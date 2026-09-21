@@ -89,7 +89,8 @@ class TestFileAccessProvider : FileAccessProvider {
     }
 
     override fun deleteRecursively(path: String) {
-        File(path).deleteRecursively()
+        if (File(path).deleteRecursively()) return
+        check(ProcessBuilder("rm", "-rf", "--", path).start().waitFor() == 0)
     }
 
     override fun rename(path: String, newPath: String) {
