@@ -90,7 +90,16 @@ class TestFileAccessProvider : FileAccessProvider {
 
     override fun deleteRecursively(path: String) {
         if (File(path).deleteRecursively()) return
-        check(ProcessBuilder("rm", "-rf", "--", path).start().waitFor() == 0)
+        val command = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            listOf("cmd", "/c", "rmdir", "/s", "/q", path)
+        } else {
+            listOf("rm", "-rf", "--", path)
+        }
+        val process = ProcessBuilder(command)
+            .redirectOutput(ProcessBuilder.Redirect.INHERIT)
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
+        check(process.waitFor() == 0)
     }
 
     override fun rename(path: String, newPath: String) {
