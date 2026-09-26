@@ -6,10 +6,13 @@ import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.workspace.domain.RemoteSkillConnection
 import com.aicode.feature.workspace.domain.RemoteSkillFileAccess
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,36 +97,66 @@ class RemoteSkillsManager @Inject constructor(
         }
     }
 
-    suspend fun save(form: SkillForm, originalName: String?): SkillSaveError? {
-        val a = requireAccess()
-        val existing = skillRepository.listSkillsFrom(a, skillsRoot)
-        val error = skillRepository.saveTo(a, skillsRoot, form, originalName, existing)
-        if (error == null) refresh()
-        return error
+    private val opMutex = Mutex()
+
+    suspend fun save(form: SkillForm, originalName: String?): SkillSaveError? = opMutex.withLock {
+        try {
+            val a = access ?: return@withLock SkillSaveError.IO_FAILED
+            val existing = skillRepository.listSkillsFrom(a, skillsRoot)
+            val error = skillRepository.saveTo(a, skillsRoot, form, originalName, existing)
+            if (error == null) refresh()
+            error
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            FileLogger.w(TAG, "远程保存技能失败", e)
+            _state.value = RemoteSkillsState.Failed(e.message ?: "连接失败")
+            SkillSaveError.IO_FAILED
+        }
     }
 
-    suspend fun delete(name: String): Boolean {
-        val a = requireAccess()
-        val existing = skillRepository.listSkillsFrom(a, skillsRoot)
-        val ok = skillRepository.deleteSkillFrom(a, name, existing)
-        if (ok) refresh()
-        return ok
+    suspend fun delete(name: String): Boolean = opMutex.withLock {
+        try {
+            val a = access ?: return@withLock false
+            val existing = skillRepository.listSkillsFrom(a, skillsRoot)
+            val ok = skillRepository.deleteSkillFrom(a, name, existing)
+            if (ok) refresh()
+            ok
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            FileLogger.w(TAG, "远程删除技能失败", e)
+            _state.value = RemoteSkillsState.Failed(e.message ?: "连接失败")
+            false
+        }
     }
 
-    suspend fun importMarkdown(text: String, fallbackName: String): SkillImportReport {
-        val a = requireAccess()
-        val existing = existingNames(a)
-        val report = skillRepository.importMarkdownTo(a, skillsRoot, existing, text, fallbackName)
-        refresh()
-        return report
+    suspend fun importMarkdown(text: String, fallbackName: String): SkillImportReport = opMutex.withLock {
+        try {
+            val a = access ?: return@withLock SkillImportReport(emptyList(), fatal = SkillImportError.IO_FAILED)
+            val existing = existingNames(a)
+            val report = skillRepository.importMarkdownTo(a, skillsRoot, existing, text, fallbackName)
+            refresh()
+            report
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            FileLogger.w(TAG, "远程导入技能失败", e)
+            _state.value = RemoteSkillsState.Failed(e.message ?: "连接失败")
+            SkillImportReport(emptyList(), fatal = SkillImportError.IO_FAILED)
+        }
     }
 
-    suspend fun importZip(input: InputStream, fallbackName: String): SkillImportReport {
-        val a = requireAccess()
-        val existing = existingNames(a)
-        val report = skillRepository.importZipTo(a, skillsRoot, existing, input, fallbackName)
-        refresh()
-        return report
+    suspend fun importZip(input: InputStream, fallbackName: String): SkillImportReport = opMutex.withLock {
+        try {
+            val a = access ?: return@withLock SkillImportReport(emptyList(), fatal = SkillImportError.IO_FAILED)
+            val existing = existingNames(a)
+            val report = skillRepository.importZipTo(a, skillsRoot, existing, input, fallbackName)
+            refresh()
+            report
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            FileLogger.w(TAG, "远程导入技能失败", e)
+            _state.value = RemoteSkillsState.Failed(e.message ?: "连接失败")
+            SkillImportReport(emptyList(), fatal = SkillImportError.IO_FAILED)
+        }
     }
 
     fun disconnect() {

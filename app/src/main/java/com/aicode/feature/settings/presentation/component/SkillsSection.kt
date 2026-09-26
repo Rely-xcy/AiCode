@@ -67,7 +67,7 @@ internal fun SkillsSection(
     val globalSkills = entries.filter { it.scope == SkillScope.GLOBAL }
     val remoteSkills = (remoteState as? RemoteSkillsState.Loaded)?.skills.orEmpty()
 
-    if (entries.isEmpty() && (!remoteVisible || remoteSkills.isEmpty())) {
+    if (entries.isEmpty() && remoteSkills.isEmpty() && remoteState !is RemoteSkillsState.Loading) {
         Box(
             modifier = Modifier
                 .fillMaxSize()

@@ -1177,11 +1177,16 @@ class SettingsViewModel @Inject constructor(
 
     /** 连接远程 SSH 并扫描其工作区技能（进入技能页 / 手动刷新时调用）。 */
     fun connectRemoteSkills() {
-        viewModelScope.launch { remoteSkillsManager.connect() }
+        viewModelScope.launch {
+            // SFTP 扫描内部是 runBlocking 阻塞实现，必须离开 Main 线程，否则连接超时会 ANR。
+            withContext(Dispatchers.IO) { remoteSkillsManager.connect() }
+        }
     }
 
     fun refreshRemoteSkills() {
-        viewModelScope.launch { remoteSkillsManager.refresh() }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { remoteSkillsManager.refresh() }
+        }
     }
 
     /** 保存远程技能；结果写入 [skillSaveState]，编辑页据此退回或报错。 */
@@ -1193,7 +1198,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun deleteRemoteSkill(name: String) {
-        viewModelScope.launch { withContext(Dispatchers.IO) { remoteSkillsManager.delete(name) } }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { remoteSkillsManager.delete(name) }
+            if (!ok) {
+                // 复用保存状态链路提示失败（列表页顶部已有消费点），避免静默失败。
+                _skillSaveState.value = SkillSaveState.Failed(SkillSaveError.IO_FAILED)
+            }
+        }
     }
 
     /** 从 Markdown 文件导入技能到远程工作区。 */
