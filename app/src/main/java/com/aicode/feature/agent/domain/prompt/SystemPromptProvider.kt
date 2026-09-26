@@ -410,6 +410,17 @@ class SystemPromptProvider @Inject constructor(
     /** 按优先级解析单个提示词片段，见 [PromptFileResolver.resolve]。保留本方法以兼容现有调用点。 */
     fun resolvePrompt(name: String): String = promptFileResolver.resolve(name)
 
+    /** 直接读本地文件内容；失败返回 null。供静态基线与自定义片段合并时使用。 */
+    private fun readFileOrNull(file: File?): String? {
+        if (file == null || !file.isFile) return null
+        return try {
+            file.bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "读取提示词失败 ${file.name}: ${e.message}", e)
+            null
+        }
+    }
+
     private companion object {
         const val TAG = "SystemPromptProvider"
         const val AGENTS_FILE = "AGENTS.md"
