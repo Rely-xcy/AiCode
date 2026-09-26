@@ -156,8 +156,9 @@ class RemoteSkillFileAccess(
         }
         closeInternal()
         val conn = connection
-        val client = try {
-            SSHClient().apply {
+        var client: SSHClient? = null
+        try {
+            client = SSHClient().apply {
                 setConnectTimeout(CONNECT_TIMEOUT_MS)
                 addHostKeyVerifier(hostKeyVerifier)
                 connect(conn.host, conn.port)
@@ -170,6 +171,8 @@ class RemoteSkillFileAccess(
                 }
             }
         } catch (e: Exception) {
+            // TCP 已连但认证/握手失败时 client 未赋给字段，必须显式断开，否则泄漏连接。
+            runCatching { client?.disconnect() }
             throw IOException(friendlySshError(e), e)
         }
         sshClient = client
