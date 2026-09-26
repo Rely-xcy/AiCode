@@ -80,7 +80,12 @@ class ContextCompactor @Inject constructor(
         val hardPercent = generalSettingsRepository.compactionThresholdPercent()
         val softPercent = generalSettingsRepository.softCompactionThresholdPercent()
         val triggerThreshold = (contextLimit * hardPercent / 100.0).toInt()
-        val softThreshold = (contextLimit * softPercent / 100.0).toInt()
+        // 软阈值 >= 硬阈值时软精简永不触发（reachedHard 先到），压到硬阈值之下保留其意义。
+        val softThreshold = if (softPercent >= hardPercent) {
+            (contextLimit * (hardPercent - 1).coerceAtLeast(1) / 100.0).toInt()
+        } else {
+            (contextLimit * softPercent / 100.0).toInt()
+        }
         // 真实 usage 优先（含 system prompt + tools，与上下文窗口同口径）；取不到（0）回退本地估算
         val currentTokens = lastInputTokens.takeIf { it > 0 } ?: estimatedTokens
         val reachedHard = currentTokens >= triggerThreshold || currentTokens >= contextLimit

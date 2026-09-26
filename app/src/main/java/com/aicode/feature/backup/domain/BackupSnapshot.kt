@@ -117,6 +117,7 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     maxNetworkRetries = maxNetworkRetries,
     enterToSend = enterToSend,
     compactionThresholdPercent = compactionThresholdPercent,
+    softCompactionThresholdPercent = softCompactionThresholdPercent,
     sendFileMaxSizeMb = sendFileMaxSizeMb,
     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
     logLevel = logLevel,
