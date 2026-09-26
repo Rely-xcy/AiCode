@@ -1613,8 +1613,6 @@ class AIAgentViewModel @Inject constructor(
                                         agentWorkflow.curateMemory(sessionId, projectRoot, transcript)
                                         lastCurateAt[sessionId] = System.currentTimeMillis()
                                     }
-                                        agentWorkflow.curateMemory(sessionId, projectRoot, transcript)
-                                    }
                                 }
                             }
                         }

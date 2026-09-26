@@ -416,7 +416,7 @@ class SystemPromptProvider @Inject constructor(
 
     /** 失效记忆清单的会话级缓存：curator 写入新记忆后调用，让下一轮 system prompt 看到新清单。 */
     fun invalidateMemoryCache(sessionId: String?, projectRoot: String?) {
-        memoryListSource.invalidate(SourceCacheKey(sessionId, projectRoot))
+        memoryListSource.invalidate(SourceCacheKey(sessionId, projectRoot.orEmpty()))
     }
 
     /** 直接读本地文件内容；失败返回 null。供静态基线与自定义片段合并时使用。 */
