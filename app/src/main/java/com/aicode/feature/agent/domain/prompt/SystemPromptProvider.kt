@@ -194,7 +194,8 @@ class SystemPromptProvider @Inject constructor(
             val memories = try { memoryRepository.listMemories(ctx.projectRoot) } catch (e: Exception) { return null }
             if (memories.isEmpty()) {
                 cachedByKey[key] = ""
-                return null
+                // 空清单也要注入纪律：首次会话正是建立记忆的起点。
+                return memoryDiscipline()
             }
 
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
@@ -212,10 +213,18 @@ class SystemPromptProvider @Inject constructor(
                 }
             }.trimEnd()
 
-            cachedByKey[key] = content
+            // 记忆纪律紧跟清单注入：清单告诉模型「有什么」，纪律告诉它「何时必须写」。
+            val full = listOf(content, memoryDiscipline()).mapNotNull { it }.joinToString("\n\n")
+            if (full.isEmpty()) return null
+
+            cachedByKey[key] = full
             trimIfNeeded()
-            return content
+            return full
         }
+
+        /** 记忆纪律正文（无记忆清单时单独注入）。 */
+        private fun memoryDiscipline(): String? =
+            resolvePrompt(MEMORY_DISCIPLINE_FILE).replace(LEADING_COMMENT, "").trim().ifEmpty { null }
 
         private fun trimIfNeeded() {
             if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
@@ -428,6 +437,7 @@ class SystemPromptProvider @Inject constructor(
         const val AGENTS_FILE = "AGENTS.md"
         const val CLAUDE_FILE = "CLAUDE.md"
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
+        const val MEMORY_DISCIPLINE_FILE = "agent/memory-discipline.md"
         const val MAX_AGENTS_CHARS = 32_000
         /** 会话级缓存 key 数量上限：超过后整体清空，仅防长期累积；正常会话数远小于此。 */
         const val SOURCE_CACHE_LIMIT = 32
