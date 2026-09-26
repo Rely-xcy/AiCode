@@ -268,13 +268,16 @@ class ContextCompactor @Inject constructor(
     private fun softTrim(messages: List<AgentMessage>): List<AgentMessage> {
         var changed = false
         val result = messages.map { msg ->
-            // 已精简过的消息（尾部带标记）长度仍超阈值，直接跳过，避免每次软触发都重建列表。
+            // 只改喂模型的 modelResult，不动 result（UI/持久化用）。
+            // 已有紧凑 modelResult 的工具（editFile/writeFile）无需截断；
+            // modelResult 为 null 回退用 result 时，在 modelResult 上做幂等截断。
             if (msg is AgentMessage.ToolResultMessage &&
+                msg.modelResult == null &&
                 msg.result.length > SOFT_TRIM_TOOL_CHARS &&
                 !msg.result.endsWith(SOFT_TRIM_MARKER)
             ) {
                 changed = true
-                msg.copy(result = msg.result.take(SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
+                msg.copy(modelResult = msg.result.take(SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
             } else {
                 msg
             }
