@@ -87,7 +87,6 @@ import com.aicode.feature.settings.presentation.SkillUiEntry
 import com.aicode.feature.agent.domain.skill.SkillImportError
 import com.aicode.feature.agent.domain.skill.RemoteSkillsState
 import com.aicode.feature.agent.domain.skill.SkillScope
-import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.presentation.SkillSource
 import com.aicode.feature.settings.presentation.SubAgentUiEntry
 import compose.icons.FeatherIcons
@@ -405,9 +404,9 @@ fun SettingsScreen(
         viewModel.refreshSubAgents()
     }
 
-    // 本地模式下进入技能页时连接远程 SSH 并扫描其工作区技能。
+    // 远程技能管理用独立 SFTP 通道，不依赖执行模式；本地/远程模式都展示「远程服务器」分组。
     LaunchedEffect(executionMode) {
-        if (executionMode == ExecutionMode.LOCAL_PROOT) viewModel.connectRemoteSkills()
+        viewModel.connectRemoteSkills()
     }
 
     // 编辑保存后回详情页：等列表刷新出新快照再换，避免详情页停在保存前的旧值（改名时按新名找）。
@@ -545,7 +544,7 @@ fun SettingsScreen(
                 initial = editingSkill,
                 saveState = skillSaveState,
                 defaultSource = skillSource,
-                remoteAvailable = executionMode == ExecutionMode.LOCAL_PROOT,
+                remoteAvailable = true,
                 onSave = { form, source ->
                     when (source) {
                         SkillSource.GLOBAL -> viewModel.saveSkill(form, SkillScope.GLOBAL, editingSkill?.name)
@@ -856,7 +855,7 @@ fun SettingsScreen(
                     projectName = currentProjectName,
                     entries = skills,
                     remoteState = remoteSkillsState,
-                    remoteVisible = executionMode == ExecutionMode.LOCAL_PROOT,
+                    remoteVisible = true,
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
                         selectedSkill = it
@@ -1058,7 +1057,7 @@ fun SettingsScreen(
         SkillAddSheet(
             source = skillSource,
             onSourceChange = { skillSource = it },
-            remoteAvailable = executionMode == ExecutionMode.LOCAL_PROOT,
+            remoteAvailable = true,
             onManual = {
                 showSkillAddSheet = false
                 editingSkill = null
