@@ -3,7 +3,7 @@ package com.aicode.feature.agent.domain.memory
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.provider.AIProvider
-import com.aicode.feature.agent.domain.workflow.SystemPromptProvider
+import com.aicode.feature.agent.domain.prompt.PromptFileResolver
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -28,11 +28,10 @@ private const val MAX_TRANSCRIPT_CHARS = 12_000
 @Singleton
 class MemoryCurator @Inject constructor(
     private val memoryRepository: MemoryRepository,
-    private val promptProvider: SystemPromptProvider
+    private val promptFileResolver: PromptFileResolver
 ) {
-    /** 提示词文件名与 [SystemPromptProvider.resolvePrompt] 的路径约定一致。 */
-    private fun prompt(): String =
-        promptProvider.resolvePrompt("agent/memory-curator.md")
+    /** 提示词文件名，与 [PromptFileResolver.resolve] 的路径约定一致。 */
+    private fun prompt(): String = promptFileResolver.resolve("agent/memory-curator.md")
 
     /**
      * 抽取并落盘本轮对话的记忆。
