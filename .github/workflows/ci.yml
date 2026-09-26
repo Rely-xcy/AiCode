@@ -78,4 +78,5 @@ jobs:
         with:
           name: aicode-debug-${{ github.sha }}
           path: app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          retention-days: 7
           if-no-files-found: warn
