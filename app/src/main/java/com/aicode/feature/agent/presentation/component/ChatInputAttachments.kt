@@ -32,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -148,10 +149,19 @@ internal fun PendingAttachmentPreviewList(
 ) {
     if (attachments.isEmpty()) return
 
+    val scrollState = rememberScrollState()
+    // 新附件加入时自动滚到最右，保证刚上传的附件可见（横向滑动，不改竖向）。
+    // 用 Int.MAX_VALUE：内部 clamp 到当前 maxValue，避免布局前读 stale 值滚不到位；
+    // key 用最后一个附件的标识，只有新增时才触发，删除附件不强制跳转。
+    LaunchedEffect(attachments.lastOrNull()?.containerPath) {
+        if (attachments.isNotEmpty()) {
+            scrollState.animateScrollTo(Int.MAX_VALUE)
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            .horizontalScroll(scrollState)
             .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
