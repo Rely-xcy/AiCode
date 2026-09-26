@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -181,14 +182,19 @@ class BrowserManager @Inject constructor(
     /** 每 60s 检查一次保活标签的心跳，冻结则唤醒；避免长时间不可见后连 reload 都超时。 */
     private fun startKeepAliveSupervisor() {
         if (supervisorJob?.isActive == true) return
-        supervisorJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+        supervisorJob = supervisorScope.launch {
             while (isActive) {
                 delay(60_000)
                 if (containerView != null) continue
+                if (keepAliveTabIds.isEmpty()) continue
                 for (id in keepAliveTabIds) wakeIfFrozen(id)
             }
         }
     }
+
+    private val supervisorScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
+    )
 
     /**
      * 页面不可见（面板关闭/非活动标签）时 WebView 会暂停渲染层：JS 定时器降速到约 0.5 次/秒，
@@ -201,17 +207,25 @@ class BrowserManager @Inject constructor(
     /**
      * 若标签处于冻结状态（心跳停摆且面板未打开）则唤醒：强制 VISIBLE + 触发布局，
      * 让 WebView 恢复渲染管线后放回隐藏宿主。供后台监督协程与工具调用前调用。
+     *
+     * 心跳读取带 2s 超时：已冻结的 WebView 无法执行 JS（callback 永不回调），
+     * 裸 await 会永久挂起阻塞监督协程——超时即判定冻结，直接进唤醒流程。
      */
-    fun wakeIfFrozen(tabId: String? = null) {
+    suspend fun wakeIfFrozen(tabId: String? = null) {
         if (containerView != null) return
         val tab = findTab(tabId ?: activeTabId) ?: return
         if (!keepAliveTabIds.contains(tab.id)) return
-        val frozen = runCatching {
-            val before = tab.webView.evaluateJavascriptSync(
-                "(function(){var k=window.__bicodeKeepAlive;return k?k.t:0})()"
-            )?.trim()?.trim('"')?.toLongOrNull()
+        val frozen = try {
+            val before = withTimeout(2_000) {
+                tab.webView.evaluateJavascriptSync(
+                    "(function(){var k=window.__bicodeKeepAlive;return k?k.t:0})()"
+                )
+            }?.trim()?.trim('"')?.toLongOrNull()
             before == null || System.currentTimeMillis() - before > 10_000
-        }.getOrDefault(true)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            true
+        }
         if (!frozen) return
         runCatching {
             tab.webView.visibility = View.VISIBLE
@@ -223,6 +237,9 @@ class BrowserManager @Inject constructor(
             tab.webView.layout(0, 0, (HEADLESS_WIDTH_DP * density).toInt(), (HEADLESS_HEIGHT_DP * density).toInt())
             tab.webView.requestLayout()
             tab.webView.invalidate()
+            // 唤醒后重注入心跳：原注入可能失败（页面未加载完/JS 异常），
+            // 不重注入会永久误判冻结、无限空转唤醒。
+            injectKeepAlive(tab)
         }
     }
 
@@ -728,10 +745,11 @@ class BrowserManager @Inject constructor(
         return container
     }
 
-    /** 面板重新打开后取消对应标签的保活监督。 */
+    /** 面板重新打开后取消全部保活监督：清空集合并停掉监督协程。 */
     fun attachVisible(tabId: String? = null) {
-        val id = tabId ?: activeTabId
-        if (id.isNotEmpty()) keepAliveTabIds.remove(id)
+        keepAliveTabIds.clear()
+        supervisorJob?.cancel()
+        supervisorJob = null
     }
 
     fun detachFromViewHierarchy() {
@@ -760,6 +778,7 @@ class BrowserManager @Inject constructor(
     fun destroy() {
         keepAliveTabIds.clear()
         supervisorJob?.cancel()
+        supervisorJob = null
         tabs.forEach { tab ->
             tab.webView.apply {
                 stopLoading()
@@ -812,6 +831,7 @@ class BrowserManager @Inject constructor(
         tab.pendingDialogResult?.cancel()
         tab.consoleLogs.clear()
         tabs.remove(tab)
+        keepAliveTabIds.remove(tabId)
 
         if (tabs.isEmpty()) {
             // 所有标签都被关闭，自动重置为一个新的空白标签页
@@ -828,6 +848,11 @@ class BrowserManager @Inject constructor(
 
     suspend fun selectTab(tabId: String): Boolean = withContext(Dispatchers.Main) {
         if (findTab(tabId) == null) return@withContext false
+        // 面板关闭期间的标签切换要同步保活集合：新激活标签纳入保活，旧标签移出。
+        if (containerView == null && keepAliveTabIds.isNotEmpty()) {
+            keepAliveTabIds.remove(activeTabId)
+            keepAliveTabIds.add(tabId)
+        }
         activeTabId = tabId
         updateContainerView()
         publishState()
