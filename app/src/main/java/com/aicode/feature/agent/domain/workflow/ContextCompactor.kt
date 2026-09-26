@@ -38,6 +38,9 @@ class ContextCompactor @Inject constructor(
 
         /** 软精简时单条工具输出的保留上限（比硬压缩宽松，尽量少丢信息）。 */
         const val SOFT_TRIM_TOOL_CHARS = 3_000
+
+        /** 软精简后追加在尾部的标记，用于幂等判断。 */
+        const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
         const val COMPACT_PROMPT_FILE = "agent/compact-summary.md"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
     }
@@ -265,9 +268,13 @@ class ContextCompactor @Inject constructor(
     private fun softTrim(messages: List<AgentMessage>): List<AgentMessage> {
         var changed = false
         val result = messages.map { msg ->
-            if (msg is AgentMessage.ToolResultMessage && msg.result.length > SOFT_TRIM_TOOL_CHARS) {
+            // 已精简过的消息（尾部带标记）长度仍超阈值，直接跳过，避免每次软触发都重建列表。
+            if (msg is AgentMessage.ToolResultMessage &&
+                msg.result.length > SOFT_TRIM_TOOL_CHARS &&
+                !msg.result.endsWith(SOFT_TRIM_MARKER)
+            ) {
                 changed = true
-                msg.copy(result = msg.result.take(SOFT_TRIM_TOOL_CHARS) + "\n[工具输出已精简以节省上下文]")
+                msg.copy(result = msg.result.take(SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
             } else {
                 msg
             }
