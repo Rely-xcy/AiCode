@@ -86,8 +86,9 @@ class ContextCompactor @Inject constructor(
         } else {
             (contextLimit * softPercent / 100.0).toInt()
         }
-        // 真实 usage 优先（含 system prompt + tools，与上下文窗口同口径）；取不到（0）回退本地估算
-        val currentTokens = lastInputTokens.takeIf { it > 0 } ?: estimatedTokens
+        // 取上次真实 usage 与本次本地估算的较大值：lastInputTokens 是上一次请求的值，
+        // 本轮新塞入的大内容（文件/工具输出）在旧值里看不到，单靠它会把超限请求发出去。
+        val currentTokens = maxOf(lastInputTokens.takeIf { it > 0 } ?: 0, estimatedTokens)
         val reachedHard = currentTokens >= triggerThreshold || currentTokens >= contextLimit
         val reachedSoft = currentTokens >= softThreshold
         if (messages.size <= 2) return messages.toList()
@@ -342,8 +343,34 @@ class ContextCompactor @Inject constructor(
     private fun estimateTokens(messages: List<AgentMessage>): Int =
         messages.sumOf { estimateTokens(it) }
 
-    private fun estimateTokens(message: AgentMessage): Int =
-        ModelContextPolicy.estimateTokens(messageChars(message))
+    private fun estimateTokens(message: AgentMessage): Int {
+        val chars = messageChars(message)
+        // 保守估算：超长连续 base64（图片等）1 字符 ≈ 1 token；其余按 3 字符 ≈ 1 token，
+        // 比默认 4:1 保守——本地估算低估会让 max(lastInputTokens, 估算) 拿不到本轮新增量，
+        // 压缩不触发，请求直接顶到模型窗口上限被拒。
+        val base64Chars = when (message) {
+            is AgentMessage.UserMessage -> countBase64Chars(message.content)
+            is AgentMessage.AssistantMessage -> countBase64Chars(message.content)
+            is AgentMessage.ToolResultMessage -> countBase64Chars(message.result)
+        }
+        return (chars - base64Chars) / 3 + base64Chars
+    }
+
+    /** 统计文本中连续 base64 字符串（长度 ≥ 64 的字母数字+/= 串）的总字符数，图片/嵌入内容按高权重估。 */
+    private fun countBase64Chars(text: String): Int {
+        var count = 0
+        var run = 0
+        for (c in text) {
+            if ((c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || c == '+' || c == '/' || c == '=') {
+                run++
+            } else {
+                if (run >= 64) count += run
+                run = 0
+            }
+        }
+        if (run >= 64) count += run
+        return count
+    }
 
     private fun messageChars(message: AgentMessage): Int = when (message) {
         is AgentMessage.UserMessage -> message.content.length
@@ -353,7 +380,6 @@ class ContextCompactor @Inject constructor(
         }
         is AgentMessage.ToolResultMessage -> message.toolName.length + message.result.length
     }
-
     private fun inferProviderType(aiProvider: AIProvider): ProviderType {
         val className = aiProvider::class.simpleName.orEmpty()
         return when {
