@@ -9,6 +9,7 @@
 
 记录方式：
 
-- 已有相关记忆（见下方清单）→ 用 memory(action=edit) 局部更新正文，不要新建重复文件；
+- 先用 memory(action=list) 确认是否已有同名/同主题记忆，再决定 save 还是 edit；
+- 已有相关记忆 → 用 memory(action=edit) 局部更新正文，不要新建重复文件；
 - 确属新主题 → memory(action=save)，description 写清「何时该读它」；
 - 同一事实已经记录过 → 不再重复记录；记忆内容过时 → 用 edit 修正或 delete 清理。

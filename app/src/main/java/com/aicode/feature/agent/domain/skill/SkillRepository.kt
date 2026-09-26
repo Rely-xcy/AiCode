@@ -23,8 +23,16 @@ class SkillRepository @Inject constructor(
     private val fileAccess: FileAccessProvider
 ) {
     /** 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。 */
-    fun listAllSkills(): List<SkillEntry> =
-        mergeAll(localDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
+    fun listAllSkills(): List<SkillEntry> {
+        // 各源独立 catch：远程扫描失败不该把全局技能也拖没。
+        val global = runCatching { localDirectorySkillSource.listSkills() }
+            .onFailure { FileLogger.w(TAG, "全局技能扫描失败", it) }
+            .getOrDefault(emptyList())
+        val project = runCatching { projectDirectorySkillSource.listSkills() }
+            .onFailure { FileLogger.w(TAG, "项目技能扫描失败", it) }
+            .getOrDefault(emptyList())
+        return mergeAll(global, project)
+    }
 
     /** 启用的技能列表（注入系统提示词用），禁用技能被过滤。 */
     fun listSkills(): List<Skill> =

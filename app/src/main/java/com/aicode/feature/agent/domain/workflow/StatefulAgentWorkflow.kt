@@ -999,14 +999,20 @@ class StatefulAgentWorkflow @Inject constructor(
      * 会话轮次结束后的记忆兑底：优先用压缩专用模型（轻量、便宜）抽记忆，
      * 未配置则回退当前聊天模型。全静默，任何失败都不影响调用方。
      */
-    override suspend fun curateMemory(sessionId: String, projectRoot: String?, transcript: String): Int = runCatching {
-        if (transcript.isBlank()) return@runCatching 0
-        val provider = resolveCompactionFallbackProvider(sessionId)
-            ?: getEffectiveProvider(sessionId)
-        memoryCurator.curate(provider, sessionId, projectRoot, transcript)
-    }.onFailure { e ->
-        FileLogger.w(TAG, "记忆兑现跳过: ${e.message}")
-    }.getOrDefault(0)
+    override suspend fun curateMemory(sessionId: String, projectRoot: String?, transcript: String): Int {
+        if (transcript.isBlank()) return 0
+        return try {
+            val provider = resolveCompactionFallbackProvider(sessionId)
+                ?: getEffectiveProvider(sessionId)
+            val saved = memoryCurator.curate(provider, sessionId, projectRoot, transcript)
+            if (saved > 0) promptProvider.invalidateMemoryCache(sessionId, projectRoot)
+            saved
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            FileLogger.w(TAG, "记忆兑现失败: ${e.message}", e)
+            0
+        }
+    }
 
     private suspend fun runToolStream(
         tool: StreamingAgentTool, 

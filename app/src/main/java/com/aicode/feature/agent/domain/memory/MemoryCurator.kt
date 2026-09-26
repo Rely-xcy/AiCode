@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.memory
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.prompt.PromptFileResolver
@@ -51,25 +52,39 @@ class MemoryCurator @Inject constructor(
 
         val response = provider.complete(
             systemPrompt = systemPrompt,
-            messages = listOf(AgentMessage.UserMessage(content = transcript.take(MAX_TRANSCRIPT_CHARS))),
+            messages = listOf(AgentMessage.UserMessage(content = transcript.takeLast(MAX_TRANSCRIPT_CHARS))),
             tools = emptyList()
         )
         val candidates = parseCandidates(response.content)
         var saved = 0
         for (c in candidates) {
+            // 已有同名记忆不覆盖：主模型当轮写的完整版本不该被 curator 的截断版覆盖。
+            val existing = memoryRepository.loadContent(c.name, projectRoot)
+            if (existing != null) {
+                FileLogger.i(TAG, "记忆「${c.name}」已存在，跳过自动覆盖")
+                continue
+            }
+            // PROJECT 但无工作区时降级为 GLOBAL（静默场景下降级比丢弃合理）。
+            val effectiveScope = if (c.scope == MemoryScope.PROJECT && projectRoot.isNullOrBlank()) {
+                MemoryScope.GLOBAL
+            } else {
+                c.scope
+            }
             val ok = memoryRepository.saveMemory(
                 name = c.name,
                 description = c.description,
                 content = c.content,
-                scope = c.scope,
+                scope = effectiveScope,
                 projectRoot = projectRoot
             )
             if (ok) saved++
         }
-        if (saved > 0) FileLogger.i(TAG, "会话 $sessionId 自动沉淀 $saved 条记忆")
+        if (saved > 0) {
+            FileLogger.i(TAG, "会话 $sessionId 自动沉淀 $saved 条记忆")
+        }
         saved
     }.onFailure { e ->
-        FileLogger.w(TAG, "自动记忆整理失败（静默忽略）: ${e.message}")
+        FileLogger.w(TAG, "自动记忆整理失败（静默忽略）: ${e.message}", e)
     }.getOrDefault(0)
 
     /** 解析整理器输出；格式不合法/越界条目一律丢弃，宁缺毋滥。 */
@@ -85,7 +100,7 @@ class MemoryCurator @Inject constructor(
             .mapNotNull { el -> runCatching { el.jsonObject }.getOrNull() }
             .mapNotNull { obj ->
                 runCatching {
-                    val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                     val description = obj["description"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                     val body = obj["content"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                     val isProject = obj["scope"]?.jsonPrimitive?.contentOrNull?.trim()
@@ -99,14 +114,10 @@ class MemoryCurator @Inject constructor(
                     )
                 }.getOrNull()
             }
-            .filter { isValidName(it.name) }
+            .filter { MemorySource.sanitizeName(it.name).isNotEmpty() }
             .take(MAX_CANDIDATES)
             .toList()
     }
-
-    /** 与记忆文件名规则对齐：小写英文/数字/下划线/连字符，长度 1..64。 */
-    private fun isValidName(name: String): Boolean =
-        name.length <= 64 && name.matches(Regex("[a-z0-9][a-z0-9_-]*"))
 
     private data class Candidate(
         val name: String,

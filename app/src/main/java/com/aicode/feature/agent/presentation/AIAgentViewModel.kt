@@ -1594,7 +1594,6 @@ class AIAgentViewModel @Inject constructor(
                             val now = System.currentTimeMillis()
                             val last = lastCurateAt[sessionId] ?: 0L
                             if (now - last >= MEMORY_CURATE_INTERVAL_MS) {
-                                lastCurateAt[sessionId] = now
                                 viewModelScope.launch {
                                     // 本轮对话文本：发送前的持久化历史尾部 + 用户请求 + 流式回答快照。
                                     val tail = history.takeLast(6).joinToString("\n") { msg ->
@@ -1610,6 +1609,10 @@ class AIAgentViewModel @Inject constructor(
                                         _streamingTexts.value[sessionId]?.take(4000)?.let { append("助手: ").appendLine(it) }
                                     }.trim()
                                     if (transcript.isNotBlank()) {
+                                        // 成功后才记账：失败/取消时不占用 10 分钟窗口，下一轮重试。
+                                        agentWorkflow.curateMemory(sessionId, projectRoot, transcript)
+                                        lastCurateAt[sessionId] = System.currentTimeMillis()
+                                    }
                                         agentWorkflow.curateMemory(sessionId, projectRoot, transcript)
                                     }
                                 }

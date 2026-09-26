@@ -230,6 +230,10 @@ class SystemPromptProvider @Inject constructor(
         private fun trimIfNeeded() {
             if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
         }
+
+        fun invalidate(key: SourceCacheKey) {
+            cachedByKey.remove(key)
+        }
     }
 
     /** 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。 */
@@ -409,6 +413,11 @@ class SystemPromptProvider @Inject constructor(
 
     /** 按优先级解析单个提示词片段，见 [PromptFileResolver.resolve]。保留本方法以兼容现有调用点。 */
     fun resolvePrompt(name: String): String = promptFileResolver.resolve(name)
+
+    /** 失效记忆清单的会话级缓存：curator 写入新记忆后调用，让下一轮 system prompt 看到新清单。 */
+    fun invalidateMemoryCache(sessionId: String?, projectRoot: String?) {
+        memoryListSource.invalidate(SourceCacheKey(sessionId, projectRoot))
+    }
 
     /** 直接读本地文件内容；失败返回 null。供静态基线与自定义片段合并时使用。 */
     private fun readFileOrNull(file: File?): String? {
