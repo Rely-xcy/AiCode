@@ -179,6 +179,46 @@ internal fun BackupSection(viewModel: BackupViewModel) {
                     )
                 }
             )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_skills),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.skills,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(skills = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_memory),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.memory,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(memory = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_subagents),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.agentDefinitions,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(agentDefinitions = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_custom_prompts),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.customPrompts,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(customPrompts = it)) }
+                    )
+                }
+            )
             WorkspaceBackupHint()
         }
 

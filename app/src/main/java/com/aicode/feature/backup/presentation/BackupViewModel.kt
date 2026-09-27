@@ -61,6 +61,10 @@ class BackupViewModel @Inject constructor(
             .putBoolean(KEY_PERMISSION_RULES, options.permissionRules)
             .putBoolean(KEY_APP_SETTINGS, options.appSettings)
             .putBoolean(KEY_WORKSPACE_FILES, options.workspaceFiles)
+            .putBoolean(KEY_SKILLS, options.skills)
+            .putBoolean(KEY_MEMORY, options.memory)
+            .putBoolean(KEY_AGENT_DEFINITIONS, options.agentDefinitions)
+            .putBoolean(KEY_CUSTOM_PROMPTS, options.customPrompts)
             .apply()
     }
 
@@ -71,7 +75,11 @@ class BackupViewModel @Inject constructor(
         mcpServers = prefs.getBoolean(KEY_MCP_SERVERS, true),
         permissionRules = prefs.getBoolean(KEY_PERMISSION_RULES, true),
         appSettings = prefs.getBoolean(KEY_APP_SETTINGS, true),
-        workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false)
+        workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false),
+        skills = prefs.getBoolean(KEY_SKILLS, true),
+        memory = prefs.getBoolean(KEY_MEMORY, true),
+        agentDefinitions = prefs.getBoolean(KEY_AGENT_DEFINITIONS, true),
+        customPrompts = prefs.getBoolean(KEY_CUSTOM_PROMPTS, true)
     )
 
     /** 流式导出到 [output]（调用方打开，本方法负责关闭）。 */
@@ -192,5 +200,9 @@ class BackupViewModel @Inject constructor(
         private const val KEY_PERMISSION_RULES = "permission_rules"
         private const val KEY_APP_SETTINGS = "app_settings"
         private const val KEY_WORKSPACE_FILES = "workspace_files"
+        private const val KEY_SKILLS = "skills"
+        private const val KEY_MEMORY = "memory"
+        private const val KEY_AGENT_DEFINITIONS = "agent_definitions"
+        private const val KEY_CUSTOM_PROMPTS = "custom_prompts"
     }
 }
