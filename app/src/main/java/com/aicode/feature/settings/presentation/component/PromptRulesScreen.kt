@@ -75,6 +75,12 @@ private const val OFFICIAL_PROMPT_DOCS_URL = "https://aicode.murk.top/guide/cust
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PromptRulesScreen(
+    /** 页面层级：主页面 / 片段清单 / 片段编辑器。由 SettingsScreen 外壳传入，
+     *  这样标题、返回箭头、右上角动作都由外壳统一提供，页面不再自画顶栏。 */
+    level: PromptLevel,
+    onLevelChange: (PromptLevel) -> Unit,
+    menuOpen: Boolean,
+    onMenuDismiss: () -> Unit,
     onNavigateBack: () -> Unit,
     viewModel: PromptRulesViewModel = hiltViewModel()
 ) {
@@ -88,10 +94,8 @@ internal fun PromptRulesScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -125,11 +129,11 @@ internal fun PromptRulesScreen(
     val systemDirty = editor == null && systemPrompt?.isDirty == true
 
     // 未保存守卫：只有真的改了东西才拦；否则直接退。
-    BackHandler(enabled = editor != null || showAdvanced || editorDirty || systemDirty) {
+    BackHandler(enabled = editor != null || level == PromptLevel.FragmentList || editorDirty || systemDirty) {
         when {
             editorDirty -> confirmDiscard = true
             editor != null -> viewModel.closeEditor()
-            showAdvanced -> showAdvanced = false
+            level == PromptLevel.FragmentList -> onLevelChange(PromptLevel.Main)
             systemDirty -> confirmDiscard = true
             else -> onNavigateBack()
         }
@@ -138,141 +142,6 @@ internal fun PromptRulesScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = when {
-                            editor != null -> if (editor!!.isNew) {
-                                stringResource(R.string.prompt_rules_new_title)
-                            } else {
-                                editor!!.fragment.title
-                            }
-
-                            showAdvanced -> stringResource(R.string.prompt_rules_advanced)
-                            else -> stringResource(R.string.prompt_rules_title)
-                        }
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        when {
-                            editorDirty -> confirmDiscard = true
-                            editor != null -> viewModel.closeEditor()
-                            showAdvanced -> showAdvanced = false
-                            systemDirty -> confirmDiscard = true
-                            else -> onNavigateBack()
-                        }
-                    }) {
-                        Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                actions = {
-                    // 三条杠菜单只在主页面（系统提示词）出现；编辑片段/高级页用自己的返回逻辑
-                    // 片段清单页的「添加」放右上角，与子代理/技能页一致，不再做一行「添加」行。
-                    if (showAdvanced && editor == null) {
-                        IconButton(onClick = { viewModel.openNew() }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.prompt_rules_new)
-                            )
-                        }
-                    }
-                    if (editor == null && !showAdvanced && docsRead == true && systemPrompt != null) {
-                        Box {
-                            IconButton(onClick = { menuOpen = true }) {
-                                Icon(
-                                    FeatherIcons.Menu,
-                                    contentDescription = stringResource(R.string.prompt_rules_menu)
-                                )
-                            }
-                            if (menuOpen) {
-                                // 选项放底栏（与 App 其它页面一致），不用 Material 下拉菜单：
-                                // 下拉菜单的行样式和设置页的卡片/行完全是两套，看着就不像一个 App。
-                                val state = systemPrompt!!
-                                AdaptiveModalBottomSheet(onDismissRequest = { menuOpen = false }) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(bottom = Spacing.xl),
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                                    ) {
-                                        SettingsGroupHeader(text = stringResource(R.string.prompt_rules_sys_mode_title))
-                                        SettingsGroup {
-                                            listOf(
-                                                SystemPromptMode.OFF,
-                                                SystemPromptMode.PREPEND,
-                                                SystemPromptMode.SUFFIX
-                                            ).forEachIndexed { index, mode ->
-                                                if (index > 0) SettingsDivider()
-                                                SettingsRow(
-                                                    title = stringResource(modeTitleRes(mode)),
-                                                    subtitle = stringResource(modeDescRes(mode)),
-                                                    onClick = {
-                                                        menuOpen = false
-                                                        viewModel.setSystemPromptMode(mode)
-                                                    },
-                                                    trailing = if (mode == state.mode) {
-                                                        {
-                                                            Icon(
-                                                                FeatherIcons.Check,
-                                                                contentDescription = null,
-                                                                tint = MaterialTheme.colorScheme.primary
-                                                            )
-                                                        }
-                                                    } else {
-                                                        null
-                                                    }
-                                                )
-                                            }
-                                        }
-                                        SettingsGroup {
-                                            SettingsRow(
-                                                title = stringResource(R.string.prompt_rules_sys_import),
-                                                onClick = {
-                                                    menuOpen = false
-                                                    importLauncher.launch("text/*")
-                                                }
-                                            )
-                                            SettingsDivider()
-                                            if (state.hasCustom) {
-                                                SettingsRow(
-                                                    title = stringResource(R.string.prompt_rules_sys_restore),
-                                                    onClick = {
-                                                        menuOpen = false
-                                                        confirmRestore = true
-                                                    }
-                                                )
-                                                SettingsDivider()
-                                            }
-                                            SettingsRow(
-                                                title = stringResource(R.string.prompt_rules_menu_docs),
-                                                onClick = {
-                                                    menuOpen = false
-                                                    viewModel.reopenDocs()
-                                                }
-                                            )
-                                            SettingsDivider()
-                                            SettingsRow(
-                                                title = stringResource(R.string.prompt_rules_advanced),
-                                                onClick = {
-                                                    menuOpen = false
-                                                    showAdvanced = true
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                )
-            )
-        }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
@@ -292,7 +161,7 @@ internal fun PromptRulesScreen(
                     onDeleteCustom = viewModel::deleteCustom
                 )
 
-                showAdvanced -> PromptFragmentList(
+                level == PromptLevel.FragmentList -> PromptFragmentList(
                     fragments = fragments,
                     onOpen = viewModel::open
                 )
@@ -570,3 +439,6 @@ private fun PromptFragmentEditor(
         }
     }
 }
+
+/** 提示词页的三个层级，由外壳持有（同技能/子代理页的 section 划分）。 */
+internal enum class PromptLevel { Main, FragmentList, FragmentEditor }

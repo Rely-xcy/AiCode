@@ -151,6 +151,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgents(R.string.settings_subagents),
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
+    PromptFragmentList(R.string.prompt_rules_advanced),
+    PromptFragmentEditor(R.string.prompt_rules_advanced),
     PromptRules(R.string.settings_prompt_rules),
     Profile(R.string.settings_profile),
     Container(R.string.settings_container),
@@ -179,6 +181,8 @@ private fun SettingsSection.depth(): Int = when (this) {
     // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SkillEditor,
     SettingsSection.SubAgentEditor -> 3
+    SettingsSection.PromptFragmentList -> 2
+    SettingsSection.PromptFragmentEditor -> 3
     SettingsSection.ProviderEditor,
     SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
@@ -376,6 +380,7 @@ fun SettingsScreen(
     // 子代理编辑目标：null 表示新建一个；编辑现有定义时指向被编辑的条目。
     var editingSubAgent by remember { mutableStateOf<SubAgentUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
+    var promptMenuOpen by remember { mutableStateOf(false) }
     var subAgentEditorReturn by remember { mutableStateOf(SettingsSection.SubAgents) }
     // 保存后要在详情页展示的子代理名：列表刷新是异步的，先记名字等刷新完再换快照。
     var pendingSubAgentName by remember { mutableStateOf<String?>(null) }
@@ -404,6 +409,8 @@ fun SettingsScreen(
         SettingsSection.SkillDetail -> SettingsSection.Skills
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
+        SettingsSection.PromptFragmentList -> SettingsSection.PromptRules
+        SettingsSection.PromptFragmentEditor -> SettingsSection.PromptFragmentList
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
@@ -592,12 +599,14 @@ fun SettingsScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
                 )
 
-            current == SettingsSection.PromptRules ->
-                PromptRulesScreen(onNavigateBack = { section = SettingsSection.Menu })
-
             else -> {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
+            val promptViewModel: com.aicode.feature.settings.presentation.PromptRulesViewModel? =
+                if (current == SettingsSection.PromptRules ||
+                    current == SettingsSection.PromptFragmentList ||
+                    current == SettingsSection.PromptFragmentEditor
+                ) androidx.hilt.navigation.compose.hiltViewModel() else null
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
             Scaffold(
@@ -699,6 +708,20 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                        }
+                        // 提示词页的右上角：主页面是菜单（选项底栏），片段清单页是 + 新增。
+                        // 与技能/子代理页一致：页面不自画顶栏，动作放外壳动作槽。
+                        SettingsSection.PromptRules -> IconButton(onClick = { promptMenuOpen = true }) {
+                            Icon(
+                                FeatherIcons.Sliders,
+                                contentDescription = stringResource(R.string.prompt_rules_menu)
+                            )
+                        }
+                        SettingsSection.PromptFragmentList -> IconButton(onClick = { promptViewModel?.openNew() }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.prompt_rules_new)
+                            )
                         }
                         SettingsSection.Skills -> IconButton(onClick = {
                             showSkillAddSheet = true
@@ -985,6 +1008,25 @@ fun SettingsScreen(
                     onToggleScreenOn = { viewModel.setScreenOnEnabled(it) },
                     agentSoundEnabled = agentSoundEnabled,
                     onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
+                )
+                SettingsSection.PromptRules,
+                SettingsSection.PromptFragmentList,
+                SettingsSection.PromptFragmentEditor -> PromptRulesScreen(
+                    level = when (current) {
+                        SettingsSection.PromptFragmentList -> PromptLevel.FragmentList
+                        SettingsSection.PromptFragmentEditor -> PromptLevel.FragmentEditor
+                        else -> PromptLevel.Main
+                    },
+                    onLevelChange = { lvl ->
+                        section = when (lvl) {
+                            PromptLevel.Main -> SettingsSection.PromptRules
+                            PromptLevel.FragmentList -> SettingsSection.PromptFragmentList
+                            PromptLevel.FragmentEditor -> SettingsSection.PromptFragmentEditor
+                        }
+                    },
+                    menuOpen = promptMenuOpen,
+                    onMenuDismiss = { promptMenuOpen = false },
+                    onNavigateBack = { section = SettingsSection.Menu }
                 )
                 SettingsSection.Profile -> ProfileSettingsScreen()
                 SettingsSection.Backup -> {
