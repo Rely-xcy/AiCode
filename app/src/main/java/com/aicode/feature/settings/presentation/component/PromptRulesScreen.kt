@@ -19,8 +19,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +54,8 @@ import com.aicode.feature.settings.domain.service.PromptFragmentInfo
 import com.aicode.feature.settings.presentation.PromptRulesViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import com.aicode.core.ui.AdaptiveModalBottomSheet
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Plus
 import kotlinx.coroutines.Dispatchers
@@ -177,68 +177,83 @@ internal fun PromptRulesScreen(
                                     contentDescription = stringResource(R.string.prompt_rules_menu)
                                 )
                             }
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            if (menuOpen) {
+                                // 选项放底栏（与 App 其它页面一致），不用 Material 下拉菜单：
+                                // 下拉菜单的行样式和设置页的卡片/行完全是两套，看着就不像一个 App。
                                 val state = systemPrompt!!
-                                Text(
-                                    text = stringResource(R.string.prompt_rules_sys_mode_title),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                                )
-                                listOf(
-                                    SystemPromptMode.OFF,
-                                    SystemPromptMode.PREPEND,
-                                    SystemPromptMode.SUFFIX
-                                ).forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = stringResource(modeTitleRes(mode)),
-                                                color = if (mode == state.mode) {
-                                                    MaterialTheme.colorScheme.primary
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurface
+                                AdaptiveModalBottomSheet(onDismissRequest = { menuOpen = false }) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = Spacing.xl),
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                                    ) {
+                                        SettingsGroupHeader(text = stringResource(R.string.prompt_rules_sys_mode_title))
+                                        SettingsGroup {
+                                            listOf(
+                                                SystemPromptMode.OFF,
+                                                SystemPromptMode.PREPEND,
+                                                SystemPromptMode.SUFFIX
+                                            ).forEachIndexed { index, mode ->
+                                                if (index > 0) SettingsDivider()
+                                                SettingsRow(
+                                                    title = stringResource(modeTitleRes(mode)),
+                                                    subtitle = stringResource(modeDescRes(mode)),
+                                                    onClick = {
+                                                        menuOpen = false
+                                                        viewModel.setSystemPromptMode(mode)
+                                                    },
+                                                    trailing = if (mode == state.mode) {
+                                                        {
+                                                            Icon(
+                                                                FeatherIcons.Check,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary
+                                                            )
+                                                        }
+                                                    } else {
+                                                        null
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        SettingsGroup {
+                                            SettingsRow(
+                                                title = stringResource(R.string.prompt_rules_sys_import),
+                                                onClick = {
+                                                    menuOpen = false
+                                                    importLauncher.launch("text/*")
                                                 }
                                             )
-                                        },
-                                        onClick = {
-                                            menuOpen = false
-                                            viewModel.setSystemPromptMode(mode)
+                                            SettingsDivider()
+                                            if (state.hasCustom) {
+                                                SettingsRow(
+                                                    title = stringResource(R.string.prompt_rules_sys_restore),
+                                                    onClick = {
+                                                        menuOpen = false
+                                                        confirmRestore = true
+                                                    }
+                                                )
+                                                SettingsDivider()
+                                            }
+                                            SettingsRow(
+                                                title = stringResource(R.string.prompt_rules_menu_docs),
+                                                onClick = {
+                                                    menuOpen = false
+                                                    viewModel.reopenDocs()
+                                                }
+                                            )
+                                            SettingsDivider()
+                                            SettingsRow(
+                                                title = stringResource(R.string.prompt_rules_advanced),
+                                                onClick = {
+                                                    menuOpen = false
+                                                    showAdvanced = true
+                                                }
+                                            )
                                         }
-                                    )
+                                    }
                                 }
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.prompt_rules_sys_import)) },
-                                    onClick = {
-                                        menuOpen = false
-                                        importLauncher.launch("text/*")
-                                    }
-                                )
-                                if (state.hasCustom) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.prompt_rules_sys_restore)) },
-                                        onClick = {
-                                            menuOpen = false
-                                            confirmRestore = true
-                                        }
-                                    )
-                                }
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.prompt_rules_menu_docs)) },
-                                    onClick = {
-                                        menuOpen = false
-                                        viewModel.reopenDocs()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.prompt_rules_advanced)) },
-                                    onClick = {
-                                        menuOpen = false
-                                        showAdvanced = true
-                                    }
-                                )
                             }
                         }
                     }
