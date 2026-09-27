@@ -177,8 +177,7 @@ internal fun PromptRulesScreen(
 
                 docsRead == false -> PromptDocsGate(
                     docs = docs,
-                    onConfirm = viewModel::confirmDocsRead,
-                    onRefresh = { viewModel.loadDocs(forceRefresh = true) }
+                    onConfirm = viewModel::confirmDocsRead
                 )
 
                 editor != null -> PromptFragmentEditor(
@@ -336,12 +335,11 @@ private fun modeDescRes(mode: SystemPromptMode): Int = when (mode) {
     SystemPromptMode.SUFFIX -> R.string.prompt_rules_sys_mode_suffix_desc
 }
 
-/** 使用说明门槛：正文来自官方文档，可滚动；确认按钮在滚动内容末尾，必须读到底才能点到。 */
+/** 使用说明门槛：正文是 App 内置的官方文档，可滚动；确认按钮在滚动内容末尾，必须读到底才能点到。 */
 @Composable
 private fun PromptDocsGate(
     docs: PromptRulesViewModel.DocsUiState,
-    onConfirm: () -> Unit,
-    onRefresh: () -> Unit
+    onConfirm: () -> Unit
 ) {
     val context = LocalContext.current
     Column(
@@ -370,14 +368,6 @@ private fun PromptDocsGate(
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.fillMaxWidth()
                 )
-                if (docs.fromCache) {
-                    Text(
-                        text = stringResource(R.string.prompt_rules_docs_from_cache),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                TextButton(onClick = onRefresh) { Text(stringResource(R.string.prompt_rules_docs_refresh)) }
             }
 
             PromptRulesViewModel.DocsUiState.Unavailable -> {
@@ -391,7 +381,6 @@ private fun PromptDocsGate(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                TextButton(onClick = onRefresh) { Text(stringResource(R.string.prompt_rules_docs_retry)) }
             }
         }
 

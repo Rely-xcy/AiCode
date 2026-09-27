@@ -64,10 +64,10 @@ class PromptRulesViewModel @Inject constructor(
         val isDirty: Boolean get() = content != original
     }
 
-    /** 使用说明的加载状态：Ready 为官方文档正文；Unavailable 时 UI 回退到内置短说明。 */
+    /** 使用说明的加载状态：正文来自 App 内置的官方文档（`assets/docs/guide/custom-prompts.md`）。 */
     sealed interface DocsUiState {
         data object Loading : DocsUiState
-        data class Ready(val text: String, val fromCache: Boolean) : DocsUiState
+        data class Ready(val text: String) : DocsUiState
         data object Unavailable : DocsUiState
     }
 
@@ -98,12 +98,12 @@ class PromptRulesViewModel @Inject constructor(
         }
     }
 
-    /** 加载使用说明：默认走缓存，[forceRefresh] 时强制联网刷新（离线自动回退缓存）。 */
-    fun loadDocs(forceRefresh: Boolean = false) {
+    /** 加载使用说明（内置资源，离线可用）。 */
+    fun loadDocs() {
         viewModelScope.launch {
             if (_docs.value !is DocsUiState.Ready) _docs.value = DocsUiState.Loading
-            _docs.value = promptDocsRepository.load(forceRefresh).fold(
-                onSuccess = { DocsUiState.Ready(it.text, it.fromCache) },
+            _docs.value = promptDocsRepository.load().fold(
+                onSuccess = { DocsUiState.Ready(it) },
                 onFailure = { DocsUiState.Unavailable }
             )
         }

@@ -1021,10 +1021,7 @@
     <string name="prompt_rules_title">Prompt &amp; Rules</string>
     <string name="prompt_rules_new_title">New fragment</string>
     <string name="prompt_rules_docs_title">Instructions (required reading)</string>
-    <string name="prompt_rules_docs_from_cache">Showing a locally cached copy of the documentation (couldn\'t refresh online this time).</string>
-    <string name="prompt_rules_docs_refresh">Refetch official docs</string>
-    <string name="prompt_rules_docs_retry">Retry</string>
-    <string name="prompt_rules_docs_unavailable">Couldn\'t load the official documentation (offline and no local cache). Below are the offline highlights; tap the button below for the full documentation.</string>
+    <string name="prompt_rules_docs_unavailable">Couldn\'t read the built-in documentation. Below are the offline highlights; tap the button below for the full documentation.</string>
     <string name="prompt_rules_docs_body">Offline highlights:\n\n1. Customizing replaces, it does not append. Your file completely replaces the matching built-in fragment; writing only half of it effectively deletes the other half.\n\n2. A fragment\'s identity is the two-digit number in its file name. A number matching a built-in fragment overrides it (e.g. 00-identity.md); any other number creates a new fragment, inserted at the position matching that number.\n\n3. Every fragment is editable. 00 identity and 50 safety define who the agent is and the boundaries it must never cross; breaking them costs the app its fallback guarantees, so back up before editing.\n\n4. Mistakes are recoverable. Delete the custom file to restore the built-in default; app upgrades never overwrite your custom directory.\n\n5. Back up first. Prompts directly determine agent behaviour, so export a backup before editing, or keep your changes under version control in the workspace.\n\n6. When unsure, change less. Content that conflicts with the built-in rules makes the model behave erratically.</string>
     <string name="prompt_rules_open_official">Open official docs (full guide)</string>
     <string name="prompt_rules_docs_confirm">I have read and understood the above</string>
