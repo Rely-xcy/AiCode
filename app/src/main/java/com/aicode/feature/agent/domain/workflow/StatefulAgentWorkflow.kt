@@ -61,6 +61,7 @@ import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -503,6 +504,12 @@ class StatefulAgentWorkflow @Inject constructor(
         context: AgentContext,
         tools: List<AgentTool>
     ): Flow<AgentEvent> = channelFlow {
+        // 会话运行一结束就释放它持有的写范围租约。
+        // 放在这里是一次覆盖三条路径（正常完成、取消、异常），比在每个结束点各加一行可靠；
+        // 否则租约只能等 10 分钟 TTL 过期，子代理写完的文件会一直把主代理锁在外面。
+        coroutineContext[Job]?.invokeOnCompletion {
+            writeLeaseRegistry.release(context.sessionId)
+        }
         var currentContext = context
         var state = AgentSessionState()
         var currentTools = tools
