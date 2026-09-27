@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
+import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.data.local.entity.ProfileEntryEntity
 import com.aicode.feature.agent.data.local.entity.ProfileStatus
 import com.aicode.feature.settings.presentation.ProfileViewModel
@@ -111,19 +112,22 @@ internal fun ProfileSettingsScreen(
                 SettingsGroup {
                     group.entries.forEachIndexed { index, entry ->
                         if (index > 0) SettingsDivider()
-                        SettingsRow(
-                            title = entry.value,
-                            subtitle = buildString {
-                                if (entry.status != ProfileStatus.ACTIVE) {
-                                    append(stringResource(R.string.profile_superseded_tag))
-                                    append(" · ")
+                        // 操作风格对齐其它设置页：左滑删除，而不是「点一下弹删除确认」。
+                        // 画像条目是只读的（由 ProfileModule 自动沉淀），所以行本身不可点，也就没有右箭头。
+                        SwipeToDeleteRow(onDelete = { pendingDelete = entry }) {
+                            SettingsRow(
+                                title = entry.value,
+                                subtitle = buildString {
+                                    if (entry.status != ProfileStatus.ACTIVE) {
+                                        append(stringResource(R.string.profile_superseded_tag))
+                                        append(" · ")
+                                    }
+                                    if (entry.evidence.isNotBlank()) {
+                                        append(entry.evidence)
+                                    }
                                 }
-                                if (entry.evidence.isNotBlank()) {
-                                    append(entry.evidence)
-                                }
-                            },
-                            onClick = { pendingDelete = entry }
-                        )
+                            )
+                        }
                     }
                 }
             }
