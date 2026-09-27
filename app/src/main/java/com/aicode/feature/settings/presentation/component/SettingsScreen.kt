@@ -770,6 +770,8 @@ fun SettingsScreen(
             when (current) {
                 // 大屏菜单已常驻左栏，右栏在没选中分区时给个占位提示
                 SettingsSection.Menu -> if (expanded) SettingsDetailPlaceholder() else menuBody()
+                // 自带 Scaffold 的整屏页在前面就已分流处理，这里仅为穷尽分支
+                SettingsSection.PromptRules -> Unit
                 SettingsSection.General -> GeneralSettingsSection(
                     autoRemoveStaleModels = autoRemoveStaleModels,
                     onToggleAutoRemoveStaleModels = { viewModel.setAutoRemoveStaleModels(it) },
