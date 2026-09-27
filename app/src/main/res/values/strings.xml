@@ -1033,7 +1033,7 @@
     <string name="prompt_rules_protected_tag">关键片段，不可修改</string>
     <string name="prompt_rules_protected_hint">该片段决定 Agent 的身份与安全边界，为避免改坏应用兜底能力，不允许修改。此处仅供查看。</string>
     <string name="prompt_rules_override_hint">保存后将整体替换该内置片段；点「恢复内置默认」可删除自定义内容。</string>
-    <string name="prompt_rules_new_hint">新片段将以 %1$s-<名称>.md 写入自定义目录，并按编号插入到提示词对应位置。</string>
+    <string name="prompt_rules_new_hint">新片段将以 %1$s-&lt;名称&gt;.md 写入自定义目录，并按编号插入到提示词对应位置。</string>
     <string name="prompt_rules_new">新建片段</string>
     <string name="prompt_rules_name_label">片段名称（用于生成文件名）</string>
     <string name="prompt_rules_content_label">片段正文</string>
