@@ -121,8 +121,11 @@ internal fun McpSection(
     val projectEntries = entries.filter { it.scope == McpScope.PROJECT }
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
-    // LazyColumn 里的 index 含两个组标题：全局标题=0、全局项=1..gN、项目标题=gN+1、项目项=gN+2..
-    val projectStart = 1 + globalEntries.size + 1
+    // 组标题只在该组非空时才发出，所以起始下标必须按「实际发出了什么」推：
+    // 全局组为空时没有全局标题，项目项从下标 1 开始而不是 2。
+    // 假定标题一定存在会让「只有项目级服务器」时下标整体偏 1：拖到顶部无效、位置也不变。
+    val projectStart = (if (globalEntries.isNotEmpty()) 1 + globalEntries.size else 0) +
+        (if (projectEntries.isNotEmpty()) 1 else 0)
     val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
         val fi = from.index
         val ti = to.index
