@@ -1038,13 +1038,14 @@
     <string name="prompt_rules_discard_body">当前片段有未保存的内容，返回将丢失这些修改。</string>
     <string name="prompt_rules_discard_confirm">放弃修改</string>
     <string name="prompt_rules_sys_hint">这里只开放一项：系统提示词。它作为内置规则之上的最高优先级层注入，内置的身份、工具说明、安全边界等片段都保持原样，不会被替换。想改单个内置片段请进下方「高级」。</string>
+    <string name="prompt_rules_menu">更多选项</string>
+    <string name="prompt_rules_sys_mode_title">注入位置</string>
     <string name="prompt_rules_sys_mode_off">关闭（用内置默认）</string>
     <string name="prompt_rules_sys_mode_off_desc">内置提示词原样使用，与加这个功能之前完全一致</string>
     <string name="prompt_rules_sys_mode_prepend">放在最前</string>
     <string name="prompt_rules_sys_mode_prepend_desc">放在内置规则之前，模型最先读到；适合重写身份与整体行事风格</string>
     <string name="prompt_rules_sys_mode_suffix">放在内置规则之后</string>
     <string name="prompt_rules_sys_mode_suffix_desc">放在内置身份与工具说明之后、技能与记忆等动态内容之前；静态前缀保持不变，更省缓存</string>
-    <string name="prompt_rules_sys_current">当前</string>
     <string name="prompt_rules_sys_body_label">系统提示词正文</string>
     <string name="prompt_rules_sys_over_limit">已超出 %1$d 字符上限，保存与注入都会被拒绝</string>
     <string name="prompt_rules_sys_save">保存</string>
@@ -1054,7 +1055,6 @@
     <string name="prompt_rules_sys_restore_title">恢复默认系统提示词？</string>
     <string name="prompt_rules_sys_restore_body">将删除自定义系统提示词，内置默认立即恢复。此操作不可撤销。</string>
     <string name="prompt_rules_advanced">高级（片段级自定义）</string>
-    <string name="prompt_rules_advanced_hint">按文件名规则覆盖或新增单个提示词片段，编号需自己维护；非必要不建议修改</string>
     <string name="subagents_empty">还没有自定义子代理</string>
     <string name="subagents_empty_hint">点右上角「+」新建一个，或把 agent 的 .md 定义放进 ~/.aicode/agents/</string>
     <string name="subagents_no_project">当前项目暂无子代理</string>

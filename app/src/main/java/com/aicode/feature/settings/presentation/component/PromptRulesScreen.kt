@@ -19,6 +19,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +56,7 @@ import com.aicode.feature.settings.domain.service.PromptFragmentInfo
 import com.aicode.feature.settings.presentation.PromptRulesViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Plus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -87,6 +91,7 @@ internal fun PromptRulesScreen(
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -162,6 +167,75 @@ internal fun PromptRulesScreen(
                         Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
                     }
                 },
+                actions = {
+                    // 三条杠菜单只在主页面（系统提示词）出现；编辑片段/高级页用自己的返回逻辑
+                    if (editor == null && !showAdvanced && docsRead == true && systemPrompt != null) {
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(
+                                    FeatherIcons.Menu,
+                                    contentDescription = stringResource(R.string.prompt_rules_menu)
+                                )
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                val state = systemPrompt!!
+                                Text(
+                                    text = stringResource(R.string.prompt_rules_sys_mode_title),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                                )
+                                listOf(
+                                    SystemPromptMode.OFF,
+                                    SystemPromptMode.PREPEND,
+                                    SystemPromptMode.SUFFIX
+                                ).forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = stringResource(modeTitleRes(mode)),
+                                                color = if (mode == state.mode) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            menuOpen = false
+                                            viewModel.setSystemPromptMode(mode)
+                                        }
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.prompt_rules_sys_import)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        importLauncher.launch("text/*")
+                                    }
+                                )
+                                if (state.hasCustom) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.prompt_rules_sys_restore)) },
+                                        onClick = {
+                                            menuOpen = false
+                                            confirmRestore = true
+                                        }
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.prompt_rules_advanced)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        showAdvanced = true
+                                    }
+                                )
+                            }
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground
@@ -199,12 +273,8 @@ internal fun PromptRulesScreen(
 
                 else -> SystemPromptEditor(
                     state = systemPrompt!!,
-                    onModeChange = viewModel::setSystemPromptMode,
                     onBodyChange = viewModel::updateSystemPromptBody,
-                    onSave = viewModel::saveSystemPrompt,
-                    onImport = { importLauncher.launch("text/*") },
-                    onRestore = { confirmRestore = true },
-                    onAdvanced = { showAdvanced = true }
+                    onSave = viewModel::saveSystemPrompt
                 )
             }
         }
@@ -245,16 +315,12 @@ internal fun PromptRulesScreen(
     }
 }
 
-/** 系统提示词编辑器：注入位置三选 + 正文 + 导入/恢复默认 + 高级入口。 */
+/** 系统提示词编辑器：一级界面只留正文与保存，注入位置/导入/恢复默认/高级都收在右上角三条杠菜单里。 */
 @Composable
 private fun SystemPromptEditor(
     state: PromptRulesViewModel.SystemPromptState,
-    onModeChange: (SystemPromptMode) -> Unit,
     onBodyChange: (String) -> Unit,
-    onSave: () -> Unit,
-    onImport: () -> Unit,
-    onRestore: () -> Unit,
-    onAdvanced: () -> Unit
+    onSave: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -270,19 +336,13 @@ private fun SystemPromptEditor(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        SettingsGroup {
-            val modes = listOf(SystemPromptMode.OFF, SystemPromptMode.PREPEND, SystemPromptMode.SUFFIX)
-            modes.forEachIndexed { index, mode ->
-                if (index > 0) SettingsDivider()
-                val selected = mode == state.mode
-                SettingsRow(
-                    title = stringResource(modeTitleRes(mode)) +
-                        if (selected) " · " + stringResource(R.string.prompt_rules_sys_current) else "",
-                    subtitle = stringResource(modeDescRes(mode)),
-                    onClick = { onModeChange(mode) }
-                )
-            }
-        }
+        Text(
+            text = stringResource(R.string.prompt_rules_sys_mode_title) + "：" +
+                stringResource(modeTitleRes(state.mode)) +
+                "（" + stringResource(modeDescRes(state.mode)) + "）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         AppTextField(
             value = state.body,
@@ -303,22 +363,12 @@ private fun SystemPromptEditor(
             )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            Button(onClick = onSave, enabled = state.isDirty && !state.isOverLimit) {
-                Text(stringResource(R.string.prompt_rules_sys_save))
-            }
-            TextButton(onClick = onImport) { Text(stringResource(R.string.prompt_rules_sys_import)) }
-            if (state.hasCustom) {
-                TextButton(onClick = onRestore) { Text(stringResource(R.string.prompt_rules_sys_restore)) }
-            }
-        }
-
-        SettingsGroup {
-            SettingsRow(
-                title = stringResource(R.string.prompt_rules_advanced),
-                subtitle = stringResource(R.string.prompt_rules_advanced_hint),
-                onClick = onAdvanced
-            )
+        Button(
+            onClick = onSave,
+            enabled = state.isDirty && !state.isOverLimit,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.prompt_rules_sys_save))
         }
     }
 }
