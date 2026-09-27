@@ -121,10 +121,16 @@ internal fun McpSection(
     val projectEntries = entries.filter { it.scope == McpScope.PROJECT }
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
+    var globalExpanded by remember { mutableStateOf(true) }
+    var projectExpanded by remember { mutableStateOf(true) }
+    // 收起的组只占标题、不占条目，所以要按「实际会渲染哪些项」来算下标的。
+    val visibleGlobal = if (globalExpanded) globalEntries else emptyList()
+    val visibleProject = if (projectExpanded) projectEntries else emptyList()
     // 组标题只在该组非空时才发出，所以起始下标必须按「实际发出了什么」推：
     // 全局组为空时没有全局标题，项目项从下标 1 开始而不是 2。
     // 假定标题一定存在会让「只有项目级服务器」时下标整体偏 1：拖到顶部无效、位置也不变。
-    val projectStart = (if (globalEntries.isNotEmpty()) 1 + globalEntries.size else 0) +
+    val projectStart = (if (globalEntries.isNotEmpty()) 1 else 0) +
+        visibleGlobal.size +
         (if (projectEntries.isNotEmpty()) 1 else 0)
     val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
         val fi = from.index
@@ -149,9 +155,13 @@ internal fun McpSection(
     ) {
         if (globalEntries.isNotEmpty()) {
             item(key = "mcp_header_global") {
-                SettingsGroupHeader(text = stringResource(R.string.perm_global))
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.perm_global),
+                    expanded = globalExpanded,
+                    onToggle = { globalExpanded = !globalExpanded }
+                )
             }
-            itemsIndexed(globalEntries, key = { _, e -> "g_${e.server.name}" }) { _, entry ->
+            itemsIndexed(visibleGlobal, key = { _, e -> "g_${e.server.name}" }) { _, entry ->
                 ReorderableItem(state = reorderableState, key = "g_${entry.server.name}") { isDragging ->
                     McpDraggableCard(
                         isDragging = isDragging,
@@ -176,9 +186,13 @@ internal fun McpSection(
         }
         if (projectEntries.isNotEmpty()) {
             item(key = "mcp_header_project") {
-                SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.skills_scope_project),
+                    expanded = projectExpanded,
+                    onToggle = { projectExpanded = !projectExpanded }
+                )
             }
-            itemsIndexed(projectEntries, key = { _, e -> "p_${e.server.name}" }) { _, entry ->
+            itemsIndexed(visibleProject, key = { _, e -> "p_${e.server.name}" }) { _, entry ->
                 ReorderableItem(state = reorderableState, key = "p_${entry.server.name}") { isDragging ->
                     McpDraggableCard(
                         isDragging = isDragging,
