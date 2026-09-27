@@ -144,6 +144,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     DefaultModels(R.string.settings_default_models),
     Mcp(R.string.settings_mcp),
     Skills(R.string.settings_skills),
+    Memory(R.string.settings_memory),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
@@ -822,6 +823,16 @@ fun SettingsScreen(
                         section = SettingsSection.SkillDetail
                     }
                 )
+                SettingsSection.Memory -> {
+                    // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
+                    val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
+                    MemorySection(
+                        memories = memories,
+                        onDelete = memoryViewModel::delete
+                    )
+                }
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
                         entry = entry,
@@ -1347,6 +1358,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Users,
                 title = stringResource(SettingsSection.SubAgents.titleRes),
                 onClick = { onOpen(SettingsSection.SubAgents) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.FileText,
+                title = stringResource(SettingsSection.Memory.titleRes),
+                onClick = { onOpen(SettingsSection.Memory) }
             )
         }
 
