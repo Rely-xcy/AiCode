@@ -69,12 +69,12 @@ internal fun ProfileSettingsScreen(
         }
     }
 
-    // 顶栏交给 SettingsScreen 外壳（与其它设置分区一致，不再自画一套）；
-    // 删除结果的 snackbar 需要自己的 host，所以用 Box 浮在底部。
-    Box(modifier = Modifier.fillMaxSize()) {
+    // 本页现在渲染在外壳的分区内容列里（不再是整页 early-return），
+    // 用 fillMaxSize 会在无界高度的宿主里塔成 0 高、整页空白，所以按宽度撑开、高度随内容。
+    Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
