@@ -50,6 +50,7 @@
     <string name="settings_image_gen_model">Image Generation Model</string>
     <string name="settings_mcp">MCP Servers</string>
     <string name="settings_skills">Skills</string>
+    <string name="settings_memory">Memory</string>
     <string name="settings_container">Container &amp; Images</string>
     <string name="settings_log_no_files">No log files yet</string>
     <string name="settings_log_read_failed">Failed to read log: %1$s</string>
@@ -964,6 +965,10 @@
     <string name="mcp_type_stdio">stdio</string>
     <string name="mcp_tools_count">%1$d tools</string>
     <string name="mcp_details">Details</string>
+
+    <!-- Memory Settings -->
+    <string name="memory_empty">No memories yet</string>
+    <string name="memory_empty_hint">Whatever you ask the assistant to remember shows up here</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>
