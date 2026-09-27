@@ -148,8 +148,8 @@ fun BrowserScreen(
                 onGoForward = { scope.launch { browserManager.goForward() } },
                 onNewTab = { scope.launch { browserManager.newTab() } },
                 onToggleNightMode = { browserManager.toggleNightMode() },
-                userAgent = viewModel.userAgent.collectAsStateWithLifecycle().value,
-                onSelectUserAgent = viewModel::setUserAgent,
+                userAgent = state.userAgent,
+                onSelectUserAgent = { browserManager.setUserAgent(it) },
                 onOpenTabs = { showTabsSheet = true }
             )
         }

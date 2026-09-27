@@ -67,7 +67,8 @@ data class BrowserState(
     val tabs: List<BrowserTabState> = emptyList(),
     val activeTabId: String = "",
     val attached: Boolean = false,
-    val nightMode: Boolean = false
+    val nightMode: Boolean = false,
+    val userAgent: BrowserUserAgent = BrowserUserAgent.SYSTEM
 ) {
     val activeTab: BrowserTabState? get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.firstOrNull()
     val url: String get() = activeTab?.url.orEmpty()
@@ -172,7 +173,7 @@ class BrowserManager @Inject constructor(
 
     private val nightMode: Boolean get() = nightModeOverride ?: appDarkTheme
 
-    private val _state = MutableStateFlow(BrowserState())
+    private val _state = MutableStateFlow(BrowserState(userAgent = userAgentStore.current()))
     val state: StateFlow<BrowserState> = _state.asStateFlow()
 
     /** 面板不可见时仍需保活的标签：计时器被 WebView 暂停后由监督协程定期唤醒。 */
@@ -301,6 +302,16 @@ class BrowserManager @Inject constructor(
             return document.querySelector(selector);
         }
     """.trimIndent()
+
+    /**
+     * 切换 UA 档位：落盘 + 更新状态 + 对已打开标签重应用并重载。
+     */
+    fun setUserAgent(value: BrowserUserAgent) {
+        if (value == _state.value.userAgent) return
+        userAgentStore.set(value)
+        _state.update { it.copy(userAgent = value) }
+        applyUserAgentChange()
+    }
 
     /**
      * UA 设置变更后重新应用到所有已打开的标签并重载页面，否则要等用户手动刷新才生效。
