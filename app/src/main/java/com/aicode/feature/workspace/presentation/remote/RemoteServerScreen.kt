@@ -165,7 +165,8 @@ fun RemoteServerScreen(
                     } else {
                         ConnectionsList(
                             connections = uiState.connections,
-                            onReorder = viewModel::reorderConnections,
+                            onReorder = viewModel::moveConnection,
+                            onReorderEnd = viewModel::persistConnectionOrder,
                             onEdit = {
                                 connectionToEdit = it
                                 showAddConnectionDialog = true
@@ -188,7 +189,8 @@ fun RemoteServerScreen(
                         MountsList(
                             mounts = uiState.mounts,
                             failedMountIds = uiState.failedMountIds,
-                            onReorder = viewModel::reorderMounts,
+                            onReorder = viewModel::moveMount,
+                            onReorderEnd = viewModel::persistMountOrder,
                             onEdit = {
                                 mountToEdit = it
                                 showAddMountDialog = true
@@ -399,6 +401,7 @@ private fun EmptyState(
 private fun ConnectionsList(
     connections: List<RemoteConnection>,
     onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onReorderEnd: () -> Unit,
     onEdit: (RemoteConnection) -> Unit,
     onDelete: (RemoteConnection) -> Unit
 ) {
@@ -419,7 +422,10 @@ private fun ConnectionsList(
                     isDragging = isDragging,
                     dragHandleModifier = Modifier.longPressDraggableHandle(
                         onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                        onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                        onDragStopped = {
+                            haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                            onReorderEnd()
+                        }
                     )
                 ) {
                     RemoteConnectionCard(
@@ -439,6 +445,7 @@ private fun MountsList(
     mounts: List<RemoteMount>,
     failedMountIds: Set<String>,
     onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onReorderEnd: () -> Unit,
     onEdit: (RemoteMount) -> Unit,
     onDelete: (RemoteMount) -> Unit,
     onUpload: (RemoteMount) -> Unit,
@@ -463,7 +470,10 @@ private fun MountsList(
                     isDragging = isDragging,
                     dragHandleModifier = Modifier.longPressDraggableHandle(
                         onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                        onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                        onDragStopped = {
+                            haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                            onReorderEnd()
+                        }
                     )
                 ) {
                     RemoteMountCard(

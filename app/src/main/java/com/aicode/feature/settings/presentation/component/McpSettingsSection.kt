@@ -75,7 +75,8 @@ internal fun McpSection(
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
     onDelete: (String, McpScope) -> Unit,
-    onReorder: (McpScope, Int, Int) -> Unit
+    onReorder: (McpScope, Int, Int) -> Unit,
+    onReorderEnd: (McpScope) -> Unit
 ) {
     if (entries.isEmpty()) {
         Box(
@@ -153,7 +154,10 @@ internal fun McpSection(
                         isDragging = isDragging,
                         dragHandleModifier = Modifier.longPressDraggableHandle(
                             onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                            onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                            onDragStopped = {
+                                haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                onReorderEnd(McpScope.GLOBAL)
+                            }
                         )
                     ) {
                         McpServerRow(
@@ -177,7 +181,10 @@ internal fun McpSection(
                         isDragging = isDragging,
                         dragHandleModifier = Modifier.longPressDraggableHandle(
                             onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                            onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                            onDragStopped = {
+                                haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                onReorderEnd(McpScope.PROJECT)
+                            }
                         )
                     ) {
                         McpServerRow(

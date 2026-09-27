@@ -802,8 +802,9 @@ fun SettingsScreen(
                     },
                     onDelete = { viewModel.deleteProvider(it.id) },
                     onReorder = { fromIndex, toIndex ->
-                        viewModel.reorderProviders(fromIndex, toIndex)
-                    }
+                        viewModel.moveProvider(fromIndex, toIndex)
+                    },
+                    onReorderEnd = { viewModel.persistProviderOrder() }
                 )
                 SettingsSection.DefaultModels -> DefaultModelsSection(
                     providers = providers,
@@ -837,7 +838,8 @@ fun SettingsScreen(
                         showMcpDialog = true
                     },
                     onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) },
-                    onReorder = { scope, from, to -> viewModel.reorderMcpServers(scope, from, to) }
+                    onReorder = { scope, from, to -> viewModel.moveMcpServer(scope, from, to) },
+                    onReorderEnd = { scope -> viewModel.persistMcpServers(scope) }
                 )
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,

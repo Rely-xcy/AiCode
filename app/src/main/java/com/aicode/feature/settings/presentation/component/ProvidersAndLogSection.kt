@@ -57,7 +57,8 @@ internal fun ProvidersSection(
     providers: List<AIProviderConfig>,
     onEdit: (AIProviderConfig) -> Unit,
     onDelete: (AIProviderConfig) -> Unit,
-    onReorder: (fromIndex: Int, toIndex: Int) -> Unit
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onReorderEnd: () -> Unit
 ) {
     if (providers.isEmpty()) {
         EmptyHint(stringResource(R.string.providers_empty))
@@ -118,6 +119,7 @@ internal fun ProvidersSection(
                             },
                             onDragStopped = {
                                 hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                onReorderEnd()
                             }
                         )
                     )

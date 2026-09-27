@@ -1088,14 +1088,26 @@ class SettingsViewModel @Inject constructor(
      * MCP 列表按作用域组内拖拽排序：重排该作用域的配置列表并持久化。
      * 顺序存在 mcp.json 的键序里（无单独排序字段），只做组内重排、不跨作用域。
      */
-    fun reorderMcpServers(scope: McpScope, fromIndex: Int, toIndex: Int) {
+    /**
+     * MCP 列表组内拖拽：只改内存顺序。
+     * 拖动中每次移动都序列化 JSON 写文件是卡顿主因，落盘交给 [persistMcpServers]。
+     */
+    fun moveMcpServer(scope: McpScope, fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
+        val current = _mcpEntries.value
+        val scopeIndices = current.indices.filter { current[it].scope == scope }
+        if (fromIndex !in scopeIndices.indices || toIndex !in scopeIndices.indices) return
+        val moved = current.toMutableList()
+        moved.add(scopeIndices[toIndex], moved.removeAt(scopeIndices[fromIndex]))
+        _mcpEntries.value = moved
+    }
+
+    /** 拖拽结束：把当前顺序按作用域写回配置。 */
+    fun persistMcpServers(scope: McpScope) {
+        val ordered = _mcpEntries.value.filter { it.scope == scope }.map { it.server }
         viewModelScope.launch {
-            val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-            if (fromIndex !in base.indices || toIndex !in base.indices) return@launch
-            val reordered = base.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(reordered)
-            else mcpConfigRepository.setProjectServers(reordered)
+            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(ordered)
+            else mcpConfigRepository.setProjectServers(ordered)
         }
     }
 
@@ -2067,18 +2079,20 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 提供商列表长按拖拽排序：同步更新内存顺序（reorderable 库要求 onMove 返回前列表已更新，否则拖拽项闪烁），再异步持久化 sortOrder。 */
-    fun reorderProviders(fromIndex: Int, toIndex: Int) {
+    /** 提供商列表长按拖拽排序：拖动过程只改内存（onMove 要求返回前列表已更新），松手后再落库。 */
+    fun moveProvider(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
         val current = _providers.value
         if (fromIndex !in current.indices || toIndex !in current.indices) return
-        val reordered = current.toMutableList().apply {
+        _providers.value = current.toMutableList().apply {
             add(toIndex, removeAt(fromIndex))
         }
-        _providers.value = reordered
-        viewModelScope.launch {
-            repository.reorderProviders(reordered)
-        }
+    }
+
+    /** 拖拽结束：把当前内存顺序落库。拖动中逐帧写库是列表卡顿的主因。 */
+    fun persistProviderOrder() {
+        val ordered = _providers.value
+        viewModelScope.launch { repository.reorderProviders(ordered) }
     }
 
     fun fetchModels(provider: AIProviderConfig) {

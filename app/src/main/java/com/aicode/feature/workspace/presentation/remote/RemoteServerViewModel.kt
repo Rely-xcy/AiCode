@@ -85,24 +85,34 @@ class RemoteServerViewModel @Inject constructor(
         }
     }
 
-    /** 连接列表拖拽排序：先改内存（reorderable 要求 onMove 返回前已更新），再异步持久化。 */
-    fun reorderConnections(fromIndex: Int, toIndex: Int) {
+    /** 连接列表拖拽排序：拖动过程只改内存，落库交给 [persistConnectionOrder]。 */
+    fun moveConnection(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
         val current = _uiState.value.connections
         if (fromIndex !in current.indices || toIndex !in current.indices) return
         val reordered = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
         _uiState.value = _uiState.value.copy(connections = reordered)
-        viewModelScope.launch { repository.reorderConnections(reordered) }
+    }
+
+    /** 拖拽结束：把当前顺序落库（拖动中逐帧写库会明显卡顿）。 */
+    fun persistConnectionOrder() {
+        val ordered = _uiState.value.connections
+        viewModelScope.launch { repository.reorderConnections(ordered) }
     }
 
     /** 工作区（挂载）列表拖拽排序，同上。 */
-    fun reorderMounts(fromIndex: Int, toIndex: Int) {
+    fun moveMount(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
         val current = _uiState.value.mounts
         if (fromIndex !in current.indices || toIndex !in current.indices) return
         val reordered = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
         _uiState.value = _uiState.value.copy(mounts = reordered)
-        viewModelScope.launch { repository.reorderMounts(reordered) }
+    }
+
+    /** 拖拽结束：把挂载顺序落库。 */
+    fun persistMountOrder() {
+        val ordered = _uiState.value.mounts
+        viewModelScope.launch { repository.reorderMounts(ordered) }
     }
 
     fun connectMount(id: String) {
