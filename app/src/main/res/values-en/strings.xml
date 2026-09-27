@@ -1600,5 +1600,9 @@
     <string name="browser_empty_click_hint">Tap above to enter a URL and start browsing</string>
     <string name="browser_night_mode_on">Turn off night mode</string>
     <string name="browser_night_mode_off">Turn on night mode</string>
+    <string name="browser_user_agent">User agent</string>
+    <string name="browser_user_agent_system">Follow system</string>
+    <string name="browser_user_agent_desktop">Desktop</string>
+    <string name="browser_user_agent_mobile">Mobile</string>
     <string name="browser_devtools">Developer tools</string>
 </resources>

@@ -32,6 +32,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -69,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aicode.feature.agent.domain.tool.browser.BrowserUserAgent
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
@@ -145,6 +148,8 @@ fun BrowserScreen(
                 onGoForward = { scope.launch { browserManager.goForward() } },
                 onNewTab = { scope.launch { browserManager.newTab() } },
                 onToggleNightMode = { browserManager.toggleNightMode() },
+                userAgent = viewModel.userAgent.collectAsStateWithLifecycle().value,
+                onSelectUserAgent = viewModel::setUserAgent,
                 onOpenTabs = { showTabsSheet = true }
             )
         }
@@ -565,6 +570,8 @@ private fun BrowserBottomBar(
     onGoForward: () -> Unit,
     onNewTab: () -> Unit,
     onToggleNightMode: () -> Unit,
+    userAgent: BrowserUserAgent,
+    onSelectUserAgent: (BrowserUserAgent) -> Unit,
     onOpenTabs: () -> Unit
 ) {
     Surface(
@@ -635,7 +642,48 @@ private fun BrowserBottomBar(
                     )
                 }
 
-                // 5. 标签页管理按钮（数字方框徽标）
+                // 5. UA 档位：切换后立刻对已打开标签重应用并重载
+                Box {
+                    var uaMenuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { uaMenuOpen = true }) {
+                        Icon(
+                            FeatherIcons.Globe,
+                            contentDescription = stringResource(R.string.browser_user_agent),
+                            tint = if (userAgent == BrowserUserAgent.SYSTEM) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    DropdownMenu(expanded = uaMenuOpen, onDismissRequest = { uaMenuOpen = false }) {
+                        listOf(
+                            BrowserUserAgent.SYSTEM to R.string.browser_user_agent_system,
+                            BrowserUserAgent.DESKTOP to R.string.browser_user_agent_desktop,
+                            BrowserUserAgent.MOBILE to R.string.browser_user_agent_mobile
+                        ).forEach { (value, labelRes) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = stringResource(labelRes),
+                                        color = if (value == userAgent) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    uaMenuOpen = false
+                                    onSelectUserAgent(value)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // 6. 标签页管理按钮（数字方框徽标）
                 Box(
                     modifier = Modifier
                         .size(28.dp)

@@ -94,7 +94,8 @@ data class BrowserConsoleEntry(
 class BrowserManager @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val fileAccess: FileAccessProvider,
-    private val pathHomeResolver: PathHomeResolver
+    private val pathHomeResolver: PathHomeResolver,
+    private val userAgentStore: BrowserUserAgentStore
 ) {
 
     companion object {
@@ -301,6 +302,20 @@ class BrowserManager @Inject constructor(
         }
     """.trimIndent()
 
+    /**
+     * UA 设置变更后重新应用到所有已打开的标签并重载页面，否则要等用户手动刷新才生效。
+     * 用 `webView.post` 保证在 UI 线程执行（WebView 的 settings 与 reload 都不能跨线程调）。
+     */
+    fun applyUserAgentChange() {
+        val ua = userAgentStore.userAgentString()
+        tabs.forEach { holder ->
+            holder.webView.post {
+                holder.webView.settings.userAgentString = ua
+                holder.webView.reload()
+            }
+        }
+    }
+
     inner class BrowserJsBridge(private val tabId: String) {
         @JavascriptInterface
         fun resolve(callId: String, result: String) {
@@ -440,6 +455,9 @@ class BrowserManager @Inject constructor(
         wv.settings.displayZoomControls = false
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
+        // UA 覆盖：null 表示跟随系统——直接赋 null 会让 WebView 恢复自带 UA，
+        // 所以从桌面/移动切回跟随系统时不需要另外记录原始 UA。
+        wv.settings.userAgentString = userAgentStore.userAgentString()
         wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.setBackgroundColor(if (nightMode) NIGHT_BG_COLOR else Color.WHITE)

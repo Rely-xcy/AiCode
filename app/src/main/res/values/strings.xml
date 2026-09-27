@@ -1599,5 +1599,9 @@
     <string name="browser_empty_click_hint">点击上方输入网址开始浏览</string>
     <string name="browser_night_mode_on">关闭夜间模式</string>
     <string name="browser_night_mode_off">开启夜间模式</string>
+    <string name="browser_user_agent">浏览器标识（UA）</string>
+    <string name="browser_user_agent_system">跟随系统</string>
+    <string name="browser_user_agent_desktop">桌面版</string>
+    <string name="browser_user_agent_mobile">移动版</string>
     <string name="browser_devtools">开发者工具</string>
 </resources>
