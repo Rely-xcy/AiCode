@@ -105,7 +105,7 @@ internal fun GeneralSettingsSection(
                 subtitle = buildString {
                     append(stringResource(R.string.settings_compaction_threshold_desc))
                     if (contextWindow > 0) {
-                        append("\n")
+                        // 不换行：subtitle 保持单段，与同页其它行一致（硬换行会让行高比别处高一截）。
                         // 百分比只是上限之一，还要过档位绝对上限；直接显示算完的绝对值，
                         // 用户才看得出“设置里写 80%”到底对应多少 tokens、上限有没有生效。
                         append(
@@ -138,7 +138,7 @@ internal fun GeneralSettingsSection(
                 subtitle = buildString {
                     append(stringResource(R.string.settings_soft_compaction_threshold_desc))
                     if (contextWindow > 0) {
-                        append("\n")
+                        // 不换行：subtitle 保持单段，与同页其它行一致（硬换行会让行高比别处高一截）。
                         // 与 ContextCompactor 同一套算法：软阈值还要被硬阈值减一（硬阈值未启用时按窗口 90%）封顶。
                         val hardEffective = if (tierHardCap > 0) {
                             minOf(contextWindow * compactionThresholdPercent / 100, tierHardCap)
