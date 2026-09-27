@@ -1,0 +1,2 @@
+ALTER TABLE remote_connections ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE remote_mounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;

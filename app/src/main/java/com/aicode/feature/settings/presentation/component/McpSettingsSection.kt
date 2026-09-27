@@ -1,11 +1,15 @@
 package com.aicode.feature.settings.presentation.component
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,24 +19,33 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.zIndex
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.SwipeToDeleteRow
@@ -46,6 +59,8 @@ import compose.icons.feathericons.Box
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Terminal
 import com.aicode.R
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * MCP 二级页：与提供商/默认模型一致的 iOS 分组列表。
@@ -59,7 +74,8 @@ internal fun McpSection(
     onReload: () -> Unit,
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
-    onDelete: (String, McpScope) -> Unit
+    onDelete: (String, McpScope) -> Unit,
+    onReorder: (McpScope, Int, Int) -> Unit
 ) {
     if (entries.isEmpty()) {
         Box(
@@ -100,28 +116,115 @@ internal fun McpSection(
         return
     }
 
-    Column(
+    val globalEntries = entries.filter { it.scope == McpScope.GLOBAL }
+    val projectEntries = entries.filter { it.scope == McpScope.PROJECT }
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    // LazyColumn 里的 index 含两个组标题：全局标题=0、全局项=1..gN、项目标题=gN+1、项目项=gN+2..
+    val projectStart = 1 + globalEntries.size + 1
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        val fi = from.index
+        val ti = to.index
+        val gStart = 1
+        val gEnd = globalEntries.size
+        when {
+            globalEntries.isNotEmpty() && fi in gStart..gEnd && ti in gStart..gEnd ->
+                onReorder(McpScope.GLOBAL, fi - gStart, ti - gStart)
+            projectEntries.isNotEmpty() && fi >= projectStart && ti >= projectStart ->
+                onReorder(McpScope.PROJECT, fi - projectStart, ti - projectStart)
+            else -> Unit // 跨组拖拽忽略（项回弹）
+        }
+    }
+    LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(horizontal = Spacing.lg),
+        contentPadding = PaddingValues(top = Spacing.sm, bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        SettingsGroup {
-            entries.forEachIndexed { index, entry ->
-                if (index > 0) {
-                    SettingsDivider()
+        if (globalEntries.isNotEmpty()) {
+            item(key = "mcp_header_global") {
+                SettingsGroupHeader(text = stringResource(R.string.perm_global))
+            }
+            itemsIndexed(globalEntries, key = { _, e -> "g_${e.server.name}" }) { _, entry ->
+                ReorderableItem(state = reorderableState, key = "g_${entry.server.name}") { isDragging ->
+                    McpDraggableCard(
+                        isDragging = isDragging,
+                        dragHandleModifier = Modifier.longPressDraggableHandle(
+                            onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                            onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                        )
+                    ) {
+                        McpServerRow(
+                            server = entry.server,
+                            scope = entry.scope,
+                            status = statuses.firstOrNull { it.name == entry.server.name },
+                            onClick = { onEdit(entry) },
+                            onDelete = { onDelete(entry.server.name, entry.scope) }
+                        )
+                    }
                 }
-                McpServerRow(
-                    server = entry.server,
-                    scope = entry.scope,
-                    status = statuses.firstOrNull { it.name == entry.server.name },
-                    onClick = { onEdit(entry) },
-                    onDelete = { onDelete(entry.server.name, entry.scope) }
-                )
             }
         }
+        if (projectEntries.isNotEmpty()) {
+            item(key = "mcp_header_project") {
+                SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
+            }
+            itemsIndexed(projectEntries, key = { _, e -> "p_${e.server.name}" }) { _, entry ->
+                ReorderableItem(state = reorderableState, key = "p_${entry.server.name}") { isDragging ->
+                    McpDraggableCard(
+                        isDragging = isDragging,
+                        dragHandleModifier = Modifier.longPressDraggableHandle(
+                            onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                            onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                        )
+                    ) {
+                        McpServerRow(
+                            server = entry.server,
+                            scope = entry.scope,
+                            status = statuses.firstOrNull { it.name == entry.server.name },
+                            onClick = { onEdit(entry) },
+                            onDelete = { onDelete(entry.server.name, entry.scope) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** MCP 拖拽卡片包装：缩放 + 阴影 + 长按拖拽把手 + 触感（对齐提供商/远程列表）。 */
+@Composable
+private fun McpDraggableCard(
+    isDragging: Boolean,
+    dragHandleModifier: Modifier,
+    content: @Composable () -> Unit
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (isDragging) 0.97f else 1f,
+        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+        label = "mcpDragScale"
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (isDragging) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+        label = "mcpDragElevation"
+    )
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.semanticColors.cardSurface,
+        shadowElevation = elevation,
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .then(dragHandleModifier)
+    ) {
+        content()
     }
 }
 

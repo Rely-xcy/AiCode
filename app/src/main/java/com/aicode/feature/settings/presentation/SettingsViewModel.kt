@@ -1083,6 +1083,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * MCP 列表按作用域组内拖拽排序：重排该作用域的配置列表并持久化。
+     * 顺序存在 mcp.json 的键序里（无单独排序字段），只做组内重排、不跨作用域。
+     */
+    fun reorderMcpServers(scope: McpScope, fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        viewModelScope.launch {
+            val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+            if (fromIndex !in base.indices || toIndex !in base.indices) return@launch
+            val reordered = base.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(reordered)
+            else mcpConfigRepository.setProjectServers(reordered)
+        }
+    }
+
     fun setMcpServerEnabled(name: String, enabled: Boolean, scope: McpScope) {
         viewModelScope.launch {
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()

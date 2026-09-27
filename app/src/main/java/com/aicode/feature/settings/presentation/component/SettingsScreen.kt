@@ -830,7 +830,8 @@ fun SettingsScreen(
                         editingMcp = it
                         showMcpDialog = true
                     },
-                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) }
+                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) },
+                    onReorder = { scope, from, to -> viewModel.reorderMcpServers(scope, from, to) }
                 )
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,

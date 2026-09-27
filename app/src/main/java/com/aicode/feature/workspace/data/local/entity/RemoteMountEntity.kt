@@ -26,5 +26,7 @@ data class RemoteMountEntity(
     val localMountPath: String,
     val isActive: Boolean = false,
     val autoConnect: Boolean = true,
-    @ColumnInfo(name = "created_at") val createdAt: Long = 0
+    @ColumnInfo(name = "created_at") val createdAt: Long = 0,
+    /** 列表拖拽排序序号；新建时取当前最大值 +1。 */
+    @ColumnInfo(name = "sort_order") val sortOrder: Int = 0
 )

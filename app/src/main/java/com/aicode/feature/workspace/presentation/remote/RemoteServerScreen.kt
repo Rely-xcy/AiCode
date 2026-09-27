@@ -12,6 +12,14 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -21,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -34,11 +43,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Spacing
+import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
 import com.aicode.feature.settings.presentation.component.SettingsDivider
@@ -56,6 +70,8 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.UploadCloud
 import kotlinx.coroutines.launch
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,21 +163,15 @@ fun RemoteServerScreen(
                             }
                         )
                     } else {
-                        SettingsList(scrollState = connScrollState) {
-                            uiState.connections.forEachIndexed { index, conn ->
-                                if (index > 0) {
-                                    SettingsDivider()
-                                }
-                                RemoteConnectionCard(
-                                    conn = conn,
-                                    onEdit = {
-                                        connectionToEdit = it
-                                        showAddConnectionDialog = true
-                                    },
-                                    onDelete = { pendingDeleteConnection = it }
-                                )
-                            }
-                        }
+                        ConnectionsList(
+                            connections = uiState.connections,
+                            onReorder = viewModel::reorderConnections,
+                            onEdit = {
+                                connectionToEdit = it
+                                showAddConnectionDialog = true
+                            },
+                            onDelete = { pendingDeleteConnection = it }
+                        )
                     }
                 }
                 1 -> {
@@ -175,26 +185,20 @@ fun RemoteServerScreen(
                             }
                         )
                     } else {
-                        SettingsList(scrollState = mountScrollState) {
-                            uiState.mounts.forEachIndexed { index, mount ->
-                                if (index > 0) {
-                                    SettingsDivider()
-                                }
-                                RemoteMountCard(
-                                    mount = mount,
-                                    isFailed = mount.id in uiState.failedMountIds,
-                                    onEdit = {
-                                        mountToEdit = it
-                                        showAddMountDialog = true
-                                    },
-                                    onDelete = { pendingDeleteMount = it },
-                                    onUpload = { viewModel.forceUploadMount(it.id) },
-                                    onDownload = { viewModel.forceDownloadMount(it.id) },
-                                    onConnect = { viewModel.connectMount(it.id) },
-                                    onDisconnect = { viewModel.disconnectMount(it.id) }
-                                )
-                            }
-                        }
+                        MountsList(
+                            mounts = uiState.mounts,
+                            failedMountIds = uiState.failedMountIds,
+                            onReorder = viewModel::reorderMounts,
+                            onEdit = {
+                                mountToEdit = it
+                                showAddMountDialog = true
+                            },
+                            onDelete = { pendingDeleteMount = it },
+                            onUpload = { viewModel.forceUploadMount(it.id) },
+                            onDownload = { viewModel.forceDownloadMount(it.id) },
+                            onConnect = { viewModel.connectMount(it.id) },
+                            onDisconnect = { viewModel.disconnectMount(it.id) }
+                        )
                     }
                 }
                 2 -> WiFiFtpServerSection(viewModel, ftpScrollState)
@@ -390,20 +394,124 @@ private fun EmptyState(
     }
 }
 
-/** 分组列表容器：垂直滚动 + 白色圆角分组，与容器镜像页列表一致。底部预留 70dp（tab 栏高度），
- *  列表最后一项可完全滚到悬浮 tab 栏之上不被遮挡（同 Git 页面）。 */
+/** 连接列表：长按拖拽排序（与提供商列表一致的 reorderable 交互）。 */
 @Composable
-private fun SettingsList(
-    scrollState: ScrollState,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+private fun ConnectionsList(
+    connections: List<RemoteConnection>,
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onEdit: (RemoteConnection) -> Unit,
+    onDelete: (RemoteConnection) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = 70.dp)
+    val listState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        onReorder(from.index, to.index)
+    }
+    val haptic = LocalHapticFeedback.current
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lg),
+        contentPadding = PaddingValues(top = Spacing.sm, bottom = 70.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        SettingsGroup(content = content)
+        itemsIndexed(items = connections, key = { _, c -> c.id }) { _, conn ->
+            ReorderableItem(state = reorderableState, key = conn.id) { isDragging ->
+                DraggableCard(
+                    isDragging = isDragging,
+                    dragHandleModifier = Modifier.longPressDraggableHandle(
+                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                        onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                    )
+                ) {
+                    RemoteConnectionCard(
+                        conn = conn,
+                        onEdit = onEdit,
+                        onDelete = onDelete
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 挂载（工作区）列表：同样支持长按拖拽排序。 */
+@Composable
+private fun MountsList(
+    mounts: List<RemoteMount>,
+    failedMountIds: Set<String>,
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onEdit: (RemoteMount) -> Unit,
+    onDelete: (RemoteMount) -> Unit,
+    onUpload: (RemoteMount) -> Unit,
+    onDownload: (RemoteMount) -> Unit,
+    onConnect: (RemoteMount) -> Unit,
+    onDisconnect: (RemoteMount) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        onReorder(from.index, to.index)
+    }
+    val haptic = LocalHapticFeedback.current
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lg),
+        contentPadding = PaddingValues(top = Spacing.sm, bottom = 70.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        itemsIndexed(items = mounts, key = { _, m -> m.id }) { _, mount ->
+            ReorderableItem(state = reorderableState, key = mount.id) { isDragging ->
+                DraggableCard(
+                    isDragging = isDragging,
+                    dragHandleModifier = Modifier.longPressDraggableHandle(
+                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                        onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) }
+                    )
+                ) {
+                    RemoteMountCard(
+                        mount = mount,
+                        isFailed = mount.id in failedMountIds,
+                        onEdit = onEdit,
+                        onDelete = onDelete,
+                        onUpload = onUpload,
+                        onDownload = onDownload,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 拖拽中的卡片包装：缩放 + 阴影 + 层级提升 + 长按拖拽把手 + 触感反馈（对齐提供商列表）。 */
+@Composable
+private fun DraggableCard(
+    isDragging: Boolean,
+    dragHandleModifier: Modifier,
+    content: @Composable () -> Unit
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (isDragging) 0.97f else 1f,
+        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+        label = "remoteDragScale"
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (isDragging) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+        label = "remoteDragElevation"
+    )
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.semanticColors.cardSurface,
+        shadowElevation = elevation,
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .then(dragHandleModifier)
+    ) {
+        content()
     }
 }

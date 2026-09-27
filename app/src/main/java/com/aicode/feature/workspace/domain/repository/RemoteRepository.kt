@@ -141,7 +141,9 @@ class RemoteRepository @Inject constructor(
             authType = authType,
             authData = if (authType == "PASSWORD") KeystoreCipher.encryptString(authData) else authData,
             passphrase = passphrase?.let { KeystoreCipher.encryptString(it) },
-            createdAt = existing?.createdAt ?: System.currentTimeMillis()
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            // 编辑时保留原排序位置；新建取当前最大 +1 排到末尾。
+            sortOrder = existing?.sortOrder ?: (dao.getMaxConnectionSortOrder() + 1)
         )
         dao.insertConnection(entity)
     }
@@ -163,24 +165,42 @@ class RemoteRepository @Inject constructor(
     }
 
     suspend fun addMount(mount: RemoteMount) {
+        val existing = dao.getMountById(mount.id)
         dao.insertMount(RemoteMountEntity(
             id = mount.id,
             connectionId = mount.connectionId,
             remotePath = mount.remotePath,
             localMountPath = mount.localMountPath,
+            isActive = existing?.isActive ?: false,
             autoConnect = mount.autoConnect,
-            createdAt = System.currentTimeMillis()
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            sortOrder = existing?.sortOrder ?: (dao.getMaxMountSortOrder() + 1)
         ))
     }
-    
+
     suspend fun updateMount(mount: RemoteMount) {
+        // @Update 是整行覆盖：保留原 createdAt / isActive / sortOrder，否则编辑挂载会把它
+        // 们的默认值（0 / false / 0）写回去，丢失创建时间、断开激活状态、打乱排序。
+        val existing = dao.getMountById(mount.id)
         dao.updateMount(RemoteMountEntity(
             id = mount.id,
             connectionId = mount.connectionId,
             remotePath = mount.remotePath,
             localMountPath = mount.localMountPath,
-            autoConnect = mount.autoConnect
+            isActive = existing?.isActive ?: false,
+            autoConnect = mount.autoConnect,
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            sortOrder = existing?.sortOrder ?: (dao.getMaxMountSortOrder() + 1)
         ))
+    }
+
+    /** 拖拽排序：按传入顺序重分配 sort_order（拖动后落盘）。 */
+    suspend fun reorderConnections(ordered: List<RemoteConnection>) {
+        ordered.forEachIndexed { index, conn -> dao.updateConnectionSortOrder(conn.id, index) }
+    }
+
+    suspend fun reorderMounts(ordered: List<RemoteMount>) {
+        ordered.forEachIndexed { index, mount -> dao.updateMountSortOrder(mount.id, index) }
     }
     
     suspend fun deleteMount(mountId: String) {
