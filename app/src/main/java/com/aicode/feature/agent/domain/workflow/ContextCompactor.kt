@@ -29,7 +29,8 @@ class ContextCompactor @Inject constructor(
     private val systemPromptProvider: SystemPromptProvider,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val generalSettingsRepository: GeneralSettingsRepository,
-    private val compactedHistoryArchive: CompactedHistoryArchive
+    private val compactedHistoryArchive: CompactedHistoryArchive,
+    private val contextUsageHolder: ContextUsageHolder
 ) {
 
     private companion object {
@@ -110,6 +111,17 @@ class ContextCompactor @Inject constructor(
         // 取上次真实 usage 与本次本地估算的较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，单靠它会把超限请求发出去。
         val currentTokens = maxOf(lastInputTokens.takeIf { it > 0 } ?: 0, estimatedTokens)
+        // 把判定结果发出去：指示器必须用这里的数字，不能自己按「当前模型元数据窗口」另算一份，
+        // 否则会出现「指示器显示一半、压缩已经触发」这种 UI 与行为矛盾。
+        contextUsageHolder.publish(
+            sessionId,
+            ContextUsage(
+                currentTokens = currentTokens,
+                contextLimit = contextLimit,
+                triggerThreshold = if (hardAllowed) triggerThreshold else contextLimit,
+                softThreshold = softThreshold
+            )
+        )
         val reachedHard = hardAllowed && currentTokens >= triggerThreshold
         val reachedSoft = currentTokens >= softThreshold
         // 以「单条消息也可能就超过窗口」的姿势早退：只有估算还没逼近窗口时才允许按条数跳过。
