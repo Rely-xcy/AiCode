@@ -22,7 +22,7 @@ import com.aicode.feature.workspace.data.local.entity.RemoteConnectionEntity
 import com.aicode.feature.workspace.data.local.entity.RemoteMountEntity
 
 @Database(
-    entities = [AgentMessageEntity::class, ChatSessionEntity::class, AIProviderEntity::class, RemoteConnectionEntity::class, RemoteMountEntity::class, TodoItemEntity::class, SessionGoalEntity::class, ProfileEntryEntity::class, CheckpointEntity::class, CheckpointFileSnapshotEntity::class, LlmCallRecordEntity::class],
+    entities = [AgentMessageEntity::class, ChatSessionEntity::class, AIProviderEntity::class, RemoteConnectionEntity::class, RemoteMountEntity::class, TodoItemEntity::class, SessionGoalEntity::class, CheckpointEntity::class, CheckpointFileSnapshotEntity::class, LlmCallRecordEntity::class],
     version = AgentDatabase.SCHEMA_VERSION,
     exportSchema = true
 )
@@ -32,14 +32,12 @@ abstract class AgentDatabase : RoomDatabase() {
     abstract fun aiProviderDao(): AIProviderDao
     abstract fun remoteConnectionDao(): RemoteConnectionDao
     abstract fun todoItemDao(): TodoItemDao
-    abstract fun profileEntryDao(): com.aicode.feature.agent.data.local.dao.ProfileEntryDao
-
     abstract fun sessionGoalDao(): SessionGoalDao
     abstract fun checkpointDao(): CheckpointDao
     abstract fun llmCallRecordDao(): LlmCallRecordDao
 
     companion object {
-        const val SCHEMA_VERSION = 59
+        const val SCHEMA_VERSION = 58
 
         /** 数据库文件名（落在 `databases/` 下，另有 Room 默认 WAL 模式产生的 `-wal`/`-shm`）。 */
         const val DATABASE_NAME = "aicode_agent_db"
