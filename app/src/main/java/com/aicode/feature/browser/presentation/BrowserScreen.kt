@@ -32,8 +32,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -74,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.feature.agent.domain.tool.browser.BrowserUserAgent
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
 import com.aicode.feature.agent.domain.tool.browser.BrowserTabState
 import compose.icons.FeatherIcons
@@ -560,6 +559,79 @@ private fun BrowserTopBar(
  * 底部操作栏独立组件
  */
 @Composable
+/** 浏览器选项面板：UA 档位与夜间模式。 */
+@Composable
+private fun BrowserOptionsContent(
+    userAgent: BrowserUserAgent,
+    nightMode: Boolean,
+    onSelectUserAgent: (BrowserUserAgent) -> Unit,
+    onToggleNightMode: () -> Unit,
+    onClose: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.xl)) {
+        Text(
+            text = stringResource(R.string.browser_options),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+        )
+        Text(
+            text = stringResource(R.string.browser_user_agent),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+        )
+        listOf(
+            BrowserUserAgent.SYSTEM to R.string.browser_user_agent_system,
+            BrowserUserAgent.DESKTOP to R.string.browser_user_agent_desktop,
+            BrowserUserAgent.MOBILE to R.string.browser_user_agent_mobile
+        ).forEach { (value, labelRes) ->
+            BrowserOptionRow(
+                label = stringResource(labelRes),
+                selected = value == userAgent,
+                onClick = {
+                    onSelectUserAgent(value)
+                    onClose()
+                }
+            )
+        }
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(vertical = Spacing.sm)
+        )
+        BrowserOptionRow(
+            label = stringResource(
+                if (nightMode) R.string.browser_night_mode_on else R.string.browser_night_mode_off
+            ),
+            selected = nightMode,
+            onClick = { onToggleNightMode() }
+        )
+    }
+}
+
+/** 选项行：选中项用主色标出，整行可点。 */
+@Composable
+private fun BrowserOptionRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
 private fun BrowserBottomBar(
     canGoBack: Boolean,
     canGoForward: Boolean,
@@ -584,6 +656,18 @@ private fun BrowserBottomBar(
                 .fillMaxWidth()
                 .then(if (!embedded) Modifier.navigationBarsPadding() else Modifier)
         ) {
+            var showOptions by remember { mutableStateOf(false) }
+            if (showOptions) {
+                AdaptiveModalBottomSheet(onDismissRequest = { showOptions = false }) {
+                    BrowserOptionsContent(
+                        userAgent = userAgent,
+                        nightMode = nightMode,
+                        onSelectUserAgent = onSelectUserAgent,
+                        onToggleNightMode = onToggleNightMode,
+                        onClose = { showOptions = false }
+                    )
+                }
+            }
             HorizontalDivider(
                 thickness = 0.5.dp,
                 color = DividerDefaults.color.copy(alpha = 0.5f)
@@ -630,60 +714,21 @@ private fun BrowserBottomBar(
                     )
                 }
 
-                // 4. 夜间模式切换
-                IconButton(onClick = onToggleNightMode) {
+                // 4. 选项面板：UA 档位、夜间模式都收进底部弹窗，工具栏不再堆按钮
+                IconButton(onClick = { showOptions = true }) {
                     Icon(
-                        if (nightMode) FeatherIcons.Sun else FeatherIcons.Moon,
-                        contentDescription = stringResource(
-                            if (nightMode) R.string.browser_night_mode_on else R.string.browser_night_mode_off
-                        ),
-                        tint = if (nightMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        FeatherIcons.Menu,
+                        contentDescription = stringResource(R.string.browser_options),
+                        tint = if (userAgent != BrowserUserAgent.SYSTEM) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         modifier = Modifier.size(24.dp)
                     )
                 }
 
-                // 5. UA 档位：切换后立刻对已打开标签重应用并重载
-                Box {
-                    var uaMenuOpen by remember { mutableStateOf(false) }
-                    IconButton(onClick = { uaMenuOpen = true }) {
-                        Icon(
-                            FeatherIcons.Globe,
-                            contentDescription = stringResource(R.string.browser_user_agent),
-                            tint = if (userAgent == BrowserUserAgent.SYSTEM) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    DropdownMenu(expanded = uaMenuOpen, onDismissRequest = { uaMenuOpen = false }) {
-                        listOf(
-                            BrowserUserAgent.SYSTEM to R.string.browser_user_agent_system,
-                            BrowserUserAgent.DESKTOP to R.string.browser_user_agent_desktop,
-                            BrowserUserAgent.MOBILE to R.string.browser_user_agent_mobile
-                        ).forEach { (value, labelRes) ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = stringResource(labelRes),
-                                        color = if (value == userAgent) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        }
-                                    )
-                                },
-                                onClick = {
-                                    uaMenuOpen = false
-                                    onSelectUserAgent(value)
-                                }
-                            )
-                        }
-                    }
-                }
-
-                // 6. 标签页管理按钮（数字方框徽标）
+                // 5. 标签页管理按钮（数字方框徽标）
                 Box(
                     modifier = Modifier
                         .size(28.dp)

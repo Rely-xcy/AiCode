@@ -1601,6 +1601,7 @@
     <string name="browser_night_mode_on">关闭夜间模式</string>
     <string name="browser_night_mode_off">开启夜间模式</string>
     <string name="browser_user_agent">浏览器标识（UA）</string>
+    <string name="browser_options">浏览器选项</string>
     <string name="browser_user_agent_system">跟随系统</string>
     <string name="browser_user_agent_desktop">桌面版</string>
     <string name="browser_user_agent_mobile">移动版</string>
