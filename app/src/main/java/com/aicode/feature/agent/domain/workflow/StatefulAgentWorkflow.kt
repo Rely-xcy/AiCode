@@ -508,7 +508,7 @@ class StatefulAgentWorkflow @Inject constructor(
         // 放在这里是一次覆盖三条路径（正常完成、取消、异常），比在每个结束点各加一行可靠；
         // 否则租约只能等 10 分钟 TTL 过期，子代理写完的文件会一直把主代理锁在外面。
         coroutineContext[Job]?.invokeOnCompletion {
-            writeLeaseRegistry.release(context.sessionId)
+            context.sessionId?.let { writeLeaseRegistry.release(it) }
         }
         var currentContext = context
         var state = AgentSessionState()
