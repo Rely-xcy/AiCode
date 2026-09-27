@@ -110,7 +110,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val memoryCurator: MemoryCurator,
     private val fileAccess: FileAccessProvider,
     private val engine: AgentEngine,
-    private val profileModule: com.aicode.feature.agent.domain.profile.ProfileModule
+    private val profileModule: com.aicode.feature.agent.domain.profile.ProfileModule,
+    private val writeLeaseRegistry: com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 ) : AgentWorkflow {
 
     private companion object {
@@ -786,11 +787,23 @@ class StatefulAgentWorkflow @Inject constructor(
                             coroutineScope {
                                 toolCalls.map { toolCall ->
                                     async {
-                                        val tool = toolRegistry.getTool(toolCall.name)
-                                        if (tool is StreamingAgentTool) {
-                                            runToolStream(tool, toolCall, currentContext) { send(it) }
+                                        // 写范围租约：目标路径被别的子代理占着时直接拒绝执行，
+                                        // 而不是让两个子代理各自基于旧内容改同一个文件（结果按 index 对应，
+                                        // 所以必须在这里短路，不能把调用从列表里剔除）。
+                                        val leaseConflict = writeLeaseConflictOf(toolCall, currentContext)
+                                        if (leaseConflict != null) {
+                                            ToolRunResult(
+                                                ToolResult.Error(leaseConflict, "WRITE_LEASE_CONFLICT")
+                                                    .toTransportString(),
+                                                true
+                                            )
                                         } else {
-                                            runToolSync(tool, toolCall, currentContext)
+                                            val tool = toolRegistry.getTool(toolCall.name)
+                                            if (tool is StreamingAgentTool) {
+                                                runToolStream(tool, toolCall, currentContext) { send(it) }
+                                            } else {
+                                                runToolSync(tool, toolCall, currentContext)
+                                            }
                                         }
                                     }
                                 }.awaitAll()
@@ -1060,6 +1073,25 @@ class StatefulAgentWorkflow @Inject constructor(
             FileLogger.w(TAG, "记忆兑现失败: ${e.message}", e)
             0
         }
+    }
+
+    /**
+     * 写类工具的执行前租约检查。
+     *
+     * 只拦 [editFile]/[writeFile]：它们都是「读旧内容 → 改 → 写回」，并发改同一文件必然互相覆盖。
+     * 其它工具（读、搜、跑命令）不涉及这种覆盖，不做限制。
+     *
+     * @return 拒绝原因；无冲突返回 null。
+     */
+    private fun writeLeaseConflictOf(toolCall: ToolCall, context: AgentContext): String? {
+        if (toolCall.name != "editFile" && toolCall.name != "writeFile") return null
+        val path = (toolCall.arguments["path"] as? JsonPrimitive)?.contentOrNull ?: return null
+        val holderId = context.sessionId ?: return null
+        // 首个写入者即认领该文件：并发改同一文件必然互相覆盖，先到者优先，
+        // 后到者拿到冲突而不是默默盖掉别人的改动。持续写入会刷新租约，异常退出靠 TTL 自愈。
+        val conflict = writeLeaseRegistry.acquire(holderId, path, path) ?: return null
+        return "该路径正被另一个子代理写入（${conflict.scopeLabel}），本次调用已拒绝。" +
+            "等它结束后重试，或改做不冲突的文件。"
     }
 
     private suspend fun runToolStream(

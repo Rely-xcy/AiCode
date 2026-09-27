@@ -33,6 +33,14 @@ class WriteLeaseRegistry @Inject constructor() {
 
     private companion object {
         const val TAG = "WriteLeaseRegistry"
+
+        /**
+         * 租约有效期。持有者持续写入会不断刷新；超过这么久没动静就视为已放弃。
+         *
+         * 这是必需的兑底：子代理异常退出/被取消时没有人会去释放租约，
+         * 没有 TTL 的话那条路径会永久被占，主代理凭空被拒。
+         */
+        const val LEASE_TTL_MS = 10 * 60 * 1000L
     }
 
     private val leases = ConcurrentHashMap<String, WriteLease>()
@@ -43,7 +51,14 @@ class WriteLeaseRegistry @Inject constructor() {
      * @return 成功返回 null；失败返回已持有重叠范围的租约（供调用方回报冲突原因）。
      */
     fun acquire(holderId: String, path: String, label: String): WriteLease? {
+        pruneExpired()
         val prefix = normalize(path)
+        val now = System.currentTimeMillis()
+        // 自己已持有同一范围：只刷新时间戳（活跃持有者不该因 TTL 被踢掉）。
+        leases[holderId]?.takeIf { overlaps(it.scopePrefix, prefix) }?.let {
+            leases[holderId] = it.copy(acquiredAt = now)
+            return null
+        }
         val conflict = leases.values.firstOrNull { other ->
             other.holderId != holderId && overlaps(other.scopePrefix, prefix)
         }
@@ -54,7 +69,7 @@ class WriteLeaseRegistry @Inject constructor() {
             )
             return conflict
         }
-        leases[holderId] = WriteLease(holderId, prefix, label, System.currentTimeMillis())
+        leases[holderId] = WriteLease(holderId, prefix, label, now)
         return null
     }
 
@@ -69,10 +84,17 @@ class WriteLeaseRegistry @Inject constructor() {
      * @return 冲突租约；无冲突返回 null。同一 holder 自己写自己的范围永远放行。
      */
     fun checkWrite(holderId: String?, path: String): WriteLease? {
+        pruneExpired()
         val prefix = normalize(path)
         return leases.values.firstOrNull { other ->
             other.holderId != holderId && overlaps(other.scopePrefix, prefix)
         }
+    }
+
+    /** 清掉过期租约（持有者已静默退出）。 */
+    private fun pruneExpired() {
+        val cutoff = System.currentTimeMillis() - LEASE_TTL_MS
+        leases.entries.removeIf { it.value.acquiredAt < cutoff }
     }
 
     fun leases(): List<WriteLease> = leases.values.toList()

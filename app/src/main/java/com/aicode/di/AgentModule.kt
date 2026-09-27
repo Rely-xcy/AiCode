@@ -382,7 +382,8 @@ object AgentModule {
         memoryCurator: MemoryCurator,
         fileAccess: FileAccessProvider,
         engine: AgentEngine,
-        profileModule: com.aicode.feature.agent.domain.profile.ProfileModule
+        profileModule: com.aicode.feature.agent.domain.profile.ProfileModule,
+        writeLeaseRegistry: com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -411,7 +412,8 @@ object AgentModule {
             memoryCurator,
             fileAccess,
             engine,
-            profileModule
+            profileModule,
+            writeLeaseRegistry
         )
     }
 }
