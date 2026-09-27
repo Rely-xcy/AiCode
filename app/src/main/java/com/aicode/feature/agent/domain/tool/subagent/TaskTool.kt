@@ -60,6 +60,7 @@ class TaskTool @Inject constructor(
     private companion object {
         const val TAG = "TaskTool"
         const val TASK_DESCRIPTION_MAX = 30
+        const val ADVISE_TIMEOUT_MS = 5 * 60 * 1000L
         /** 未指定 agent 时子会话记录的类型标识。 */
         const val DEFAULT_SUBAGENT_TYPE = "subagent"
     }
@@ -76,7 +77,7 @@ class TaskTool @Inject constructor(
         }
     }
 
-    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。"
+    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。advise 用 agents 指定多个子代理名并发问同一问题，等全部回复后一起返回供主代理合成——复用现有并发，不新建 MoA 引擎。"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
@@ -114,6 +115,12 @@ class TaskTool @Inject constructor(
             type = ParameterType.STRING,
             description = "发给子代理的消息正文（send 必填）。可反复调用；运行中的子代理会尽快收到，已完成的会被重新唤醒",
             required = false
+        ),
+        "agents" to ToolParameter(
+            name = "agents",
+            type = ParameterType.STRING,
+            description = "[advise] 逗号分隔的多个子代理名。用同一 prompt 并发问它们，等全部回复后一起返回供主代理合成。",
+            required = false
         )
     )
 
@@ -121,12 +128,13 @@ class TaskTool @Inject constructor(
         val action = (args["action"] as? JsonPrimitive)?.content?.trim()?.lowercase() ?: "create"
         return when (action) {
             "create" -> createSubagent(args, context)
+            "advise" -> advise(args, context)
             "send" -> sendToSubagent(args, context)
             "read" -> readSubagent(args, context)
             "stop" -> stopSubagent(args, context)
             "del" -> deleteSubagent(args, context)
             "list" -> listSubagents(context)
-            else -> ToolResult.Error("未知 action: $action，支持：create / send / read / stop / del / list", "INVALID_ARGS")
+            else -> ToolResult.Error("未知 action: $action，支持：create / advise / send / read / stop / del / list", "INVALID_ARGS")
         }
     }
 
@@ -240,6 +248,82 @@ class TaskTool @Inject constructor(
                 put("state", "delivered")
                 put("message", "消息已投递给子代理。运行中的会在下一批工具结果里收到，已完成的会被重新唤醒；可继续用 send 追加。")
             }
+        )
+    }
+
+    /**
+     * advise：同一问题并发问多个子代理定义（各自模型），等全部回复后一起返回供主代理合成。
+     *
+     * 与 create 的区别：advise 是同步的——创建 N 个子代理后等它们全部完成，
+     * 把多份意见拼在一起交回，主代理拿到的是可比较的并行答案，而不是一堆后台任务。
+     * 复用现有的 createSubagent 与 readSubagent 逻辑，不新建 MoA 引擎。
+     */
+    private suspend fun advise(args: Map<String, JsonElement>, context: AgentContext): ToolResult {
+        val parentSessionId = context.sessionId
+            ?: return ToolResult.Error("缺少会话上下文", "NO_SESSION")
+        val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
+            ?: return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
+        val agentsRaw = (args["agents"] as? JsonPrimitive)?.contentOrNull?.trim()
+            ?: return ToolResult.Error("参数无效：agents 不能为空（逗号分隔的子代理名）", "INVALID_ARGS")
+        val agentNames = agentsRaw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (agentNames.size < 2) {
+            return ToolResult.Error("advise 至少需要两个 agent，否则没有对比意义", "INVALID_ARGS")
+        }
+        if (eventBus.activeSubSessionIds.value.size + agentNames.size > SubAgentEventBus.MAX_RUNNING) {
+            return ToolResult.Error(
+                "子代理数量将超过上限（${SubAgentEventBus.MAX_RUNNING}），请减少 agent 数量或等现有子代理完成",
+                "MAX_SUBAGENTS_REACHED"
+            )
+        }
+
+        // 复用 createSubagent：对每个 agent 定义分别创建一个子代理，从返回结果里提取 session id。
+        val createArgs = args.toMutableMap()
+        createArgs.remove("agents")
+        val subSessions = mutableListOf<Pair<String, String>>() // sessionId to agentName
+        for (name in agentNames) {
+            createArgs["agent"] = JsonPrimitive(name)
+            val result = createSubagent(createArgs, context)
+            if (result is ToolResult.Error) return result
+            val id = runCatching {
+                Json.parseToJsonElement(result.toTransportString())
+                    .jsonObject["id"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            }.getOrNull()
+            if (id.isNullOrBlank()) {
+                return ToolResult.Error("创建子代理 $name 后拿不到 session id", "INTERNAL_ERROR")
+            }
+            subSessions.add(id to name)
+        }
+
+        // 等全部完成：轮询活跃列表，直到我的子代理都不在活跃集中。
+        val deadline = System.currentTimeMillis() + ADVISE_TIMEOUT_MS
+        while (subSessions.any { it.first in eventBus.activeSubSessionIds.value }) {
+            if (System.currentTimeMillis() > deadline) {
+                val unfinished = subSessions.filter { it.first in eventBus.activeSubSessionIds.value }
+                    .joinToString(", ") { it.second }
+                return ToolResult.Error("advise 超时，未完成：$unfinished", "ADVISE_TIMEOUT")
+            }
+            kotlinx.coroutines.delay(1000)
+        }
+
+        // 收集每份意见（与 readSubagent 同一逻辑：取最后一条有内容的助手回复）。
+        val opinions = subSessions.mapIndexed { _, (id, name) ->
+            val msg = agentMessageDao.getMessagesBySessionOnce(id)
+                .lastOrNull { it.role == MessageRole.ASSISTANT.name && it.content.isNotBlank() }
+            "## 意见（$name）\n${msg?.content ?: "（未回复）"}"
+        }
+
+        return ToolResult.Success(
+            JsonObject(
+                mapOf(
+                    "opinions" to JsonArray(opinions.map { JsonPrimitive(it) }),
+                    "count" to JsonPrimitive(opinions.size),
+                    "message" to JsonPrimitive(
+                        "${opinions.size} 份意见已收集，请综合判断。"
+                    )
+                )
+            )
         )
     }
 
