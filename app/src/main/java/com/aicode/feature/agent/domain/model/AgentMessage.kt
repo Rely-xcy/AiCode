@@ -79,14 +79,10 @@ data class AgentContext(
      */
     val agentDefinition: AgentDefinition? = null,
     /**
-     * 当前会话的任务清单、目标与计划摘要。由工作流每轮从独立状态存储载入，
-     * 供 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider] 注入。
+     * 统一智能引擎本轮要注入的片段（任务清单、目标、用户画像等，由各模块产出后拼接）。
      *
-     * 任务状态刻意不放在 [history] 里：它在消息历史之外单独存储，上下文压缩只碰历史，
-     * 因此压掉再多的老轮次，模型依旧能看到「哪些做完了、哪些没做」。
+     * 这些状态都存在消息历史之外：上下文压缩只折叠历史，所以压掉再多老轮次，
+     * 模型依旧看得到「哪些做完了、哪些没做」以及用户画像。
      */
-    val todoItems: List<TodoItem> = emptyList(),
-    val goal: SessionGoal? = null,
-    /** PLAN 模式下的计划摘要（目标 + 步骤）；非 PLAN 模式为 null。 */
-    val planSummary: String? = null
+    val engineFragment: String? = null
 )

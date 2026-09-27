@@ -6,8 +6,6 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
-import com.aicode.feature.agent.domain.model.MilestoneStatus
-import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -175,52 +173,13 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /**
-     * 任务状态：待办清单 + 目标 + 计划摘要，数据由工作流每轮载入 [AgentContext]。
+     * 引擎片段：任务清单、目标、用户画像等由 [com.aicode.core.engine.AgentEngine] 的各模块产出后
+     * 拼成一段文本，工作流每轮载入 [AgentContext]。
      *
-     * 刻意不做缓存——它每轮都可能变，缓存会让模型看到过期的进度。
+     * 刻意不做缓存——它每轮都可能变，缓存会让模型看到过期进度。
      */
     private inner class TaskStateSource : PromptSource {
-        override fun build(ctx: AgentContext): String? {
-            val todos = ctx.todoItems
-            val goal = ctx.goal
-            val plan = ctx.planSummary?.takeIf { it.isNotBlank() }
-            if (todos.isEmpty() && goal == null && plan == null) return null
-
-            return buildString {
-                append("任务与目标 (tasks)（独立于对话历史维护，上下文压缩不会影响它；")
-                append("用 `todo` 工具更新清单、`goal` 工具更新目标）：")
-                goal?.let { current ->
-                    append("\n- 目标: ${current.goalText}")
-                    if (current.milestones.isNotEmpty()) {
-                        append("\n- 里程碑 (${current.completedCount}/${current.milestones.size}):")
-                        current.milestones.forEach { milestone ->
-                            append("\n  ${markOf(milestone.status.name)} ${milestone.title}")
-                            if (milestone.detail.isNotBlank()) append("：${milestone.detail}")
-                        }
-                    }
-                }
-                if (todos.isNotEmpty()) {
-                    val unfinished = todos.count { it.status != TodoStatus.COMPLETED }
-                    append("\n- 待办 (已完成 ${todos.size - unfinished}/${todos.size}，未完成 $unfinished):")
-                    // 未完成的排前面：条目过多被截掉的总是已完成项，进度不会因此看不全。
-                    val ordered = todos.sortedBy { it.status == TodoStatus.COMPLETED }
-                    ordered.take(MAX_INJECTED_TASKS).forEach { item ->
-                        append("\n  ${markOf(item.status.name)} ${item.subject}")
-                    }
-                    if (ordered.size > MAX_INJECTED_TASKS) {
-                        append("\n  …（另有 ${ordered.size - MAX_INJECTED_TASKS} 项未列出）")
-                    }
-                }
-                plan?.let { append("\n- 当前计划: $it") }
-            }
-        }
-
-        /** 待办与里程碑共用一套进度标记：[x] 完成 / [~] 进行中 / [ ] 未开始。 */
-        private fun markOf(statusName: String): String = when (statusName) {
-            TodoStatus.COMPLETED.name, MilestoneStatus.COMPLETED.name -> "[x]"
-            TodoStatus.IN_PROGRESS.name, MilestoneStatus.IN_PROGRESS.name -> "[~]"
-            else -> "[ ]"
-        }
+        override fun build(ctx: AgentContext): String? = ctx.engineFragment?.takeIf { it.isNotBlank() }
     }
 
     private inner class WorkspaceSource : PromptSource {
@@ -520,9 +479,6 @@ class SystemPromptProvider @Inject constructor(
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
         const val TASKS_VAR = "{{AICODE_TASKS}}"
-
-        /** 单次注入的任务条目上限：清单很长时优先列未完成的，避免提示词无上限膨胀。 */
-        const val MAX_INJECTED_TASKS = 30
         const val WORKSPACE_VAR = "{{AICODE_WORKSPACE}}"
         const val DATE_VAR = "{{AICODE_DATE}}"
     }

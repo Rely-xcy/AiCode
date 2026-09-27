@@ -4,8 +4,6 @@ import android.os.SystemClock
 import android.util.Base64
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
-import com.aicode.feature.agent.data.local.dao.SessionGoalDao
-import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
@@ -20,6 +18,8 @@ import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
 import com.aicode.feature.agent.domain.notification.AgentNotificationKind
 import com.aicode.feature.agent.domain.notification.PendingNotification
 import com.aicode.feature.agent.domain.session.SessionUseCase
+import com.aicode.core.engine.AgentEngine
+import com.aicode.core.engine.EngineContext
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
 import com.aicode.feature.agent.domain.permission.PermissionChoice
@@ -109,8 +109,7 @@ class StatefulAgentWorkflow @Inject constructor(
     private val eventInjector: AgentEventInjector,
     private val memoryCurator: MemoryCurator,
     private val fileAccess: FileAccessProvider,
-    private val todoItemDao: TodoItemDao,
-    private val sessionGoalDao: SessionGoalDao
+    private val engine: AgentEngine
 ) : AgentWorkflow {
 
     private companion object {
@@ -120,9 +119,6 @@ class StatefulAgentWorkflow @Inject constructor(
         const val USER_REJECTED_CODE = "USER_REJECTED"
         const val TITLE_GENERATOR_FILE = "agent/title-generator.md"
         const val TITLE_MAX_CHARS = 50
-
-        /** 计划模式下重新注入的计划摘要上限。 */
-        const val PLAN_SUMMARY_MAX_CHARS = 2_000
         const val COMMIT_GENERATOR_FILE = "agent/commit-generator.md"
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
@@ -270,29 +266,22 @@ class StatefulAgentWorkflow @Inject constructor(
     }
 
     /**
-     * 把任务状态（待办 / 目标 / 计划）载入 [AgentContext]，供系统提示词注入。
+     * 把统一智能引擎各模块本轮要注入的片段载入 [AgentContext]。
      *
-     * 这些状态存于独立表而非消息历史，所以上下文压缩折叠历史不会让模型忘记进度：
-     * 每轮都重新注入，与历史被压到多深无关。
+     * 任务、目标、画像这些状态都存在消息历史之外（各模块自己的存储），所以上下文压缩折叠历史
+     * 不会让模型忘记进度：每轮重新注入，与历史被压到多深无关。
      */
-    private suspend fun AgentContext.withTaskState(): AgentContext {
-        val session = sessionId ?: return this
-        val todos = runCatching { todoItemDao.getBySessionOnce(session).map { it.toDomain() } }
-            .getOrDefault(emptyList())
-        val goal = runCatching { sessionGoalDao.getBySessionOnce(session)?.toDomain() }.getOrNull()
-        // 计划模式下的计划正文在历史里只是普通 assistant 消息，压得久了就看不到，
-        // 这里取最近一条 assistant 正文当计划摘要重新注入。
-        val plan = if (mode == AgentMode.PLAN) {
-            history.asReversed()
-                .filterIsInstance<AgentMessage.AssistantMessage>()
-                .firstOrNull { it.content.isNotBlank() }
-                ?.content
-                ?.take(PLAN_SUMMARY_MAX_CHARS)
-        } else {
-            null
-        }
-        return copy(todoItems = todos, goal = goal, planSummary = plan)
-    }
+    private suspend fun AgentContext.withEngineFragment(): AgentContext = copy(
+        engineFragment = engine.promptFragment(
+            EngineContext(
+                sessionId = sessionId,
+                projectRoot = projectRoot,
+                mode = mode,
+                isSubAgent = agentDefinition != null,
+                history = history
+            )
+        )
+    )
 
     /**
      * 根据 [config] 创建一个全新的、独立的 [AIProvider] 实例。
@@ -527,7 +516,7 @@ class StatefulAgentWorkflow @Inject constructor(
             )
         )
 
-        currentContext = currentContext.withTaskState()
+        currentContext = currentContext.withEngineFragment()
         val systemPrompt = promptProvider.build(currentContext)
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
         // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，

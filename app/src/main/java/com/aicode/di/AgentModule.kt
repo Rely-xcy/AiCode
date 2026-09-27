@@ -17,7 +17,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
 import com.aicode.feature.agent.data.remote.openai.OpenAIApi
+import com.aicode.core.engine.AgentEngine
 import com.aicode.feature.agent.domain.container.CommandEngine
+import com.aicode.core.engine.EngineModule
+import com.aicode.core.engine.modules.TaskModule
+import dagger.multibindings.IntoSet
 import com.aicode.feature.agent.domain.memory.MemoryCurator
 import com.aicode.feature.agent.domain.container.DelegatingCommandEngine
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
@@ -159,6 +163,10 @@ object AgentModule {
     fun provideSessionGoalDao(database: AgentDatabase): SessionGoalDao {
         return database.sessionGoalDao()
     }
+
+    @Provides
+    @IntoSet
+    fun provideTaskModule(module: TaskModule): EngineModule = module
 
     @Provides
     @Singleton
@@ -359,8 +367,7 @@ object AgentModule {
         eventInjector: AgentEventInjector,
         memoryCurator: MemoryCurator,
         fileAccess: FileAccessProvider,
-        todoItemDao: TodoItemDao,
-        sessionGoalDao: SessionGoalDao
+        engine: AgentEngine
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -388,8 +395,7 @@ object AgentModule {
             eventInjector,
             memoryCurator,
             fileAccess,
-            todoItemDao,
-            sessionGoalDao
+            engine
         )
     }
 }
