@@ -99,6 +99,19 @@ fun BrowserScreen(
     val activeTab = state.activeTab
     val scope = rememberCoroutineScope()
 
+    // 浏览器选项做成二级页面：工具栏只留一个入口，UA/夜间模式等收进这一页。
+    var showOptionsScreen by rememberSaveable { mutableStateOf(false) }
+    if (showOptionsScreen) {
+        BrowserOptionsScreen(
+            userAgent = state.userAgent,
+            nightMode = state.nightMode,
+            onSelectUserAgent = { browserManager.setUserAgent(it) },
+            onToggleNightMode = { browserManager.toggleNightMode() },
+            onBack = { showOptionsScreen = false }
+        )
+        return
+    }
+
     var showTabsSheet by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -148,7 +161,7 @@ fun BrowserScreen(
                 onNewTab = { scope.launch { browserManager.newTab() } },
                 onToggleNightMode = { browserManager.toggleNightMode() },
                 userAgent = state.userAgent,
-                onSelectUserAgent = { browserManager.setUserAgent(it) },
+                onOpenOptions = { showOptionsScreen = true },
                 onOpenTabs = { showTabsSheet = true }
             )
         }
@@ -559,22 +572,35 @@ private fun BrowserTopBar(
  * 底部操作栏独立组件
  */
 @Composable
-/** 浏览器选项面板：UA 档位与夜间模式。 */
+/** 浏览器选项二级页面：UA 档位与夜间模式。 */
 @Composable
-private fun BrowserOptionsContent(
+private fun BrowserOptionsScreen(
     userAgent: BrowserUserAgent,
     nightMode: Boolean,
     onSelectUserAgent: (BrowserUserAgent) -> Unit,
     onToggleNightMode: () -> Unit,
-    onClose: () -> Unit
+    onBack: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.xl)) {
-        Text(
-            text = stringResource(R.string.browser_options),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-        )
+    BackHandler { onBack() }
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    FeatherIcons.ArrowLeft,
+                    contentDescription = stringResource(R.string.common_back)
+                )
+            }
+            Text(
+                text = stringResource(R.string.browser_options),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
         Text(
             text = stringResource(R.string.browser_user_agent),
             style = MaterialTheme.typography.labelMedium,
@@ -589,10 +615,7 @@ private fun BrowserOptionsContent(
             BrowserOptionRow(
                 label = stringResource(labelRes),
                 selected = value == userAgent,
-                onClick = {
-                    onSelectUserAgent(value)
-                    onClose()
-                }
+                onClick = { onSelectUserAgent(value) }
             )
         }
         HorizontalDivider(
@@ -643,7 +666,7 @@ private fun BrowserBottomBar(
     onNewTab: () -> Unit,
     onToggleNightMode: () -> Unit,
     userAgent: BrowserUserAgent,
-    onSelectUserAgent: (BrowserUserAgent) -> Unit,
+    onOpenOptions: () -> Unit,
     onOpenTabs: () -> Unit
 ) {
     Surface(
@@ -656,18 +679,6 @@ private fun BrowserBottomBar(
                 .fillMaxWidth()
                 .then(if (!embedded) Modifier.navigationBarsPadding() else Modifier)
         ) {
-            var showOptions by remember { mutableStateOf(false) }
-            if (showOptions) {
-                AdaptiveModalBottomSheet(onDismissRequest = { showOptions = false }) {
-                    BrowserOptionsContent(
-                        userAgent = userAgent,
-                        nightMode = nightMode,
-                        onSelectUserAgent = onSelectUserAgent,
-                        onToggleNightMode = onToggleNightMode,
-                        onClose = { showOptions = false }
-                    )
-                }
-            }
             HorizontalDivider(
                 thickness = 0.5.dp,
                 color = DividerDefaults.color.copy(alpha = 0.5f)
@@ -714,8 +725,8 @@ private fun BrowserBottomBar(
                     )
                 }
 
-                // 4. 选项面板：UA 档位、夜间模式都收进底部弹窗，工具栏不再堆按钮
-                IconButton(onClick = { showOptions = true }) {
+                // 4. 浏览器选项（二级页面：UA 档位、夜间模式等）
+                IconButton(onClick = onOpenOptions) {
                     Icon(
                         FeatherIcons.Menu,
                         contentDescription = stringResource(R.string.browser_options),
