@@ -114,6 +114,7 @@ import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.User
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Zap
 import com.aicode.feature.onboarding.domain.OnboardingStep
@@ -151,6 +152,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
     PromptRules(R.string.settings_prompt_rules),
+    Profile(R.string.settings_profile),
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
     Proxy(R.string.proxy_title),
@@ -593,6 +595,9 @@ fun SettingsScreen(
             current == SettingsSection.PromptRules ->
                 PromptRulesScreen(onNavigateBack = { section = SettingsSection.Menu })
 
+            current == SettingsSection.Profile ->
+                ProfileSettingsScreen(onNavigateBack = { section = SettingsSection.Menu })
+
             else -> {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
@@ -789,6 +794,7 @@ fun SettingsScreen(
                 SettingsSection.Menu -> if (expanded) SettingsDetailPlaceholder() else menuBody()
                 // 自带 Scaffold 的整屏页在前面就已分流处理，这里仅为穷尽分支
                 SettingsSection.PromptRules -> Unit
+                SettingsSection.Profile -> Unit
                 SettingsSection.General -> GeneralSettingsSection(
                     autoRemoveStaleModels = autoRemoveStaleModels,
                     onToggleAutoRemoveStaleModels = { viewModel.setAutoRemoveStaleModels(it) },
@@ -1402,6 +1408,13 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.FileText,
                 title = stringResource(SettingsSection.PromptRules.titleRes),
                 onClick = { onOpen(SettingsSection.PromptRules) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.User,
+                title = stringResource(SettingsSection.Profile.titleRes),
+                subtitle = stringResource(R.string.profile_menu_subtitle),
+                onClick = { onOpen(SettingsSection.Profile) }
             )
         }
 

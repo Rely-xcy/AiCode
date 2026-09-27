@@ -17,6 +17,10 @@ interface ProfileEntryDao {
     @Query("SELECT * FROM profile_entries WHERE status = 'ACTIVE' ORDER BY section ASC, updated_at DESC")
     suspend fun activeEntriesOnce(): List<ProfileEntryEntity>
 
+    /** 含已被取代的历史条目，供 UI 回查变更痕迹。 */
+    @Query("SELECT * FROM profile_entries ORDER BY section ASC, updated_at DESC")
+    suspend fun allOnce(): List<ProfileEntryEntity>
+
     /** 同一 (section, entryKey) 的当前生效条目；写入新证据前用它判断是新增还是修正。 */
     @Query(
         "SELECT * FROM profile_entries WHERE section = :section AND entry_key = :entryKey " +

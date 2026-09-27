@@ -1043,6 +1043,17 @@
     <string name="prompt_rules_sys_hint">这里只开放一项：系统提示词。它作为内置规则之上的最高优先级层注入，内置的身份、工具说明、安全边界等片段都保持原样，不会被替换。想改单个内置片段请进下方「高级」。</string>
     <string name="prompt_rules_menu">更多选项</string>
     <string name="prompt_rules_menu_docs">使用说明</string>
+    <string name="settings_profile">用户画像</string>
+    <string name="profile_menu_subtitle">AI 从对话里沉淀的关于你的结论，可查看与删除</string>
+    <string name="profile_title">用户画像</string>
+    <string name="profile_hint">AI 从历史对话里沉淀的稳定结论（当前 %1$d 条）。点任一条可删除；记错了就删掉。</string>
+    <string name="profile_show_history">显示已被取代的旧结论</string>
+    <string name="profile_show_history_desc">保留变更痕迹：同一件事改过口时，旧的会被标记而不是直接消失</string>
+    <string name="profile_superseded_tag">已被取代</string>
+    <string name="profile_empty">还没有沉淀出任何结论，多聊几轮再看</string>
+    <string name="profile_delete_title">删除这条画像？</string>
+    <string name="profile_delete_body">将删除「%1$s」，此操作不可撤销。</string>
+    <string name="profile_delete_confirm">删除</string>
     <string name="prompt_rules_sys_mode_title">注入位置</string>
     <string name="prompt_rules_sys_mode_off">关闭（用内置默认）</string>
     <string name="prompt_rules_sys_mode_off_desc">内置提示词原样使用，与加这个功能之前完全一致</string>
