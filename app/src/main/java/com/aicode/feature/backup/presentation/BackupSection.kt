@@ -179,9 +179,14 @@ internal fun BackupSection(viewModel: BackupViewModel) {
                     )
                 }
             )
-            SettingsDivider()
+            WorkspaceBackupHint()
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.backup_advanced))
+        SettingsGroup {
             SettingsRow(
                 title = stringResource(R.string.backup_data_skills),
+                subtitle = stringResource(R.string.backup_advanced_hint),
                 trailing = {
                     AppSwitch(
                         checked = exportOptions.skills,
@@ -219,7 +224,6 @@ internal fun BackupSection(viewModel: BackupViewModel) {
                     )
                 }
             )
-            WorkspaceBackupHint()
         }
 
         SettingsGroupHeader(text = stringResource(R.string.backup_actions))

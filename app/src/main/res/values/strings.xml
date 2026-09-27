@@ -454,6 +454,8 @@
     <string name="backup_data_permissions">授权规则</string>
     <string name="backup_data_app_settings">应用设置</string>
     <string name="backup_data_workspace">工作区文件</string>
+    <string name="backup_advanced">高级</string>
+    <string name="backup_advanced_hint">AI 配置目录下的内容（默认已勾选）</string>
     <string name="backup_data_skills">技能</string>
     <string name="backup_data_memory">记忆</string>
     <string name="backup_data_subagents">子代理定义</string>
