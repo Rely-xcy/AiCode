@@ -622,7 +622,9 @@ class BackupManagerImpl @Inject constructor(
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null}"
         )
         if (meta.sessionGoals.isNotEmpty()) {
-            meta.sessionGoals.forEach { sessionGoalDao.upsert(it.toEntity()) }
+            meta.sessionGoals.forEach {
+                sessionGoalDao.upsert(com.aicode.feature.agent.data.local.entity.SessionGoalEntity.fromDomain(it))
+            }
         }
         if (meta.providers.isNotEmpty()) {
             aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
