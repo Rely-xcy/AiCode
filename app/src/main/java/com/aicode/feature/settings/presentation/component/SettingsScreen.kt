@@ -1413,7 +1413,6 @@ internal fun SettingsMenu(
             SettingsRow(
                 icon = FeatherIcons.User,
                 title = stringResource(SettingsSection.Profile.titleRes),
-                subtitle = stringResource(R.string.profile_menu_subtitle),
                 onClick = { onOpen(SettingsSection.Profile) }
             )
         }

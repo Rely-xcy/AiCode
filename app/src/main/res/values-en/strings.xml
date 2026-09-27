@@ -1050,7 +1050,6 @@
     <string name="prompt_rules_menu">More options</string>
     <string name="prompt_rules_menu_docs">Instructions</string>
     <string name="settings_profile">User Profile</string>
-    <string name="profile_menu_subtitle">Conclusions about you distilled from conversations; view and delete them here</string>
     <string name="profile_title">User Profile</string>
     <string name="profile_hint">Stable conclusions distilled from past conversations (%1$d active). Tap any entry to delete it; if something is wrong, delete it.</string>
     <string name="profile_show_history">Show superseded conclusions</string>

@@ -1050,7 +1050,6 @@
     <string name="prompt_rules_menu">更多选项</string>
     <string name="prompt_rules_menu_docs">使用说明</string>
     <string name="settings_profile">用户画像</string>
-    <string name="profile_menu_subtitle">AI 从对话里沉淀的关于你的结论，可查看与删除</string>
     <string name="profile_title">用户画像</string>
     <string name="profile_hint">AI 从历史对话里沉淀的稳定结论（当前 %1$d 条）。点任一条可删除；记错了就删掉。</string>
     <string name="profile_show_history">显示已被取代的旧结论</string>
