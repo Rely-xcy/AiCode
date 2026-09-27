@@ -1039,6 +1039,7 @@
     <string name="prompt_rules_discard_confirm">放弃修改</string>
     <string name="prompt_rules_sys_hint">这里只开放一项：系统提示词。它作为内置规则之上的最高优先级层注入，内置的身份、工具说明、安全边界等片段都保持原样，不会被替换。想改单个内置片段请进下方「高级」。</string>
     <string name="prompt_rules_menu">更多选项</string>
+    <string name="prompt_rules_menu_docs">使用说明</string>
     <string name="prompt_rules_sys_mode_title">注入位置</string>
     <string name="prompt_rules_sys_mode_off">关闭（用内置默认）</string>
     <string name="prompt_rules_sys_mode_off_desc">内置提示词原样使用，与加这个功能之前完全一致</string>

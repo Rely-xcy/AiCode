@@ -168,6 +168,14 @@ class PromptRulesViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 从菜单重新查看使用说明。
+     * 只改内存里的门槛状态、不写持久化的已读标记：读完关掉后，下次进页面不会又被拦一次。
+     */
+    fun reopenDocs() {
+        _docsRead.value = false
+    }
+
     fun confirmDocsRead() {
         viewModelScope.launch {
             generalSettingsRepository.setPromptRulesDocsRead(true)

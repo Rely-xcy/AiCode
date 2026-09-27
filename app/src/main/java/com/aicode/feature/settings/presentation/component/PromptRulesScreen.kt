@@ -226,6 +226,13 @@ internal fun PromptRulesScreen(
                                 }
                                 HorizontalDivider()
                                 DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.prompt_rules_menu_docs)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.reopenDocs()
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text(stringResource(R.string.prompt_rules_advanced)) },
                                     onClick = {
                                         menuOpen = false

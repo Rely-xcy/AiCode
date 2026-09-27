@@ -311,6 +311,7 @@ class BrowserManager @Inject constructor(
         userAgentStore.set(value)
         _state.update { it.copy(userAgent = value) }
         applyUserAgentChange()
+        FileLogger.i(TAG, "UA 档位切换为 ${value.key}（共 ${tabs.size} 个标签已重应用）")
     }
 
     /**
@@ -322,9 +323,33 @@ class BrowserManager @Inject constructor(
         tabs.forEach { holder ->
             holder.webView.post {
                 holder.webView.settings.userAgentString = ua
+                if (_state.value.userAgent == BrowserUserAgent.DESKTOP) applyDesktopViewport(holder.webView)
                 holder.webView.reload()
+                // 读回来确认真的写进去了：UA 不生效时这是唯一能分辨“没设置”还是“站点不认”的依据。
+                FileLogger.i(
+                    TAG,
+                    "标签 ${holder.id} UA 已设为 ${holder.webView.settings.userAgentString}"
+                )
             }
         }
+    }
+
+    /**
+     * 桌面档位下把视口固定成 1280 宽。
+     *
+     * 自适应站点普遍按 `<meta name="viewport" content="width=device-width">` 排版，只改 UA 不改视口时
+     * 即使拿到桌面 HTML 仍会渲染成手机版布局——这也是“切了桌面版但看着还是手机页面”的常见原因。
+     */
+    private fun applyDesktopViewport(view: WebView) {
+        view.evaluateJavascript(
+            "(function(){" +
+                "var m=document.querySelector('meta[name=\"viewport\"]');" +
+                "if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');" +
+                "document.head.appendChild(m);}" +
+                "m.setAttribute('content','width=1280, initial-scale=1');" +
+                "})()",
+            null
+        )
     }
 
     inner class BrowserJsBridge(private val tabId: String) {
@@ -379,6 +404,7 @@ class BrowserManager @Inject constructor(
                 tab.loading = false
                 tab.url = url.orEmpty()
                 if (view != null && nightMode) applyNightModeTo(view)
+                if (view != null && _state.value.userAgent == BrowserUserAgent.DESKTOP) applyDesktopViewport(view)
                 if (view != null && tab.devToolsOpen) injectEruda(view, autoShow = false)
                 val finish = {
                     tab.loadDeferred?.complete(Result.success(url.orEmpty()))
