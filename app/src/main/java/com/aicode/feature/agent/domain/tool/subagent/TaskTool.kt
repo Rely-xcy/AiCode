@@ -132,7 +132,7 @@ class TaskTool @Inject constructor(
     override suspend fun executeWithContext(args: Map<String, JsonElement>, context: AgentContext): ToolResult {
         val action = (args["action"] as? JsonPrimitive)?.content?.trim()?.lowercase() ?: "create"
         return when (action) {
-            "create" -> createSubagent(args, context)
+            "create" -> createSubagent(args, context).second
             "advise" -> advise(args, context)
             "send" -> sendToSubagent(args, context)
             "read" -> readSubagent(args, context)
@@ -143,15 +143,24 @@ class TaskTool @Inject constructor(
         }
     }
 
-    /** 创建子代理并启动执行。 */
-    private suspend fun createSubagent(args: Map<String, JsonElement>, context: AgentContext): ToolResult {
-        val parentSessionId = context.sessionId ?: return ToolResult.Error("缺少会话上下文", "NO_SESSION")
+    /**
+     * 创建子代理并启动执行。
+     *
+     * 同时返回子会话 id：advise 要并发创建多个再等它们全部完成，必须拿到各自的 id。
+     * 不要让调用方去解析 ToolResult 的传输字符串取 id——那条路实测拿不到：
+     * toTransportString() 序列化的是整个 ToolResult，id 嵌在 content 字符串里，取出来是 null。
+     */
+    private suspend fun createSubagent(
+        args: Map<String, JsonElement>,
+        context: AgentContext
+    ): Pair<String?, ToolResult> {
+        val parentSessionId = context.sessionId ?: return null to ToolResult.Error("缺少会话上下文", "NO_SESSION")
         val parentSession = sessionUseCase.getSessionById(parentSessionId)
-            ?: return ToolResult.Error("当前会话不存在", "SESSION_NOT_FOUND")
+            ?: return null to ToolResult.Error("当前会话不存在", "SESSION_NOT_FOUND")
 
         // 检查并发上限
         if (eventBus.isFull) {
-            return ToolResult.Error(
+            return null to ToolResult.Error(
                 "子代理已达上限（最多 ${SubAgentEventBus.MAX_RUNNING} 个同时运行），请先等待其中某个完成或用 stop 停止后再创建",
                 "MAX_SUBAGENTS_REACHED"
             )
@@ -159,7 +168,7 @@ class TaskTool @Inject constructor(
 
         val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
         if (prompt.isNullOrBlank()) {
-            return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
+            return null to ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
         }
         val description = (args["description"] as? JsonPrimitive)?.contentOrNull?.trim()
             ?.replace(Regex("\\s+"), " ")
@@ -175,7 +184,7 @@ class TaskTool @Inject constructor(
             if (definition == null) {
                 val available = agentDefinitionRepository.listEnabled().map { it.definition.name }
                 val hint = if (available.isEmpty()) "当前未定义任何自定义子代理" else "可用：${available.joinToString(", ")}"
-                return ToolResult.Error("子代理定义不存在: $agentName（$hint）", "AGENT_NOT_FOUND")
+                return null to ToolResult.Error("子代理定义不存在: $agentName（$hint）", "AGENT_NOT_FOUND")
             }
         }
 
@@ -206,7 +215,7 @@ class TaskTool @Inject constructor(
         )
         FileLogger.i(TAG, "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"}")
 
-        return ToolResult.Success(
+        return subSessionId to ToolResult.Success(
             buildJsonObject {
                 put("id", subSessionId)
                 put("state", "running")
@@ -281,20 +290,15 @@ class TaskTool @Inject constructor(
             )
         }
 
-        // 复用 createSubagent：对每个 agent 定义分别创建一个子代理，从返回结果里提取 session id。
+        // 复用 createSubagent：对每个 agent 定义分别创建一个子代理，拿到各自的子会话 id。
         val createArgs = args.toMutableMap()
         createArgs.remove("agents")
         val subSessions = mutableListOf<Pair<String, String>>() // sessionId to agentName
         for (name in agentNames) {
             createArgs["agent"] = JsonPrimitive(name)
-            val result = createSubagent(createArgs, context)
+            val (createdId, result) = createSubagent(createArgs, context)
             if (result is ToolResult.Error) return result
-            val id = runCatching {
-                Json.parseToJsonElement(result.toTransportString())
-                    .jsonObject["id"]
-                    ?.jsonPrimitive
-                    ?.contentOrNull
-            }.getOrNull()
+            val id = createdId
             if (id.isNullOrBlank()) {
                 return ToolResult.Error("创建子代理 $name 后拿不到 session id", "INTERNAL_ERROR")
             }
