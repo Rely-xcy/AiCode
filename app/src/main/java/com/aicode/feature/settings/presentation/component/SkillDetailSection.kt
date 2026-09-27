@@ -42,9 +42,8 @@ internal fun SkillDetailSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 卡片 1：是否启用（开关行）。远程技能 v1 无启用/禁用概念，不展示。
-        if (!entry.remote) {
-            SettingsGroup {
+        // 卡片 1：是否启用（开关行）
+        SettingsGroup {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -63,7 +62,6 @@ internal fun SkillDetailSection(
                     )
                 }
             }
-        }
 
         // 卡片 2：摘要
         SettingsGroupHeader(text = stringResource(R.string.skills_summary))

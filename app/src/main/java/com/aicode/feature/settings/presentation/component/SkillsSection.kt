@@ -209,14 +209,11 @@ private fun SkillRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    // 远程技能无「启用/禁用」概念（v1），不显示状态徽章。
-                    if (!entry.remote) {
-                        McpPill(
-                            text = stringResource(if (entry.disabled) R.string.common_disabled else R.string.common_enabled),
-                            textColor = if (entry.disabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.tertiary,
-                            backgroundColor = (if (entry.disabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.tertiary).copy(alpha = 0.12f)
-                        )
-                    }
+                    McpPill(
+                        text = stringResource(if (entry.disabled) R.string.common_disabled else R.string.common_enabled),
+                        textColor = if (entry.disabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.tertiary,
+                        backgroundColor = (if (entry.disabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.tertiary).copy(alpha = 0.12f)
+                    )
                 }
                 Text(
                     text = entry.description.ifBlank { stringResource(R.string.mcp_no_description) },

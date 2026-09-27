@@ -29,8 +29,6 @@ import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
-import com.aicode.feature.agent.domain.skill.RemoteSkillsManager
-import com.aicode.feature.agent.domain.skill.RemoteSkillsState
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillForm
 import com.aicode.feature.agent.domain.skill.SkillImportError
@@ -317,7 +315,6 @@ class SettingsViewModel @Inject constructor(
     private val permissionRulesRepository: PermissionRulesRepository,
     private val toolSafetySettingsRepository: ToolSafetySettingsRepository,
     private val skillRepository: SkillRepository,
-    private val remoteSkillsManager: RemoteSkillsManager,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val agentDefinitionConfigRepository: AgentDefinitionConfigRepository,
     private val toolRegistry: ToolRegistry,
@@ -544,9 +541,6 @@ class SettingsViewModel @Inject constructor(
 
     private val _skillImportState = MutableStateFlow<SkillImportState>(SkillImportState.Idle)
     val skillImportState: StateFlow<SkillImportState> = _skillImportState.asStateFlow()
-
-    /** 远程服务器技能状态（本地模式下管理「远程 SSH 模式」那台服务器）。 */
-    val remoteSkills: StateFlow<RemoteSkillsState> = remoteSkillsManager.state
 
     private val _subAgents = MutableStateFlow<List<SubAgentUiEntry>>(emptyList())
     val subAgents: StateFlow<List<SubAgentUiEntry>> = _subAgents.asStateFlow()
@@ -1180,83 +1174,6 @@ class SettingsViewModel @Inject constructor(
 
     fun clearSkillSaveState() {
         _skillSaveState.value = SkillSaveState.Idle
-    }
-
-    // ================= 远程服务器技能（本地模式下管理「远程 SSH 模式」那台服务器） =================
-
-    /** 连接远程 SSH 并扫描其工作区技能（进入技能页 / 手动刷新时调用）。 */
-    fun connectRemoteSkills() {
-        viewModelScope.launch {
-            // SFTP 扫描内部是 runBlocking 阻塞实现，必须离开 Main 线程，否则连接超时会 ANR。
-            withContext(Dispatchers.IO) { remoteSkillsManager.connect() }
-        }
-    }
-
-    fun refreshRemoteSkills() {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { remoteSkillsManager.refresh() }
-        }
-    }
-
-    /** 保存远程技能；结果写入 [skillSaveState]，编辑页据此退回或报错。 */
-    fun saveRemoteSkill(form: SkillForm, originalName: String? = null) {
-        viewModelScope.launch {
-            val error = withContext(Dispatchers.IO) { remoteSkillsManager.save(form, originalName) }
-            _skillSaveState.value = if (error == null) SkillSaveState.Saved else SkillSaveState.Failed(error)
-        }
-    }
-
-    fun deleteRemoteSkill(name: String) {
-        viewModelScope.launch {
-            val ok = withContext(Dispatchers.IO) { remoteSkillsManager.delete(name) }
-            if (!ok) {
-                // 复用保存状态链路提示失败（列表页顶部已有消费点），避免静默失败。
-                _skillSaveState.value = SkillSaveState.Failed(SkillSaveError.IO_FAILED)
-            }
-        }
-    }
-
-    /** 从 Markdown 文件导入技能到远程工作区。 */
-    fun importRemoteSkillFromMarkdown(uri: Uri) {
-        if (_skillImportState.value is SkillImportState.Running) return
-        _skillImportState.value = SkillImportState.Running
-        viewModelScope.launch {
-            val report = withContext(Dispatchers.IO) {
-                val name = queryDisplayName(uri)
-                if (!name.hasExtension(MARKDOWN_EXTENSIONS)) {
-                    SkillImportReport(emptyList(), fatal = SkillImportError.UNSUPPORTED_FILE)
-                } else {
-                    runCatching {
-                        val text = context.contentResolver.openInputStream(uri)
-                            ?.bufferedReader()?.use { it.readText() }
-                            ?: throw java.io.IOException("openInputStream returned null")
-                        remoteSkillsManager.importMarkdown(text, name.substringBeforeLast('.'))
-                    }.getOrElse { SkillImportReport(emptyList(), fatal = SkillImportError.IO_FAILED) }
-                }
-            }
-            finishSkillImport(report)
-        }
-    }
-
-    /** 从 zip 压缩包导入技能到远程工作区。 */
-    fun importRemoteSkillFromZip(uri: Uri) {
-        if (_skillImportState.value is SkillImportState.Running) return
-        _skillImportState.value = SkillImportState.Running
-        viewModelScope.launch {
-            val report = withContext(Dispatchers.IO) {
-                val name = queryDisplayName(uri)
-                if (!name.hasExtension(ZIP_EXTENSIONS)) {
-                    SkillImportReport(emptyList(), fatal = SkillImportError.UNSUPPORTED_FILE)
-                } else {
-                    runCatching {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            remoteSkillsManager.importZip(input, name.substringBeforeLast('.'))
-                        } ?: throw java.io.IOException("openInputStream returned null")
-                    }.getOrElse { SkillImportReport(emptyList(), fatal = SkillImportError.INVALID_ARCHIVE) }
-                }
-            }
-            finishSkillImport(report)
-        }
     }
 
     /**

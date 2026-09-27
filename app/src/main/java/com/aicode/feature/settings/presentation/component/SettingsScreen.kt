@@ -1130,11 +1130,7 @@ fun SettingsScreen(
             text = { Text(stringResource(R.string.skills_delete_confirm_message, target.name)) },
             confirmButton = {
                 TextButton(onClick = {
-                    if (target.remote) {
-                        viewModel.deleteRemoteSkill(target.name)
-                    } else {
-                        viewModel.deleteSkill(target.name, target.scope)
-                    }
+                    viewModel.deleteSkill(target.name, target.scope)
                     skillToDelete = null
                 }) { Text(stringResource(R.string.common_delete)) }
             },
