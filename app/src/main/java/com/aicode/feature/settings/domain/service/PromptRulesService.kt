@@ -20,16 +20,13 @@ data class PromptFragmentInfo(
     /** 是否有内置默认内容（即覆盖内置片段）；false 表示纯新增片段。 */
     val isBuiltin: Boolean,
     /** 当前是否存在自定义文件。 */
-    val hasCustom: Boolean,
-    /** 关键片段，禁止修改。 */
-    val isProtected: Boolean
+    val hasCustom: Boolean
 )
 
 /**
  * 自定义提示词（`~/.aicode/prompts.custom/`）的读写服务。
  *
  * 片段身份是文件名里的两位数字：命中内置数字即为**覆盖**，其它数字为**新增**（见 [PromptFragmentResolver]）。
- * 少数关键片段（身份、安全）不允许改——它们决定 Agent 的基本行为与安全边界，改坏会让 App 失去兜底。
  */
 @Singleton
 class PromptRulesService @Inject constructor(
@@ -39,9 +36,6 @@ class PromptRulesService @Inject constructor(
     private companion object {
         const val TAG = "PromptRulesService"
         const val ASSET_DIR = "prompts"
-
-        /** 关键片段：身份与安全边界，禁止用户覆盖。 */
-        val PROTECTED_NUMBERS = setOf(0, 50)
 
         /** 内置静态基线：数字 → (文件名, 中文标题, 一句话说明)。 */
         val BUILTIN_FRAGMENTS = listOf(
@@ -78,8 +72,7 @@ class PromptRulesService @Inject constructor(
                 title = b.title,
                 subtitle = b.subtitle,
                 isBuiltin = true,
-                hasCustom = customByNumber.containsKey(b.number),
-                isProtected = b.number in PROTECTED_NUMBERS
+                hasCustom = customByNumber.containsKey(b.number)
             )
         }
         val extras = customByNumber
@@ -91,8 +84,7 @@ class PromptRulesService @Inject constructor(
                     title = displayNameOf(file),
                     subtitle = "自定义新增片段",
                     isBuiltin = false,
-                    hasCustom = true,
-                    isProtected = false
+                    hasCustom = true
                 )
             }
         return (builtin + extras).sortedBy { it.number }
@@ -118,9 +110,6 @@ class PromptRulesService @Inject constructor(
      * 同一数字已有别的自定义文件时先删掉，避免 [PromptFragmentResolver.numberedFragments] 因同数字多文件而取错。
      */
     fun save(number: Int, fileName: String, content: String): Result<Unit> {
-        if (number in PROTECTED_NUMBERS) {
-            return Result.failure(IllegalArgumentException("该片段是关键提示词，不允许修改"))
-        }
         if (number !in 0..99) return Result.failure(IllegalArgumentException("数字需在 00~99 之间"))
         if (content.isBlank()) return Result.failure(IllegalArgumentException("内容不能为空"))
         return runCatching {
@@ -144,7 +133,6 @@ class PromptRulesService @Inject constructor(
 
     /** 删除某数字的自定义文件；返回是否删掉了东西（删掉即恢复内置默认）。 */
     fun deleteCustom(number: Int): Boolean {
-        if (number in PROTECTED_NUMBERS) return false
         val file = customFilesByNumber()[number] ?: return false
         return runCatching { file.delete() }.getOrDefault(false)
     }

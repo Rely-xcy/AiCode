@@ -152,6 +152,8 @@
     <string name="storage_clean_logs_desc">App and AI request logs; deleting them affects nothing</string>
     <string name="storage_clean_tool_output">Tool output archive</string>
     <string name="storage_clean_tool_output_desc">Saved copies of oversized tool output; output paths in older messages stop resolving</string>
+    <string name="storage_clean_compacted_history">Compacted history archive</string>
+    <string name="storage_clean_compacted_history_desc">Archived copies of the original history taken during context compaction, kept for looking up details; once deleted, older sessions rely on the summary alone</string>
     <string name="storage_clean_vision">Vision session cache</string>
     <string name="storage_clean_vision_desc">History for image follow-up questions; old sessions can no longer be continued</string>
     <string name="storage_untitled_session">Untitled session</string>
@@ -1015,6 +1017,29 @@
 
     <!-- Subagent Settings -->
     <string name="settings_subagents">Subagents</string>
+    <string name="settings_prompt_rules">Prompt &amp; Rules</string>
+    <string name="prompt_rules_title">Prompt &amp; Rules</string>
+    <string name="prompt_rules_new_title">New fragment</string>
+    <string name="prompt_rules_docs_title">Instructions (required reading)</string>
+    <string name="prompt_rules_docs_from_cache">Showing a locally cached copy of the documentation (couldn\'t refresh online this time).</string>
+    <string name="prompt_rules_docs_refresh">Refetch official docs</string>
+    <string name="prompt_rules_docs_retry">Retry</string>
+    <string name="prompt_rules_docs_unavailable">Couldn\'t load the official documentation (offline and no local cache). Below are the offline highlights; tap the button below for the full documentation.</string>
+    <string name="prompt_rules_docs_body">Offline highlights:\n\n1. Customizing replaces, it does not append. Your file completely replaces the matching built-in fragment; writing only half of it effectively deletes the other half.\n\n2. A fragment\'s identity is the two-digit number in its file name. A number matching a built-in fragment overrides it (e.g. 00-identity.md); any other number creates a new fragment, inserted at the position matching that number.\n\n3. Every fragment is editable. 00 identity and 50 safety define who the agent is and the boundaries it must never cross; breaking them costs the app its fallback guarantees, so back up before editing.\n\n4. Mistakes are recoverable. Delete the custom file to restore the built-in default; app upgrades never overwrite your custom directory.\n\n5. Back up first. Prompts directly determine agent behaviour, so export a backup before editing, or keep your changes under version control in the workspace.\n\n6. When unsure, change less. Content that conflicts with the built-in rules makes the model behave erratically.</string>
+    <string name="prompt_rules_open_official">Open official docs (full guide)</string>
+    <string name="prompt_rules_docs_confirm">I have read and understood the above</string>
+    <string name="prompt_rules_list_hint">The fragments below are concatenated into the system prompt in numeric order. Customized fragments are marked \'Customized\'; deleting your custom content restores the built-in default.</string>
+    <string name="prompt_rules_custom_tag">Customized</string>
+    <string name="prompt_rules_override_hint">Saving replaces this built-in fragment entirely; tap \'Restore default\' to delete your custom content.</string>
+    <string name="prompt_rules_new_hint">The new fragment is written to the custom directory as %1$s-&lt;name&gt;.md and inserted at the position matching that number.</string>
+    <string name="prompt_rules_new">New fragment</string>
+    <string name="prompt_rules_name_label">Fragment name (used to build the file name)</string>
+    <string name="prompt_rules_content_label">Fragment content</string>
+    <string name="prompt_rules_save">Save</string>
+    <string name="prompt_rules_restore_builtin">Restore default</string>
+    <string name="prompt_rules_discard_title">Discard unsaved changes?</string>
+    <string name="prompt_rules_discard_body">This fragment has unsaved content; going back will lose those changes.</string>
+    <string name="prompt_rules_discard_confirm">Discard</string>
     <string name="subagents_empty">No custom subagents yet</string>
     <string name="subagents_empty_hint">Tap + in the top bar to create one, or drop an agent\'s .md definition into ~/.aicode/agents/</string>
     <string name="subagents_no_project">No subagents in this project</string>

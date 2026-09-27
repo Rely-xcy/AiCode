@@ -1025,13 +1025,11 @@
     <string name="prompt_rules_docs_refresh">重新拉取官方文档</string>
     <string name="prompt_rules_docs_retry">重试</string>
     <string name="prompt_rules_docs_unavailable">无法加载官方文档（未联网且无本地缓存）。下面是离线要点，完整说明请点下方按钮打开官方文档。</string>
-    <string name="prompt_rules_docs_body">离线要点：\n\n1. 自定义是「整体替换」而不是追加。你的文件会完全取代对应的内置片段；只写一半相当于把另一半删掉。\n\n2. 片段身份是文件名里的两位数字。数字命中内置片段即为覆盖（如 00-identity.md），其它数字为新增片段，按数字大小插入到提示词的对应位置。\n\n3. 关键片段不允许修改。00 身份与 50 安全决定 Agent 是谁、以及不可越过的安全边界，改坏会让 App 失去兜底能力，因此锁死。\n\n4. 改错可以恢复。删除对应的自定义文件即恢复内置默认，升级 App 时自定义目录不会被覆盖。\n\n5. 建议先备份。提示词直接决定 Agent 行为，改之前先用备份功能导出，或把改动放进工作区的版本控制里。\n\n6. 不确定就少改。与内置规则冲突的内容会让模型行为飘忽。</string>
+    <string name="prompt_rules_docs_body">离线要点：\n\n1. 自定义是「整体替换」而不是追加。你的文件会完全取代对应的内置片段；只写一半相当于把另一半删掉。\n\n2. 片段身份是文件名里的两位数字。数字命中内置片段即为覆盖（如 00-identity.md），其它数字为新增片段，按数字大小插入到提示词的对应位置。\n\n3. 所有片段都可以改。00 身份与 50 安全决定 Agent 是谁、以及不可越过的安全边界，改坏会让 App 失去兜底能力，改前建议先备份。\n\n4. 改错可以恢复。删除对应的自定义文件即恢复内置默认，升级 App 时自定义目录不会被覆盖。\n\n5. 建议先备份。提示词直接决定 Agent 行为，改之前先用备份功能导出，或把改动放进工作区的版本控制里。\n\n6. 不确定就少改。与内置规则冲突的内容会让模型行为飘忽。</string>
     <string name="prompt_rules_open_official">打开官方文档（完整说明）</string>
     <string name="prompt_rules_docs_confirm">我已阅读并理解以上说明</string>
     <string name="prompt_rules_list_hint">下列片段按数字顺序拼接成系统提示词。被自定义的片段会显示「已自定义」；删除自定义内容即恢复内置默认。</string>
     <string name="prompt_rules_custom_tag">已自定义</string>
-    <string name="prompt_rules_protected_tag">关键片段，不可修改</string>
-    <string name="prompt_rules_protected_hint">该片段决定 Agent 的身份与安全边界，为避免改坏应用兜底能力，不允许修改。此处仅供查看。</string>
     <string name="prompt_rules_override_hint">保存后将整体替换该内置片段；点「恢复内置默认」可删除自定义内容。</string>
     <string name="prompt_rules_new_hint">新片段将以 %1$s-&lt;名称&gt;.md 写入自定义目录，并按编号插入到提示词对应位置。</string>
     <string name="prompt_rules_new">新建片段</string>

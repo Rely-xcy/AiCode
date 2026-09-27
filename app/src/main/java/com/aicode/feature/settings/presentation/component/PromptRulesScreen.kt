@@ -58,7 +58,7 @@ private const val OFFICIAL_PROMPT_DOCS_URL = "https://aicode.murk.top/guide/cust
  * 自定义提示词页：说明门槛 → 片段清单 → 编辑。
  *
  * 首次进入强制先读使用说明（读完才解锁编辑），因为自定义提示词会整体替换内置片段，
- * 改错会让 Agent 行为异常甚至丢掉安全边界；关键片段（身份、安全）只读。
+ * 改错会让 Agent 行为异常。所有片段都可修改，改坏了删掉自定义文件即恢复内置默认。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -234,7 +234,7 @@ private fun PromptDocsGate(
     }
 }
 
-/** 片段清单：内置 9 个（标注是否已覆盖 / 是否关键）+ 自定义新增片段。 */
+/** 片段清单：内置 9 个（标注是否已覆盖）+ 自定义新增片段。 */
 @Composable
 private fun PromptFragmentList(
     fragments: List<PromptFragmentInfo>,
@@ -261,10 +261,7 @@ private fun PromptFragmentList(
                     title = "${String.format("%02d", fragment.number)} · ${fragment.title}",
                     subtitle = buildString {
                         append(fragment.subtitle)
-                        if (fragment.isProtected) {
-                            append(" · ")
-                            append(stringResource(R.string.prompt_rules_protected_tag))
-                        } else if (fragment.hasCustom) {
+                        if (fragment.hasCustom) {
                             append(" · ")
                             append(stringResource(R.string.prompt_rules_custom_tag))
                         }
@@ -283,7 +280,7 @@ private fun PromptFragmentList(
     }
 }
 
-/** 片段编辑器：内置片段可覆盖/恢复默认，新增片段填名称；关键片段只读。 */
+/** 片段编辑器：内置片段可覆盖/恢复默认，新增片段填名称。 */
 @Composable
 private fun PromptFragmentEditor(
     state: PromptRulesViewModel.EditorState,
@@ -292,7 +289,6 @@ private fun PromptFragmentEditor(
     onDeleteCustom: () -> Unit
 ) {
     var name by rememberSaveable(state.fragment.number) { mutableStateOf("") }
-    val protected = state.fragment.isProtected
 
     Column(
         modifier = Modifier
@@ -303,9 +299,7 @@ private fun PromptFragmentEditor(
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
         Text(
-            text = if (protected) {
-                stringResource(R.string.prompt_rules_protected_hint)
-            } else if (state.isNew) {
+            text = if (state.isNew) {
                 stringResource(R.string.prompt_rules_new_hint, String.format("%02d", state.fragment.number))
             } else {
                 stringResource(R.string.prompt_rules_override_hint)
@@ -327,19 +321,16 @@ private fun PromptFragmentEditor(
             onValueChange = onContentChange,
             modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp),
             label = stringResource(R.string.prompt_rules_content_label),
-            singleLine = false,
-            readOnly = protected
+            singleLine = false
         )
 
-        if (!protected) {
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Button(onClick = { onSave(name) }, enabled = state.isDirty) {
-                    Text(stringResource(R.string.prompt_rules_save))
-                }
-                if (state.fragment.hasCustom && !state.isNew) {
-                    TextButton(onClick = onDeleteCustom) {
-                        Text(stringResource(R.string.prompt_rules_restore_builtin))
-                    }
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Button(onClick = { onSave(name) }, enabled = state.isDirty) {
+                Text(stringResource(R.string.prompt_rules_save))
+            }
+            if (state.fragment.hasCustom && !state.isNew) {
+                TextButton(onClick = onDeleteCustom) {
+                    Text(stringResource(R.string.prompt_rules_restore_builtin))
                 }
             }
         }

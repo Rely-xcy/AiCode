@@ -19,8 +19,7 @@ import javax.inject.Inject
 /**
  * 自定义提示词页的状态与动作。
  *
- * 首次进入必须先读使用说明（[docsRead] 为 null 表示还在读标记，UI 应显示加载态），
- * 读完才允许编辑；关键片段（身份、安全）只读。
+ * 首次进入必须先读使用说明（[docsRead] 为 null 表示还在读标记，UI 应显示加载态）。
  */
 @HiltViewModel
 class PromptRulesViewModel @Inject constructor(
@@ -93,7 +92,7 @@ class PromptRulesViewModel @Inject constructor(
         }
     }
 
-    /** 打开片段：受保护的只读查看；其余以「已有自定义内容，否则内置默认」为草稿。 */
+    /** 打开片段：以「已有自定义内容，否则内置默认」为草稿与基线。 */
     fun open(fragment: PromptFragmentInfo) {
         viewModelScope.launch {
             val custom = withContext(Dispatchers.IO) { service.customText(fragment.number) }
@@ -101,7 +100,9 @@ class PromptRulesViewModel @Inject constructor(
             _editor.value = EditorState(
                 fragment = fragment,
                 content = custom ?: builtin,
-                original = custom.orEmpty(),
+                // 基线必须与初值一致：未自定义过的内置片段初值是内置正文，若基线取空串，
+                // 一打开就已经是「脏」的，会导致没改任何东西也弹放弃确认。
+                original = custom ?: builtin,
                 isNew = false
             )
         }
@@ -121,8 +122,7 @@ class PromptRulesViewModel @Inject constructor(
                 title = "",
                 subtitle = "自定义新增片段",
                 isBuiltin = false,
-                hasCustom = false,
-                isProtected = false
+                hasCustom = false
             ),
             content = "",
             original = "",
