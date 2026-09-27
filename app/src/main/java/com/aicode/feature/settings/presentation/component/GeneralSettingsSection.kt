@@ -59,6 +59,10 @@ internal fun GeneralSettingsSection(
     compactionThresholdPercent: Int,
     onSetCompactionThresholdPercent: (Int) -> Unit,
     softCompactionThresholdPercent: Int,
+    /** 默认模型的上下文窗口；0 表示拿不到元数据（此时不展示实际触发线）。 */
+    contextWindow: Int,
+    /** 该窗口档位的硬压缩绝对上限；0 表示该档不启用硬压缩。 */
+    tierHardCap: Int,
     onSetSoftCompactionThresholdPercent: (Int) -> Unit,
     sendFileMaxSizeMb: Int,
     onSetSendFileMaxSizeMb: (Int) -> Unit,
@@ -98,7 +102,26 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_compaction_threshold),
-                subtitle = stringResource(R.string.settings_compaction_threshold_desc),
+                subtitle = buildString {
+                    append(stringResource(R.string.settings_compaction_threshold_desc))
+                    if (contextWindow > 0) {
+                        append("\n")
+                        // 百分比只是上限之一，还要过档位绝对上限；直接显示算完的绝对值，
+                        // 用户才看得出“设置里写 80%”到底对应多少 tokens、上限有没有生效。
+                        append(
+                            if (tierHardCap > 0) {
+                                stringResource(
+                                    R.string.settings_compaction_effective,
+                                    minOf(contextWindow * compactionThresholdPercent / 100, tierHardCap),
+                                    contextWindow,
+                                    tierHardCap
+                                )
+                            } else {
+                                stringResource(R.string.settings_compaction_hard_disabled, contextWindow)
+                            }
+                        )
+                    }
+                },
                 onClick = { editingCompactionThreshold = true },
                 trailing = {
                     Text(
@@ -112,7 +135,32 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_soft_compaction_threshold),
-                subtitle = stringResource(R.string.settings_soft_compaction_threshold_desc),
+                subtitle = buildString {
+                    append(stringResource(R.string.settings_soft_compaction_threshold_desc))
+                    if (contextWindow > 0) {
+                        append("\n")
+                        // 与 ContextCompactor 同一套算法：软阈值还要被硬阈值减一（硬阈值未启用时按窗口 90%）封顶。
+                        val hardEffective = if (tierHardCap > 0) {
+                            minOf(contextWindow * compactionThresholdPercent / 100, tierHardCap)
+                        } else 0
+                        val softCeiling = if (tierHardCap > 0) {
+                            (hardEffective - 1).coerceAtLeast(1)
+                        } else {
+                            contextWindow * 90 / 100
+                        }
+                        val softEffective = minOf(
+                            contextWindow * softCompactionThresholdPercent / 100,
+                            softCeiling
+                        ).coerceAtLeast(1)
+                        append(
+                            stringResource(
+                                R.string.settings_compaction_soft_effective,
+                                softEffective,
+                                contextWindow
+                            )
+                        )
+                    }
+                },
                 onClick = { editingSoftCompactionThreshold = true },
                 trailing = {
                     Text(

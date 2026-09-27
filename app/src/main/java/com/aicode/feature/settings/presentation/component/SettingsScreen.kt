@@ -222,6 +222,23 @@ fun SettingsScreen(
     val enterToSend by viewModel.enterToSend.collectAsStateWithLifecycle()
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
     val softCompactionThresholdPercent by viewModel.softCompactionThresholdPercent.collectAsStateWithLifecycle()
+    val compactionDefaultProviderId by viewModel.defaultModelProviderId.collectAsStateWithLifecycle()
+    val compactionDefaultModel by viewModel.defaultModel.collectAsStateWithLifecycle()
+    val compactionModelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
+    // 压缩的实际触发线取决于默认模型窗口：设置里的百分比还要过档位绝对上限，
+    // 只显示百分比的话，用户无法判断“写 80%”到底对应多少 tokens、上限有没有生效。
+    val compactionContextWindow = compactionModelMetadata[
+        com.aicode.feature.settings.domain.model.modelMetadataKey(
+            compactionDefaultProviderId,
+            compactionDefaultModel
+        )
+    ]?.contextTokens ?: 0
+    val compactionTierHardCap = if (compactionContextWindow > 0) {
+        com.aicode.feature.settings.domain.model.ModelContextPolicy
+            .tierFor(compactionContextWindow).hardThreshold
+    } else {
+        0
+    }
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -789,6 +806,8 @@ fun SettingsScreen(
                     onSetCompactionThresholdPercent = { viewModel.setCompactionThresholdPercent(it) },
                     softCompactionThresholdPercent = softCompactionThresholdPercent,
                     onSetSoftCompactionThresholdPercent = { viewModel.setSoftCompactionThresholdPercent(it) },
+                    contextWindow = compactionContextWindow,
+                    tierHardCap = compactionTierHardCap,
                     sendFileMaxSizeMb = sendFileMaxSizeMb,
                     onSetSendFileMaxSizeMb = { viewModel.setSendFileMaxSizeMb(it) },
                     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
