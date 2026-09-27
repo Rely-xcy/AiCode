@@ -527,6 +527,8 @@ class BackupManagerImpl @Inject constructor(
                 else -> {
                     if (entry.name.startsWith(WORKSPACE_PREFIX)) {
                         stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+                    } else {
+                        restoreAicodeDirEntry(tar, entry.name)
                     }
                 }
             }
@@ -675,6 +677,34 @@ class BackupManagerImpl @Inject constructor(
      * 仅处理勾选的工作区（[selectedWorkspaces] 非 null 时），且只允许写入内部工作区；本地无同名工作区时自动创建，
      * 避免新设备/重装后导入的工作区文件因找不到目标而丢失。
      */
+    /**
+     * 恢复 `skills/…`、`memory/…`、`agents/…`、`prompts/…` 条目到对应的本地配置目录。
+     *
+     * 必须做越界校验：备份文件是可以被改动/伪造的，`..` 或绝对路径能写到配置目录之外。
+     * 不认识的条目直接跳过，不消费内容（tar 会在 nextEntry 时自动跳过剩余字节）。
+     */
+    private fun restoreAicodeDirEntry(tar: TarArchiveInputStream, entryName: String) {
+        val slash = entryName.indexOf('/')
+        if (slash <= 0) return
+        val dirName = when (entryName.substring(0, slash)) {
+            "skills" -> "skills"
+            "memory" -> "memory"
+            "agents" -> "agents"
+            "prompts" -> "prompts.custom"
+            else -> return
+        }
+        val rel = entryName.substring(slash + 1)
+        if (rel.isEmpty()) return
+        val root = File(containerInstaller.aicodeDir, dirName)
+        val target = File(root, rel)
+        if (!target.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+            FileLogger.w(TAG, "跳过越界的备份条目：$entryName")
+            return
+        }
+        target.parentFile?.mkdirs()
+        FileOutputStream(target).use { out -> tar.copyTo(out) }
+    }
+
     private suspend fun restoreWorkspaceEntry(
         tar: TarArchiveInputStream,
         entryName: String,
