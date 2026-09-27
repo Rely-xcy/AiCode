@@ -342,6 +342,7 @@ class SettingsViewModel @Inject constructor(
     private val proxySettingsRepository: ProxySettingsRepository
 ) : ViewModel() {
     private companion object {
+        const val TAG = "SettingsViewModel"
         const val MAX_LOG_LINES = 1200
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
@@ -1156,7 +1157,9 @@ class SettingsViewModel @Inject constructor(
     /** 切换技能的启用/禁用状态（写入对应作用域的 skills.json）。 */
     fun setSkillEnabled(name: String, enabled: Boolean, scope: SkillScope) {
         viewModelScope.launch {
-            skillRepository.setSkillDisabled(name, !enabled, scope)
+            // 远程模式下 skills.json 在服务器上，写入要过 SSH，不能占主线程。
+            runCatching { withContext(Dispatchers.IO) { skillRepository.setSkillDisabled(name, !enabled, scope) } }
+                .onFailure { FileLogger.w(TAG, "切换技能启用状态失败: $name", it) }
             refreshSkills()
         }
     }
@@ -1164,7 +1167,9 @@ class SettingsViewModel @Inject constructor(
     /** 删除指定作用域的技能（删除其目录，不可恢复），随后立即刷新列表。 */
     fun deleteSkill(name: String, scope: SkillScope) {
         viewModelScope.launch {
-            skillRepository.deleteSkill(name, scope)
+            // 同上：远程模式下删目录是 SSH 往返，之前直接跑在主线程上，会卡死甚至闪退。
+            runCatching { withContext(Dispatchers.IO) { skillRepository.deleteSkill(name, scope) } }
+                .onFailure { FileLogger.w(TAG, "删除技能失败: $name", it) }
             refreshSkills()
         }
     }
