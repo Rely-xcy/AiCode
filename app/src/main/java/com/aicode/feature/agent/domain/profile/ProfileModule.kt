@@ -8,8 +8,7 @@ import com.aicode.feature.agent.data.local.entity.ProfileEntryEntity
 import com.aicode.feature.agent.data.local.entity.ProfileSection
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.prompt.PromptFileResolver
-import com.aicode.feature.agent.domain.remote.AIProvider
-import kotlinx.serialization.SerialName
+import com.aicode.feature.agent.domain.provider.AIProvider
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID

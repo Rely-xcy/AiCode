@@ -14,6 +14,7 @@ import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.local.entity.SessionGoalEntity
+import com.aicode.feature.agent.data.local.entity.ProfileEntryEntity
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
