@@ -457,6 +457,8 @@
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
     <string name="backup_data_workspace">Workspace Files</string>
+    <string name="backup_advanced">Advanced</string>
+    <string name="backup_advanced_hint">Contents of the AI config directory (checked by default)</string>
     <string name="backup_data_skills">Skills</string>
     <string name="backup_data_memory">Memory</string>
     <string name="backup_data_subagents">Subagent Definitions</string>
