@@ -250,7 +250,15 @@ class StatefulAgentWorkflow @Inject constructor(
         val history = messagePersistenceUseCase.buildHistory(sessionId, "__manual_compress__")
         if (history.size <= 2) return false
         val compactionProvider = resolveCompactionFallbackProvider(sessionId) ?: provider
-        val compacted = contextCompactor.compactIfNeeded(history, compactionProvider, sessionId, force = true, onEvent = onEvent)
+        // 窗口来源要传聊天模型：tail 预算按窗口比例算，用压缩模型（窗口可能小得多）会过度压缩。
+        val compacted = contextCompactor.compactIfNeeded(
+            messages = history,
+            aiProvider = compactionProvider,
+            sessionId = sessionId,
+            force = true,
+            windowProvider = provider,
+            onEvent = onEvent
+        )
         return compacted.size != history.size
     }
 
@@ -489,6 +497,14 @@ class StatefulAgentWorkflow @Inject constructor(
 
         val systemPrompt = promptProvider.build(currentContext)
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
+        // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，
+        // 只靠 lastInputTokens 间接体现（provider 不回传 usage 时恒为 0）会系统性低估。
+        val baseOverheadTokens = TokenEstimator.estimateText(systemPrompt) +
+            currentTools.sumOf { tool ->
+                TokenEstimator.estimateText(tool.name) +
+                    TokenEstimator.estimateText(tool.description) +
+                    TokenEstimator.estimateText(tool.toJsonSchema().toString())
+            }
         // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
         var compactionAttemptFailed = false
 
@@ -506,7 +522,14 @@ class StatefulAgentWorkflow @Inject constructor(
                         var compactedMessages = state.messages
                         if (!compactionAttemptFailed) {
                             val sessionLastInputTokens = currentContext.sessionId?.let { sessionUseCase.getSessionById(it)?.lastInputTokens } ?: 0
-                            compactedMessages = contextCompactor.compactIfNeeded(state.messages, compactionProvider, context.sessionId, lastInputTokens = sessionLastInputTokens, windowProvider = aiProvider) { event ->
+                            compactedMessages = contextCompactor.compactIfNeeded(
+                                messages = state.messages,
+                                aiProvider = compactionProvider,
+                                sessionId = context.sessionId,
+                                lastInputTokens = sessionLastInputTokens,
+                                windowProvider = aiProvider,
+                                baseOverheadTokens = baseOverheadTokens
+                            ) { event ->
                                 if (event is AgentEvent.CompactionFailed) compactionAttemptFailed = true
                                 send(event)
                             }
