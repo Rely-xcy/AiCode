@@ -153,10 +153,6 @@ internal fun ProfileSettingsScreen(
                 }
             }
         }
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
     }
 
     // 行里只放简略信息，点开才看详细——从底部弹出，与 App 其它页一致。
