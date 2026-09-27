@@ -169,6 +169,15 @@ internal fun PromptRulesScreen(
                 },
                 actions = {
                     // 三条杠菜单只在主页面（系统提示词）出现；编辑片段/高级页用自己的返回逻辑
+                    // 片段清单页的「添加」放右上角，与子代理/技能页一致，不再做一行「添加」行。
+                    if (showAdvanced && editor == null) {
+                        IconButton(onClick = { viewModel.openNew() }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.prompt_rules_new)
+                            )
+                        }
+                    }
                     if (editor == null && !showAdvanced && docsRead == true && systemPrompt != null) {
                         Box {
                             IconButton(onClick = { menuOpen = true }) {
@@ -285,8 +294,7 @@ internal fun PromptRulesScreen(
 
                 showAdvanced -> PromptFragmentList(
                     fragments = fragments,
-                    onOpen = viewModel::open,
-                    onNew = viewModel::openNew
+                    onOpen = viewModel::open
                 )
 
                 systemPrompt == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -472,8 +480,7 @@ private fun PromptDocsGate(
 @Composable
 private fun PromptFragmentList(
     fragments: List<PromptFragmentInfo>,
-    onOpen: (PromptFragmentInfo) -> Unit,
-    onNew: () -> Unit
+    onOpen: (PromptFragmentInfo) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -503,13 +510,6 @@ private fun PromptFragmentList(
                     onClick = { onOpen(fragment) }
                 )
             }
-        }
-        SettingsGroup {
-            SettingsRow(
-                icon = FeatherIcons.Plus,
-                title = stringResource(R.string.prompt_rules_new),
-                onClick = onNew
-            )
         }
     }
 }
