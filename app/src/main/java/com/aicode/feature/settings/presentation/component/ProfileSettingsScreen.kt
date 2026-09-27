@@ -51,6 +51,7 @@ import compose.icons.feathericons.ArrowLeft
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ProfileSettingsScreen(
+    onNavigateBack: () -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val groups by viewModel.groups.collectAsStateWithLifecycle()
@@ -69,12 +70,30 @@ internal fun ProfileSettingsScreen(
         }
     }
 
-    // 本页现在渲染在外壳的分区内容列里（不再是整页 early-return），
-    // 用 fillMaxSize 会在无界高度的宿主里塔成 0 高、整页空白，所以按宽度撑开、高度随内容。
-    Box(modifier = Modifier.fillMaxWidth()) {
+    // 退回自带 Scaffold（之前「交外壳顶栏」的改法导致页面空白：本地无法复现、查不准根因，
+    // 先回到已知能跑的形态；风格对齐的事之后单独做、单独测）。
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.profile_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        }
+    ) { padding ->
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
+                .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
