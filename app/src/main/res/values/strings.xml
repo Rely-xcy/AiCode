@@ -39,9 +39,9 @@
     <string name="settings_compaction_soft_effective">实际触发线 %1$d tokens（窗口 %2$d）</string>
     <string name="settings_compaction_threshold">自动压缩阈值</string>
     <string name="settings_compaction_hard_disabled">当前模型窗口 %1$d，该档不启用硬压缩（仅软精简）</string>
-    <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，生成摘要压缩早期历史。利用率超过约 40% 后模型质量开始下降，不建议设得过高。</string>
+    <string name="settings_compaction_threshold_desc">占用达该比例时，生成摘要压缩早期历史</string>
     <string name="settings_soft_compaction_threshold">软精简阈值</string>
-    <string name="settings_soft_compaction_threshold_desc">上下文占用达到该比例时，先精简历史里的超长工具输出，暂不调用摘要模型</string>
+    <string name="settings_soft_compaction_threshold_desc">占用达该比例时，先精简超长工具输出</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">填 1-100 的整数百分比</string>
     <string name="settings_general_tools">工具</string>

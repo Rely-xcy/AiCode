@@ -39,9 +39,9 @@
     <string name="settings_compaction_effective">Effective trigger at %1$d tokens (window %2$d, tier cap %3$d)</string>
     <string name="settings_compaction_soft_effective">Effective trigger at %1$d tokens (window %2$d)</string>
     <string name="settings_compaction_hard_disabled">Model window %1$d; hard compaction is off for this tier (soft trim only)</string>
-    <string name="settings_compaction_threshold_desc">Summarize early history once context reaches this share of the window</string>
+    <string name="settings_compaction_threshold_desc">Summarize early history at this share</string>
     <string name="settings_soft_compaction_threshold">Soft trim threshold</string>
-    <string name="settings_soft_compaction_threshold_desc">Trim long tool outputs from history first once context reaches this share (without summarizing)</string>
+    <string name="settings_soft_compaction_threshold_desc">Trim long tool outputs first at this share</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">Integer percentage between 1 and 100</string>
     <string name="settings_general_tools">Tools</string>
