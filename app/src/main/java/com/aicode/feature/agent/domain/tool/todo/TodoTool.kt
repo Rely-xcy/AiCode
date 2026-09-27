@@ -39,7 +39,9 @@ class TodoTool @Inject constructor(
     override val name = "todo"
     override val description = "用当前完整 items 列表替换会话任务清单。只需提交完整列表，" +
         "无需 action、todo_id 或单项更新。items 可为空数组表示清空；每项为 " +
-        "{subject, description, status, priority}。status 可为 pending、in_progress、completed。"
+        "{subject, description, status, priority, blockedBy}。status 可为 pending、in_progress、completed。" +
+        "blockedBy 是前置任务的 subject 列表（可选）：前置还没全部完成时把本项置为 in_progress 会被拒绝，" +
+        "先完成前置，或让它保持未开始。"
 
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.MODIFY_TODO_STATE)
@@ -64,6 +66,11 @@ class TodoTool @Inject constructor(
             "priority" to mapOf(
                 "type" to "integer",
                 "description" to "优先级，0=普通，越大越优先"
+            ),
+            "blockedBy" to mapOf(
+                "type" to "array",
+                "items" to mapOf("type" to "string"),
+                "description" to "前置任务的 subject 列表（可选）。它们未全部完成时，本项不能置为 in_progress。"
             )
         ),
         "required" to listOf("subject")
@@ -118,10 +125,30 @@ class TodoTool @Inject constructor(
                 status = draft.status.name,
                 priority = draft.priority,
                 order = idx,
+                blockedBy = draft.blockedBy,
                 createdAt = previous?.createdAt ?: now,
                 updatedAt = now
             ))
         }
+
+        // 依赖门禁：要把某项置为进行中时，它的前置任务必须已完成。
+        // 主代理本身就是调度器，所以这里只做「不满足就拒绝开始」，不替它排计划。
+        // 必须在写库前拦：否则被拒的调用已经把清单改掉了。
+        val statusBySubject = entities.associate { normalizeSubject(it.subject) to it.status }
+        entities.firstOrNull { it.status == TodoStatus.IN_PROGRESS.name && it.blockedBy.isNotBlank() }
+            ?.let { started ->
+                val unmet = started.blockedBy.split(',')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .filter { statusBySubject[normalizeSubject(it)] != TodoStatus.COMPLETED.name }
+                if (unmet.isNotEmpty()) {
+                    return ToolResult.Error(
+                        "「${started.subject}」还有未完成的前置任务：${unmet.joinToString("、")}。" +
+                            "先完成它们，或把它改回未开始。",
+                        "DEPENDENCY_UNMET"
+                    )
+                }
+            }
 
         todoItemDao.deleteBySession(sessionId)
         if (entities.isNotEmpty()) {
@@ -172,8 +199,27 @@ class TodoTool @Inject constructor(
             subject = subject,
             description = obj["description"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
             status = status,
-            priority = obj["priority"]?.jsonPrimitive?.intOrNull ?: 0
+            priority = obj["priority"]?.jsonPrimitive?.intOrNull ?: 0,
+            blockedBy = parseBlockedBy(obj["blockedBy"] ?: obj["blocked_by"])
         )
+    }
+
+    /**
+     * `blockedBy` 接受数组（推荐，模型不容易写错）或逗号分隔字符串；统一存成逗号分隔的 subject。
+     */
+    private fun parseBlockedBy(element: JsonElement?): String {
+        if (element == null) return ""
+        (element as? JsonArray)?.let { array ->
+            return array
+                .mapNotNull { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull()?.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString(",")
+        }
+        return element.jsonPrimitive.contentOrNull.orEmpty()
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(",")
     }
 
     private fun parseStatus(raw: String?): TodoStatus? {
@@ -195,5 +241,7 @@ private data class TodoDraft(
     val subject: String,
     val description: String = "",
     val status: TodoStatus = TodoStatus.PENDING,
-    val priority: Int = 0
+    val priority: Int = 0,
+    /** 前置任务的 subject，逗号分隔；空串表示无依赖。 */
+    val blockedBy: String = ""
 )

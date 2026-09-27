@@ -1,0 +1,1 @@
+ALTER TABLE todo_items ADD COLUMN blocked_by TEXT NOT NULL DEFAULT '';
