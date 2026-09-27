@@ -21,20 +21,26 @@ object MemoryParser {
 
         val name = frontmatter["name"]?.toString()?.takeIf { it.isNotBlank() } ?: file.nameWithoutExtension
         val description = (frontmatter["description"]?.toString() ?: "").take(MAX_DESC_CHARS)
+        val kind = when (frontmatter["kind"]?.toString()?.trim()?.lowercase()) {
+            "profile" -> MemoryKind.PROFILE
+            else -> MemoryKind.NOTE
+        }
 
         return Memory(
             name = name,
             description = description,
             scope = scope,
             file = file,
-            content = body.trim()
+            content = body.trim(),
+            kind = kind
         )
     }
 
-    fun format(name: String, description: String, content: String): String {
+    fun format(name: String, description: String, content: String, kind: MemoryKind = MemoryKind.NOTE): String {
         val safeName = yamlScalar(name)
         val safeDesc = yamlScalar(description)
-        return "---\nname: $safeName\ndescription: $safeDesc\n---\n$content"
+        val kindLine = if (kind == MemoryKind.PROFILE) "kind: profile\n" else ""
+        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine---\n$content"
     }
 
     /** 把任意字符串转成安全的 YAML 标量，避免冒号/引号/换行破坏 frontmatter。 */

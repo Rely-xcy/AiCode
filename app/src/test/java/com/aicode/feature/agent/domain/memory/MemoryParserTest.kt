@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.memory
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -44,5 +45,41 @@ class MemoryParserTest {
         assertEquals("special:key#name", memory?.name)
         assertEquals("Description with \"quotes\" and : colons", memory?.description)
         assertEquals("Memory body", memory?.content)
+    }
+
+    @Test
+    fun profileKind_roundtripsThroughFrontmatter() {
+        val formatted = MemoryParser.format("pref_concise", "Prefers concise answers", "body", MemoryKind.PROFILE)
+        assertTrue(formatted.contains("kind: profile"))
+
+        val file = tempFolder.newFile("pref_concise.md")
+        file.writeText(formatted)
+
+        val memory = MemoryParser.parse(file, MemoryScope.GLOBAL)
+        assertEquals(MemoryKind.PROFILE, memory?.kind)
+        assertEquals("Prefers concise answers", memory?.description)
+        assertEquals("body", memory?.content)
+    }
+
+    @Test
+    fun noteKind_doesNotWriteKindField() {
+        val formatted = MemoryParser.format("plain", "plain note", "body")
+        assertFalse(formatted.contains("kind:"))
+
+        val file = tempFolder.newFile("plain.md")
+        file.writeText(formatted)
+
+        assertEquals(MemoryKind.NOTE, MemoryParser.parse(file, MemoryScope.GLOBAL)?.kind)
+    }
+
+    @Test
+    fun unknownOrMissingKind_fallsBackToNote() {
+        val file = tempFolder.newFile("legacy.md")
+        file.writeText("---\nname: legacy\ndescription: old file\n---\nbody")
+        assertEquals(MemoryKind.NOTE, MemoryParser.parse(file, MemoryScope.GLOBAL)?.kind)
+
+        val weird = tempFolder.newFile("weird.md")
+        weird.writeText("---\nname: weird\nkind: something-else\n---\nbody")
+        assertEquals(MemoryKind.NOTE, MemoryParser.parse(weird, MemoryScope.GLOBAL)?.kind)
     }
 }

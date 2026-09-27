@@ -16,9 +16,19 @@ data class Memory(
     val description: String,
     val scope: MemoryScope,
     val file: File? = null,
-    val content: String
+    val content: String,
+    val kind: MemoryKind = MemoryKind.NOTE
 )
 
 enum class MemoryScope {
     GLOBAL, PROJECT
+}
+
+/**
+ * 记忆类型：[NOTE] 是模型显式记录的内容，[PROFILE] 是从历史对话自动沉淀的长期结论。
+ *
+ * 仅作 frontmatter 的 kind 字段落盘，[NOTE] 不写该字段——保持既有记忆文件字节不变。
+ */
+enum class MemoryKind {
+    NOTE, PROFILE
 }
