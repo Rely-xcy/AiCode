@@ -816,8 +816,8 @@ class BackupManagerImpl @Inject constructor(
         thinkingBlocksJson = thinkingBlocksJson
     )
 
-    private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
-    private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
+    private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt, blockedBy)
+    private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, blockedBy = blockedBy, createdAt = createdAt, updatedAt = updatedAt)
 
     private companion object {
         const val TAG = "BackupManager"

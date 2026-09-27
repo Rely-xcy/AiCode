@@ -237,5 +237,7 @@ data class TodoItemDto(
     val priority: Int = 0,
     val order: Int = 0,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** 前置任务的 subject，逗号分隔。旧备份没有这个字段，反序列化时取默认空串。 */
+    val blockedBy: String = ""
 )
