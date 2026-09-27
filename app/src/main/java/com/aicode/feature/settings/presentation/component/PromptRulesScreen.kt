@@ -3,6 +3,8 @@ package com.aicode.feature.settings.presentation.component
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,21 +47,26 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
+import com.aicode.feature.agent.domain.prompt.SystemPromptMode
 import com.aicode.feature.agent.presentation.component.MarkdownContent
 import com.aicode.feature.settings.domain.service.PromptFragmentInfo
 import com.aicode.feature.settings.presentation.PromptRulesViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Plus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** 官方提示词文档（与 App 内置文档同源）。 */
+/** 官方提示词文档（页面里有完整说明，App 内也给出离线要点）。 */
 private const val OFFICIAL_PROMPT_DOCS_URL = "https://aicode.murk.top/guide/custom-prompts"
 
 /**
- * 自定义提示词页：说明门槛 → 片段清单 → 编辑。
+ * 提示词页：说明门槛 → 系统提示词编辑 → 高级（片段级自定义）。
  *
- * 首次进入强制先读使用说明（读完才解锁编辑），因为自定义提示词会整体替换内置片段，
- * 改错会让 Agent 行为异常。所有片段都可修改，改坏了删掉自定义文件即恢复内置默认。
+ * 主入口只开放「系统提示词」一项：它作为内置提示词之上的注入层生效，内置的 9 个静态片段
+ * 一个都不暴露——避免用户覆盖掉 `60-tools-and-paths.md` 这类片段后，App 升级导致
+ * AI 看到的工具定义与实际不一致。片段级自定义（有文件名规则、需要手动维护）收在高级页。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,11 +77,16 @@ internal fun PromptRulesScreen(
     val fragments by viewModel.fragments.collectAsStateWithLifecycle()
     val docsRead by viewModel.docsRead.collectAsStateWithLifecycle()
     val docs by viewModel.docs.collectAsStateWithLifecycle()
+    val systemPrompt by viewModel.systemPrompt.collectAsStateWithLifecycle()
     val editor by viewModel.editor.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var confirmRestore by remember { mutableStateOf(false) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -82,8 +95,39 @@ internal fun PromptRulesScreen(
         }
     }
 
-    BackHandler(enabled = editor != null) {
-        if (editor?.isDirty == true) confirmDiscard = true else viewModel.closeEditor()
+    // 导入：超限在 ViewModel 里被拒（不截断）；读不出来只提示，不动当前内容。
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.bufferedReader(Charsets.UTF_8).readText()
+                    }
+                }.getOrNull()
+            }
+            if (text == null) {
+                viewModel.showMessage(context.getString(R.string.prompt_rules_sys_import_failed))
+            } else {
+                viewModel.importSystemPromptBody(text)
+            }
+        }
+    }
+
+    val editorDirty = editor?.isDirty == true
+    val systemDirty = editor == null && systemPrompt?.isDirty == true
+
+    // 未保存守卫：只有真的改了东西才拦；否则直接退。
+    BackHandler(enabled = editor != null || showAdvanced || editorDirty || systemDirty) {
+        when {
+            editorDirty -> confirmDiscard = true
+            editor != null -> viewModel.closeEditor()
+            showAdvanced -> showAdvanced = false
+            systemDirty -> confirmDiscard = true
+            else -> onNavigateBack()
+        }
     }
 
     Scaffold(
@@ -93,17 +137,25 @@ internal fun PromptRulesScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = editor?.let { state ->
-                            if (state.isNew) stringResource(R.string.prompt_rules_new_title)
-                            else state.fragment.title
-                        } ?: stringResource(R.string.prompt_rules_title)
+                        text = when {
+                            editor != null -> if (editor!!.isNew) {
+                                stringResource(R.string.prompt_rules_new_title)
+                            } else {
+                                editor!!.fragment.title
+                            }
+
+                            showAdvanced -> stringResource(R.string.prompt_rules_advanced)
+                            else -> stringResource(R.string.prompt_rules_title)
+                        }
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = {
                         when {
-                            editor?.isDirty == true -> confirmDiscard = true
+                            editorDirty -> confirmDiscard = true
                             editor != null -> viewModel.closeEditor()
+                            showAdvanced -> showAdvanced = false
+                            systemDirty -> confirmDiscard = true
                             else -> onNavigateBack()
                         }
                     }) {
@@ -136,10 +188,24 @@ internal fun PromptRulesScreen(
                     onDeleteCustom = viewModel::deleteCustom
                 )
 
-                else -> PromptFragmentList(
+                showAdvanced -> PromptFragmentList(
                     fragments = fragments,
                     onOpen = viewModel::open,
                     onNew = viewModel::openNew
+                )
+
+                systemPrompt == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+
+                else -> SystemPromptEditor(
+                    state = systemPrompt!!,
+                    onModeChange = viewModel::setSystemPromptMode,
+                    onBodyChange = viewModel::updateSystemPromptBody,
+                    onSave = viewModel::saveSystemPrompt,
+                    onImport = { importLauncher.launch("text/*") },
+                    onRestore = { confirmRestore = true },
+                    onAdvanced = { showAdvanced = true }
                 )
             }
         }
@@ -153,7 +219,7 @@ internal fun PromptRulesScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmDiscard = false
-                    viewModel.closeEditor()
+                    if (editor != null) viewModel.closeEditor() else viewModel.loadSystemPrompt()
                 }) { Text(stringResource(R.string.prompt_rules_discard_confirm)) }
             },
             dismissButton = {
@@ -161,6 +227,113 @@ internal fun PromptRulesScreen(
             }
         )
     }
+
+    if (confirmRestore) {
+        AlertDialog(
+            onDismissRequest = { confirmRestore = false },
+            title = { Text(stringResource(R.string.prompt_rules_sys_restore_title)) },
+            text = { Text(stringResource(R.string.prompt_rules_sys_restore_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRestore = false
+                    viewModel.restoreSystemPrompt()
+                }) { Text(stringResource(R.string.prompt_rules_sys_restore)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestore = false }) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+}
+
+/** 系统提示词编辑器：注入位置三选 + 正文 + 导入/恢复默认 + 高级入口。 */
+@Composable
+private fun SystemPromptEditor(
+    state: PromptRulesViewModel.SystemPromptState,
+    onModeChange: (SystemPromptMode) -> Unit,
+    onBodyChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onImport: () -> Unit,
+    onRestore: () -> Unit,
+    onAdvanced: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg)
+            .padding(top = Spacing.sm, bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+    ) {
+        Text(
+            text = stringResource(R.string.prompt_rules_sys_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        SettingsGroup {
+            val modes = listOf(SystemPromptMode.OFF, SystemPromptMode.PREPEND, SystemPromptMode.SUFFIX)
+            modes.forEachIndexed { index, mode ->
+                if (index > 0) SettingsDivider()
+                val selected = mode == state.mode
+                SettingsRow(
+                    title = stringResource(modeTitleRes(mode)) +
+                        if (selected) " · " + stringResource(R.string.prompt_rules_sys_current) else "",
+                    subtitle = stringResource(modeDescRes(mode)),
+                    onClick = { onModeChange(mode) }
+                )
+            }
+        }
+
+        AppTextField(
+            value = state.body,
+            onValueChange = onBodyChange,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp),
+            label = stringResource(R.string.prompt_rules_sys_body_label),
+            singleLine = false
+        )
+
+        if (state.isOverLimit) {
+            Text(
+                text = stringResource(
+                    R.string.prompt_rules_sys_over_limit,
+                    com.aicode.feature.agent.domain.prompt.CustomSystemPromptStore.BODY_CHAR_LIMIT
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Button(onClick = onSave, enabled = state.isDirty && !state.isOverLimit) {
+                Text(stringResource(R.string.prompt_rules_sys_save))
+            }
+            TextButton(onClick = onImport) { Text(stringResource(R.string.prompt_rules_sys_import)) }
+            if (state.hasCustom) {
+                TextButton(onClick = onRestore) { Text(stringResource(R.string.prompt_rules_sys_restore)) }
+            }
+        }
+
+        SettingsGroup {
+            SettingsRow(
+                title = stringResource(R.string.prompt_rules_advanced),
+                subtitle = stringResource(R.string.prompt_rules_advanced_hint),
+                onClick = onAdvanced
+            )
+        }
+    }
+}
+
+private fun modeTitleRes(mode: SystemPromptMode): Int = when (mode) {
+    SystemPromptMode.OFF -> R.string.prompt_rules_sys_mode_off
+    SystemPromptMode.PREPEND -> R.string.prompt_rules_sys_mode_prepend
+    SystemPromptMode.SUFFIX -> R.string.prompt_rules_sys_mode_suffix
+}
+
+private fun modeDescRes(mode: SystemPromptMode): Int = when (mode) {
+    SystemPromptMode.OFF -> R.string.prompt_rules_sys_mode_off_desc
+    SystemPromptMode.PREPEND -> R.string.prompt_rules_sys_mode_prepend_desc
+    SystemPromptMode.SUFFIX -> R.string.prompt_rules_sys_mode_suffix_desc
 }
 
 /** 使用说明门槛：正文来自官方文档，可滚动；确认按钮在滚动内容末尾，必须读到底才能点到。 */
@@ -234,7 +407,7 @@ private fun PromptDocsGate(
     }
 }
 
-/** 片段清单：内置 9 个（标注是否已覆盖）+ 自定义新增片段。 */
+/** 高级页片段清单：内置 9 个（标注是否已覆盖）+ 自定义新增片段。 */
 @Composable
 private fun PromptFragmentList(
     fragments: List<PromptFragmentInfo>,

@@ -34,7 +34,8 @@ class SystemPromptProvider @Inject constructor(
     private val memoryRepository: MemoryRepository,
     private val promptFileResolver: PromptFileResolver,
     private val containerInstaller: ContainerInstaller,
-    private val agentDefinitionRepository: AgentDefinitionRepository
+    private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val customSystemPromptStore: CustomSystemPromptStore
 ) {
     // 抽象独立的 Source
     interface PromptSource {
@@ -270,8 +271,17 @@ class SystemPromptProvider @Inject constructor(
     fun build(agentContext: AgentContext): String {
         agentContext.agentDefinition?.let { return buildForSubAgent(it, agentContext) }
 
+        // 每次构建都重读文件：保存后下一轮对话即生效，不需要重启 App。
+        val customPrompt = customSystemPromptStore.load()
+        val rawCustomBlock = customSystemPromptStore.injectionBlock(customPrompt)
+
         if (PromptFragmentResolver.isBuiltinDisabled(customDir)) {
-            return buildCustomOnly(agentContext)
+            val body = buildCustomOnly(agentContext)
+            return when (customPrompt.mode) {
+                SystemPromptMode.PREPEND -> rawCustomBlock?.let { "$it\n\n$body" } ?: body
+                SystemPromptMode.SUFFIX -> rawCustomBlock?.let { "$body\n\n$it" } ?: body
+                SystemPromptMode.OFF -> body
+            }
         }
 
         // 1. 获取各个 Source 的基线快照。
@@ -287,6 +297,19 @@ class SystemPromptProvider @Inject constructor(
         val timeContent = currentTimeSource.build(agentContext)
 
         // 3. 变量就地展开：片段里写了 {{AICODE_*}} 就替换为真实内容，并跳过下方对应的自动追加，避免重复。
+        //    自定义系统提示词走同一套展开，它写了某个变量同样跳过自动追加。
+        val renderedCustomBlock = rawCustomBlock?.let {
+            renderVariables(
+                it,
+                skillsContent,
+                memoriesContent,
+                subAgentsContent,
+                projectRules,
+                effectiveWorkspaceContent,
+                currentDate(),
+                taskState
+            )
+        }
         val staticContent = renderVariables(
             rawStatic,
             skillsContent,
@@ -297,26 +320,35 @@ class SystemPromptProvider @Inject constructor(
             currentDate(),
             taskState
         )
+        val varsSeen = rawStatic + renderedCustomBlock.orEmpty()
 
         // 4. 组装最终提示词：把稳定不变的重头基线放最前面（享受 KV Cache），变化部分放末尾
         return buildString {
+            // PREPEND：放最前，模型最先读到（相当于重写身份层）
+            if (customPrompt.mode == SystemPromptMode.PREPEND) {
+                renderedCustomBlock?.let { append(it); append("\n\n") }
+            }
             append(staticContent)
+            // SUFFIX：放内置静态片段之后、动态片段之前，静态前缀仍保持缓存稳定
+            if (customPrompt.mode == SystemPromptMode.SUFFIX) {
+                renderedCustomBlock?.let { append("\n\n"); append(it) }
+            }
 
-            if (SKILLS_VAR !in rawStatic) skillsContent?.let { append("\n\n"); append(it) }
-            if (SUBAGENTS_VAR !in rawStatic) subAgentsContent?.let { append("\n\n"); append(it) }
-            if (MEMORY_VAR !in rawStatic) memoriesContent?.let { append("\n\n"); append(it) }
-            if (PROJECT_RULES_VAR !in rawStatic) projectRules?.let { append("\n\n"); append(it) }
+            if (SKILLS_VAR !in varsSeen) skillsContent?.let { append("\n\n"); append(it) }
+            if (SUBAGENTS_VAR !in varsSeen) subAgentsContent?.let { append("\n\n"); append(it) }
+            if (MEMORY_VAR !in varsSeen) memoriesContent?.let { append("\n\n"); append(it) }
+            if (PROJECT_RULES_VAR !in varsSeen) projectRules?.let { append("\n\n"); append(it) }
 
-            if (WORKSPACE_VAR !in rawStatic) {
+            if (WORKSPACE_VAR !in varsSeen) {
                 append("\n\n")
                 append(effectiveWorkspaceContent)
             }
-            if (DATE_VAR !in rawStatic) {
+            if (DATE_VAR !in varsSeen) {
                 append("\n\n")
                 append(timeContent)
             }
             // 任务状态每轮都可能变，放最末尾追加，不打断前面的稳定前缀（KV 缓存）。
-            if (TASKS_VAR !in rawStatic) taskState?.let { append("\n\n"); append(it) }
+            if (TASKS_VAR !in varsSeen) taskState?.let { append("\n\n"); append(it) }
         }
     }
 
