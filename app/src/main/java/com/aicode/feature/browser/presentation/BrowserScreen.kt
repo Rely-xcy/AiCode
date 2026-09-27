@@ -81,6 +81,7 @@ import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Code
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Moon
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
@@ -568,10 +569,6 @@ private fun BrowserTopBar(
     }
 }
 
-/**
- * 底部操作栏独立组件
- */
-@Composable
 /** 浏览器选项二级页面：UA 档位与夜间模式。 */
 @Composable
 private fun BrowserOptionsScreen(
@@ -655,6 +652,10 @@ private fun BrowserOptionRow(
     }
 }
 
+/**
+ * 底部操作栏独立组件
+ */
+@Composable
 private fun BrowserBottomBar(
     canGoBack: Boolean,
     canGoForward: Boolean,
