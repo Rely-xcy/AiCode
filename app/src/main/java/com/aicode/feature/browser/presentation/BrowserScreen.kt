@@ -100,17 +100,18 @@ fun BrowserScreen(
     val activeTab = state.activeTab
     val scope = rememberCoroutineScope()
 
-    // 浏览器选项做成二级页面：工具栏只留一个入口，UA/夜间模式等收进这一页。
-    var showOptionsScreen by rememberSaveable { mutableStateOf(false) }
-    if (showOptionsScreen) {
-        BrowserOptionsScreen(
-            userAgent = state.userAgent,
-            nightMode = state.nightMode,
-            onSelectUserAgent = { browserManager.setUserAgent(it) },
-            onToggleNightMode = { browserManager.toggleNightMode() },
-            onBack = { showOptionsScreen = false }
-        )
-        return
+    // 浏览器选项：工具栏一个入口，选项只占下方一块（底部面板），不盖住整个页面。
+    var showOptionsSheet by rememberSaveable { mutableStateOf(false) }
+    if (showOptionsSheet) {
+        AdaptiveModalBottomSheet(onDismissRequest = { showOptionsSheet = false }) {
+            BrowserOptionsContent(
+                userAgent = state.userAgent,
+                nightMode = state.nightMode,
+                onSelectUserAgent = { browserManager.setUserAgent(it) },
+                onToggleNightMode = { browserManager.toggleNightMode() },
+                onClose = { showOptionsSheet = false }
+            )
+        }
     }
 
     var showTabsSheet by rememberSaveable { mutableStateOf(false) }
@@ -162,7 +163,7 @@ fun BrowserScreen(
                 onNewTab = { scope.launch { browserManager.newTab() } },
                 onToggleNightMode = { browserManager.toggleNightMode() },
                 userAgent = state.userAgent,
-                onOpenOptions = { showOptionsScreen = true },
+                onOpenOptions = { showOptionsSheet = true },
                 onOpenTabs = { showTabsSheet = true }
             )
         }
@@ -569,35 +570,22 @@ private fun BrowserTopBar(
     }
 }
 
-/** 浏览器选项二级页面：UA 档位与夜间模式。 */
+/** 浏览器选项面板内容：UA 档位与夜间模式（作为底部面板内容，不占整页）。 */
 @Composable
-private fun BrowserOptionsScreen(
+private fun BrowserOptionsContent(
     userAgent: BrowserUserAgent,
     nightMode: Boolean,
     onSelectUserAgent: (BrowserUserAgent) -> Unit,
     onToggleNightMode: () -> Unit,
-    onBack: () -> Unit
+    onClose: () -> Unit
 ) {
-    BackHandler { onBack() }
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    FeatherIcons.ArrowLeft,
-                    contentDescription = stringResource(R.string.common_back)
-                )
-            }
-            Text(
-                text = stringResource(R.string.browser_options),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.xl)) {
+        Text(
+            text = stringResource(R.string.browser_options),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+        )
         Text(
             text = stringResource(R.string.browser_user_agent),
             style = MaterialTheme.typography.labelMedium,
@@ -612,7 +600,10 @@ private fun BrowserOptionsScreen(
             BrowserOptionRow(
                 label = stringResource(labelRes),
                 selected = value == userAgent,
-                onClick = { onSelectUserAgent(value) }
+                onClick = {
+                    onSelectUserAgent(value)
+                    onClose()
+                }
             )
         }
         HorizontalDivider(
