@@ -430,8 +430,9 @@ fun AIChatPanel(
     val sessionTitle = currentSession?.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.chat_new_session_btn)
     val sessionInputTokens = currentSession?.totalInputTokens ?: 0
     val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
-    val sessionLastInputTokens = currentSession?.lastInputTokens ?: 0
     val messagesReady = messagesState.loaded && messagesState.sessionId == currentSessionId
+    // 压缩判定发布的占用快照：指示器与触发点共用它，避免 UI 显示与压缩行为各说各话。
+    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
     val runningTool by viewModel.runningTool.collectAsStateWithLifecycle()
     val isCompacting by viewModel.isCompacting.collectAsStateWithLifecycle()
     val retryState by viewModel.retryState.collectAsStateWithLifecycle()
@@ -1377,12 +1378,12 @@ fun AIChatPanel(
                         settingsViewModel?.refreshProviderDashboard(it, context = context, force = true)
                     }
                 },
-                tokenProgress = run {
-                    val contextLimit = activeModelMetadata?.contextTokens ?: 0
-                    if (contextLimit > 0) {
-                        sessionLastInputTokens.toFloat() / contextLimit
-                    } else 0f
-                },
+                // 与压缩判定同源：用压缩器发布的占用/窗口，不再自己按当前模型元数据窗口另算。
+                tokenProgress = contextUsage
+                    ?.takeIf { it.sessionId == currentSessionId }
+                    ?.usage
+                    ?.progress
+                    ?: 0f,
                 isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,

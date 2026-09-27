@@ -151,8 +151,19 @@ class AIAgentViewModel @Inject constructor(
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
-    @param:ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    private val contextUsageHolder: com.aicode.feature.agent.domain.workflow.ContextUsageHolder
 ) : ViewModel(), SlashCommandContext {
+
+    /**
+     * 压缩判定发布的上下文占用快照（含实际生效的阈值）。
+     *
+     * 指示器必须用它、不得自己按「当前模型元数据窗口」另算：判定取的是真实 usage 与本地估算
+     * 的较大值，窗口也另行解析，阈值还会被档位硬上限压低，两套数字并存就会出现
+     * 「指示器显示一半、压缩已经触发」。
+     */
+    val contextUsage: StateFlow<com.aicode.feature.agent.domain.workflow.SessionContextUsage?>
+        get() = contextUsageHolder.latest
 
     private val sessionJobs = mutableMapOf<String, Job>()
 
