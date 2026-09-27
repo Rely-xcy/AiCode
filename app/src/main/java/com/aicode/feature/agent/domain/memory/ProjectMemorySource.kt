@@ -46,12 +46,12 @@ class ProjectMemorySource(
             ?.content
     }
 
-    override fun saveMemory(name: String, description: String, content: String): Boolean {
+    override fun saveMemory(name: String, description: String, content: String, kind: MemoryKind): Boolean {
         if (projectRoot.isBlank()) return false
         return try {
             if (!memoryRoot.exists()) memoryRoot.mkdirs()
             val file = MemorySource.resolveMemoryFile(memoryRoot, name)
-            file.writeText(MemoryParser.format(MemorySource.sanitizeName(name), description, content))
+            file.writeText(MemoryParser.format(MemorySource.sanitizeName(name), description, content, kind))
             true
         } catch (e: Exception) {
             FileLogger.e("ProjectMemorySource", "Failed to save memory: $name", e)

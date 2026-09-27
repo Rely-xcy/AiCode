@@ -33,7 +33,12 @@ interface MemorySource {
     fun loadContent(name: String): String?
 
     /** 保存一条记忆（创建或覆盖） */
-    fun saveMemory(name: String, description: String, content: String): Boolean
+    fun saveMemory(
+        name: String,
+        description: String,
+        content: String,
+        kind: MemoryKind = MemoryKind.NOTE
+    ): Boolean
 
     /**
      * 对已有记忆的正文做局部编辑（old_string/new_string 精确匹配），语义与 editFile 一致。
@@ -74,7 +79,7 @@ interface MemorySource {
         }
 
         return try {
-            file.writeText(MemoryParser.format(memory.name, memory.description, content))
+            file.writeText(MemoryParser.format(memory.name, memory.description, content, memory.kind))
             MemoryEditResult.Success
         } catch (e: Exception) {
             FileLogger.e("MemorySource", "Failed to edit memory: $name", e)

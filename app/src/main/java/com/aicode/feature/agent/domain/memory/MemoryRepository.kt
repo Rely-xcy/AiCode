@@ -17,8 +17,8 @@ class MemoryRepository @Inject constructor(
     private fun projectSource(projectRoot: String) =
         ProjectMemorySource(projectRoot, executionModeHolder, containerInstaller, projectAicodeRoot)
 
-    /** 扫描并聚合全局和项目级的 memory。同名 memory 项目级优先。 */
-    fun listMemories(projectRoot: String?): List<Memory> {
+    /** 扫描并聚合全局和项目级的 memory。同名 memory 项目级优先。kind 非空时只返回该类型。 */
+    fun listMemories(projectRoot: String?, kind: MemoryKind? = null): List<Memory> {
         val allMemories = mutableListOf<Memory>()
         
         // 1. 加载全局记忆
@@ -30,9 +30,10 @@ class MemoryRepository @Inject constructor(
         }
         
         // 去重：按 name 小写分组，保留最后加入的（即项目级优先覆盖全局级）
-        return allMemories
+        val deduped = allMemories
             .groupBy { it.name.lowercase() }
             .map { it.value.last() }
+        return if (kind == null) deduped else deduped.filter { it.kind == kind }
     }
 
     /** 读取指定 memory 的完整指令正文；不存在 / 解析失败返回 null。 */
@@ -46,12 +47,19 @@ class MemoryRepository @Inject constructor(
         return globalMemorySource.loadContent(name)
     }
 
-    fun saveMemory(name: String, description: String, content: String, scope: MemoryScope, projectRoot: String?): Boolean {
+    fun saveMemory(
+        name: String,
+        description: String,
+        content: String,
+        scope: MemoryScope,
+        projectRoot: String?,
+        kind: MemoryKind = MemoryKind.NOTE
+    ): Boolean {
         return when (scope) {
-            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(name, description, content)
+            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(name, description, content, kind)
             MemoryScope.PROJECT -> {
                 if (projectRoot.isNullOrBlank()) false
-                else projectSource(projectRoot).saveMemory(name, description, content)
+                else projectSource(projectRoot).saveMemory(name, description, content, kind)
             }
         }
     }
