@@ -595,9 +595,6 @@ fun SettingsScreen(
             current == SettingsSection.PromptRules ->
                 PromptRulesScreen(onNavigateBack = { section = SettingsSection.Menu })
 
-            current == SettingsSection.Profile ->
-                ProfileSettingsScreen(onNavigateBack = { section = SettingsSection.Menu })
-
             else -> {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
@@ -989,6 +986,7 @@ fun SettingsScreen(
                     agentSoundEnabled = agentSoundEnabled,
                     onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
                 )
+                SettingsSection.Profile -> ProfileSettingsScreen()
                 SettingsSection.Backup -> {
                     val backupViewModel: com.aicode.feature.backup.presentation.BackupViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()

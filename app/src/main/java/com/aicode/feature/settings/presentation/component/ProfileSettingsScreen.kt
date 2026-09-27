@@ -49,7 +49,6 @@ import compose.icons.feathericons.ArrowLeft
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ProfileSettingsScreen(
-    onNavigateBack: () -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val groups by viewModel.groups.collectAsStateWithLifecycle()
@@ -67,28 +66,12 @@ internal fun ProfileSettingsScreen(
         }
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.profile_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                )
-            )
-        }
-    ) { padding ->
+    // 顶栏交给 SettingsScreen 外壳（与其它设置分区一致，不再自画一套）；
+    // 删除结果的 snackbar 需要自己的 host，所以用 Box 浮在底部。
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -145,6 +128,10 @@ internal fun ProfileSettingsScreen(
                 }
             }
         }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 
     pendingDelete?.let { entry ->
