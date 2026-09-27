@@ -109,7 +109,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val eventInjector: AgentEventInjector,
     private val memoryCurator: MemoryCurator,
     private val fileAccess: FileAccessProvider,
-    private val engine: AgentEngine
+    private val engine: AgentEngine,
+    private val profileModule: com.aicode.feature.agent.domain.profile.ProfileModule
 ) : AgentWorkflow {
 
     private companion object {
@@ -1051,6 +1052,8 @@ class StatefulAgentWorkflow @Inject constructor(
                 ?: getEffectiveProvider(sessionId)
             val saved = memoryCurator.curate(provider, sessionId, projectRoot, transcript)
             if (saved > 0) promptProvider.invalidateMemoryCache(sessionId, projectRoot)
+            // 画像与记忆共用同一个轻量 provider；内部各自静默失败，互不影响。
+            profileModule.curate(provider, sessionId, transcript)
             saved
         } catch (e: Exception) {
             if (e is CancellationException) throw e

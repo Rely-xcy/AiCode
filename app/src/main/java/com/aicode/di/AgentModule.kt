@@ -169,6 +169,12 @@ object AgentModule {
     fun provideTaskModule(module: TaskModule): EngineModule = module
 
     @Provides
+    @IntoSet
+    fun provideProfileModule(
+        module: com.aicode.feature.agent.domain.profile.ProfileModule
+    ): EngineModule = module
+
+    @Provides
     @Singleton
     fun provideOkHttpClient(@ApplicationContext context: Context): OkHttpClient {
         // 统一 UA 为 aicode/<版本> (Android)；请求已带显式 UA（如用户自定义头）时不覆盖。
@@ -367,7 +373,8 @@ object AgentModule {
         eventInjector: AgentEventInjector,
         memoryCurator: MemoryCurator,
         fileAccess: FileAccessProvider,
-        engine: AgentEngine
+        engine: AgentEngine,
+        profileModule: com.aicode.feature.agent.domain.profile.ProfileModule
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -395,7 +402,8 @@ object AgentModule {
             eventInjector,
             memoryCurator,
             fileAccess,
-            engine
+            engine,
+            profileModule
         )
     }
 }
