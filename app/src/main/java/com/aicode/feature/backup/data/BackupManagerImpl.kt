@@ -86,6 +86,7 @@ class BackupManagerImpl @Inject constructor(
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val containerInstaller: com.aicode.feature.agent.domain.container.ContainerInstaller,
+    private val sessionGoalDao: com.aicode.feature.agent.data.local.dao.SessionGoalDao,
     private val logSettingsRepository: LogSettingsRepository,
     private val visionModelSettingsRepository: VisionModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
@@ -314,6 +315,7 @@ class BackupManagerImpl @Inject constructor(
     }
 
     private suspend fun buildMetadata(options: BackupOptions): BackupMetadata = BackupMetadata(
+        sessionGoals = sessionGoalDao.getAllOnce().map { it.toDomain() },
         schemaVersion = currentSchemaVersion(),
         appVersion = appVersionName(),
         createdAt = System.currentTimeMillis(),
@@ -619,6 +621,9 @@ class BackupManagerImpl @Inject constructor(
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null}"
         )
+        if (meta.sessionGoals.isNotEmpty()) {
+            meta.sessionGoals.forEach { sessionGoalDao.upsert(it.toEntity()) }
+        }
         if (meta.providers.isNotEmpty()) {
             aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
         }

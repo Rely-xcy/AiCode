@@ -1,6 +1,7 @@
 package com.aicode.feature.backup.domain
 
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
+import com.aicode.feature.agent.domain.model.SessionGoal
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.settings.data.repository.SyncSettingsSnapshot
 import kotlinx.serialization.SerialName
@@ -14,6 +15,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class BackupSnapshot(
+    /** 会话目标（含里程碑）。独立于消息历史，不备份就会丢。 */
+    val sessionGoals: List<SessionGoal> = emptyList(),
     val schemaVersion: Int,
     val appVersion: String = "",
     val createdAt: Long,
@@ -55,6 +58,8 @@ data class BackupSnapshot(
  */
 @Serializable
 data class BackupMetadata(
+    /** 会话目标（含里程碑）。与会话一一对应，量级小，跟元数据一起走。 */
+    val sessionGoals: List<SessionGoal> = emptyList(),
     val schemaVersion: Int,
     val appVersion: String = "",
     val createdAt: Long,

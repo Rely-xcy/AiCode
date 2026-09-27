@@ -15,6 +15,10 @@ interface SessionGoalDao {
     @Query("SELECT * FROM session_goals WHERE sessionId = :sessionId")
     suspend fun getBySessionOnce(sessionId: String): SessionGoalEntity?
 
+    /** 备份导出用：一次取全部目标（目标与会话一一对应，量级有限）。 */
+    @Query("SELECT * FROM session_goals")
+    suspend fun getAllOnce(): List<SessionGoalEntity>
+
     @Query("SELECT * FROM session_goals WHERE sessionId = :sessionId")
     fun getBySession(sessionId: String): Flow<SessionGoalEntity?>
 
