@@ -3,6 +3,8 @@ package com.aicode.feature.agent.domain.session
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.SessionGoalDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ReasoningEffort
@@ -14,7 +16,9 @@ import javax.inject.Singleton
 @Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val todoItemDao: TodoItemDao,
+    private val sessionGoalDao: SessionGoalDao
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -73,10 +77,15 @@ class SessionUseCase @Inject constructor(
         // 递归收集子会话（v1 仅一层，循环即可）
         chatSessionDao.getSubSessionsByParentOnce(id).forEach { child ->
             agentMessageDao.deleteBySession(child.id)
+            todoItemDao.deleteBySession(child.id)
+            sessionGoalDao.deleteBySession(child.id)
             chatSessionDao.delete(child.id)
             deleted.add(child.id)
         }
         agentMessageDao.deleteBySession(id)
+        // 任务清单与目标没有外键约束，不跟着删就会留下永远读不到的孤立行。
+        todoItemDao.deleteBySession(id)
+        sessionGoalDao.deleteBySession(id)
         chatSessionDao.delete(id)
         return deleted
     }
@@ -85,7 +94,11 @@ class SessionUseCase @Inject constructor(
     suspend fun deleteSessionsByWorkspace(workspacePath: String): Int {
         val sessions = chatSessionDao.getAllSessionsByWorkspaceOnce(workspacePath)
         if (sessions.isEmpty()) return 0
-        sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
+        sessions.forEach { session ->
+            agentMessageDao.deleteBySession(session.id)
+            todoItemDao.deleteBySession(session.id)
+            sessionGoalDao.deleteBySession(session.id)
+        }
         chatSessionDao.deleteByWorkspace(workspacePath)
         return sessions.size
     }

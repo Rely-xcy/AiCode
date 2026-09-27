@@ -6,12 +6,14 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.SessionGoalDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
+import com.aicode.feature.agent.data.local.entity.SessionGoalEntity
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
@@ -20,7 +22,7 @@ import com.aicode.feature.workspace.data.local.entity.RemoteConnectionEntity
 import com.aicode.feature.workspace.data.local.entity.RemoteMountEntity
 
 @Database(
-    entities = [AgentMessageEntity::class, ChatSessionEntity::class, AIProviderEntity::class, RemoteConnectionEntity::class, RemoteMountEntity::class, TodoItemEntity::class, CheckpointEntity::class, CheckpointFileSnapshotEntity::class, LlmCallRecordEntity::class],
+    entities = [AgentMessageEntity::class, ChatSessionEntity::class, AIProviderEntity::class, RemoteConnectionEntity::class, RemoteMountEntity::class, TodoItemEntity::class, SessionGoalEntity::class, CheckpointEntity::class, CheckpointFileSnapshotEntity::class, LlmCallRecordEntity::class],
     version = AgentDatabase.SCHEMA_VERSION,
     exportSchema = true
 )
@@ -30,11 +32,12 @@ abstract class AgentDatabase : RoomDatabase() {
     abstract fun aiProviderDao(): AIProviderDao
     abstract fun remoteConnectionDao(): RemoteConnectionDao
     abstract fun todoItemDao(): TodoItemDao
+    abstract fun sessionGoalDao(): SessionGoalDao
     abstract fun checkpointDao(): CheckpointDao
     abstract fun llmCallRecordDao(): LlmCallRecordDao
 
     companion object {
-        const val SCHEMA_VERSION = 57
+        const val SCHEMA_VERSION = 58
 
         /** 数据库文件名（落在 `databases/` 下，另有 Room 默认 WAL 模式产生的 `-wal`/`-shm`）。 */
         const val DATABASE_NAME = "aicode_agent_db"

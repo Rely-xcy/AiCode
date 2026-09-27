@@ -8,6 +8,7 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.SessionGoalDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -42,6 +43,7 @@ import com.aicode.feature.agent.domain.tool.shizuku.ShizukuTool
 import com.aicode.feature.agent.domain.tool.skill.LoadSkillTool
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionTool
 import com.aicode.feature.agent.domain.tool.todo.TodoTool
+import com.aicode.feature.agent.domain.tool.goal.GoalTool
 import com.aicode.feature.agent.domain.tool.subagent.TaskTool
 import com.aicode.feature.agent.domain.tool.subagent.MessageParentTool
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
@@ -286,6 +288,7 @@ object AgentModule {
         webFetchTool: WebFetchTool,
         planModeTool: PlanModeTool,
         todoTool: TodoTool,
+        goalTool: GoalTool,
         memoryTool: MemoryTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
@@ -310,6 +313,7 @@ object AgentModule {
             register("webfetch", webFetchTool)
             register("planMode", planModeTool)
             register("todo", todoTool)
+            register("goal", goalTool)
             register("memory", memoryTool)
             register("task", taskTool)
             register("messageParent", messageParentTool)
@@ -348,7 +352,9 @@ object AgentModule {
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
         memoryCurator: MemoryCurator,
-        fileAccess: FileAccessProvider
+        fileAccess: FileAccessProvider,
+        todoItemDao: TodoItemDao,
+        sessionGoalDao: SessionGoalDao
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -375,7 +381,9 @@ object AgentModule {
             agentNotificationCenter,
             eventInjector,
             memoryCurator,
-            fileAccess
+            fileAccess,
+            todoItemDao,
+            sessionGoalDao
         )
     }
 }

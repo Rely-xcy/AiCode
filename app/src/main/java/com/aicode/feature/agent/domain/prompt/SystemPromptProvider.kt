@@ -6,6 +6,8 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.feature.agent.domain.model.MilestoneStatus
+import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -172,6 +174,55 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
+    /**
+     * 任务状态：待办清单 + 目标 + 计划摘要，数据由工作流每轮载入 [AgentContext]。
+     *
+     * 刻意不做缓存——它每轮都可能变，缓存会让模型看到过期的进度。
+     */
+    private inner class TaskStateSource : PromptSource {
+        override fun build(ctx: AgentContext): String? {
+            val todos = ctx.todoItems
+            val goal = ctx.goal
+            val plan = ctx.planSummary?.takeIf { it.isNotBlank() }
+            if (todos.isEmpty() && goal == null && plan == null) return null
+
+            return buildString {
+                append("任务与目标 (tasks)（独立于对话历史维护，上下文压缩不会影响它；")
+                append("用 `todo` 工具更新清单、`goal` 工具更新目标）：")
+                goal?.let { current ->
+                    append("\n- 目标: ${current.goalText}")
+                    if (current.milestones.isNotEmpty()) {
+                        append("\n- 里程碑 (${current.completedCount}/${current.milestones.size}):")
+                        current.milestones.forEach { milestone ->
+                            append("\n  ${markOf(milestone.status.name)} ${milestone.title}")
+                            if (milestone.detail.isNotBlank()) append("：${milestone.detail}")
+                        }
+                    }
+                }
+                if (todos.isNotEmpty()) {
+                    val unfinished = todos.count { it.status != TodoStatus.COMPLETED }
+                    append("\n- 待办 (已完成 ${todos.size - unfinished}/${todos.size}，未完成 $unfinished):")
+                    // 未完成的排前面：条目过多被截掉的总是已完成项，进度不会因此看不全。
+                    val ordered = todos.sortedBy { it.status == TodoStatus.COMPLETED }
+                    ordered.take(MAX_INJECTED_TASKS).forEach { item ->
+                        append("\n  ${markOf(item.status.name)} ${item.subject}")
+                    }
+                    if (ordered.size > MAX_INJECTED_TASKS) {
+                        append("\n  …（另有 ${ordered.size - MAX_INJECTED_TASKS} 项未列出）")
+                    }
+                }
+                plan?.let { append("\n- 当前计划: $it") }
+            }
+        }
+
+        /** 待办与里程碑共用一套进度标记：[x] 完成 / [~] 进行中 / [ ] 未开始。 */
+        private fun markOf(statusName: String): String = when (statusName) {
+            TodoStatus.COMPLETED.name, MilestoneStatus.COMPLETED.name -> "[x]"
+            TodoStatus.IN_PROGRESS.name, MilestoneStatus.IN_PROGRESS.name -> "[~]"
+            else -> "[ ]"
+        }
+    }
+
     private inner class WorkspaceSource : PromptSource {
         override fun build(ctx: AgentContext): String {
             val hasWorkspace = ctx.projectRoot.isNotBlank()
@@ -245,6 +296,7 @@ class SystemPromptProvider @Inject constructor(
     private val memoryListSource = MemoryListSource()
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
+    private val taskStateSource = TaskStateSource()
     private val workspaceSource = WorkspaceSource()
     private val currentTimeSource = CurrentTimeSource()
 
@@ -269,6 +321,7 @@ class SystemPromptProvider @Inject constructor(
         val subAgentsContent = subAgentListSource.build(agentContext)
         val memoriesContent = memoryListSource.build(agentContext)
         val projectRules = projectRuleSource.build(agentContext)
+        val taskState = taskStateSource.build(agentContext)
 
         // 2. Workspace 上下文固定输出（内容已精简，无需快照占位）
         val effectiveWorkspaceContent = workspaceSource.build(agentContext)
@@ -282,7 +335,8 @@ class SystemPromptProvider @Inject constructor(
             subAgentsContent,
             projectRules,
             effectiveWorkspaceContent,
-            currentDate()
+            currentDate(),
+            taskState
         )
 
         // 4. 组装最终提示词：把稳定不变的重头基线放最前面（享受 KV Cache），变化部分放末尾
@@ -302,6 +356,8 @@ class SystemPromptProvider @Inject constructor(
                 append("\n\n")
                 append(timeContent)
             }
+            // 任务状态每轮都可能变，放最末尾追加，不打断前面的稳定前缀（KV 缓存）。
+            if (TASKS_VAR !in rawStatic) taskState?.let { append("\n\n"); append(it) }
         }
     }
 
@@ -328,7 +384,8 @@ class SystemPromptProvider @Inject constructor(
             subAgentListSource.build(ctx),
             projectRuleSource.build(ctx),
             workspaceSource.build(ctx),
-            currentDate()
+            currentDate(),
+            taskStateSource.build(ctx)
         )
     }
 
@@ -359,7 +416,8 @@ class SystemPromptProvider @Inject constructor(
                 subAgentListSource.build(agentContext),
                 projectRuleSource.build(agentContext),
                 workspaceSource.build(agentContext),
-                currentDate()
+                currentDate(),
+                taskStateSource.build(agentContext)
             )
         )
 
@@ -396,7 +454,8 @@ class SystemPromptProvider @Inject constructor(
         subAgents: String?,
         projectRules: String?,
         workspace: String,
-        date: String
+        date: String,
+        tasks: String?
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -405,6 +464,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(PROJECT_RULES_VAR, projectRules.orEmpty())
         out = out.replace(WORKSPACE_VAR, workspace)
         out = out.replace(DATE_VAR, date)
+        out = out.replace(TASKS_VAR, tasks.orEmpty())
         return out
     }
 
@@ -459,6 +519,10 @@ class SystemPromptProvider @Inject constructor(
         const val MEMORY_VAR = "{{AICODE_MEMORY}}"
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
+        const val TASKS_VAR = "{{AICODE_TASKS}}"
+
+        /** 单次注入的任务条目上限：清单很长时优先列未完成的，避免提示词无上限膨胀。 */
+        const val MAX_INJECTED_TASKS = 30
         const val WORKSPACE_VAR = "{{AICODE_WORKSPACE}}"
         const val DATE_VAR = "{{AICODE_DATE}}"
     }

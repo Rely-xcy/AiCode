@@ -4,6 +4,8 @@ import android.os.SystemClock
 import android.util.Base64
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.SessionGoalDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
@@ -106,7 +108,9 @@ class StatefulAgentWorkflow @Inject constructor(
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
     private val memoryCurator: MemoryCurator,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val todoItemDao: TodoItemDao,
+    private val sessionGoalDao: SessionGoalDao
 ) : AgentWorkflow {
 
     private companion object {
@@ -116,6 +120,9 @@ class StatefulAgentWorkflow @Inject constructor(
         const val USER_REJECTED_CODE = "USER_REJECTED"
         const val TITLE_GENERATOR_FILE = "agent/title-generator.md"
         const val TITLE_MAX_CHARS = 50
+
+        /** 计划模式下重新注入的计划摘要上限。 */
+        const val PLAN_SUMMARY_MAX_CHARS = 2_000
         const val COMMIT_GENERATOR_FILE = "agent/commit-generator.md"
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
@@ -260,6 +267,31 @@ class StatefulAgentWorkflow @Inject constructor(
             onEvent = onEvent
         )
         return compacted.size != history.size
+    }
+
+    /**
+     * 把任务状态（待办 / 目标 / 计划）载入 [AgentContext]，供系统提示词注入。
+     *
+     * 这些状态存于独立表而非消息历史，所以上下文压缩折叠历史不会让模型忘记进度：
+     * 每轮都重新注入，与历史被压到多深无关。
+     */
+    private suspend fun AgentContext.withTaskState(): AgentContext {
+        val session = sessionId ?: return this
+        val todos = runCatching { todoItemDao.getBySessionOnce(session).map { it.toDomain() } }
+            .getOrDefault(emptyList())
+        val goal = runCatching { sessionGoalDao.getBySessionOnce(session)?.toDomain() }.getOrNull()
+        // 计划模式下的计划正文在历史里只是普通 assistant 消息，压得久了就看不到，
+        // 这里取最近一条 assistant 正文当计划摘要重新注入。
+        val plan = if (mode == AgentMode.PLAN) {
+            history.asReversed()
+                .filterIsInstance<AgentMessage.AssistantMessage>()
+                .firstOrNull { it.content.isNotBlank() }
+                ?.content
+                ?.take(PLAN_SUMMARY_MAX_CHARS)
+        } else {
+            null
+        }
+        return copy(todoItems = todos, goal = goal, planSummary = plan)
     }
 
     /**
@@ -495,6 +527,7 @@ class StatefulAgentWorkflow @Inject constructor(
             )
         )
 
+        currentContext = currentContext.withTaskState()
         val systemPrompt = promptProvider.build(currentContext)
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
         // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，

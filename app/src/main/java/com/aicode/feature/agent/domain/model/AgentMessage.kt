@@ -77,5 +77,16 @@ data class AgentContext(
      * 本会话绑定的自定义子代理定义；非空表示这是一个按定义运行的子代理会话，
      * 系统提示词与工具集都按其配置组装（见 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider]）。
      */
-    val agentDefinition: AgentDefinition? = null
+    val agentDefinition: AgentDefinition? = null,
+    /**
+     * 当前会话的任务清单、目标与计划摘要。由工作流每轮从独立状态存储载入，
+     * 供 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider] 注入。
+     *
+     * 任务状态刻意不放在 [history] 里：它在消息历史之外单独存储，上下文压缩只碰历史，
+     * 因此压掉再多的老轮次，模型依旧能看到「哪些做完了、哪些没做」。
+     */
+    val todoItems: List<TodoItem> = emptyList(),
+    val goal: SessionGoal? = null,
+    /** PLAN 模式下的计划摘要（目标 + 步骤）；非 PLAN 模式为 null。 */
+    val planSummary: String? = null
 )

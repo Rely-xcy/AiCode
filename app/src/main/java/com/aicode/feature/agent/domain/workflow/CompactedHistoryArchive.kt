@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.workflow
 
+import com.aicode.core.util.DirectoryRetention
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.model.AgentMessage
@@ -29,8 +30,16 @@ class CompactedHistoryArchive @Inject constructor(
         /** 单条消息写入档案的上限，防止一条巨型工具输出撑爆文件。 */
         const val MAX_FIELD_CHARS = 200_000
 
+        /** 归档保留策略：任一上限超出就从最旧的开始删。 */
+        const val RETENTION_DAYS = 7
+        const val RETENTION_MAX_BYTES = 32L * 1024 * 1024
+        const val RETENTION_MAX_FILES = 30
+
         val TIMESTAMP_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
     }
+
+    /** 存档目录（宿主路径）。对外用于占用统计与手动清理；写入仍走本类。 */
+    val archiveDir: File get() = File(containerInstaller.aicodeDir, DIR)
 
     /** @return 容器内路径；落盘失败返回 null（调用方降级为不提示路径）。 */
     fun archive(sessionId: String?, messages: List<AgentMessage>): String? {
@@ -39,6 +48,7 @@ class CompactedHistoryArchive @Inject constructor(
             val dir = File(containerInstaller.aicodeDir, DIR).apply { mkdirs() }
             val file = uniqueFile(dir, sessionId)
             file.writeText(render(messages), Charsets.UTF_8)
+            DirectoryRetention.prune(dir, RETENTION_DAYS, RETENTION_MAX_BYTES, RETENTION_MAX_FILES)
             val path = "$AICODE_ROOT/$DIR/${file.name}"
             FileLogger.i(TAG, "已归档 ${messages.size} 条被压缩历史: $path")
             path

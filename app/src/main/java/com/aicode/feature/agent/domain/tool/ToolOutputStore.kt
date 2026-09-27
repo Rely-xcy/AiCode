@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.tool
 
+import com.aicode.core.util.DirectoryRetention
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import kotlinx.serialization.encodeToString
@@ -32,6 +33,11 @@ class ToolOutputStore @Inject constructor(
         const val HEAD_CHARS = 20_000
         const val TAIL_CHARS = 20_000
         const val MAX_INLINE_CHARS = HEAD_CHARS + TAIL_CHARS
+
+        /** 存档保留策略：任一上限超出就从最旧的开始删。 */
+        const val RETENTION_DAYS = 7
+        const val RETENTION_MAX_BYTES = 64L * 1024 * 1024
+        const val RETENTION_MAX_FILES = 120
         val LARGE_TEXT_FIELDS = listOf("output", "content", "text", "stdout", "stderr", "body", "result")
         val TIMESTAMP_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
     }
@@ -144,6 +150,7 @@ class ToolOutputStore @Inject constructor(
             val file = uniqueOutputFile(dir, toolName, callId)
             file.writeText(text, Charsets.UTF_8)
             val path = "$AICODE_ROOT/$OUTPUT_DIR/${file.name}"
+            DirectoryRetention.prune(dir, RETENTION_DAYS, RETENTION_MAX_BYTES, RETENTION_MAX_FILES)
             FileLogger.i(TAG, "工具输出已保存: $path (${text.length} chars)")
             StoredPathResult(outputPath = path)
         } catch (e: Exception) {

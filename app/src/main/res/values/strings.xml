@@ -36,7 +36,7 @@
     <string name="settings_enter_to_send">回车键发送消息</string>
     <string name="settings_enter_to_send_desc">关闭后回车换行，需点发送按钮发送</string>
     <string name="settings_compaction_threshold">自动压缩阈值</string>
-    <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，生成摘要压缩早期历史</string>
+    <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，生成摘要压缩早期历史。利用率超过约 40% 后模型质量开始下降，不建议设得过高。</string>
     <string name="settings_soft_compaction_threshold">软精简阈值</string>
     <string name="settings_soft_compaction_threshold_desc">上下文占用达到该比例时，先精简历史里的超长工具输出，暂不调用摘要模型</string>
     <string name="settings_percent_value">%1$d%%</string>
@@ -152,6 +152,8 @@
     <string name="storage_clean_logs_desc">应用日志与 AI 请求日志，删除不影响功能</string>
     <string name="storage_clean_tool_output">工具输出存档</string>
     <string name="storage_clean_tool_output_desc">AI 超长工具输出保存到磁盘的副本，删除后旧消息里的输出路径不再可读</string>
+    <string name="storage_clean_compacted_history">压缩历史存档</string>
+    <string name="storage_clean_compacted_history_desc">上下文压缩时归档的历史原文副本，用于需要细节时回查，删除后旧会话只能依赖摘要</string>
     <string name="storage_clean_vision">识图会话缓存</string>
     <string name="storage_clean_vision_desc">识图追问的历史，删除后无法继续追问旧图片</string>
     <string name="storage_untitled_session">未命名会话</string>

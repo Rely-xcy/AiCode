@@ -46,6 +46,7 @@ data class StorageEntry(
 object StorageDetailKey {
     const val TOOL_OUTPUT = "toolOutput"
     const val VISION_SESSIONS = "visionSessions"
+    const val COMPACTED_HISTORY = "compactedHistory"
 }
 
 /** 可清理项：都是能自动重建或仅影响历史回看的临时数据，不含用户内容。 */
@@ -56,6 +57,7 @@ enum class CleanupKind(
     Caches(R.string.storage_clean_caches, R.string.storage_clean_caches_desc),
     Logs(R.string.storage_clean_logs, R.string.storage_clean_logs_desc),
     ToolOutput(R.string.storage_clean_tool_output, R.string.storage_clean_tool_output_desc),
+    CompactedHistory(R.string.storage_clean_compacted_history, R.string.storage_clean_compacted_history_desc),
     VisionSessions(R.string.storage_clean_vision, R.string.storage_clean_vision_desc)
 }
 
