@@ -803,7 +803,9 @@ fun AIChatPanel(
             val prefix = currentText.trimStart().take(20)
             prefix.isEmpty() || lastMsg.content.trimStart().startsWith(prefix)
         }
-        val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
+        // 消息本身没带 reasoning（例如本轮调过工具、reasoning 落在前一段）时不能拿它拦判定：
+        // 没有可等的东西却卡在 false，会让保留缓冲永不退场，与已落库消息同时渲染（同一条回复显示两遍）。
+        val reasoningSettled = if (currentReasoning.isNullOrBlank() || lastMsg.reasoning.isNullOrBlank()) {
             true
         } else {
             val prefix = currentReasoning.trimStart().take(20)
