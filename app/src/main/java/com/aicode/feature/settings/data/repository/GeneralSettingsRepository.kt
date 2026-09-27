@@ -49,6 +49,7 @@ class GeneralSettingsRepository @Inject constructor(
         val SOFT_COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("soft_compaction_threshold_percent")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
+        val PROMPT_RULES_DOCS_READ_KEY = booleanPreferencesKey("prompt_rules_docs_read")
 
         /** 首字超时默认 5 分钟，与原硬编码值一致。 */
         const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 300
@@ -56,7 +57,7 @@ class GeneralSettingsRepository @Inject constructor(
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
-        /** 完整摘要压缩（硬）阈值默认 85%。 */
+        /** 完整摘要压缩（硬）阈值默认 70%：上下文利用率过约 40% 后模型质量下降。 */
         const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 70
 
         /** 软精简阈值默认 60%：达到即先精简历史里的超长工具输出，不调用摘要模型。 */
@@ -188,6 +189,15 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun softCompactionThresholdPercent(): Int = softCompactionThresholdPercentFlow.first()
 
     suspend fun softCompactionThresholdPercentSnapshot(): Int = softCompactionThresholdPercentFlow.first()
+
+    /** 自定义提示词页的「已阅读使用说明」标记：首次进入必须先读说明才允许编辑。 */
+    val promptRulesDocsReadFlow: Flow<Boolean> = context.generalDataStore.data.map {
+        it[PROMPT_RULES_DOCS_READ_KEY] ?: false
+    }
+
+    suspend fun setPromptRulesDocsRead(read: Boolean) {
+        context.generalDataStore.edit { it[PROMPT_RULES_DOCS_READ_KEY] = read }
+    }
 
     suspend fun restoreSoftCompactionThresholdPercent(percent: Int) = setSoftCompactionThresholdPercent(percent)
 

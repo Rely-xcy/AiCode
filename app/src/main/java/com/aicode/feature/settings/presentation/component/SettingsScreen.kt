@@ -150,6 +150,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgents(R.string.settings_subagents),
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
+    PromptRules(R.string.settings_prompt_rules),
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
     Proxy(R.string.proxy_title),
@@ -571,6 +572,9 @@ fun SettingsScreen(
                 com.aicode.feature.workspace.presentation.remote.RemoteServerScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
                 )
+
+            current == SettingsSection.PromptRules ->
+                PromptRulesScreen(onNavigateBack = { section = SettingsSection.Menu })
 
             else -> {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
@@ -1369,6 +1373,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Users,
                 title = stringResource(SettingsSection.SubAgents.titleRes),
                 onClick = { onOpen(SettingsSection.SubAgents) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.FileText,
+                title = stringResource(SettingsSection.PromptRules.titleRes),
+                onClick = { onOpen(SettingsSection.PromptRules) }
             )
         }
 
