@@ -85,6 +85,7 @@ class BackupManagerImpl @Inject constructor(
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
+    private val containerInstaller: com.aicode.feature.agent.domain.container.ContainerInstaller,
     private val logSettingsRepository: LogSettingsRepository,
     private val visionModelSettingsRepository: VisionModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
@@ -270,6 +271,8 @@ class BackupManagerImpl @Inject constructor(
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar)
                     }
+                    // 配置类目录与工作区文件互相独立，各自受自己的开关控制。
+                    writeAicodeDirEntries(tar, options)
                     if (options.chatHistory) {
                         writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
                             var lastTs = 0L
@@ -401,6 +404,32 @@ class BackupManagerImpl @Inject constructor(
             walkWorkspaceFiles(ws) { file, parts ->
                 writeTarFileEntry(tar, "workspaces/${ws.name}/${parts.joinToString("/")}", file)
             }
+        }
+    }
+
+    /**
+     * 把 AI 配置目录下可备份的子目录写进 tar（`skills/…`、`memory/…`、`agents/…`、`prompts/…`）。
+     *
+     * 只覆盖本地目录：远程模式下这些目录在服务器上（走 SSH），本方法拿不到，UI 上已标注。
+     * 目录不存在时静默跳过——用户很可能从没用过其中某一项。
+     */
+    private fun writeAicodeDirEntries(tar: TarArchiveOutputStream, options: BackupOptions) {
+        val aicodeDir = containerInstaller.aicodeDir
+        val dirs = buildList {
+            if (options.skills) add("skills" to "skills")
+            if (options.memory) add("memory" to "memory")
+            if (options.agentDefinitions) add("agents" to "agents")
+            if (options.customPrompts) add("prompts.custom" to "prompts")
+        }
+        dirs.forEach { (dirName, prefix) ->
+            val root = File(aicodeDir, dirName)
+            if (!root.isDirectory) return@forEach
+            root.walkTopDown()
+                .filter { it.isFile }
+                .forEach { file ->
+                    val rel = file.relativeTo(root).invariantSeparatorsPath
+                    writeTarFileEntry(tar, "$prefix/$rel", file)
+                }
         }
     }
 

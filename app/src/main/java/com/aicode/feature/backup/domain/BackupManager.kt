@@ -60,7 +60,15 @@ data class BackupOptions(
     val mcpServers: Boolean = true,
     val permissionRules: Boolean = true,
     val appSettings: Boolean = true,
-    val workspaceFiles: Boolean = false
+    val workspaceFiles: Boolean = false,
+    /** 全局技能目录 `~/.aicode/skills/`。 */
+    val skills: Boolean = true,
+    /** 记忆目录 `~/.aicode/memory/`（含项目记忆子目录）。 */
+    val memory: Boolean = true,
+    /** 自定义子代理定义 `~/.aicode/agents/`。 */
+    val agentDefinitions: Boolean = true,
+    /** 自定义提示词 `~/.aicode/prompts.custom/`（含 system.md）。 */
+    val customPrompts: Boolean = true
 )
 
 data class RestoreStats(
