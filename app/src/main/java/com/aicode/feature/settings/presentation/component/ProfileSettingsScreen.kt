@@ -33,6 +33,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.data.local.entity.ProfileEntryEntity
@@ -59,6 +60,7 @@ internal fun ProfileSettingsScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<ProfileEntryEntity?>(null) }
+    var detailEntry by remember { mutableStateOf<ProfileEntryEntity?>(null) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -112,8 +114,7 @@ internal fun ProfileSettingsScreen(
                 SettingsGroup {
                     group.entries.forEachIndexed { index, entry ->
                         if (index > 0) SettingsDivider()
-                        // 操作风格对齐其它设置页：左滑删除，而不是「点一下弹删除确认」。
-                        // 画像条目是只读的（由 ProfileModule 自动沉淀），所以行本身不可点，也就没有右箭头。
+                        // 行里只给简略信息，点开才看详细（从底部弹出，与 App 其它页一致）；左滑删除。
                         SwipeToDeleteRow(onDelete = { pendingDelete = entry }) {
                             SettingsRow(
                                 title = entry.value,
@@ -125,7 +126,8 @@ internal fun ProfileSettingsScreen(
                                     if (entry.evidence.isNotBlank()) {
                                         append(entry.evidence)
                                     }
-                                }
+                                },
+                                onClick = { detailEntry = entry }
                             )
                         }
                     }
@@ -138,9 +140,32 @@ internal fun ProfileSettingsScreen(
         )
     }
 
+    // 行里只放简略信息，点开才看详细——从底部弹出，与 App 其它页一致。
+    detailEntry?.let { entry ->
+        AdaptiveModalBottomSheet(onDismissRequest = { detailEntry = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                SettingsGroupHeader(text = entry.value)
+                SettingsGroup {
+                    SettingsRow(
+                        title = entry.evidence.ifBlank { entry.value },
+                        subtitle = if (entry.status == ProfileStatus.ACTIVE) {
+                            null
+                        } else {
+                            stringResource(R.string.profile_superseded_tag)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     pendingDelete?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
+        AlertDialog(            onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.profile_delete_title)) },
             text = { Text(stringResource(R.string.profile_delete_body, entry.value)) },
             confirmButton = {
