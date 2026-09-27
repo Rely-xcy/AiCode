@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
+import com.aicode.feature.agent.presentation.component.MarkdownContent
 import com.aicode.feature.settings.domain.service.PromptFragmentInfo
 import com.aicode.feature.settings.presentation.PromptRulesViewModel
 import compose.icons.FeatherIcons
@@ -67,6 +68,7 @@ internal fun PromptRulesScreen(
 ) {
     val fragments by viewModel.fragments.collectAsStateWithLifecycle()
     val docsRead by viewModel.docsRead.collectAsStateWithLifecycle()
+    val docs by viewModel.docs.collectAsStateWithLifecycle()
     val editor by viewModel.editor.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
 
@@ -121,7 +123,11 @@ internal fun PromptRulesScreen(
                     CircularProgressIndicator()
                 }
 
-                docsRead == false -> PromptDocsGate(onConfirm = viewModel::confirmDocsRead)
+                docsRead == false -> PromptDocsGate(
+                    docs = docs,
+                    onConfirm = viewModel::confirmDocsRead,
+                    onRefresh = { viewModel.loadDocs(forceRefresh = true) }
+                )
 
                 editor != null -> PromptFragmentEditor(
                     state = editor!!,
@@ -157,9 +163,13 @@ internal fun PromptRulesScreen(
     }
 }
 
-/** 使用说明门槛：正文可滚动，确认按钮放在滚动内容末尾，必须读到底才能点到。 */
+/** 使用说明门槛：正文来自官方文档，可滚动；确认按钮在滚动内容末尾，必须读到底才能点到。 */
 @Composable
-private fun PromptDocsGate(onConfirm: () -> Unit) {
+private fun PromptDocsGate(
+    docs: PromptRulesViewModel.DocsUiState,
+    onConfirm: () -> Unit,
+    onRefresh: () -> Unit
+) {
     val context = LocalContext.current
     Column(
         modifier = Modifier
@@ -174,16 +184,50 @@ private fun PromptDocsGate(onConfirm: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground
         )
-        Text(
-            text = stringResource(R.string.prompt_rules_docs_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground
-        )
+
+        when (docs) {
+            PromptRulesViewModel.DocsUiState.Loading -> Box(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator() }
+
+            is PromptRulesViewModel.DocsUiState.Ready -> {
+                MarkdownContent(
+                    text = docs.text,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (docs.fromCache) {
+                    Text(
+                        text = stringResource(R.string.prompt_rules_docs_from_cache),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onRefresh) { Text(stringResource(R.string.prompt_rules_docs_refresh)) }
+            }
+
+            PromptRulesViewModel.DocsUiState.Unavailable -> {
+                Text(
+                    text = stringResource(R.string.prompt_rules_docs_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = stringResource(R.string.prompt_rules_docs_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                TextButton(onClick = onRefresh) { Text(stringResource(R.string.prompt_rules_docs_retry)) }
+            }
+        }
+
         TextButton(onClick = {
             runCatching {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(OFFICIAL_PROMPT_DOCS_URL)))
             }
         }) { Text(stringResource(R.string.prompt_rules_open_official)) }
+
         Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.prompt_rules_docs_confirm))
         }

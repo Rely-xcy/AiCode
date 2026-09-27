@@ -2,6 +2,7 @@ package com.aicode.feature.settings.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.feature.settings.data.remote.PromptDocsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.service.PromptFragmentInfo
 import com.aicode.feature.settings.domain.service.PromptRulesService
@@ -24,6 +25,7 @@ import javax.inject.Inject
 @HiltViewModel
 class PromptRulesViewModel @Inject constructor(
     private val service: PromptRulesService,
+    private val promptDocsRepository: PromptDocsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository
 ) : ViewModel() {
 
@@ -36,6 +38,16 @@ class PromptRulesViewModel @Inject constructor(
     ) {
         val isDirty: Boolean get() = content != original
     }
+
+    /** 使用说明的加载状态：Ready 为官方文档正文；Unavailable 时 UI 回退到内置短说明。 */
+    sealed interface DocsUiState {
+        data object Loading : DocsUiState
+        data class Ready(val text: String, val fromCache: Boolean) : DocsUiState
+        data object Unavailable : DocsUiState
+    }
+
+    private val _docs = MutableStateFlow<DocsUiState>(DocsUiState.Loading)
+    val docs: StateFlow<DocsUiState> = _docs.asStateFlow()
 
     private val _fragments = MutableStateFlow<List<PromptFragmentInfo>>(emptyList())
     val fragments: StateFlow<List<PromptFragmentInfo>> = _fragments.asStateFlow()
@@ -51,8 +63,20 @@ class PromptRulesViewModel @Inject constructor(
 
     init {
         refresh()
+        loadDocs()
         viewModelScope.launch {
             _docsRead.value = generalSettingsRepository.promptRulesDocsReadFlow.first()
+        }
+    }
+
+    /** 加载使用说明：默认走缓存，[forceRefresh] 时强制联网刷新（离线自动回退缓存）。 */
+    fun loadDocs(forceRefresh: Boolean = false) {
+        viewModelScope.launch {
+            if (_docs.value !is DocsUiState.Ready) _docs.value = DocsUiState.Loading
+            _docs.value = promptDocsRepository.load(forceRefresh).fold(
+                onSuccess = { DocsUiState.Ready(it.text, it.fromCache) },
+                onFailure = { DocsUiState.Unavailable }
+            )
         }
     }
 
