@@ -165,6 +165,14 @@ object AgentModule {
     }
 
     @Provides
+    @Singleton
+    fun provideProfileEntryDao(
+        database: AgentDatabase
+    ): com.aicode.feature.agent.data.local.dao.ProfileEntryDao {
+        return database.profileEntryDao()
+    }
+
+    @Provides
     @IntoSet
     fun provideTaskModule(module: TaskModule): EngineModule = module
 
