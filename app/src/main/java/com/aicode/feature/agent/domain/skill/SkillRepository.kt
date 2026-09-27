@@ -2,7 +2,6 @@ package com.aicode.feature.agent.domain.skill
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
-import com.aicode.feature.workspace.domain.LocalFileAccess
 import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -19,7 +18,6 @@ class SkillRepository @Inject constructor(
     private val localDirectorySkillSource: LocalDirectorySkillSource,
     private val projectDirectorySkillSource: ProjectDirectorySkillSource,
     private val skillConfigRepository: SkillConfigRepository,
-    private val localFileAccess: LocalFileAccess,
     private val fileAccess: FileAccessProvider
 ) {
     /** 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。 */
@@ -164,9 +162,9 @@ class SkillRepository @Inject constructor(
         return safeDeleteSkillDir(provider, dirPath)
     }
 
-    /** 全局技能固定在本地私有目录，项目级技能跟随工作区（可能是远程）。 */
+    /** 全局技能随执行模式落本地私有目录或服务器 home；项目级技能跟随工作区（可能是远程）。 */
     private fun providerFor(scope: SkillScope): FileAccessProvider =
-        if (scope == SkillScope.GLOBAL) localFileAccess else fileAccess
+        if (scope == SkillScope.GLOBAL) localDirectorySkillSource.provider() else fileAccess
 
     companion object {
         private const val TAG = "SkillRepository"

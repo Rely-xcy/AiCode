@@ -59,7 +59,6 @@ internal fun SkillEditorScreen(
     onSaved: (String) -> Unit,
     onNavigateBack: () -> Unit,
     defaultSource: SkillSource = SkillSource.GLOBAL,
-    remoteAvailable: Boolean = false
 ) {
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
     var description by rememberSaveable { mutableStateOf(initial?.description ?: "") }
@@ -68,7 +67,6 @@ internal fun SkillEditorScreen(
         mutableStateOf(
             when {
                 initial == null -> defaultSource
-                initial.remote -> SkillSource.REMOTE
                 initial.scope == SkillScope.GLOBAL -> SkillSource.GLOBAL
                 else -> SkillSource.PROJECT
             }
@@ -186,14 +184,6 @@ internal fun SkillEditorScreen(
                             onClick = { source = SkillSource.GLOBAL },
                             label = { Text(stringResource(R.string.skills_scope_global)) }
                         )
-                        if (remoteAvailable || source == SkillSource.REMOTE) {
-                            FilterChip(
-                                selected = source == SkillSource.REMOTE,
-                                enabled = initial == null,
-                                onClick = { source = SkillSource.REMOTE },
-                                label = { Text(stringResource(R.string.skills_scope_remote)) }
-                            )
-                        }
                     }
                 }
             }

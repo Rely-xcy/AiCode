@@ -85,7 +85,6 @@ import com.aicode.feature.settings.presentation.ShizukuViewModel
 import com.aicode.feature.settings.presentation.SkillImportState
 import com.aicode.feature.settings.presentation.SkillUiEntry
 import com.aicode.feature.agent.domain.skill.SkillImportError
-import com.aicode.feature.agent.domain.skill.RemoteSkillsState
 import com.aicode.feature.agent.domain.skill.SkillScope
 import com.aicode.feature.settings.presentation.SkillSource
 import com.aicode.feature.settings.presentation.SubAgentUiEntry
@@ -205,8 +204,6 @@ fun SettingsScreen(
     val skills by viewModel.skills.collectAsStateWithLifecycle()
     val skillSaveState by viewModel.skillSaveState.collectAsStateWithLifecycle()
     val skillImportState by viewModel.skillImportState.collectAsStateWithLifecycle()
-    val remoteSkillsState by viewModel.remoteSkills.collectAsStateWithLifecycle()
-    val executionMode by viewModel.executionMode.collectAsStateWithLifecycle()
     val subAgents by viewModel.subAgents.collectAsStateWithLifecycle()
     val subAgentSaveState by viewModel.subAgentSaveState.collectAsStateWithLifecycle()
     val globalRules by viewModel.globalRules.collectAsStateWithLifecycle()
@@ -343,7 +340,6 @@ fun SettingsScreen(
             when (skillSource) {
                 SkillSource.GLOBAL -> viewModel.importSkillFromMarkdown(uri, SkillScope.GLOBAL)
                 SkillSource.PROJECT -> viewModel.importSkillFromMarkdown(uri, SkillScope.PROJECT)
-                SkillSource.REMOTE -> viewModel.importRemoteSkillFromMarkdown(uri)
             }
         }
     }
@@ -352,7 +348,6 @@ fun SettingsScreen(
             when (skillSource) {
                 SkillSource.GLOBAL -> viewModel.importSkillsFromZip(uri, SkillScope.GLOBAL)
                 SkillSource.PROJECT -> viewModel.importSkillsFromZip(uri, SkillScope.PROJECT)
-                SkillSource.REMOTE -> viewModel.importRemoteSkillFromZip(uri)
             }
         }
     }
@@ -405,26 +400,11 @@ fun SettingsScreen(
         viewModel.refreshSubAgents()
     }
 
-    // 远程技能管理用独立 SFTP 通道，不依赖执行模式；本地/远程模式都展示「远程服务器」分组。
-    LaunchedEffect(executionMode) {
-        viewModel.connectRemoteSkills()
-    }
-
     // 编辑保存后回详情页：等列表刷新出新快照再换，避免详情页停在保存前的旧值（改名时按新名找）。
     LaunchedEffect(skills, pendingSkillName) {
         val target = pendingSkillName ?: return@LaunchedEffect
         skills.firstOrNull { it.name.equals(target, ignoreCase = true) }?.let { fresh ->
             selectedSkill = fresh
-            pendingSkillName = null
-        }
-    }
-
-    // 远程技能保存后同理：从远程状态里取新快照。
-    LaunchedEffect(remoteSkillsState, pendingSkillName) {
-        val target = pendingSkillName ?: return@LaunchedEffect
-        val loaded = remoteSkillsState as? RemoteSkillsState.Loaded ?: return@LaunchedEffect
-        loaded.skills.firstOrNull { it.name.equals(target, ignoreCase = true) }?.let { fresh ->
-            selectedSkill = fresh.toUiEntry()
             pendingSkillName = null
         }
     }
@@ -545,12 +525,10 @@ fun SettingsScreen(
                 initial = editingSkill,
                 saveState = skillSaveState,
                 defaultSource = skillSource,
-                remoteAvailable = true,
                 onSave = { form, source ->
                     when (source) {
                         SkillSource.GLOBAL -> viewModel.saveSkill(form, SkillScope.GLOBAL, editingSkill?.name)
                         SkillSource.PROJECT -> viewModel.saveSkill(form, SkillScope.PROJECT, editingSkill?.name)
-                        SkillSource.REMOTE -> viewModel.saveRemoteSkill(form, editingSkill?.name)
                     }
                 },
                 onSaved = { savedName ->
@@ -857,14 +835,11 @@ fun SettingsScreen(
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
-                    remoteState = remoteSkillsState,
-                    remoteVisible = true,
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
                         selectedSkill = it
                         section = SettingsSection.SkillDetail
-                    },
-                    onConnectRemote = { viewModel.connectRemoteSkills() }
+                    }
                 )
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
@@ -1060,7 +1035,6 @@ fun SettingsScreen(
         SkillAddSheet(
             source = skillSource,
             onSourceChange = { skillSource = it },
-            remoteAvailable = true,
             onManual = {
                 showSkillAddSheet = false
                 editingSkill = null

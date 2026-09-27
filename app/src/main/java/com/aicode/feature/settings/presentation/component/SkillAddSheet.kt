@@ -34,7 +34,6 @@ import compose.icons.feathericons.FileText
 internal fun SkillAddSheet(
     source: SkillSource,
     onSourceChange: (SkillSource) -> Unit,
-    remoteAvailable: Boolean,
     onManual: () -> Unit,
     onPickFile: () -> Unit,
     onPickZip: () -> Unit,
@@ -79,13 +78,6 @@ internal fun SkillAddSheet(
                     onClick = { onSourceChange(SkillSource.PROJECT) },
                     label = { Text(stringResource(R.string.skills_scope_project)) }
                 )
-                if (remoteAvailable) {
-                    FilterChip(
-                        selected = source == SkillSource.REMOTE,
-                        onClick = { onSourceChange(SkillSource.REMOTE) },
-                        label = { Text(stringResource(R.string.skills_scope_remote)) }
-                    )
-                }
             }
 
             SettingsGroup {
