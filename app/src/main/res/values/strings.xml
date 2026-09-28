@@ -976,6 +976,19 @@
     <string name="memory_detail_content">内容</string>
     <string name="memory_detail_empty">（暂无正文）</string>
 
+    <!-- Custom Prompts -->
+    <string name="prompts_title">提示词</string>
+    <string name="prompts_hint">这里放你自己的提示词。固定的「全局默认提示词」可改；自己添加的按创建顺序注入，可选插在所有提示词之前或系统提示词之后。</string>
+    <string name="prompts_group_default">默认提示词</string>
+    <string name="prompts_default_title">全局默认提示词（00）</string>
+    <string name="prompts_state_builtin">内置默认内容</string>
+    <string name="prompts_state_overridden">已修改（覆盖内置）</string>
+    <string name="prompts_empty">还没有添加提示词</string>
+    <string name="prompts_no_workspace">未选择工作区，项目级提示词不可用</string>
+    <string name="prompts_position_before_all">最前（内置之前）</string>
+    <string name="prompts_position_after_system">最后（系统提示词末尾）</string>
+    <string name="prompts_position_off">已关闭（不注入）</string>
+
     <!-- Skills Settings -->
     <string name="skills_empty">还没有安装技能</string>
     <string name="skills_empty_hint">点右上角「+」新建或导入</string>

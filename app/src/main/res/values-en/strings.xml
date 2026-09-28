@@ -976,6 +976,19 @@
     <string name="memory_detail_content">Content</string>
     <string name="memory_detail_empty">(no content)</string>
 
+    <!-- Custom Prompts -->
+    <string name="prompts_title">Prompts</string>
+    <string name="prompts_hint">Your own prompts live here. The fixed \"global default prompt\" is editable; prompts you add are injected in creation order, either before all built-in prompts or after the system prompt.</string>
+    <string name="prompts_group_default">Default prompt</string>
+    <string name="prompts_default_title">Global default prompt (00)</string>
+    <string name="prompts_state_builtin">Built-in default</string>
+    <string name="prompts_state_overridden">Modified (overrides built-in)</string>
+    <string name="prompts_empty">No prompts added yet</string>
+    <string name="prompts_no_workspace">No workspace selected; project prompts are unavailable</string>
+    <string name="prompts_position_before_all">First (before built-ins)</string>
+    <string name="prompts_position_after_system">Last (end of system prompt)</string>
+    <string name="prompts_position_off">Off (not injected)</string>
+
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>
     <string name="skills_empty_hint">Tap + in the top bar to create or import one.</string>
