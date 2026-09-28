@@ -1005,6 +1005,9 @@
     <string name="prompts_save_hint">保存后立即生效（开新会话或下一轮对话即可看到）。</string>
     <string name="prompts_action_add">添加</string>
     <string name="prompts_action_save">保存</string>
+    <string name="prompts_action_reset">恢复内置默认</string>
+    <string name="prompts_action_reset_hint">删掉你的修改，回到 App 自带内容</string>
+    <string name="prompts_fragment_hint">你的修改会存为覆盖文件，App 自带文件永不被改；升级 App 后新内置内容仍可整体对比。</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">还没有安装技能</string>

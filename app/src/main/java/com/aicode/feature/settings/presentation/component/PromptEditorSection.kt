@@ -155,6 +155,70 @@ internal fun PromptEditorSection(
     }
 }
 
+/**
+ * 固定内置片段（默认 00 身份/总纲）的编辑页：只能改正文，可恢复内置默认。
+ *
+ * 修改落盘为 prompts.custom 下的覆盖文件，与手工放文件等价——内置文件本身永不被改。
+ */
+@Composable
+internal fun FragmentEditorSection(
+    initialContent: String,
+    overridden: Boolean,
+    onSave: (String) -> Unit,
+    onReset: () -> Unit
+) {
+    var content by remember { mutableStateOf(initialContent) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg)
+            .padding(bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        SettingsGroupHeader(text = stringResource(R.string.prompts_default_title))
+        SettingsGroup {
+            Column(modifier = Modifier.padding(Spacing.lg)) {
+                AppTextField(
+                    value = content,
+                    onValueChange = { content = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 240.dp),
+                    singleLine = false,
+                    label = stringResource(R.string.prompts_field_content)
+                )
+            }
+        }
+
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.prompts_action_save),
+                enabled = content.isNotBlank(),
+                onClick = { onSave(content) }
+            )
+            if (overridden) {
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.prompts_action_reset),
+                    subtitle = stringResource(R.string.prompts_action_reset_hint),
+                    onClick = onReset
+                )
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.prompts_fragment_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.semanticColors.subtleText,
+            modifier = Modifier.padding(top = Spacing.sm)
+        )
+    }
+}
+
 @Composable
 private fun PositionRow(
     label: String,

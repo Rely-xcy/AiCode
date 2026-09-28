@@ -1005,6 +1005,9 @@
     <string name="prompts_save_hint">Takes effect immediately (start a new session or continue the next turn).</string>
     <string name="prompts_action_add">Add</string>
     <string name="prompts_action_save">Save</string>
+    <string name="prompts_action_reset">Reset to built-in</string>
+    <string name="prompts_action_reset_hint">Drop your edit and go back to the shipped content</string>
+    <string name="prompts_fragment_hint">Your edit is stored as an override file; the shipped file is never modified, so new built-in content after an app update can still be compared.</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>

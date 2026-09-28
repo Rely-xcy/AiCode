@@ -36,6 +36,19 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 
 /**
+ * 编辑目标：区分三种入口。
+ *
+ * - [isDefaultFragment] = true：编辑固定的内置片段（00），只有正文可改
+ * - [prompt] = null：新建用户提示词
+ * - 其余：编辑已有用户提示词
+ */
+internal data class PromptEditTarget(
+    val prompt: UserPrompt? = null,
+    val scope: UserPromptScope = UserPromptScope.GLOBAL,
+    val isDefaultFragment: Boolean = false
+)
+
+/**
  * 自定义提示词页：顶部一句说明 + 固定内置片段（00）+ 全局/项目两组用户提示词。
  *
  * 用户提示词按「创建顺序」注入，分「最前 / 最后 / 关闭」三种位置，见 [UserPromptPosition]。
