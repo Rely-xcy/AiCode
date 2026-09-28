@@ -829,6 +829,9 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
                     val autoDistill by memoryViewModel.autoDistillEnabled.collectAsStateWithLifecycle()
+                    // 每次进入本分区重扫：引擎可能在后台刚沉淀了新条目，
+                    // 而 VM 在设置页返回栈里常驻，只在 init 扫一次会永远是旧列表。
+                    LaunchedEffect(Unit) { memoryViewModel.refresh() }
                     MemorySection(
                         memories = memories,
                         autoDistillEnabled = autoDistill,
