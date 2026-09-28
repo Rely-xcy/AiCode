@@ -104,6 +104,8 @@ class MemoryModule @Inject constructor(
         // 挑哪几条不能按名字序——名字是写入时随手起的 slug，与「这轮该用哪条」无关，
         // 所以先按与当前话题的重合度粗排，再取前 N（未列出的靠 memory(action=list) 取）。
         val listed = MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES)
+        // 记账异步做：注入路径上不能卡 I/O。同一会话同一记忆只记一次（仓库内部去重）。
+        scope.launch { runCatching { memoryRepository.recordHits(listed, ctx.sessionId) } }
         val globalMemories = listed.filter { it.scope == MemoryScope.GLOBAL }
         val projectMemories = listed.filter { it.scope == MemoryScope.PROJECT }
 
@@ -181,11 +183,15 @@ class MemoryModule @Inject constructor(
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
-        cachedByKey.keys.removeAll { it.first == ctx.sessionId }
+        cachedByKey.keys.removeAll { it.sessionId == ctx.sessionId }
         ctx.sessionId?.let { turnsSinceDistill.remove(it) }
     }
 
-    override suspend fun onSessionDeleted(ctx: EngineContext) {
+    /** 注入缓存上限：会话多了不能让缓存无限长大。 */
+    private fun trimIfNeeded() {
+        if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+    }
+
     private companion object {
         const val MODULE_ID = "memory"
         const val TAG = "MemoryModule"

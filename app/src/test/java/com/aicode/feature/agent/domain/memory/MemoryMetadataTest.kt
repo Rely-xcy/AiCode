@@ -36,6 +36,29 @@ class MemoryMetadataTest {
     }
 
     @Test
+    fun `命中统计能落盘并回读`() {
+        val root = tempRoot()
+        val file = MemorySource.resolveMemoryFile(root, "used")
+        file.writeText(
+            MemoryParser.format(
+                name = "used",
+                description = "d",
+                content = "body",
+                kind = MemoryKind.PROFILE,
+                source = "auto-distill",
+                createdAt = 1_700_000_000_000L,
+                hitCount = 3,
+                lastHitAt = 1_700_000_500_000L
+            )
+        )
+
+        val parsed = MemoryParser.parse(file, MemoryScope.GLOBAL)
+        assertNotNull(parsed)
+        assertEquals(3, parsed.hitCount)
+        assertEquals(1_700_000_500_000L, parsed.lastHitAt)
+    }
+
+    @Test
     fun `旧文件缺新字段时按默认值回读`() {
         val root = tempRoot()
         val file = File(root, "legacy.md")
@@ -46,6 +69,8 @@ class MemoryMetadataTest {
         assertEquals(MemoryKind.NOTE, parsed.kind)
         assertEquals("", parsed.source)
         assertEquals(0L, parsed.createdAt)
+        assertEquals(0, parsed.hitCount)
+        assertEquals(0L, parsed.lastHitAt)
     }
 
     @Test

@@ -21,10 +21,19 @@ object MemoryRanker {
     /** 正文只扫前这么多字符：记忆正文可能很长，打分不必读完。 */
     private const val CONTENT_SCAN_CHARS = 2_000
 
+    /** 陈旧阈值：创建超过这个时长且从未被用过，排序时退一步（降级，不删除）。 */
+    private const val STALE_AFTER_MS = 30L * 24 * 60 * 60 * 1000
+    private const val STALE_PENALTY = 1
+
     /** 去重阈值：token 集合的 Jaccard 相似度超过它就算「说的是同一件事」。 */
     private const val DEDUPE_THRESHOLD = 0.7
 
-    fun rank(memories: List<Memory>, query: String, limit: Int): List<Memory> {
+    fun rank(
+        memories: List<Memory>,
+        query: String,
+        limit: Int,
+        now: Long = System.currentTimeMillis()
+    ): List<Memory> {
         if (limit <= 0) return emptyList()
         if (memories.size <= limit) return memories
         val tokens = tokenize(query)
@@ -32,7 +41,7 @@ object MemoryRanker {
             byRecency(memories)
         } else {
             memories.sortedWith(
-                compareByDescending<Memory> { score(it, tokens) }
+                compareByDescending<Memory> { score(it, tokens, now) }
                     .thenByDescending { updatedAt(it) }
                     .thenBy { it.name }
             )
@@ -66,14 +75,24 @@ object MemoryRanker {
         return union > 0 && intersection.toDouble() / union >= DEDUPE_THRESHOLD
     }
 
-    private fun score(memory: Memory, tokens: Set<String>): Int {
+    private fun score(memory: Memory, tokens: Set<String>, now: Long): Int {
         val name = tokenize(memory.name)
         val description = tokenize(memory.description)
         val content = tokenize(memory.content.take(CONTENT_SCAN_CHARS))
-        return tokens.count { it in name } * NAME_WEIGHT +
+        val overlap = tokens.count { it in name } * NAME_WEIGHT +
             tokens.count { it in description } * DESCRIPTION_WEIGHT +
             tokens.count { it in content } * CONTENT_WEIGHT
+        return overlap - if (isStale(memory, now)) STALE_PENALTY else 0
     }
+
+    /**
+     * 陈旧判定：记了 30 天却一次都没被注入过，说明它跟你的日常话题关系不大。
+     *
+     * 只降权不删除——「好的记忆系统和好的遗忘机制是同一件事的两面」，
+     * 但删除是不可逆的，降级把坑位让出去就够了（真需要时还能 memory(action=list) 找到）。
+     */
+    private fun isStale(memory: Memory, now: Long): Boolean =
+        memory.hitCount == 0 && memory.createdAt > 0 && now - memory.createdAt > STALE_AFTER_MS
 
     private fun byRecency(memories: List<Memory>): List<Memory> =
         memories.sortedWith(compareByDescending<Memory> { updatedAt(it) }.thenBy { it.name })

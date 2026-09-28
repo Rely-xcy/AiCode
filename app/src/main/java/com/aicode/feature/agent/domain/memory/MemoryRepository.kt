@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.memory
 
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
@@ -16,6 +17,12 @@ class MemoryRepository @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val projectAicodeRoot: ProjectAicodeRoot
 ) {
+    private companion object {
+        /** 命中记账的去重表上限，超了直接清空（统计精度不如内存稳定重要）。 */
+        const val HIT_CACHE_LIMIT = 500
+        const val TAG = "MemoryRepository"
+    }
+
     /** 按当前会话 projectRoot 创建项目级数据源（内部按执行模式决定存储位置）。 */
     private fun projectSource(projectRoot: String) =
         ProjectMemorySource(projectRoot, executionModeHolder, containerInstaller, projectAicodeRoot)
@@ -51,6 +58,44 @@ class MemoryRepository @Inject constructor(
             .groupBy { it.name.lowercase() }
             .map { it.value.last() }
         return if (kind == null) deduped else deduped.filter { it.kind == kind }
+    }
+
+    /** 本会话已记过账的记忆（session:name），避免同一会话反复写盘。 */
+    private val recordedHits = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * 记录一次「被用上」：注入进上下文，或模型主动读。
+     *
+     * 统计的是**会话数**而不是次数：按次数记会退化成「聊得越久越重要」，
+     * 按会话数记才是「多少个不同场景里真的用到了它」。同一会话只记一次。
+     * 写盘失败只记日志——统计不能反过来影响注入本身。
+     */
+    fun recordHits(memories: List<Memory>, sessionId: String?) {
+        memories.forEach { memory ->
+            val file = memory.file ?: return@forEach
+            val key = "${sessionId.orEmpty()}:${memory.name}"
+            if (!recordedHits.add(key)) return@forEach
+            if (recordedHits.size > HIT_CACHE_LIMIT) recordedHits.clear()
+            runCatching {
+                val parsed = MemoryParser.parse(file, memory.scope)
+                if (parsed == null) {
+                    FileLogger.w(TAG, "记录命中时读不到记忆: ${memory.name}")
+                } else {
+                    file.writeText(
+                        MemoryParser.format(
+                            name = parsed.name,
+                            description = parsed.description,
+                            content = parsed.content,
+                            kind = parsed.kind,
+                            source = parsed.source,
+                            createdAt = parsed.createdAt,
+                            hitCount = parsed.hitCount + 1,
+                            lastHitAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }.onFailure { FileLogger.w(TAG, "记录记忆命中失败: ${memory.name}", it) }
+        }
     }
 
     /** 读取指定 memory 的完整指令正文；不存在 / 解析失败返回 null。 */

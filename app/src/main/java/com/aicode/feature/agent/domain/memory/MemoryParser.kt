@@ -28,6 +28,8 @@ object MemoryParser {
         // 旧文件没有这两个字段：source 空串、createdAt 0（回退用文件修改时间）
         val source = frontmatter["source"]?.toString()?.trim().orEmpty()
         val createdAt = frontmatter["created_at"]?.toString()?.trim()?.toLongOrNull() ?: 0L
+        val hitCount = frontmatter["hit_count"]?.toString()?.trim()?.toIntOrNull() ?: 0
+        val lastHitAt = frontmatter["last_hit_at"]?.toString()?.trim()?.toLongOrNull() ?: 0L
 
         return Memory(
             name = name,
@@ -37,7 +39,9 @@ object MemoryParser {
             content = body.trim(),
             kind = kind,
             source = source,
-            createdAt = createdAt
+            createdAt = createdAt,
+            hitCount = hitCount,
+            lastHitAt = lastHitAt
         )
     }
 
@@ -53,14 +57,18 @@ object MemoryParser {
         content: String,
         kind: MemoryKind = MemoryKind.NOTE,
         source: String = "",
-        createdAt: Long = 0L
+        createdAt: Long = 0L,
+        hitCount: Int = 0,
+        lastHitAt: Long = 0L
     ): String {
         val safeName = yamlScalar(name)
         val safeDesc = yamlScalar(description)
         val kindLine = if (kind == MemoryKind.PROFILE) "kind: profile\n" else ""
         val sourceLine = if (source.isNotBlank()) "source: ${yamlScalar(source)}\n" else ""
         val createdLine = if (createdAt > 0) "created_at: $createdAt\n" else ""
-        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine$sourceLine$createdLine---\n$content"
+        val hitCountLine = if (hitCount > 0) "hit_count: $hitCount\n" else ""
+        val lastHitLine = if (lastHitAt > 0) "last_hit_at: $lastHitAt\n" else ""
+        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine$sourceLine$createdLine$hitCountLine$lastHitLine---\n$content"
     }
 
     /** 把任意字符串转成安全的 YAML 标量，避免冒号/引号/换行破坏 frontmatter。 */
