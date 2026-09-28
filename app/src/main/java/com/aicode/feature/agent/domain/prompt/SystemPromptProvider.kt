@@ -32,6 +32,7 @@ class SystemPromptProvider @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val skillRepository: SkillRepository,
     private val agentEngine: AgentEngine,
+    private val userPromptStore: UserPromptStore,
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository
 ) {
@@ -205,6 +206,29 @@ class SystemPromptProvider @Inject constructor(
     private val subAgentBaseSource = SubAgentBaseSource()
     private val subAgentListSource = SubAgentListSource()
     private val engineFragmentSource = EngineFragmentSource()
+
+    /**
+     * 用户自定义提示词：不参与内置片段的编号排序，只按注入位置拼在两端。
+     *
+     * - [UserPromptPosition.BEFORE_ALL]：拼在所有内置提示词之前
+     * - [UserPromptPosition.AFTER_SYSTEM]：拼在整个系统提示词之后
+     * - [UserPromptPosition.OFF]：不注入
+     *
+     * 只在主代理的 build() 里用（子代理与「仅自定义片段」模式不注入）。
+     */
+    private inner class UserPromptSource {
+        fun buildAt(position: UserPromptPosition, ctx: AgentContext): String? {
+            val prompts = runCatching {
+                userPromptStore.list(UserPromptScope.GLOBAL, ctx.projectRoot) +
+                    userPromptStore.list(UserPromptScope.PROJECT, ctx.projectRoot)
+            }.getOrDefault(emptyList())
+                .filter { it.position == position && it.content.isNotBlank() }
+            if (prompts.isEmpty()) return null
+            return prompts.joinToString("\n\n") { it.content.trim() }
+        }
+    }
+
+    private val userPromptSource = UserPromptSource()
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
@@ -249,6 +273,11 @@ class SystemPromptProvider @Inject constructor(
 
         // 4. 组装最终提示词：把稳定不变的重头基线放最前面（享受 KV Cache），变化部分放末尾
         return buildString {
+            // 用户提示词（最前）：拼在基线之前
+            userPromptSource.buildAt(UserPromptPosition.BEFORE_ALL, agentContext)?.let {
+                append(it)
+                append("\n\n")
+            }
             append(staticContent)
 
             if (SKILLS_VAR !in rawStatic) skillsContent?.let { append("\n\n"); append(it) }
@@ -263,6 +292,12 @@ class SystemPromptProvider @Inject constructor(
             if (DATE_VAR !in rawStatic) {
                 append("\n\n")
                 append(timeContent)
+            }
+
+            // 用户提示词（最后）：拼在整个系统提示词之后
+            userPromptSource.buildAt(UserPromptPosition.AFTER_SYSTEM, agentContext)?.let {
+                append("\n\n")
+                append(it)
             }
         }
     }
