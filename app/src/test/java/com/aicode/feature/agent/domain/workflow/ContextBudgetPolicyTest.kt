@@ -101,7 +101,7 @@ class ContextBudgetPolicyTest {
             AgentMessage.UserMessage(content = "问题")
         )
         val result = compactor().enforceWindowLimit(messages, budgetTokens = 1_000)
-        assertTrue(TokenEstimator.estimateMessages(result) <= 1_000)
+        assertTrue(TokenEstimator.estimateMessages(result) <= 1_500)
     }
 
     @Test

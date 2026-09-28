@@ -75,6 +75,7 @@ class ModelContextPolicyTest {
         val policy = ModelContextPolicy.tierFor(128_000)
         assertEquals(ModelContextPolicy.Tier.GENEROUS, policy.tier)
         assertEquals(108_000, policy.hardThreshold)
-        assertEquals(108_000, ModelContextPolicy.tierFor(1_000_000).let { 1_000_000 - 20_000 })
+        // 1M 窗口同档：上限 = 窗口 - 20k
+        assertEquals(980_000, ModelContextPolicy.tierFor(1_000_000).hardThreshold)
     }
 }

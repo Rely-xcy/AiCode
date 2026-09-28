@@ -129,7 +129,7 @@ class CompactionModule @Inject constructor(
         return call.copy(messages = guarded)
     }
 
-    private fun resolveContextTokens(provider: AIProvider): Int =
+    private suspend fun resolveContextTokens(provider: AIProvider): Int =
         modelMetadataService
             .resolve(provider.providerId, inferProviderType(provider), provider.model)
             .contextTokens

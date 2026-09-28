@@ -38,7 +38,7 @@ enum class StartupSessionMode {
 class GeneralSettingsRepository @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
-    private companion object {
+    companion object {
         val AUTO_REMOVE_STALE_MODELS_KEY = booleanPreferencesKey("auto_remove_stale_models")
         val STARTUP_SESSION_MODE_KEY = stringPreferencesKey("startup_session_mode")
         val FIRST_BYTE_TIMEOUT_SEC_KEY = intPreferencesKey("first_byte_timeout_sec")
