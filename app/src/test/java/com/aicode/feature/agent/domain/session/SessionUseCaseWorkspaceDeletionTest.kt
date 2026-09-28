@@ -3,15 +3,22 @@ package com.aicode.feature.agent.domain.session
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
+import com.aicode.feature.agent.domain.engine.AgentEngine
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /** 删除工作区时按 workspacePath 级联清理会话与消息的行为。 */
 class SessionUseCaseWorkspaceDeletionTest {
+
+    /** 空模块集的引擎：本测试只验证会话/消息删除，引擎侧钩子无副作用。 */
+    private fun emptyEngine() = AgentEngine(emptySet(), CoroutineScope(SupervisorJob() + Dispatchers.IO))
 
     private fun session(id: String, workspacePath: String, parentId: String? = null) = ChatSessionEntity(
         id = id,
@@ -31,7 +38,7 @@ class SessionUseCaseWorkspaceDeletionTest {
             session("sub", "/ws/a", parentId = "root")
         )
 
-        val useCase = SessionUseCase(chatDao, messageDao)
+        val useCase = SessionUseCase(chatDao, messageDao, emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/a")
 
         assertEquals(2, deleted)
@@ -46,7 +53,7 @@ class SessionUseCaseWorkspaceDeletionTest {
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/empty") } returns emptyList()
 
-        val useCase = SessionUseCase(chatDao, messageDao)
+        val useCase = SessionUseCase(chatDao, messageDao, emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/empty")
 
         assertEquals(0, deleted)

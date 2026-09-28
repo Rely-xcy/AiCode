@@ -1,6 +1,8 @@
 package com.aicode.feature.agent.domain.session
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.engine.AgentEngine
+import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
@@ -14,7 +16,8 @@ import javax.inject.Singleton
 @Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val agentEngine: AgentEngine
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -78,6 +81,10 @@ class SessionUseCase @Inject constructor(
         }
         agentMessageDao.deleteBySession(id)
         chatSessionDao.delete(id)
+        // 交给引擎分发：模块自持的会话级状态（如记忆注入缓存）在这里释放
+        deleted.forEach { sessionId ->
+            agentEngine.onSessionDeleted(EngineContext(sessionId = sessionId))
+        }
         return deleted
     }
 
