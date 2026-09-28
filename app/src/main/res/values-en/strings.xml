@@ -1008,6 +1008,19 @@
     <string name="prompts_action_reset">Reset to built-in</string>
     <string name="prompts_action_reset_hint">Drop your edit and go back to the shipped content</string>
     <string name="prompts_fragment_hint">Your edit is stored as an override file; the shipped file is never modified, so new built-in content after an app update can still be compared.</string>
+    <string name="prompts_add_sheet_title">Prompts</string>
+    <string name="prompts_add_prompt">Add prompt</string>
+    <string name="prompts_add_prompt_hint">Create a prompt of your own</string>
+    <string name="prompts_advanced">Advanced</string>
+    <string name="prompts_advanced_hint">Built-in fragments and switches</string>
+    <string name="prompts_help">Help</string>
+    <string name="prompts_help_hint">How it works and when it applies</string>
+    <string name="prompts_advanced_doc_title">Notes (key points from the docs)</string>
+    <string name="prompts_advanced_doc_body">The system prompt has two parts: the static baseline (built-in fragments, ordered 00/10/15/20/30/40/50/60/70) and the dynamic section (skills, subagents, memory, project rules, workspace, time).\n\nOverride: a file in prompts.custom/ with the same number replaces that built-in fragment — changing it in the app is equivalent to dropping the file there.\n\nAdd: use a free number in the same folder to insert your own fragment; fragments are ordered by number.\n\nDisable: the .no-builtin marker disables all built-in prompts; the system prompt then only contains your fragments, and dynamic content must be pulled in with {{AICODE_*}} variables.\n\nUser prompts: added on the Prompts page; they go before all prompts or after the system prompt, and do not take part in numbered ordering.</string>
+    <string name="prompts_advanced_switch_title">Built-in prompts</string>
+    <string name="prompts_disable_builtin">Disable all built-in prompts</string>
+    <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
+    <string name="prompts_help_body">1. "Global default prompt (00)" is the identity and general policy — editable, stored as an override, and resettable to the built-in default.\n\n2. Tap "+" to add your own prompt: name, scope (global/project), injection position, content.\n\n3. Injection: "First" goes before all built-in prompts (good for general policy); "Last" goes at the very end of the system prompt and is read last; "Off" keeps it but does not inject it.\n\n4. Changes apply immediately — the next turn (or a new session) picks them up.\n\n5. Longer prompts cost more context, so keep only the rules you actually need.</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>

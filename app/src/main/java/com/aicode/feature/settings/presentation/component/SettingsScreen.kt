@@ -71,6 +71,8 @@ import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
 import com.aicode.R
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
+import com.aicode.feature.agent.domain.prompt.UserPromptPosition
+import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.presentation.component.MarkdownContent
@@ -145,6 +147,10 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Mcp(R.string.settings_mcp),
     Skills(R.string.settings_skills),
     Memory(R.string.settings_memory),
+    Prompts(R.string.prompts_title),
+    PromptEditor(R.string.prompts_title),
+    PromptsAdvanced(R.string.prompts_advanced),
+    PromptsHelp(R.string.prompts_help),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
@@ -177,6 +183,9 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.SkillEditor,
     SettingsSection.SubAgentEditor -> 3
     SettingsSection.ProviderEditor,
+    SettingsSection.PromptEditor,
+    SettingsSection.PromptsAdvanced,
+    SettingsSection.PromptsHelp,
     SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
@@ -324,6 +333,10 @@ fun SettingsScreen(
     }
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
+
+    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
+    var showPromptsAddSheet by remember { mutableStateOf(false) }
+    var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
@@ -371,6 +384,9 @@ fun SettingsScreen(
         SettingsSection.ProviderEditor -> SettingsSection.Providers
         SettingsSection.Log -> logReturnSection.takeUnless { expanded && it == SettingsSection.Menu }
         SettingsSection.SkillDetail -> SettingsSection.Skills
+        SettingsSection.PromptEditor -> SettingsSection.Prompts
+        SettingsSection.PromptsAdvanced -> SettingsSection.Prompts
+        SettingsSection.PromptsHelp -> SettingsSection.Prompts
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
@@ -726,6 +742,14 @@ fun SettingsScreen(
                                 )
                             }
                         }
+                        SettingsSection.Prompts -> IconButton(onClick = { showPromptsAddSheet = true }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.prompts_add_prompt),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         SettingsSection.Storage -> {
                             IconButton(onClick = { storageViewModel?.refresh() }) {
                                 Icon(
@@ -823,6 +847,85 @@ fun SettingsScreen(
                         section = SettingsSection.SkillDetail
                     }
                 )
+                SettingsSection.Prompts -> {
+                    val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { promptsViewModel.refresh() }
+                    PromptsSection(
+                        state = promptsState,
+                        onOpenDefaultFragment = {
+                            promptEditTarget = PromptEditTarget(isDefaultFragment = true)
+                            section = SettingsSection.PromptEditor
+                        },
+                        onOpenPrompt = { prompt, scope ->
+                            promptEditTarget = PromptEditTarget(prompt = prompt, scope = scope)
+                            section = SettingsSection.PromptEditor
+                        },
+                        onDeletePrompt = { prompt, scope -> promptsViewModel.deletePrompt(prompt, scope) }
+                    )
+                    if (showPromptsAddSheet) {
+                        PromptsAddSheet(
+                            onDismiss = { showPromptsAddSheet = false },
+                            onAddPrompt = {
+                                showPromptsAddSheet = false
+                                promptEditTarget = PromptEditTarget()
+                                section = SettingsSection.PromptEditor
+                            },
+                            onAdvanced = {
+                                showPromptsAddSheet = false
+                                section = SettingsSection.PromptsAdvanced
+                            },
+                            onHelp = {
+                                showPromptsAddSheet = false
+                                section = SettingsSection.PromptsHelp
+                            }
+                        )
+                    }
+                }
+                SettingsSection.PromptEditor -> {
+                    val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                    val target = promptEditTarget
+                    if (target?.isDefaultFragment == true) {
+                        FragmentEditorSection(
+                            initialContent = promptsState.defaultFragmentContent.orEmpty(),
+                            overridden = promptsState.defaultFragmentOverridden,
+                            onSave = {
+                                promptsViewModel.saveDefaultFragment(it)
+                                section = SettingsSection.Prompts
+                            },
+                            onReset = {
+                                promptsViewModel.resetDefaultFragment()
+                                section = SettingsSection.Prompts
+                            }
+                        )
+                    } else {
+                        PromptEditorSection(
+                            isNew = target?.prompt == null,
+                            initialName = target?.prompt?.name.orEmpty(),
+                            initialScope = target?.scope ?: UserPromptScope.GLOBAL,
+                            initialPosition = target?.prompt?.position ?: UserPromptPosition.AFTER_SYSTEM,
+                            initialContent = target?.prompt?.content.orEmpty(),
+                            hasWorkspace = promptsState.hasWorkspace,
+                            onSave = { name, scope, position, content ->
+                                promptsViewModel.savePrompt(target?.prompt, name, scope, position, content)
+                                section = SettingsSection.Prompts
+                            }
+                        )
+                    }
+                }
+                SettingsSection.PromptsAdvanced -> {
+                    val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                    PromptsAdvancedSection(
+                        builtinDisabled = promptsState.builtinDisabled,
+                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled
+                    )
+                }
+                SettingsSection.PromptsHelp -> PromptsHelpSection()
                 SettingsSection.Memory -> {
                     // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
@@ -1375,6 +1478,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.FileText,
                 title = stringResource(SettingsSection.Memory.titleRes),
                 onClick = { onOpen(SettingsSection.Memory) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.FileText,
+                title = stringResource(SettingsSection.Prompts.titleRes),
+                onClick = { onOpen(SettingsSection.Prompts) }
             )
         }
 

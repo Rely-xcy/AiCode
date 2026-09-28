@@ -1008,6 +1008,19 @@
     <string name="prompts_action_reset">恢复内置默认</string>
     <string name="prompts_action_reset_hint">删掉你的修改，回到 App 自带内容</string>
     <string name="prompts_fragment_hint">你的修改会存为覆盖文件，App 自带文件永不被改；升级 App 后新内置内容仍可整体对比。</string>
+    <string name="prompts_add_sheet_title">提示词</string>
+    <string name="prompts_add_prompt">添加提示词</string>
+    <string name="prompts_add_prompt_hint">新建一条你自己的提示词</string>
+    <string name="prompts_advanced">高级设置</string>
+    <string name="prompts_advanced_hint">内置片段说明与开关</string>
+    <string name="prompts_help">帮助</string>
+    <string name="prompts_help_hint">怎么用、什么时候生效</string>
+    <string name="prompts_advanced_doc_title">说明（官方文档要点）</string>
+    <string name="prompts_advanced_doc_body">提示词分两段：静态基线（内置片段，按编号 00/10/15/20/30/40/50/60/70 顺序拼接）与动态段（技能、子代理、记忆、项目规则、工作区、时间）。\n\n覆盖：prompts.custom/ 下放同编号文件即覆盖对应内置片段，App 里的改动与手工放文件等价。\n\n新增：同目录下用没被占用的编号即可插入自己的片段，按编号排序。\n\n禁用：放 .no-builtin 标记可完全禁用内置提示词，此时系统提示词只由你的片段组成，动态内容需用 {{AICODE_*}} 变量按需取回。\n\n用户提示词：在「提示词」页添加，可选插在所有提示词之前或系统提示词之后，不参与编号排序。</string>
+    <string name="prompts_advanced_switch_title">内置提示词</string>
+    <string name="prompts_disable_builtin">完全禁用内置提示词</string>
+    <string name="prompts_disable_builtin_hint">只保留你自己的片段；需要自己补全全部规则，谨慎开启</string>
+    <string name="prompts_help_body">1. 「全局默认提示词（00）」是身份与总纲，可改；改动存为覆盖文件，随时能恢复内置默认。\n\n2. 右上角「+」添加自己的提示词：填名称、选作用域（全局/项目）、选注入位置、写内容。\n\n3. 注入位置：「最前」在所有内置提示词之前（适合总纲）；「最后」在系统提示词末尾，最后被读到；「关闭」只保留不注入。\n\n4. 保存后立即生效：下一轮对话（或新会话）就带上。\n\n5. 提示词越长越占上下文，建议只写真正需要的规则。</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">还没有安装技能</string>

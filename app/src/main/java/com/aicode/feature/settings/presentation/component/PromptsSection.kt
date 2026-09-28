@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -27,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
@@ -34,6 +37,9 @@ import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.settings.presentation.PromptsUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Info
+import compose.icons.feathericons.Plus
+import compose.icons.feathericons.Sliders
 
 /**
  * 编辑目标：区分三种入口。
@@ -124,6 +130,116 @@ internal fun PromptsSection(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 右上角「+」弹层：三项入口（添加提示词 / 高级设置 / 帮助）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PromptsAddSheet(
+    onDismiss: () -> Unit,
+    onAddPrompt: () -> Unit,
+    onAdvanced: () -> Unit,
+    onHelp: () -> Unit
+) {
+    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            SettingsGroupHeader(text = stringResource(R.string.prompts_add_sheet_title))
+            SettingsGroup {
+                SettingsRow(
+                    icon = FeatherIcons.Plus,
+                    title = stringResource(R.string.prompts_add_prompt),
+                    subtitle = stringResource(R.string.prompts_add_prompt_hint),
+                    onClick = onAddPrompt
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = FeatherIcons.Sliders,
+                    title = stringResource(R.string.prompts_advanced),
+                    subtitle = stringResource(R.string.prompts_advanced_hint),
+                    onClick = onAdvanced
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = FeatherIcons.Info,
+                    title = stringResource(R.string.prompts_help),
+                    subtitle = stringResource(R.string.prompts_help_hint),
+                    onClick = onHelp
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 高级设置：官方文档要点摘要 + 「完全禁用内置提示词」开关。
+ *
+ * 摘要是内置文本（不联网），官方文档更新后需随 App 发版更新。
+ */
+@Composable
+internal fun PromptsAdvancedSection(
+    builtinDisabled: Boolean,
+    onToggleBuiltinDisabled: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg)
+            .padding(bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        SettingsGroupHeader(text = stringResource(R.string.prompts_advanced_doc_title))
+        SettingsGroup {
+            Text(
+                text = stringResource(R.string.prompts_advanced_doc_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(Spacing.lg)
+            )
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.prompts_advanced_switch_title))
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.prompts_disable_builtin),
+                subtitle = stringResource(R.string.prompts_disable_builtin_hint),
+                trailing = {
+                    AppSwitch(checked = builtinDisabled, onCheckedChange = onToggleBuiltinDisabled)
+                }
+            )
+        }
+    }
+}
+
+/** 帮助：内置的简短说明（不联网）。 */
+@Composable
+internal fun PromptsHelpSection() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg)
+            .padding(bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        SettingsGroupHeader(text = stringResource(R.string.prompts_help))
+        SettingsGroup {
+            Text(
+                text = stringResource(R.string.prompts_help_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(Spacing.lg)
+            )
         }
     }
 }
