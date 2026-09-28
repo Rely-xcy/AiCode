@@ -988,6 +988,9 @@
     <string name="prompts_position_before_all">First (before built-ins)</string>
     <string name="prompts_position_after_system">Last (end of system prompt)</string>
     <string name="prompts_position_off">Off (not injected)</string>
+    <string name="prompts_position_short_before_all">First</string>
+    <string name="prompts_position_short_after_system">Last</string>
+    <string name="prompts_position_short_off">Off</string>
     <string name="prompts_field_basic">Basic</string>
     <string name="prompts_field_name">Name</string>
     <string name="prompts_field_name_placeholder">e.g. Answer style</string>

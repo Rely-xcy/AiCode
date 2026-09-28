@@ -988,6 +988,9 @@
     <string name="prompts_position_before_all">最前（内置之前）</string>
     <string name="prompts_position_after_system">最后（系统提示词末尾）</string>
     <string name="prompts_position_off">已关闭（不注入）</string>
+    <string name="prompts_position_short_before_all">最前</string>
+    <string name="prompts_position_short_after_system">最后</string>
+    <string name="prompts_position_short_off">关闭</string>
     <string name="prompts_field_basic">基本信息</string>
     <string name="prompts_field_name">名称</string>
     <string name="prompts_field_name_placeholder">例如：回答风格</string>
