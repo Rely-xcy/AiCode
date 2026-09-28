@@ -128,7 +128,10 @@ class MemoryModule @Inject constructor(
         }
         FileLogger.i(TAG, "沉淀长期记忆 ${entries.size} 条: ${entries.joinToString { it.name }}")
         // 本轮新增/更新了记忆 → 丢掉本会话的注入缓存，下一轮注入就带上新内容
-        cachedByKey.remove(ctx.sessionId to ctx.projectRoot)
+        // （缓存 key 是 Triple(会话, 工作区, 开关)，这里按前两项清，与开关无关）
+        cachedByKey.keys
+            .filter { it.first == ctx.sessionId && it.second == ctx.projectRoot }
+            .forEach { cachedByKey.remove(it) }
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
