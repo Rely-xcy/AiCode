@@ -832,12 +832,17 @@ fun SettingsScreen(
                     // 每次进入本分区重扫：引擎可能在后台刚沉淀了新条目，
                     // 而 VM 在设置页返回栈里常驻，只在 init 扫一次会永远是旧列表。
                     LaunchedEffect(Unit) { memoryViewModel.refresh() }
+                    var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
                         autoDistillEnabled = autoDistill,
                         onToggleAutoDistill = memoryViewModel::setAutoDistillEnabled,
+                        onOpenDetail = { detailMemory = it },
                         onDelete = memoryViewModel::delete
                     )
+                    detailMemory?.let { memory ->
+                        MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
+                    }
                 }
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(

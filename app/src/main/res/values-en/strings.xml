@@ -971,6 +971,10 @@
     <string name="memory_empty_hint">Whatever you ask the assistant to remember shows up here</string>
     <string name="memory_auto_distill">Auto-save long-term memory</string>
     <string name="memory_auto_distill_desc">After each turn, distill stable conclusions about you into memory (uses the model; off by default)</string>
+    <string name="memory_source_auto">Auto-saved</string>
+    <string name="memory_source_manual">Saved during chat</string>
+    <string name="memory_detail_content">Content</string>
+    <string name="memory_detail_empty">(no content)</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>

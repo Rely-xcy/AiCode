@@ -29,9 +29,11 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryKind
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.FileText
 
@@ -46,6 +48,7 @@ internal fun MemorySection(
     memories: List<Memory>,
     autoDistillEnabled: Boolean,
     onToggleAutoDistill: (Boolean) -> Unit,
+    onOpenDetail: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
 ) {
     Column(
@@ -76,7 +79,7 @@ internal fun MemorySection(
             SettingsGroup {
                 memories.forEachIndexed { index, memory ->
                     if (index > 0) SettingsDivider()
-                    MemoryRow(memory = memory, onDelete = { onDelete(memory) })
+                    MemoryRow(memory = memory, onOpenDetail = { onOpenDetail(memory) }, onDelete = { onDelete(memory) })
                 }
             }
         }
@@ -119,15 +122,16 @@ private fun EmptyState() {
     }
 }
 
-/** 单条记忆行：图标 + 名称/描述，左滑删除。 */
+/** 单条记忆行：图标 + 名称/描述，点击看详情，左滑删除。 */
 @Composable
 private fun MemoryRow(
     memory: Memory,
+    onOpenDetail: () -> Unit,
     onDelete: () -> Unit
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
 
-    SwipeToDeleteRow(onDelete = onDelete) {
+    SwipeToDeleteRow(onDelete = onDelete, onClick = onOpenDetail) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -168,6 +172,47 @@ private fun MemoryRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 记忆详情：名称、来源、描述与完整正文。
+ *
+ * 注入到系统提示词的只有「名称 + 描述」，正文平时看不到，详情页才展开。
+ */
+@Composable
+internal fun MemoryDetailSheet(
+    memory: Memory,
+    onDismiss: () -> Unit
+) {
+    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            SettingsGroupHeader(text = memory.name)
+            SettingsGroup {
+                SettingsRow(
+                    icon = null,
+                    title = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
+                    subtitle = stringResource(
+                        if (memory.kind == MemoryKind.PROFILE) R.string.memory_source_auto
+                        else R.string.memory_source_manual
+                    )
+                )
+            }
+            SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
+            SettingsGroup {
+                Text(
+                    text = memory.content.ifBlank { stringResource(R.string.memory_detail_empty) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(Spacing.lg)
                 )
             }
         }
