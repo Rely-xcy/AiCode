@@ -19,6 +19,9 @@ import com.aicode.feature.agent.domain.notification.PendingNotification
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
+import com.aicode.feature.agent.domain.engine.AgentEngine
+import com.aicode.feature.agent.domain.engine.EngineContext
+import com.aicode.feature.agent.domain.engine.LlmCall
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.PermissionScope
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
@@ -89,7 +92,7 @@ class StatefulAgentWorkflow @Inject constructor(
     private val promptProvider: SystemPromptProvider,
     private val permissionManager: ToolPermissionManager,
     private val policyEngine: ToolPermissionPolicyEngine,
-    private val contextCompactor: ContextCompactor,
+    private val agentEngine: AgentEngine,
     private val planApprovalManager: PlanApprovalManager,
     private val toolOutputStore: ToolOutputStore,
     private val modelMetadataService: ModelMetadataService,
@@ -250,8 +253,18 @@ class StatefulAgentWorkflow @Inject constructor(
         val compactionProvider = resolveCompactionFallbackProvider(sessionId) ?: provider
         // 摘要仍用专用压缩模型（尊重用户选择），但保留最近消息的窗口预算按主聊天模型算，
         // 与自动压缩一致——否则小窗口的压缩模型会让手动压缩保留的最近上下文偏少。
-        val result = contextCompactor.compactIfNeeded(history, compactionProvider, sessionId, force = true, windowProvider = provider, onEvent = onEvent)
-        return result.compacted
+        // 压缩策略（档位/软硬线）由引擎的 CompactionModule 判定，这里只发起强制压缩。
+        val call = agentEngine.beforeLlmCall(
+            EngineContext(sessionId = sessionId),
+            LlmCall(
+                messages = history,
+                windowProvider = provider,
+                summaryProvider = compactionProvider,
+                force = true,
+                onEvent = onEvent
+            )
+        )
+        return call.messages !== history
     }
 
     /**
@@ -489,6 +502,14 @@ class StatefulAgentWorkflow @Inject constructor(
 
         val systemPrompt = promptProvider.build(currentContext)
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
+        // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，
+        // 只靠 lastInputTokens 间接体现（provider 不回传 usage 时恒为 0）会系统性低估。
+        val baseOverheadTokens = TokenEstimator.estimateText(systemPrompt) +
+            currentTools.sumOf { tool ->
+                TokenEstimator.estimateText(tool.name) +
+                    TokenEstimator.estimateText(tool.description) +
+                    TokenEstimator.estimateText(tool.toJsonSchema().toString())
+            }
         // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
         var compactionAttemptFailed = false
 
@@ -506,13 +527,31 @@ class StatefulAgentWorkflow @Inject constructor(
                         var compactedMessages = state.messages
                         if (!compactionAttemptFailed) {
                             val sessionLastInputTokens = currentContext.sessionId?.let { sessionUseCase.getSessionById(it)?.lastInputTokens } ?: 0
-                            val compaction = contextCompactor.compactIfNeeded(state.messages, compactionProvider, context.sessionId, lastInputTokens = sessionLastInputTokens, windowProvider = aiProvider) { event ->
-                                if (event is AgentEvent.CompactionFailed) compactionAttemptFailed = true
-                                send(event)
-                            }
-                            compactedMessages = compaction.messages
-                            if (compaction.compacted) {
-                                state = state.copy(messages = compaction.messages)
+                            // 上下文预算交给引擎统一调度：CompactionModule 判档位与软/硬线，
+                            // ContextCompactor 只做消息变换（软精简、硬压缩、发送前兜底）。
+                            val call = agentEngine.beforeLlmCall(
+                                EngineContext(
+                                    sessionId = currentContext.sessionId,
+                                    projectRoot = currentContext.projectRoot,
+                                    mode = currentContext.mode,
+                                    isSubAgent = currentContext.agentDefinition != null
+                                ),
+                                LlmCall(
+                                    messages = state.messages,
+                                    windowProvider = aiProvider,
+                                    summaryProvider = compactionProvider,
+                                    lastInputTokens = sessionLastInputTokens,
+                                    overheadTokens = baseOverheadTokens,
+                                    onEvent = { event ->
+                                        if (event is AgentEvent.CompactionFailed) compactionAttemptFailed = true
+                                        send(event)
+                                    }
+                                )
+                            )
+                            compactedMessages = call.messages
+                            // 引用比较：模块未改动时原样返回同一个列表，不必白写一次状态
+                            if (call.messages !== state.messages) {
+                                state = state.copy(messages = call.messages)
                             }
                         }
 

@@ -45,6 +45,26 @@ class AgentEngine @Inject constructor(
         dispatch("onTurnCompleted") { it.onTurnCompleted(ctx) }
     }
 
+    /**
+     * 调模型前：按 [EngineModule.order] 顺序依次让模块处理即将发送的上下文。
+     *
+     * 与 [onTurnCompleted] 不同，这里是同步链路（调用方要拿返回值去发请求），
+     * 所以逐个 await。某个模块失败只记日志并保留上一版 [LlmCall]，不影响后续模块与主流程。
+     */
+    suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall {
+        var current = call
+        sortedModules().forEach { module ->
+            val next = try {
+                module.beforeLlmCall(ctx, current)
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "模块 ${module.id} 的 beforeLlmCall 失败，已跳过", e)
+                null
+            }
+            if (next != null) current = next
+        }
+        return current
+    }
+
     /** 会话被删除：并发分发给所有模块，调用方不等待。 */
     fun onSessionDeleted(ctx: EngineContext) {
         dispatch("onSessionDeleted") { it.onSessionDeleted(ctx) }

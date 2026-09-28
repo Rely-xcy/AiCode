@@ -84,7 +84,7 @@ import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
-import com.aicode.feature.agent.domain.workflow.ContextCompactor
+import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -331,7 +331,7 @@ object AgentModule {
         promptProvider: SystemPromptProvider,
         permissionManager: ToolPermissionManager,
         policyEngine: ToolPermissionPolicyEngine,
-        contextCompactor: ContextCompactor,
+        agentEngine: AgentEngine,
         planApprovalManager: PlanApprovalManager,
         toolOutputStore: ToolOutputStore,
         modelMetadataService: ModelMetadataService,
@@ -357,7 +357,7 @@ object AgentModule {
             promptProvider,
             permissionManager,
             policyEngine,
-            contextCompactor,
+            agentEngine,
             planApprovalManager,
             toolOutputStore,
             modelMetadataService,

@@ -46,6 +46,7 @@ class GeneralSettingsRepository @Inject constructor(
         val MAX_NETWORK_RETRIES_KEY = intPreferencesKey("max_network_retries")
         val ENTER_TO_SEND_KEY = booleanPreferencesKey("enter_to_send")
         val COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("compaction_threshold_percent")
+        val SOFT_COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("soft_compaction_threshold_percent")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
 
@@ -55,13 +56,21 @@ class GeneralSettingsRepository @Inject constructor(
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
-        /** 自动压缩阈值默认 60%。
+        /** 自动压缩（硬）阈值默认 85%。
          *
-         * 原为 90%（上游默认）。实测/公开结论：上下文利用率超过约 40% 后模型质量
-         * 就开始下降（Smart Zone / Dumb Zone 分界），到 90% 才压缩已经太晚。
-         * 用户仍可在偏好设置里自行调整。
+         * 达到即调摘要模型折叠早期对话。原为 90%，提前到 85% 的理由：上下文利用率
+         * 超过约 40% 后模型质量就开始下降（Smart Zone / Dumb Zone 分界），
+         * 而 90% 时留给摘要把历史读完的余量太窄。用户仍可自行调整。
          */
-        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 60
+        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 85
+
+        /** 软精简阈值默认 40%。
+         *
+         * 达到即只精简历史里的超长工具输出（不调 LLM、不落库、界面无感）。选 40% 是因为
+         * 质量下降的拐点就在约 40%，而工具输出（文件内容、命令输出）是最大的噪音源——
+         * 等到硬压缩线才动它，中间那段窗口全在噪声里。
+         */
+        const val DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT = 40
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
@@ -164,7 +173,7 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[ENTER_TO_SEND_KEY] = enabled }
     }
 
-    /** 自动压缩触发阈值（上下文窗口的百分比）；默认 90，限定 1..100。 */
+    /** 自动压缩（硬）触发阈值（上下文窗口的百分比）；默认 85，限定 1..100。 */
     val compactionThresholdPercentFlow: Flow<Int> = context.generalDataStore.data.map {
         (it[COMPACTION_THRESHOLD_PERCENT_KEY] ?: DEFAULT_COMPACTION_THRESHOLD_PERCENT).coerceIn(1, 100)
     }
@@ -176,14 +185,30 @@ class GeneralSettingsRepository @Inject constructor(
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
-    /** 备份快照：回车发送开关与压缩阈值。 */
+    /** 软精简阈值（上下文窗口的百分比）：达到即先精简历史工具输出，不调 LLM；默认 40，限定 1..100。 */
+    val softCompactionThresholdPercentFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[SOFT_COMPACTION_THRESHOLD_PERCENT_KEY] ?: DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT).coerceIn(1, 100)
+    }
+
+    suspend fun setSoftCompactionThresholdPercent(percent: Int) {
+        context.generalDataStore.edit { it[SOFT_COMPACTION_THRESHOLD_PERCENT_KEY] = percent.coerceIn(1, 100) }
+    }
+
+    /** 压缩前读取一次软精简阈值百分比。 */
+    suspend fun softCompactionThresholdPercent(): Int = softCompactionThresholdPercentFlow.first()
+
+    /** 备份快照：回车发送开关与两个压缩阈值。 */
     suspend fun enterToSendSnapshot(): Boolean = enterToSendFlow.first()
 
     suspend fun compactionThresholdPercentSnapshot(): Int = compactionThresholdPercentFlow.first()
 
+    suspend fun softCompactionThresholdPercentSnapshot(): Int = softCompactionThresholdPercentFlow.first()
+
     suspend fun restoreEnterToSend(enabled: Boolean) = setEnterToSend(enabled)
 
     suspend fun restoreCompactionThresholdPercent(percent: Int) = setCompactionThresholdPercent(percent)
+
+    suspend fun restoreSoftCompactionThresholdPercent(percent: Int) = setSoftCompactionThresholdPercent(percent)
 
     /** sendFile 单个文件大小上限（MB）；默认 100，下限 1，不设上限。 */
     val sendFileMaxSizeMbFlow: Flow<Int> = context.generalDataStore.data.map {

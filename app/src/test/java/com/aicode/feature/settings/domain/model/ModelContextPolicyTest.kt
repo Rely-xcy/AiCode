@@ -5,14 +5,14 @@ import org.junit.Test
 
 class ModelContextPolicyTest {
 
-    // ---------- preserveRecentTokens：usableTokens / 4 后 clamp 到 [2000, 20000] ----------
+    // ---------- preserveRecentTokens：窗口的 25% 后 clamp 到 [2000, 60000] ----------
 
     @Test
     fun preserveRecentTokens_zero_clampedToMinimum() {
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(0))
     }
 
-    /** 低于下界（整除后不足 2000）时被 clamp 到下界。 */
+    /** 低于下界（取四分之一后不足 2000）时被 clamp 到下界。 */
     @Test
     fun preserveRecentTokens_belowMinimum_clampedToMinimum() {
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(7_999))
@@ -25,25 +25,19 @@ class ModelContextPolicyTest {
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(8_000))
     }
 
-    /** 区间内正常整除 4。 */
+    /** 区间内按四分之一取值。 */
     @Test
-    fun preserveRecentTokens_inRange_quarterDown() {
+    fun preserveRecentTokens_inRange_quarterOfWindow() {
         assertEquals(2_500, ModelContextPolicy.preserveRecentTokens(10_000))
-        assertEquals(19_999, ModelContextPolicy.preserveRecentTokens(79_999))
+        assertEquals(32_000, ModelContextPolicy.preserveRecentTokens(128_000))
     }
 
-    /** 上界边界：整除后恰好 20000 以及略超（整除截断仍为 20000）。 */
-    @Test
-    fun preserveRecentTokens_atMaximum_boundary() {
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(80_000))
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(80_001))
-    }
-
-    /** 超过上界时 clamp 到上界，包括超大值与 Int.MAX_VALUE。 */
+    /** 上界边界：1M 窗口取四分之一会超上限，收敛到 60000。 */
     @Test
     fun preserveRecentTokens_aboveMaximum_clampedToMaximum() {
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(128_000))
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(Int.MAX_VALUE))
+        assertEquals(60_000, ModelContextPolicy.preserveRecentTokens(240_000))
+        assertEquals(60_000, ModelContextPolicy.preserveRecentTokens(1_000_000))
+        assertEquals(60_000, ModelContextPolicy.preserveRecentTokens(Int.MAX_VALUE))
     }
 
     /** 负数（理论上不会出现）同样被 clamp 到下界。 */
@@ -53,31 +47,34 @@ class ModelContextPolicyTest {
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(Int.MIN_VALUE))
     }
 
-    // ---------- estimateTokens：(chars + 3) / 4 向上取整 ----------
+    // ---------- tierFor：按窗口大小决定允许哪几级压缩 ----------
 
     @Test
-    fun estimateTokens_zero_isZero() {
-        assertEquals(0, ModelContextPolicy.estimateTokens(0))
+    fun tierFor_smallWindow_disabled() {
+        val policy = ModelContextPolicy.tierFor(16_000)
+        assertEquals(ModelContextPolicy.Tier.DISABLED, policy.tier)
+        assertEquals(0, policy.hardThreshold)
     }
 
-    /** 恰为 4 的倍数：无需进位。 */
     @Test
-    fun estimateTokens_exactMultiple() {
-        assertEquals(1, ModelContextPolicy.estimateTokens(4))
-        assertEquals(25, ModelContextPolicy.estimateTokens(100))
+    fun tierFor_below64k_softOnly() {
+        val policy = ModelContextPolicy.tierFor(32_000)
+        assertEquals(ModelContextPolicy.Tier.SOFT_ONLY, policy.tier)
+        assertEquals(0, policy.hardThreshold)
     }
 
-    /** 有余数时向上取整。 */
     @Test
-    fun estimateTokens_roundsUp() {
-        assertEquals(1, ModelContextPolicy.estimateTokens(1))
-        assertEquals(2, ModelContextPolicy.estimateTokens(5))
-        assertEquals(26, ModelContextPolicy.estimateTokens(101))
+    fun tierFor_standard_leaves10kHeadroom() {
+        val policy = ModelContextPolicy.tierFor(64_000)
+        assertEquals(ModelContextPolicy.Tier.STANDARD, policy.tier)
+        assertEquals(54_000, policy.hardThreshold)
     }
 
-    /** 超大值不溢出（不能用 Int.MAX_VALUE：+3 会整数溢出成负数）。 */
     @Test
-    fun estimateTokens_largeValue() {
-        assertEquals(250_000_000, ModelContextPolicy.estimateTokens(1_000_000_000))
+    fun tierFor_generous_leaves20kHeadroom() {
+        val policy = ModelContextPolicy.tierFor(128_000)
+        assertEquals(ModelContextPolicy.Tier.GENEROUS, policy.tier)
+        assertEquals(108_000, policy.hardThreshold)
+        assertEquals(108_000, ModelContextPolicy.tierFor(1_000_000).let { 1_000_000 - 20_000 })
     }
 }

@@ -13,126 +13,148 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.presentation.MessageRole
-import com.aicode.feature.settings.data.remote.ModelMetadataService
-import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
-import com.aicode.feature.settings.domain.model.ModelContextPolicy
-import com.aicode.feature.settings.domain.model.ProviderType
 import android.os.SystemClock
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 上下文压缩结果。
+ * 上下文变换器：只负责「怎么改消息」，不负责「什么时候改」。
  *
- * [messages] 为压缩后（未触发压缩时原样）的消息列表；[compacted] 表示本轮是否真的发生了压缩。
- * 上层判断「有无变化」必须用 [compacted]，不能靠列表长度或对象身份推断（长度在 head 恰为 2 条时
- * 会与压缩后相等，对象身份则因每次返回新列表恒为 true）。
+ * 阈值、档位、软硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
+ * 本类只提供三个纯变换，便于单独验证：
+ * - [softTrim]：不调模型的投影式精简（只改喂模型的 modelResult）；
+ * - [compact]：调摘要模型折叠早期对话，并把结果落库；
+ * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求。
+ *
+ * 三个变换都不读设置、不解析模型目录：预算由调用方算好传进来。
  */
-data class CompactionResult(
-    val messages: List<AgentMessage>,
-    val compacted: Boolean
-)
-
 @Singleton
 class ContextCompactor @Inject constructor(
     private val agentMessageDao: AgentMessageDao,
-    private val modelMetadataService: ModelMetadataService,
     private val systemPromptProvider: SystemPromptProvider,
-    private val llmCallRecordDao: LlmCallRecordDao,
-    private val generalSettingsRepository: GeneralSettingsRepository
+    private val llmCallRecordDao: LlmCallRecordDao
 ) {
 
     private companion object {
         const val TAG = "ContextCompactor"
 
-        const val TOOL_OUTPUT_MAX_CHARS = 2_000
+        /** 软精简时单条工具输出的保留上限（比硬压缩宽松，尽量少丢信息）。 */
+        const val SOFT_TRIM_TOOL_CHARS = 3_000
+
+        /** 软精简后追加在尾部的标记，用于幂等判断。 */
+        const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
+
+        /** 兜底截断的单条消息下限：再短就没法干活了，宁可让它超窗。 */
+        const val MIN_MESSAGE_TOKENS = 64
+        const val MIN_TRUNCATE_CHARS = 200
+
         const val COMPACT_PROMPT_FILE = "agent/compact-summary.md"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
     }
 
     /**
-     * 如果消息体总长度超过阈值，则将早期的消息（Head）提取出来，
-     * 通过后台 LLM 调用进行结构化摘要，然后替换回原来的位置。
+     * 软精简：把历史里超长的工具输出裁短，直到估算落回 [targetTokens] 以内。
      *
-     * 压缩结果持久化到数据库：
-     * - 被压缩的 head 部分消息标记 isCompacted=true（不删除，保留数据完整性）
-     * - 摘要消息插入数据库，作为压缩后的上下文起点
-     * - 重启后 [MessagePersistenceUseCase.buildHistory] 会跳过 isCompacted 的消息，
-     *   只回放摘要 + tail 部分
+     * 三个要点：
+     * 1. 只改喂模型的 `modelResult`，不动 `result`（UI 与持久化仍用完整内容）；
+     * 2. 按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
+     * 3. 幂等：已带标记的不再处理，重复调用不会把内容越裁越短。
      *
-     * @return [CompactionResult]：messages 为压缩后的新列表（未触发时是原列表的副本），
-     *   compacted 表示本轮是否真的压缩了
+     * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
      */
-    suspend fun compactIfNeeded(
+    fun softTrim(messages: List<AgentMessage>, targetTokens: Int): List<AgentMessage> {
+        if (messages.isEmpty()) return messages
+        var estimate = TokenEstimator.estimateMessages(messages)
+        if (estimate <= targetTokens) return messages
+
+        val candidates = messages.indices
+            .filter { messages[it] is AgentMessage.ToolResultMessage }
+            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+
+        var changed = false
+        val result = messages.toMutableList()
+        for (index in candidates) {
+            if (estimate <= targetTokens) break
+            val message = result[index] as AgentMessage.ToolResultMessage
+            val current = message.modelResult ?: message.result
+            if (current.length <= SOFT_TRIM_TOOL_CHARS || current.endsWith(SOFT_TRIM_MARKER)) continue
+            val trimmed = message.copy(modelResult = headTailTrim(current, SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
+            estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
+            result[index] = trimmed
+            changed = true
+        }
+        return if (changed) result else messages
+    }
+
+    /**
+     * 发送前兜底：软精简/硬压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
+     *
+     * 压缩只能把老消息收进摘要，动不了「单条消息本身就超窗」——tail 至少要保留一条，
+     * 而那条可能是一次巨大的工具输出或超长粘贴。不兜底就只能让请求硬撞窗口上限。
+     */
+    fun enforceWindowLimit(messages: List<AgentMessage>, budgetTokens: Int): List<AgentMessage> {
+        if (budgetTokens <= 0 || messages.isEmpty()) return messages
+        var estimate = TokenEstimator.estimateMessages(messages)
+        if (estimate <= budgetTokens) return messages
+
+        val result = messages.toMutableList()
+        var changed = false
+        // 从最大的开始削，只削到刚好落进预算为止，避免把小消息也一起截短。
+        val order = messages.indices.sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+        for (index in order) {
+            if (estimate <= budgetTokens) break
+            val before = TokenEstimator.estimateMessage(result[index])
+            if (before <= MIN_MESSAGE_TOKENS) continue
+            val target = maxOf(MIN_MESSAGE_TOKENS, before - (estimate - budgetTokens))
+            val truncated = truncateMessage(result[index], target)
+            if (truncated === result[index]) continue
+            result[index] = truncated
+            estimate -= (before - TokenEstimator.estimateMessage(truncated))
+            changed = true
+        }
+
+        if (!changed) return messages
+        FileLogger.w(TAG, "压缩后仍超窗口预算（$estimate / $budgetTokens tokens），已截断超长消息兜底")
+        return result
+    }
+
+    /**
+     * 硬压缩：把早期对话（head）折叠成结构化接手摘要，替换回原位。
+     *
+     * 持久化：head 标记 isCompacted（不删除），摘要以 marker + assistant 两条插到 tail 之前，
+     * 重启后回放顺序仍是「摘要 → tail」。
+     *
+     * @param preserveRecentTokens 保留最近原文的预算（由调用方按窗口档位算好）。
+     * @param summaryWindowTokens 摘要模型自己的窗口，用于裁剪送进摘要请求的 head。
+     * @return 压缩后的消息列表；无内容可压或调用失败返回 null（调用方保留原消息）。
+     */
+    suspend fun compact(
         messages: List<AgentMessage>,
-        aiProvider: AIProvider,
-        sessionId: String? = null,
-        force: Boolean = false,
-        lastInputTokens: Int = 0,
-        /**
-         * 触发判断用的窗口来源模型：正常为主聊天模型（决定「上下文快撑满谁」），
-         * 与 [aiProvider]（执行摘要生成的压缩专用模型）分离，避免小窗口压缩模型导致过早压缩。
-         * 为 null 时回退 [aiProvider]。
-         */
-        windowProvider: AIProvider? = null,
+        summaryProvider: AIProvider,
+        sessionId: String?,
+        preserveRecentTokens: Int,
+        summaryWindowTokens: Int,
         onEvent: suspend (AgentEvent) -> Unit = {}
-    ): CompactionResult {
-        val estimatedTokens = estimateTokens(messages)
-        val windowModel = windowProvider ?: aiProvider
-        val windowMetadata = modelMetadataService.resolve(windowModel.providerId, inferProviderType(windowModel), windowModel.model)
-        val summaryMetadata = modelMetadataService.resolve(aiProvider.providerId, inferProviderType(aiProvider), aiProvider.model)
-        val contextLimit = windowMetadata.contextTokens.takeIf { it > 0 } ?: ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
-        // 触发阈值百分比由「偏好设置 → 模型」配置（默认 90，见 GeneralSettingsRepository）。
-        val triggerThreshold = (contextLimit * generalSettingsRepository.compactionThresholdPercent() / 100.0).toInt()
-        // 真实 usage 优先（含 system prompt + tools，与上下文窗口同口径）；取不到（0）回退本地估算
-        val currentTokens = lastInputTokens.takeIf { it > 0 } ?: estimatedTokens
-        val reachedThreshold = currentTokens >= triggerThreshold
-        val reachedHardLimit = currentTokens >= contextLimit
-        if (messages.size <= 2 || (!force && !reachedThreshold && !reachedHardLimit)) {
-            return CompactionResult(messages.toList(), compacted = false)
-        }
-
-        val tokensSource = if (lastInputTokens > 0) "真实 usage" else "本地估算"
-        // 窗口来源一并打出来：命中目录（含命中的 provider 与自定义覆盖）还是走了 128k 兜底，
-        // 是排查「压缩时机与预期不符」的第一手依据。
-        val windowSource = if (windowMetadata.contextTokens > 0) "目录 ${windowMetadata.providerId}" else "128k 兜底"
-        FileLogger.i(
-            TAG,
-            "会话 ${sessionId ?: "-"} 上下文约 $currentTokens tokens（$tokensSource），窗口 $contextLimit（$windowSource），" +
-                "${if (force) "手动强制压缩" else "达到压缩触发条件（阈值 $triggerThreshold 或硬上限），触发自动压缩"}。"
-        )
-        onEvent(AgentEvent.CompactionStarted(currentTokens))
-
-        // 拆分 Head（需要压缩的老数据）和 Tail（保留的新数据）
-        var splitIndex = selectTailStartIndex(messages, triggerThreshold)
-        if (force && splitIndex <= 0 && messages.size > 1) {
-            splitIndex = messages.size - 1
-        }
-        if (splitIndex <= 0) {
-            onEvent(AgentEvent.CompactionFinished)
-            return CompactionResult(messages.toList(), compacted = false)
-        }
-
-        // 确保 tail 的第一条消息不是孤立的 ToolResultMessage：
-        // 如果 tail 以 ToolResultMessage 开头，需要向前回溯到其配对的 AssistantMessage(with toolCalls)，
-        // 否则压缩后摘要 assistant 消息不含 toolCalls，导致 tool 消息变成孤立的，API 报 400。
+    ): List<AgentMessage>? {
+        var splitIndex = selectTailStartIndex(messages, preserveRecentTokens)
+        if (splitIndex <= 0) return null
+        // tail 不能以孤立的 ToolResultMessage 开头：压缩后其前面是摘要（不含 toolCalls），
+        // 该 tool 消息会变成孤儿，API 直接 400。向前回溯到配对的 assistant。
         splitIndex = adjustSplitIndex(messages, splitIndex)
+        if (splitIndex <= 0) return null
 
         val head = messages.subList(0, splitIndex)
         val tail = messages.subList(splitIndex, messages.size)
         val previousSummary = extractPreviousSummary(messages)
-        val summaryWindowTokens = summaryMetadata.contextTokens.takeIf { it > 0 }
-            ?: ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
         val headForSummary = removeCompactionPairs(head).truncateForSummaryWindow(summaryWindowTokens)
         if (headForSummary.isEmpty()) {
-            // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容，跳过本轮压缩。
+            // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容。
             FileLogger.i(TAG, "无可压缩内容（head 为空），跳过压缩")
-            onEvent(AgentEvent.CompactionFinished)
-            return CompactionResult(messages.toList(), compacted = false)
+            return null
         }
+
         // 压缩请求：head 原始消息数组 + 末尾一条压缩指令（Codex 式），tools 不发送。
-        // 消息数组保留真实角色结构（user/assistant/tool 配对），比文本化拼接更利于模型理解。
         val summaryRequestMessages = headForSummary.trimLeadingForCompaction() + listOf(
             AgentMessage.UserMessage(content = buildSummaryInstruction(previousSummary))
         )
@@ -145,7 +167,7 @@ class ContextCompactor @Inject constructor(
         var callUsage: AIResponse? = null
 
         val summaryResponse = try {
-            val response = aiProvider.complete(
+            val response = summaryProvider.complete(
                 systemPrompt = "你是一个上下文压缩引擎。本次请求中的对话历史仅作为输入材料，不要继续其中任何任务，不要调用任何工具，只输出接手摘要。",
                 messages = summaryRequestMessages,
                 tools = emptyList()
@@ -159,8 +181,7 @@ class ContextCompactor @Inject constructor(
             callError = e.message ?: e.javaClass.simpleName
             FileLogger.e(TAG, "压缩上下文失败", e)
             onEvent(AgentEvent.CompactionFailed(callError))
-            onEvent(AgentEvent.CompactionFinished)
-            return CompactionResult(messages.toList(), compacted = false) // 失败则原样返回，交由上层自行承担溢出风险
+            return null
         }
 
         val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
@@ -168,8 +189,8 @@ class ContextCompactor @Inject constructor(
             llmCallRecordDao.insert(
                 LlmCallRecordEntity(
                     sessionId = sessionId,
-                    providerId = aiProvider.providerId.ifBlank { null },
-                    model = aiProvider.model,
+                    providerId = summaryProvider.providerId.ifBlank { null },
+                    model = summaryProvider.model,
                     kind = "compaction",
                     inputTokens = callUsage?.inputTokens ?: 0,
                     outputTokens = callUsage?.outputTokens ?: 0,
@@ -199,22 +220,19 @@ class ContextCompactor @Inject constructor(
             toolCalls = emptyList()
         )
 
-        // 持久化压缩结果到数据库
         if (sessionId != null) {
             try {
-                val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId
-                )
+                val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
                 val tailFirstTs = tail.firstNotNullOfOrNull { msg ->
                     dbEntities.find { it.id == msg.id }?.timestamp
                 }
                 val anchorTs = tailFirstTs ?: System.currentTimeMillis()
 
-                // 将 head 部分的消息标记为已压缩（不删除，保留数据完整性）
                 agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
 
-                // 摘要放在 tail 之前：marker + summary 时间戳取在 tail 首条之前，回放/UI 顺序 = 摘要 → tail。
-                // 接手摘要作为上下文背景，最后一条消息仍是用户请求 / tool 结果，模型才会继续干活；
-                // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下，不再执行任务。
+                // 摘要放在 tail 之前：回放/UI 顺序 = 摘要 → tail。
+                // 接手摘要作为背景，最后一条仍是用户请求 / tool 结果，模型才会继续干活；
+                // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下。
                 val markerTs = (anchorTs - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
                 agentMessageDao.insert(
@@ -242,16 +260,46 @@ class ContextCompactor @Inject constructor(
                 FileLogger.e(TAG, "持久化压缩结果失败", e)
             }
         }
-        onEvent(AgentEvent.CompactionFinished)
 
-        val newMessages = mutableListOf<AgentMessage>()
-        // 摘要在前、tail（保留的最近消息）在后：让最后一条消息保持为用户请求 / tool 结果，
-        // 模型据此继续任务。摘要放末尾会让模型把它当成自己的上一轮、续写一大段后停下。
-        newMessages.add(markerMessage)
-        newMessages.add(compactedMessage)
-        newMessages.addAll(tail)
+        return listOf(markerMessage, compactedMessage) + tail
+    }
 
-        return CompactionResult(newMessages, compacted = true)
+    /** 把单条消息的正文压到 [budgetTokens] 以内；工具结果改写 modelResult，其余改写 content。 */
+    private fun truncateMessage(message: AgentMessage, budgetTokens: Int): AgentMessage {
+        val currentTokens = TokenEstimator.estimateMessage(message)
+        if (currentTokens <= budgetTokens) return message
+        // 按该消息自己的 token/字符密度等比换算，不用固定系数：中文 1 字 ≈ 1 token、
+        // 拉丁 4 字符 ≈ 1 token，固定系数会把中文消息算得截不动。
+        val ratio = budgetTokens.toDouble() / currentTokens
+
+        fun limitOf(text: String): Int =
+            (text.length * ratio).toInt().coerceAtLeast(MIN_TRUNCATE_CHARS)
+
+        return when (message) {
+            is AgentMessage.ToolResultMessage -> {
+                val current = message.modelResult ?: message.result
+                if (current.length <= limitOf(current)) message
+                else message.copy(modelResult = headTailTrim(current, limitOf(current)))
+            }
+
+            is AgentMessage.UserMessage ->
+                if (message.content.length <= limitOf(message.content)) message
+                else message.copy(content = headTailTrim(message.content, limitOf(message.content)))
+
+            is AgentMessage.AssistantMessage ->
+                if (message.content.length <= limitOf(message.content)) message
+                else message.copy(content = headTailTrim(message.content, limitOf(message.content)))
+        }
+    }
+
+    /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
+    private fun headTailTrim(text: String, maxChars: Int): String {
+        if (text.length <= maxChars) return text
+        val head = maxChars * 2 / 3
+        val tail = maxChars - head
+        return text.take(head) +
+            "\n...[内容过长，已省略中间 ${text.length - maxChars} 字符]...\n" +
+            text.takeLast(tail)
     }
 
     /**
@@ -260,71 +308,37 @@ class ContextCompactor @Inject constructor(
      * OpenAI API 要求 role: "tool" 消息必须紧接在包含对应 tool_calls 的 assistant 消息之后。
      * 如果 tail 以 ToolResultMessage 开头，压缩后其前面的 assistant 消息（摘要）不含 toolCalls，
      * 该 tool 消息就变成了"孤立"的，API 会报 400 错误。
-     *
-     * 解决方案：向前回溯，把配对的 AssistantMessage(with toolCalls) 纳入 tail，
-     * 确保所有 tool 消息都有配对的 toolCalls。
      */
     private fun adjustSplitIndex(messages: List<AgentMessage>, initialSplitIndex: Int): Int {
         var splitIndex = initialSplitIndex
 
-        // 如果 tail 的第一条消息是 ToolResultMessage，
-        // 需要向前找到对应的 AssistantMessage(with toolCalls)
         while (splitIndex > 0 && messages[splitIndex] is AgentMessage.ToolResultMessage) {
             splitIndex--
         }
 
-        // 现在 splitIndex 可能指向一个 AssistantMessage(with toolCalls) 或其他类型消息
-        // 如果是含 toolCalls 的 AssistantMessage，它必须和其后的 ToolResultMessage 一起在 tail 中
         if (splitIndex >= 0 && messages[splitIndex] is AgentMessage.AssistantMessage) {
             val assistantMsg = messages[splitIndex] as AgentMessage.AssistantMessage
             if (assistantMsg.toolCalls.isNotEmpty()) {
                 // 这个 assistant 和紧随其后的 tool results 必须一起保留在 tail 中
-                // splitIndex 已经指向它，无需再调整
                 return splitIndex
             }
         }
 
-        // 如果 splitIndex 指向的是一个普通消息（非 tool 相关），直接使用
         return splitIndex
     }
 
-    private fun selectTailStartIndex(messages: List<AgentMessage>, usableTokens: Int): Int {
-        val budget = ModelContextPolicy.preserveRecentTokens(usableTokens)
+    private fun selectTailStartIndex(messages: List<AgentMessage>, budgetTokens: Int): Int {
         var total = 0
         var splitIndex = messages.size
 
         for (index in messages.indices.reversed()) {
-            val next = estimateTokens(messages[index])
-            if (total + next > budget && splitIndex < messages.size) break
+            val next = TokenEstimator.estimateMessage(messages[index])
+            if (total + next > budgetTokens && splitIndex < messages.size) break
             total += next
             splitIndex = index
         }
 
         return splitIndex
-    }
-
-    private fun estimateTokens(messages: List<AgentMessage>): Int =
-        messages.sumOf { estimateTokens(it) }
-
-    private fun estimateTokens(message: AgentMessage): Int =
-        ModelContextPolicy.estimateTokens(messageChars(message))
-
-    private fun messageChars(message: AgentMessage): Int = when (message) {
-        is AgentMessage.UserMessage -> message.content.length
-        is AgentMessage.AssistantMessage -> {
-            message.content.length + message.reasoning.length +
-                message.toolCalls.sumOf { it.name.length + it.arguments.toString().length }
-        }
-        is AgentMessage.ToolResultMessage -> message.toolName.length + message.result.length
-    }
-
-    private fun inferProviderType(aiProvider: AIProvider): ProviderType {
-        val className = aiProvider::class.simpleName.orEmpty()
-        return when {
-            "Anthropic" in className -> ProviderType.ANTHROPIC
-            "Gemini" in className -> ProviderType.GEMINI
-            else -> ProviderType.OPENAI
-        }
     }
 
     private fun buildSummaryInstruction(previousSummary: String?): String {
@@ -355,8 +369,9 @@ class ContextCompactor @Inject constructor(
         return trimmed.map { msg ->
             when {
                 msg is AgentMessage.UserMessage && msg.images.isNotEmpty() -> msg.copy(images = emptyList())
-                msg is AgentMessage.ToolResultMessage && msg.result.length > TOOL_OUTPUT_MAX_CHARS ->
-                    msg.copy(result = msg.result.truncateForSummary())
+                msg is AgentMessage.ToolResultMessage && (msg.modelResult ?: msg.result).length > SOFT_TRIM_TOOL_CHARS ->
+                    msg.copy(result = msg.result.take(SOFT_TRIM_TOOL_CHARS) + "\n[Tool output truncated for compaction]")
+
                 else -> msg
             }
         }
@@ -413,15 +428,10 @@ class ContextCompactor @Inject constructor(
     private fun String.cleanSummary(): String =
         removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart()
 
-    private fun String.truncateForSummary(): String {
-        if (length <= TOOL_OUTPUT_MAX_CHARS) return this
-        return take(TOOL_OUTPUT_MAX_CHARS) + "\n[Tool output truncated for compaction]"
-    }
-
     /**
-     * 按压缩模型窗口预算截断 head：从新到旧保留消息，超预算丢弃更旧的消息。
-     * 预算按 1 字符 ≈ 1 token 的保守口径（[ModelContextPolicy.estimateTokens] 的 4 字符/token
-     * 会低估中文 4 倍，截不干净），并预留 30% 给摘要提示词与旧摘要；被丢弃部分由已有摘要兜底。
+     * 按摘要模型窗口预算截断 head：从新到旧保留消息，超预算丢弃更旧的消息。
+     * 预算按 1 字符 ≈ 1 token 的保守口径（[TokenEstimator] 对中文是 1 字/token，
+     * 4 字符/token 的口径会截不干净），并预留 30% 给摘要提示词与旧摘要。
      */
     private fun List<AgentMessage>.truncateForSummaryWindow(contextTokens: Int): List<AgentMessage> {
         if (isEmpty()) return this
@@ -429,7 +439,7 @@ class ContextCompactor @Inject constructor(
         var totalChars = 0
         val kept = mutableListOf<AgentMessage>()
         for (msg in asReversed()) {
-            val chars = messageChars(msg)
+            val chars = TokenEstimator.estimateMessage(msg)
             if (kept.isNotEmpty() && totalChars + chars > budgetChars) break
             totalChars += chars
             kept.add(msg)
