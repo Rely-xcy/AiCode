@@ -121,4 +121,20 @@ interface AgentWorkflow {
      * @return 建议的提交说明，失败返回 null。
      */
     suspend fun generateCommitMessage(diff: String): String?
+
+    /**
+     * 用指定提示词资产文件做一次独立模型调用（不占主对话 provider、不写入会话消息），
+     * 供引擎模块做归纳类工作（如长期记忆沉淀）。
+     *
+     * @param promptFile `prompts/` 下的相对路径，如 `agent/memory-distiller.md`
+     * @param userPrompt 本次要处理的用户消息内容
+     * @param kind 调用记录类型（写进 llm_call_records，便于统计区分）
+     * @return 模型输出文本；未配置可用模型或调用失败时返回 null。
+     */
+    suspend fun oneShotComplete(
+        sessionId: String?,
+        promptFile: String,
+        userPrompt: String,
+        kind: String
+    ): String?
 }

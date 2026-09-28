@@ -828,8 +828,11 @@ fun SettingsScreen(
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
+                    val autoDistill by memoryViewModel.autoDistillEnabled.collectAsStateWithLifecycle()
                     MemorySection(
                         memories = memories,
+                        autoDistillEnabled = autoDistill,
+                        onToggleAutoDistill = memoryViewModel::setAutoDistillEnabled,
                         onDelete = memoryViewModel::delete
                     )
                 }

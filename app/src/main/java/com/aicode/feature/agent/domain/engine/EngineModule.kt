@@ -17,7 +17,15 @@ data class EngineContext(
     val mode: AgentMode = AgentMode.BUILD,
     val history: List<AgentMessage> = emptyList(),
     /** 是否为子代理会话（按自定义子代理定义运行）。 */
-    val isSubAgent: Boolean = false
+    val isSubAgent: Boolean = false,
+    /**
+     * 一次性模型调用能力，由会话运行侧注入（不占主对话 provider、不写入会话消息）。
+     * 模块拿它做归纳类工作；null 表示当前不可用（如未配置模型）。
+     *
+     * 用回调而不是让模块注入 workflow：模块 → workflow → SystemPromptProvider →
+     * AgentEngine → 模块 会形成 DI 环，所以能力只能从调用方递进来。
+     */
+    val oneShot: (suspend (promptFile: String, userPrompt: String) -> String?)? = null
 )
 
 /**
