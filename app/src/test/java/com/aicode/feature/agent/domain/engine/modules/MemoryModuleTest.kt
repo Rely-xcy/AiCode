@@ -10,7 +10,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -24,7 +24,8 @@ class MemoryModuleTest {
         val settings = mockk<MemorySettingsRepository>()
         coEvery { settings.autoDistillEnabled() } returns settingsEnabled
         every { repository.listMemories(any()) } returns emptyList()
-        every { repository.changes } returns emptyFlow()
+        // changes 的类型是 SharedFlow，不能用 emptyFlow（那是 Flow）
+        every { repository.changes } returns MutableSharedFlow()
         return MemoryModule(repository, settings) to repository
     }
 
