@@ -90,6 +90,21 @@ class PromptFragmentRepository @Inject constructor(
 
     fun isBuiltinDisabled(): Boolean = PromptFragmentResolver.isBuiltinDisabled(customDir)
 
+    /**
+     * 「已读使用说明」标记。
+     *
+     * 用标记文件而不是 DataStore：与 `.no-builtin` 同一路子，位置就在 prompts.custom 下，
+     * 用户备份/迁移配置时跟着一起走。
+     */
+    fun isHelpRead(): Boolean = File(customDir, HELP_READ_MARKER).isFile
+
+    fun markHelpRead() {
+        runCatching {
+            if (!customDir.exists()) customDir.mkdirs()
+            File(customDir, HELP_READ_MARKER).writeText("")
+        }.onFailure { FileLogger.w(TAG, "写已读标记失败", it) }
+    }
+
     /** 切换「完全禁用内置提示词」（`.no-builtin` 标记文件）。 */
     fun setBuiltinDisabled(disabled: Boolean): Boolean {
         return try {
@@ -140,5 +155,6 @@ class PromptFragmentRepository @Inject constructor(
         const val TAG = "PromptFragmentRepository"
         const val ASSET_DIR = "prompts"
         const val CUSTOM_DIR = "prompts.custom"
+        const val HELP_READ_MARKER = ".help-read"
     }
 }

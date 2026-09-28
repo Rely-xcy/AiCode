@@ -105,6 +105,7 @@ import compose.icons.feathericons.Image
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Moon
+import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.PieChart
 import compose.icons.feathericons.Plus
@@ -854,6 +855,7 @@ fun SettingsScreen(
                     LaunchedEffect(Unit) { promptsViewModel.refresh() }
                     PromptsSection(
                         state = promptsState,
+                        onMarkHelpRead = promptsViewModel::markHelpRead,
                         onOpenDefaultFragment = {
                             promptEditTarget = PromptEditTarget(isDefaultFragment = true)
                             section = SettingsSection.PromptEditor
@@ -1482,7 +1484,7 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.FileText,
+                icon = FeatherIcons.MessageSquare,
                 title = stringResource(SettingsSection.Prompts.titleRes),
                 onClick = { onOpen(SettingsSection.Prompts) }
             )

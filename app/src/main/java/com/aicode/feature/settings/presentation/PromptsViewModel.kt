@@ -25,6 +25,8 @@ data class PromptsUiState(
     val globalPrompts: List<UserPrompt> = emptyList(),
     val projectPrompts: List<UserPrompt> = emptyList(),
     val builtinDisabled: Boolean = false,
+    /** 是否已读过使用说明：未读时提示词页先展示帮助，读完才放行。 */
+    val helpRead: Boolean = false,
     /** 内置静态片段清单（含覆盖状态），供「高级设置」只读展示。 */
     val fragments: List<PromptFragmentRepository.Fragment> = emptyList(),
     /** 没有选中工作区时项目组不可用。 */
@@ -62,6 +64,7 @@ class PromptsViewModel @Inject constructor(
                     globalPrompts = userPromptStore.list(UserPromptScope.GLOBAL, projectRoot),
                     projectPrompts = userPromptStore.list(UserPromptScope.PROJECT, projectRoot),
                     builtinDisabled = fragmentRepository.isBuiltinDisabled(),
+                    helpRead = fragmentRepository.isHelpRead(),
                     fragments = fragmentRepository.listFragments(),
                     hasWorkspace = projectRoot.isNotBlank(),
                     loading = false
@@ -122,6 +125,14 @@ class PromptsViewModel @Inject constructor(
     fun setBuiltinDisabled(disabled: Boolean) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { fragmentRepository.setBuiltinDisabled(disabled) }
+            refresh()
+        }
+    }
+
+    /** 读完使用说明，放行进入提示词页。 */
+    fun markHelpRead() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { fragmentRepository.markHelpRead() }
             refresh()
         }
     }
