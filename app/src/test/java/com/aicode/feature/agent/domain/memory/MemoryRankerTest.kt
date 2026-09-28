@@ -83,6 +83,21 @@ class MemoryRankerTest {
     }
 
     @Test
+    fun `近似重复的记忆只占一个坑位`() {
+        val memories = listOf(
+            memory("build-env", "构建环境用容器，本地跑不了 gradle，只能靠 CI"),
+            memory("build-env-copy", "构建环境用容器，本地跑不了 gradle，只能靠 CI"),
+            memory("editor-preference", "编辑器用 Neovim")
+        )
+
+        val picked = MemoryRanker.rank(memories, "本地构建怎么弄", 3)
+
+        // 两条近似重复的只能进来一条，另一个坑位留给其它记忆
+        assertEquals(2, picked.size)
+        assertTrue(picked.any { it.name == "editor-preference" })
+    }
+
+    @Test
     fun `分词：ASCII 词与中文二元组`() {
         val tokens = MemoryRanker.tokenize("用 Neovim 改键位，keymap")
         assertTrue("neovim" in tokens)

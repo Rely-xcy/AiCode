@@ -21,18 +21,49 @@ object MemoryRanker {
     /** 正文只扫前这么多字符：记忆正文可能很长，打分不必读完。 */
     private const val CONTENT_SCAN_CHARS = 2_000
 
+    /** 去重阈值：token 集合的 Jaccard 相似度超过它就算「说的是同一件事」。 */
+    private const val DEDUPE_THRESHOLD = 0.7
+
     fun rank(memories: List<Memory>, query: String, limit: Int): List<Memory> {
         if (limit <= 0) return emptyList()
         if (memories.size <= limit) return memories
         val tokens = tokenize(query)
-        if (tokens.isEmpty()) return byRecency(memories).take(limit)
-        return memories
-            .sortedWith(
+        val ordered = if (tokens.isEmpty()) {
+            byRecency(memories)
+        } else {
+            memories.sortedWith(
                 compareByDescending<Memory> { score(it, tokens) }
                     .thenByDescending { updatedAt(it) }
                     .thenBy { it.name }
             )
-            .take(limit)
+        }
+        return dedupe(ordered).take(limit)
+    }
+
+    /**
+     * 低成本去重：只有 3 个坑位，两条说的是同一件事就是纯浪费。
+     *
+     * 用 token 集合的 Jaccard 相似度就够了——不用 MMR：实测本地 7B 跑一次 MMR 要 40 秒，
+     * 代价远超收益（MemOS 落地笔记）。
+     */
+    private fun dedupe(ordered: List<Memory>): List<Memory> {
+        val picked = mutableListOf<Memory>()
+        val signatures = mutableListOf<Set<String>>()
+        for (memory in ordered) {
+            val signature = tokenize(
+                "${memory.name} ${memory.description} ${memory.content.take(CONTENT_SCAN_CHARS)}"
+            )
+            if (signature.isNotEmpty() && signatures.any { similar(it, signature) }) continue
+            picked.add(memory)
+            if (signature.isNotEmpty()) signatures.add(signature)
+        }
+        return picked
+    }
+
+    private fun similar(a: Set<String>, b: Set<String>): Boolean {
+        val intersection = a.count { it in b }
+        val union = a.size + b.size - intersection
+        return union > 0 && intersection.toDouble() / union >= DEDUPE_THRESHOLD
     }
 
     private fun score(memory: Memory, tokens: Set<String>): Int {

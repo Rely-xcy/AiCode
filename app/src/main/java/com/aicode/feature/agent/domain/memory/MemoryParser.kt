@@ -25,6 +25,9 @@ object MemoryParser {
             "profile" -> MemoryKind.PROFILE
             else -> MemoryKind.NOTE
         }
+        // 旧文件没有这两个字段：source 空串、createdAt 0（回退用文件修改时间）
+        val source = frontmatter["source"]?.toString()?.trim().orEmpty()
+        val createdAt = frontmatter["created_at"]?.toString()?.trim()?.toLongOrNull() ?: 0L
 
         return Memory(
             name = name,
@@ -32,15 +35,32 @@ object MemoryParser {
             scope = scope,
             file = file,
             content = body.trim(),
-            kind = kind
+            kind = kind,
+            source = source,
+            createdAt = createdAt
         )
     }
 
-    fun format(name: String, description: String, content: String, kind: MemoryKind = MemoryKind.NOTE): String {
+    /**
+     * 组装记忆文件。
+     *
+     * [kind]/[source]/[createdAt] 为空或 0 时**不写该行**——[MemoryKind.NOTE] 的旧记忆文件
+     * 必须保持字节不变，不能因为新增元数据把所有历史文件都重写一遍。
+     */
+    fun format(
+        name: String,
+        description: String,
+        content: String,
+        kind: MemoryKind = MemoryKind.NOTE,
+        source: String = "",
+        createdAt: Long = 0L
+    ): String {
         val safeName = yamlScalar(name)
         val safeDesc = yamlScalar(description)
         val kindLine = if (kind == MemoryKind.PROFILE) "kind: profile\n" else ""
-        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine---\n$content"
+        val sourceLine = if (source.isNotBlank()) "source: ${yamlScalar(source)}\n" else ""
+        val createdLine = if (createdAt > 0) "created_at: $createdAt\n" else ""
+        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine$sourceLine$createdLine---\n$content"
     }
 
     /** 把任意字符串转成安全的 YAML 标量，避免冒号/引号/换行破坏 frontmatter。 */

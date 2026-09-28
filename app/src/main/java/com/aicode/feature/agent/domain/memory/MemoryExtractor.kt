@@ -32,6 +32,8 @@ class MemoryExtractor @Inject constructor(
     suspend fun extract(
         projectRoot: String,
         history: List<AgentMessage>,
+        /** 写入来源标记（auto-distill / pre-fold），落盘到 frontmatter 便于日后区分与治理。 */
+        source: String,
         complete: suspend (userPrompt: String) -> String?
     ): Int {
         if (history.isEmpty()) return 0
@@ -51,7 +53,8 @@ class MemoryExtractor @Inject constructor(
                 content = entry.content,
                 scope = MemoryScope.GLOBAL,
                 projectRoot = projectRoot,
-                kind = MemoryKind.PROFILE
+                kind = MemoryKind.PROFILE,
+                source = source
             )
         }
         FileLogger.i(TAG, "抽取长期记忆 ${entries.size} 条: ${entries.joinToString { it.name }}")
@@ -103,6 +106,12 @@ class MemoryExtractor @Inject constructor(
 
     companion object {
         const val TAG = "MemoryExtractor"
+
+        /** 写入来源：按轮归约。 */
+        const val SOURCE_AUTO_DISTILL = "auto-distill"
+
+        /** 写入来源：压缩前从被折叠历史里抽取。 */
+        const val SOURCE_PRE_FOLD = "pre-fold"
 
         /** 抽取提示词：与其它一次性调用一样放 assets/prompts 下。 */
         const val PROMPT_FILE = "agent/memory-distiller.md"

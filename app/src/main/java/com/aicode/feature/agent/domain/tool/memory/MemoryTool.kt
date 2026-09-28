@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.memory.MemoryEdit
 import com.aicode.feature.agent.domain.memory.MemoryEditResult
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
+import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
@@ -157,7 +158,14 @@ class MemoryTool @Inject constructor(
             return ToolResult.Error("当前未选择工作区，无法保存项目级记忆。请改用 scope=global", "NO_WORKSPACE")
         }
 
-        val success = memoryRepository.saveMemory(name, description, content, scope, projectRoot)
+        val success = memoryRepository.saveMemory(
+            name,
+            description,
+            content,
+            scope,
+            projectRoot,
+            source = MemorySource.SOURCE_MODEL_TOOL
+        )
         return if (success) {
             ToolResult.Success(JsonPrimitive("已成功保存记忆「$name」到 ${scope.name.lowercase()} 作用域。它将在下一次会话启动时自动注入摘要。当前会话若需立即使用，请通过 read 操作读取。"))
         } else {

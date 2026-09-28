@@ -32,12 +32,19 @@ interface MemorySource {
     /** 读取指定 memory 的完整指令正文；不存在或解析失败时返回 null。 */
     fun loadContent(name: String): String?
 
-    /** 保存一条记忆（创建或覆盖） */
+    /**
+     * 保存一条记忆（创建或覆盖）。
+     *
+     * 覆盖时旧版本会先被归档到 `.superseded/`——记忆是「越改越准」的题目，
+     * 但改错了要能拿回原来的结论，所以不做静默覆盖。
+     */
     fun saveMemory(
         name: String,
         description: String,
         content: String,
-        kind: MemoryKind = MemoryKind.NOTE
+        kind: MemoryKind = MemoryKind.NOTE,
+        source: String = "",
+        createdAt: Long = 0L
     ): Boolean
 
     /**
@@ -79,7 +86,7 @@ interface MemorySource {
         }
 
         return try {
-            file.writeText(MemoryParser.format(memory.name, memory.description, content, memory.kind))
+            file.writeText(MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
             MemoryEditResult.Success
         } catch (e: Exception) {
             FileLogger.e("MemorySource", "Failed to edit memory: $name", e)
@@ -114,6 +121,35 @@ interface MemorySource {
         fun resolveMemoryFile(root: File, name: String): File {
             val safe = sanitizeName(name)
             return File(root, "$safe.md")
+        }
+
+        /** 旧版本归档目录：以点开头，不会被记忆扫描当成条目（目录名也不以 .md 结尾）。 */
+        const val SUPERSEDED_DIR = ".superseded"
+
+        /** 写入来源：模型主动调 memory 工具记的。 */
+        const val SOURCE_MODEL_TOOL = "model-tool"
+
+        private const val MAX_SUPERSEDED_FILES = 50
+
+        /** 覆盖写入前把旧版本另存一份；没有旧文件或写入失败返回 null（不阻断保存）。 */
+        fun archiveBeforeOverwrite(root: File, file: File): File? {
+            if (!file.isFile) return null
+            return try {
+                val dir = File(root, SUPERSEDED_DIR).apply { mkdirs() }
+                val target = File(dir, "${file.nameWithoutExtension}-${System.currentTimeMillis() / 1000}.md")
+                file.copyTo(target, overwrite = true)
+                pruneSuperseded(dir)
+                target
+            } catch (e: Exception) {
+                FileLogger.w("MemorySource", "归档旧版本失败: ${file.name}", e)
+                null
+            }
+        }
+
+        private fun pruneSuperseded(dir: File) {
+            val files = dir.listFiles { entry -> entry.isFile }?.sortedBy { it.lastModified() }.orEmpty()
+            if (files.size <= MAX_SUPERSEDED_FILES) return
+            files.take(files.size - MAX_SUPERSEDED_FILES).forEach { it.delete() }
         }
     }
 }

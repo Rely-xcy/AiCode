@@ -113,6 +113,7 @@ class CompactionModule @Inject constructor(
                         val written = memoryExtractor.extract(
                             projectRoot = ctx.projectRoot,
                             history = folded,
+                            source = MemoryExtractor.SOURCE_PRE_FOLD,
                             complete = { userPrompt ->
                                 summaryProvider.complete(
                                     systemPrompt = systemPromptProvider.get().resolvePrompt(MemoryExtractor.PROMPT_FILE),

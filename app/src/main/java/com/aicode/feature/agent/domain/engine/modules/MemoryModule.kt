@@ -166,6 +166,7 @@ class MemoryModule @Inject constructor(
             val written = memoryExtractor.extract(
                 projectRoot = ctx.projectRoot,
                 history = ctx.history,
+                source = MemoryExtractor.SOURCE_AUTO_DISTILL,
                 complete = { userPrompt -> complete(PROMPT_FILE, userPrompt) }
             )
             if (written > 0) {

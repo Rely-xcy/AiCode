@@ -10,6 +10,8 @@ import java.io.File
  * @param scope 记忆的作用域（GLOBAL 或 PROJECT）
  * @param file 记忆对应的本地文件
  * @param content 记忆正文（剥离 Frontmatter 后的详细内容）
+ * @param source 写入来源（auto-distill / pre-fold / manual）；空串表示未标注（旧文件）
+ * @param createdAt 创建时间（epoch millis）；0 表示未标注（旧文件），此时回退用文件修改时间
  */
 data class Memory(
     val name: String,
@@ -17,7 +19,9 @@ data class Memory(
     val scope: MemoryScope,
     val file: File? = null,
     val content: String,
-    val kind: MemoryKind = MemoryKind.NOTE
+    val kind: MemoryKind = MemoryKind.NOTE,
+    val source: String = "",
+    val createdAt: Long = 0L
 )
 
 enum class MemoryScope {
