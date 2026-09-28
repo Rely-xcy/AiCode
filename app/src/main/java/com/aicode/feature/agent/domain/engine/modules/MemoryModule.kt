@@ -169,7 +169,7 @@ class MemoryModule @Inject constructor(
         /** 沉淀提示词：与其它一次性调用一样放 assets/prompts 下。 */
         const val PROMPT_FILE = "agent/memory-distiller.md"
 
-        const val TRANSCRIPT_MESSAGES = 12
+        const val TRANSCRIPT_MESSAGES = 20
         const val MAX_MESSAGE_CHARS = 1200
         const val MAX_TOOL_CHARS = 400
         const val MAX_ENTRIES_PER_TURN = 5
