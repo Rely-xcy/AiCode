@@ -255,7 +255,12 @@ class MemoryModule @Inject constructor(
         const val MAX_TOOL_CHARS = 400
         const val MAX_ENTRIES_PER_TURN = 5
 
-        /** 注入系统提示词的记忆条数上限，超出的靠 memory(action=list) 取。 */
-        const val MAX_INJECTED_MEMORIES = 40
+        /** 注入系统提示词的记忆条数上限。
+         *
+         * 实测结论（MemOS 落地笔记，原文“宁少勿多”）：记忆条数多了反而干扰决策，
+         * 3 条是甜点值，10 条已开始干扰。这里取 6 条（略宽于甜点值），
+         * 超出部分不注入，靠 memory(action=list) 按需取。
+         */
+        const val MAX_INJECTED_MEMORIES = 6
     }
 }

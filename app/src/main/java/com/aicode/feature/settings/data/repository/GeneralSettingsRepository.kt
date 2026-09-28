@@ -55,8 +55,13 @@ class GeneralSettingsRepository @Inject constructor(
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
-        /** 自动压缩阈值默认 90%，与原硬编码值一致。 */
-        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 90
+        /** 自动压缩阈值默认 60%。
+         *
+         * 原为 90%（上游默认）。实测/公开结论：上下文利用率超过约 40% 后模型质量
+         * 就开始下降（Smart Zone / Dumb Zone 分界），到 90% 才压缩已经太晚。
+         * 用户仍可在偏好设置里自行调整。
+         */
+        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 60
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
