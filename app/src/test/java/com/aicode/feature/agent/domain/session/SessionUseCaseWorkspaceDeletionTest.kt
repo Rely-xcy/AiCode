@@ -4,6 +4,7 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.engine.AgentEngine
+import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -18,7 +19,8 @@ import org.junit.Test
 class SessionUseCaseWorkspaceDeletionTest {
 
     /** 空模块集的引擎：本测试只验证会话/消息删除，引擎侧钩子无副作用。 */
-    private fun emptyEngine() = AgentEngine(emptySet(), CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    private fun emptyEngine(): Lazy<AgentEngine> =
+        Lazy { AgentEngine(emptySet(), CoroutineScope(SupervisorJob() + Dispatchers.IO)) }
 
     private fun session(id: String, workspacePath: String, parentId: String? = null) = ChatSessionEntity(
         id = id,

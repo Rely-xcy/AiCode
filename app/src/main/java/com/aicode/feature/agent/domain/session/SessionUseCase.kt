@@ -9,6 +9,7 @@ import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.MessageRole
+import dagger.Lazy
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,7 +18,9 @@ import javax.inject.Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val agentMessageDao: AgentMessageDao,
-    private val agentEngine: AgentEngine
+    // Lazy 断环：引擎 → 记忆模块 → MemoryRepository → ProjectAicodeRoot → WorkspaceRepository → 本类，
+    // 直接注入会形成 Dagger 依赖环；钩子只在删除时用一次，延迟取即可。
+    private val agentEngine: Lazy<AgentEngine>
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -83,7 +86,7 @@ class SessionUseCase @Inject constructor(
         chatSessionDao.delete(id)
         // 交给引擎分发：模块自持的会话级状态（如记忆注入缓存）在这里释放
         deleted.forEach { sessionId ->
-            agentEngine.onSessionDeleted(EngineContext(sessionId = sessionId))
+            agentEngine.get().onSessionDeleted(EngineContext(sessionId = sessionId))
         }
         return deleted
     }
