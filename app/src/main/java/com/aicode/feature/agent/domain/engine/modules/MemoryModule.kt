@@ -3,16 +3,13 @@ package com.aicode.feature.agent.domain.engine.modules
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
-import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
+import com.aicode.feature.agent.domain.memory.MemoryRanker
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,7 +41,20 @@ class MemoryModule @Inject constructor(
     // 注入顺序：记忆清单跟着「项目规则 / 技能」这类上下文走，用默认序即可。
     override val order = 50
 
-    private val cachedByKey = ConcurrentHashMap<Triple<String?, String, Boolean>, String>()
+    /**
+     * 注入缓存的 key：会话 + 工作区 + 开关 + 当前话题指纹。
+     *
+     * 带上话题指纹是因为召回要按当轮问题挑记忆；不带的话，一个会话里话题变了
+     * 仍然注入开头那几条，排序就白做了。同一话题的多轮仍会命中缓存。
+     */
+    private data class CacheKey(
+        val sessionId: String?,
+        val projectRoot: String,
+        val autoSave: Boolean,
+        val queryHash: Int
+    )
+
+    private val cachedByKey = ConcurrentHashMap<CacheKey, String>()
 
     /** 每个会话已积累的轮数，够 [DISTILL_EVERY_TURNS] 才归约一次。 */
     private val turnsSinceDistill = ConcurrentHashMap<String, Int>()
@@ -65,8 +75,8 @@ class MemoryModule @Inject constructor(
 
     override fun promptFragment(ctx: EngineContext): String? {
         val autoSave = memorySettings.autoDistillEnabledSync()
-        // 开关也进缓存 key：切换开关后注入内容要跟着变
-        val key = Triple(ctx.sessionId, ctx.projectRoot, autoSave)
+        // 开关与话题都进缓存 key：切换开关、换话题后注入内容都要跟着变
+        val key = CacheKey(ctx.sessionId, ctx.projectRoot, autoSave, queryOf(ctx).hashCode())
         val cached = cachedByKey[key]
         if (cached != null) return cached.ifEmpty { null }
 
@@ -90,12 +100,16 @@ class MemoryModule @Inject constructor(
         }
         if (memories.isEmpty()) return null
 
-        // 注入有上限：记忆多了不能把系统提示词撑爆（未列出的靠 memory(action=list) 取）
-        val listed = memories.take(MAX_INJECTED_MEMORIES)
+        // 注入有上限：记忆多了反而干扰决策（实测 10 条已开始干扰、3 条是甜点值）。
+        // 挑哪几条不能按名字序——名字是写入时随手起的 slug，与「这轮该用哪条」无关，
+        // 所以先按与当前话题的重合度粗排，再取前 N（未列出的靠 memory(action=list) 取）。
+        val listed = MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES)
         val globalMemories = listed.filter { it.scope == MemoryScope.GLOBAL }
         val projectMemories = listed.filter { it.scope == MemoryScope.PROJECT }
 
         val content = buildString {
+            // 立规矩：没有这句，模型倾向把召回的记忆全部塞进答案
+            append("只使用与当前问题真正相关的记忆；无关的直接忽略，不必为了显得连贯而硬提。\n\n")
             if (globalMemories.isNotEmpty()) {
                 append("全局记忆 (跨项目个人偏好，需要详情时用 memory(action=read, name=xxx, scope=global))：\n")
                 globalMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
@@ -112,6 +126,17 @@ class MemoryModule @Inject constructor(
 
         return content
     }
+
+    /**
+     * 排序用的当前话题文本：最近两条用户消息（含本轮）。
+     * 不用助手消息——里面常带工具输出，噪声大。
+     */
+    private fun queryOf(ctx: EngineContext): String =
+        ctx.history.asReversed()
+            .filterIsInstance<AgentMessage.UserMessage>()
+            .take(2)
+            .joinToString("\n") { it.content }
+            .take(QUERY_MAX_CHARS)
 
     /**
      * 每轮对话结束后沉淀长期记忆。
@@ -145,9 +170,8 @@ class MemoryModule @Inject constructor(
             )
             if (written > 0) {
                 // 本轮新增/更新了记忆 → 丢掉本会话的注入缓存，下一轮注入就带上新内容
-                // （缓存 key 是 Triple(会话, 工作区, 开关)，这里按前两项清，与开关无关）
                 cachedByKey.keys
-                    .filter { it.first == ctx.sessionId && it.second == ctx.projectRoot }
+                    .filter { it.sessionId == ctx.sessionId && it.projectRoot == ctx.projectRoot }
                     .forEach { cachedByKey.remove(it) }
             }
         } finally {
@@ -188,12 +212,14 @@ class MemoryModule @Inject constructor(
         /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，两个入口（按轮归约 / 折叠前抽取）共用。 */
         const val PROMPT_FILE = MemoryExtractor.PROMPT_FILE
 
-        /** 注入系统提示词的记忆条数上限。
+        /** 单条记忆注入系统提示词时的条数上限。
          *
-         * 实测结论（MemOS 落地笔记，原文“宁少勿多”）：记忆条数多了反而干扰决策，
-         * 3 条是甜点值，10 条已开始干扰。这里取 6 条（略宽于甜点值），
-         * 超出部分不注入，靠 memory(action=list) 按需取。
+         * 实测结论（MemOS 落地笔记“宁少勿多”）：记忆条数多了反而干扰决策，
+         * 3 条是甜点值、10 条已开始干扰。超出部分不注入，靠 memory(action=list) 按需取。
          */
-        const val MAX_INJECTED_MEMORIES = 6
+        const val MAX_INJECTED_MEMORIES = 3
+
+        /** 话题文本（用于召回排序）最多取多少字符。 */
+        const val QUERY_MAX_CHARS = 600
     }
 }
