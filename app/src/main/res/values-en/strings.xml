@@ -988,6 +988,23 @@
     <string name="prompts_position_before_all">First (before built-ins)</string>
     <string name="prompts_position_after_system">Last (end of system prompt)</string>
     <string name="prompts_position_off">Off (not injected)</string>
+    <string name="prompts_field_basic">Basic</string>
+    <string name="prompts_field_name">Name</string>
+    <string name="prompts_field_name_placeholder">e.g. Answer style</string>
+    <string name="prompts_field_scope">Scope</string>
+    <string name="prompts_scope_global">Global</string>
+    <string name="prompts_scope_global_hint">Applies to every project</string>
+    <string name="prompts_scope_project">Project</string>
+    <string name="prompts_scope_project_hint">Applies to the current workspace only</string>
+    <string name="prompts_field_position">Injection</string>
+    <string name="prompts_position_before_all_hint">Placed before all built-in prompts, read first</string>
+    <string name="prompts_position_after_system_hint">Appended to the end of the system prompt, read last</string>
+    <string name="prompts_position_off_hint">Kept but not injected</string>
+    <string name="prompts_field_content">Agents prompt</string>
+    <string name="prompts_field_content_placeholder">What the model should follow</string>
+    <string name="prompts_save_hint">Takes effect immediately (start a new session or continue the next turn).</string>
+    <string name="prompts_action_add">Add</string>
+    <string name="prompts_action_save">Save</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>
