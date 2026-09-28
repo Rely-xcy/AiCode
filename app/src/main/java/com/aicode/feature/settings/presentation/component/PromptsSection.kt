@@ -31,6 +31,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
+import com.aicode.feature.agent.domain.prompt.PromptFragmentRepository
 import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
@@ -187,6 +188,7 @@ internal fun PromptsAddSheet(
 @Composable
 internal fun PromptsAdvancedSection(
     builtinDisabled: Boolean,
+    fragments: List<PromptFragmentRepository.Fragment>,
     onToggleBuiltinDisabled: (Boolean) -> Unit
 ) {
     Column(
@@ -217,6 +219,22 @@ internal fun PromptsAdvancedSection(
                     AppSwitch(checked = builtinDisabled, onCheckedChange = onToggleBuiltinDisabled)
                 }
             )
+        }
+
+        // 内置片段清单：只读展示。用户可改的只有固定的 00（在上一页），其余放这里供查阅。
+        SettingsGroupHeader(text = stringResource(R.string.prompts_builtin_list_title))
+        SettingsGroup {
+            fragments.forEachIndexed { index, fragment ->
+                if (index > 0) SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = "%02d · %s".format(fragment.number, fragment.title),
+                    subtitle = stringResource(
+                        if (fragment.isOverridden) R.string.prompts_state_overridden
+                        else R.string.prompts_state_builtin
+                    )
+                )
+            }
         }
     }
 }

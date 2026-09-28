@@ -922,6 +922,7 @@ fun SettingsScreen(
                     val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
                     PromptsAdvancedSection(
                         builtinDisabled = promptsState.builtinDisabled,
+                        fragments = promptsState.fragments,
                         onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled
                     )
                 }

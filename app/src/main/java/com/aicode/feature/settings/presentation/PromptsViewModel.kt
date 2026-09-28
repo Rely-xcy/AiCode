@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.agent.domain.prompt.PromptFragmentRepository
 import com.aicode.feature.agent.domain.prompt.UserPrompt
+import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.agent.domain.prompt.UserPromptStore
@@ -25,6 +26,8 @@ data class PromptsUiState(
     val globalPrompts: List<UserPrompt> = emptyList(),
     val projectPrompts: List<UserPrompt> = emptyList(),
     val builtinDisabled: Boolean = false,
+    /** 内置静态片段清单（含覆盖状态），供「高级设置」只读展示。 */
+    val fragments: List<PromptFragmentRepository.Fragment> = emptyList(),
     /** 没有选中工作区时项目组不可用。 */
     val hasWorkspace: Boolean = false,
     val loading: Boolean = true
@@ -60,6 +63,7 @@ class PromptsViewModel @Inject constructor(
                     globalPrompts = userPromptStore.list(UserPromptScope.GLOBAL, projectRoot),
                     projectPrompts = userPromptStore.list(UserPromptScope.PROJECT, projectRoot),
                     builtinDisabled = fragmentRepository.isBuiltinDisabled(),
+                    fragments = fragmentRepository.listFragments(),
                     hasWorkspace = projectRoot.isNotBlank(),
                     loading = false
                 )
