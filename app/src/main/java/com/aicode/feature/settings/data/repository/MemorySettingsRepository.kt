@@ -5,9 +5,13 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,6 +32,22 @@ class MemorySettingsRepository @Inject constructor(
     val autoDistillEnabledFlow: Flow<Boolean> = context.memoryDataStore.data
         .map { it[AUTO_DISTILL_ENABLED_KEY] ?: false }
 
+    /**
+     * 同步快照：系统提示词片段是同步拼接的（读不了 DataStore），
+     * 而提示词里要不要加「主动记记忆」的规则取决于本开关。
+     * 由下面的收集器持续刷新，进程启动后很快就有值。
+     */
+    @Volatile
+    private var autoDistillEnabledSnapshot: Boolean = false
+
+    init {
+        scope.launch {
+            autoDistillEnabledFlow.collect { autoDistillEnabledSnapshot = it }
+        }
+    }
+
+    fun autoDistillEnabledSync(): Boolean = autoDistillEnabledSnapshot
+
     suspend fun autoDistillEnabled(): Boolean = autoDistillEnabledFlow.first()
 
     suspend fun setAutoDistillEnabled(enabled: Boolean) {
@@ -37,4 +57,6 @@ class MemorySettingsRepository @Inject constructor(
     private companion object {
         val AUTO_DISTILL_ENABLED_KEY = booleanPreferencesKey("auto_distill_enabled")
     }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 }
