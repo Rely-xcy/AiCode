@@ -40,6 +40,9 @@ class MemorySettingsRepository @Inject constructor(
     @Volatile
     private var autoDistillEnabledSnapshot: Boolean = false
 
+    // 声明在 init 之前：Kotlin 按声明顺序初始化，写在后面 init 里会报「必须初始化」
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
         scope.launch {
             autoDistillEnabledFlow.collect { autoDistillEnabledSnapshot = it }
@@ -57,6 +60,4 @@ class MemorySettingsRepository @Inject constructor(
     private companion object {
         val AUTO_DISTILL_ENABLED_KEY = booleanPreferencesKey("auto_distill_enabled")
     }
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 }
