@@ -1734,12 +1734,17 @@ class AIAgentViewModel @Inject constructor(
             // 一轮对话正常结束：交给引擎分发，模块自行判断开关与要不要干活。
             // 放在成功路径（非 finally）——取消/报错的一轮不算「结束」，不该触发沉淀。
             if (!failed) {
+                // 重新读一次历史：上面那份 history 是「本轮开始前」的快照，不含刚结束的这一轮，
+                // 沉淀模块需要看到本轮内容（否则永远慢一轮，首轮更是空的）。
+                val turnHistory = runCatching {
+                    messagePersistenceUseCase.buildHistory(sessionId, SessionUseCase.PENDING_TOOL_MARKER)
+                }.getOrDefault(emptyList())
                 agentEngine.onTurnCompleted(
                     EngineContext(
                         sessionId = sessionId,
                         projectRoot = projectRoot,
                         mode = mode,
-                        history = history,
+                        history = turnHistory,
                         isSubAgent = sessionEntity?.parentId != null,
                         // 模块做归纳时的一次性模型调用：走独立 provider，不占主对话
                         oneShot = { promptFile, userPrompt ->
