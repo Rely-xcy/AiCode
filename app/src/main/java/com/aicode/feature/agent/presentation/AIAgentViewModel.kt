@@ -56,6 +56,8 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.core.watch.asDirtySignal
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
+import com.aicode.feature.agent.domain.engine.AgentEngine
+import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
 import com.aicode.feature.terminal.domain.TabFinishedEvent
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
@@ -124,6 +126,7 @@ import javax.inject.Inject
 class AIAgentViewModel @Inject constructor(
     private val agentWorkflow: AgentWorkflow,
     private val toolRegistry: ToolRegistry,
+    private val agentEngine: AgentEngine,
     private val agentMessageDao: AgentMessageDao,
     private val chatSessionDao: ChatSessionDao,
     private val llmCallRecordDao: LlmCallRecordDao,
@@ -1518,7 +1521,15 @@ class AIAgentViewModel @Inject constructor(
                 agentDefinition = agentDefinition
             )
 
-            val allTools = toolRegistry.getAvailableTools()
+            val allTools = (toolRegistry.getAvailableTools() + agentEngine.tools(
+                EngineContext(
+                    sessionId = sessionId,
+                    projectRoot = projectRoot,
+                    mode = mode,
+                    history = history,
+                    isSubAgent = sessionEntity?.parentId != null
+                )
+            )).distinctBy { it.name }
             val isSub = sessionEntity?.parentId != null
             val tools = when {
                 agentDefinition != null -> {
@@ -1719,6 +1730,20 @@ class AIAgentViewModel @Inject constructor(
                 _completedSessions.value = _completedSessions.value + sessionId
             }
             setStreamingText(sessionId, null)
+
+            // 一轮对话正常结束：交给引擎分发，模块自行判断开关与要不要干活。
+            // 放在成功路径（非 finally）——取消/报错的一轮不算「结束」，不该触发沉淀。
+            if (!failed) {
+                agentEngine.onTurnCompleted(
+                    EngineContext(
+                        sessionId = sessionId,
+                        projectRoot = projectRoot,
+                        mode = mode,
+                        history = history,
+                        isSubAgent = sessionEntity?.parentId != null
+                    )
+                )
+            }
 
         } catch (e: CancellationException) {
             val cancelledState = _agentStates.value[sessionId]

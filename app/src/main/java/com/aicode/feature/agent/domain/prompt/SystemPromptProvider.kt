@@ -3,8 +3,8 @@ package com.aicode.feature.agent.domain.prompt
 import android.content.Context
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
-import com.aicode.feature.agent.domain.memory.MemoryRepository
-import com.aicode.feature.agent.domain.memory.MemoryScope
+import com.aicode.feature.agent.domain.engine.AgentEngine
+import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
@@ -31,7 +31,7 @@ import javax.inject.Singleton
 class SystemPromptProvider @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val skillRepository: SkillRepository,
-    private val memoryRepository: MemoryRepository,
+    private val agentEngine: AgentEngine,
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository
 ) {
@@ -182,44 +182,20 @@ class SystemPromptProvider @Inject constructor(
         override fun build(ctx: AgentContext): String = "[System] 当前本地时间: ${currentDate()}"
     }
 
-    private inner class MemoryListSource : PromptSource {
-        // 会话级缓存：同一 (sessionId, projectRoot) 内只读一次盘，保持 system prompt 稳定以命中 KV 缓存；
-        // 新开会话 / 切换工作区 / 重启 App 时缓存自然失效重建。空内容用 "" 占位以区分"未缓存"。
-        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
-
-        override fun build(ctx: AgentContext): String? {
-            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
-            val cached = cachedByKey[key]
-            if (cached != null) return cached.ifEmpty { null }
-            val memories = try { memoryRepository.listMemories(ctx.projectRoot) } catch (e: Exception) { return null }
-            if (memories.isEmpty()) {
-                cachedByKey[key] = ""
-                return null
-            }
-
-            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
-            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
-
-            val content = buildString {
-                if (globalMemories.isNotEmpty()) {
-                    append("全局记忆 (跨项目个人偏好，需要详情时用 memory(action=read, name=xxx, scope=global))：\n")
-                    globalMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
-                }
-                if (projectMemories.isNotEmpty()) {
-                    if (isNotEmpty()) append("\n")
-                    append("项目记忆 (当前项目专属，需要详情时用 memory(action=read, name=xxx, scope=project))：\n")
-                    projectMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
-                }
-            }.trimEnd()
-
-            cachedByKey[key] = content
-            trimIfNeeded()
-            return content
-        }
-
-        private fun trimIfNeeded() {
-            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
-        }
+    private inner class EngineFragmentSource : PromptSource {
+        /**
+         * 引擎聚合片段：由 [AgentEngine] 按模块 order 调度各模块本轮的片段。
+         * 记忆清单原本在这里读盘，现已迁进 MemoryModule（连同它的会话级缓存）。
+         */
+        override fun build(ctx: AgentContext): String? = agentEngine.promptFragment(
+            EngineContext(
+                sessionId = ctx.sessionId,
+                projectRoot = ctx.projectRoot,
+                mode = ctx.mode,
+                history = ctx.history,
+                isSubAgent = ctx.agentDefinition != null
+            )
+        )
     }
 
     /** 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。 */
@@ -228,7 +204,7 @@ class SystemPromptProvider @Inject constructor(
     private val staticRuleSource = StaticRuleSource()
     private val subAgentBaseSource = SubAgentBaseSource()
     private val subAgentListSource = SubAgentListSource()
-    private val memoryListSource = MemoryListSource()
+    private val engineFragmentSource = EngineFragmentSource()
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
@@ -253,7 +229,7 @@ class SystemPromptProvider @Inject constructor(
         val rawStatic = staticRuleSource.build(agentContext)
         val skillsContent = activeSkillsSource.build(agentContext)
         val subAgentsContent = subAgentListSource.build(agentContext)
-        val memoriesContent = memoryListSource.build(agentContext)
+        val memoriesContent = engineFragmentSource.build(agentContext)
         val projectRules = projectRuleSource.build(agentContext)
 
         // 2. Workspace 上下文固定输出（内容已精简，无需快照占位）
@@ -310,7 +286,7 @@ class SystemPromptProvider @Inject constructor(
         return renderVariables(
             content,
             activeSkillsSource.build(ctx),
-            memoryListSource.build(ctx),
+            engineFragmentSource.build(ctx),
             subAgentListSource.build(ctx),
             projectRuleSource.build(ctx),
             workspaceSource.build(ctx),
@@ -341,7 +317,7 @@ class SystemPromptProvider @Inject constructor(
             renderVariables(
                 definition.prompt,
                 activeSkillsSource.build(agentContext),
-                memoryListSource.build(agentContext),
+                engineFragmentSource.build(agentContext),
                 subAgentListSource.build(agentContext),
                 projectRuleSource.build(agentContext),
                 workspaceSource.build(agentContext),
@@ -356,7 +332,7 @@ class SystemPromptProvider @Inject constructor(
             }
         }
         if (InjectPart.MEMORY in definition.inject) {
-            memoryListSource.build(agentContext)?.let {
+            engineFragmentSource.build(agentContext)?.let {
                 append("\n\n")
                 append(it)
             }
