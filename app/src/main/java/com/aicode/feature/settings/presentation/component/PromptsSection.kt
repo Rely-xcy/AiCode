@@ -1,7 +1,9 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,8 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,7 +34,6 @@ import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.settings.presentation.PromptsUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.FileText
 
 /**
  * 自定义提示词页：顶部一句说明 + 固定内置片段（00）+ 全局/项目两组用户提示词。
@@ -74,7 +77,7 @@ internal fun PromptsSection(
         SettingsGroupHeader(text = stringResource(R.string.perm_global))
         SettingsGroup {
             if (state.globalPrompts.isEmpty()) {
-                EmptyHint(stringResource(R.string.prompts_empty))
+                PromptEmptyHint(stringResource(R.string.prompts_empty))
             } else {
                 state.globalPrompts.forEachIndexed { index, prompt ->
                     if (index > 0) SettingsDivider()
@@ -91,7 +94,7 @@ internal fun PromptsSection(
         SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
         SettingsGroup {
             if (state.projectPrompts.isEmpty()) {
-                EmptyHint(
+                PromptEmptyHint(
                     stringResource(
                         if (state.hasWorkspace) R.string.prompts_empty
                         else R.string.prompts_no_workspace
@@ -145,25 +148,26 @@ private fun PromptRow(
                 )
             }
             Spacer(modifier = Modifier.width(Spacing.sm))
-            androidx.compose.material3.Icon(
+            Icon(
                 imageVector = FeatherIcons.ChevronRight,
                 contentDescription = null,
                 tint = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier.width(18.dp)
+                modifier = Modifier.size(18.dp)
             )
         }
     }
 
     if (onDelete == null) {
-        // 固定内置片段不可删：只做普通可点行
-        androidx.compose.foundation.clickable(onClick = onClick) { row() }
+        // 固定内置片段不可删：只做普通可点行（clickable 是 Modifier 扩展，不能当组件用）
+        Box(modifier = Modifier.clickable(onClick = onClick)) { row() }
     } else {
         SwipeToDeleteRow(onDelete = onDelete, onClick = onClick) { row() }
     }
 }
 
+/** 空态提示（名字带 Prompt 前缀：同包已有 EmptyHint）。 */
 @Composable
-private fun EmptyHint(text: String) {
+private fun PromptEmptyHint(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
