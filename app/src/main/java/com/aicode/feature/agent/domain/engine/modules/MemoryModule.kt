@@ -12,6 +12,11 @@ import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,6 +47,20 @@ class MemoryModule @Inject constructor(
     /** 每个会话已积累的轮数，够 [DISTILL_EVERY_TURNS] 才归约一次。 */
     private val turnsSinceDistill = ConcurrentHashMap<String, Int>()
 
+    /** 每会话一把锁：归约是并发分发的，上一次没跑完就不开新的，避免重复写入。 */
+    private val distillLocks = ConcurrentHashMap<String, Mutex>()
+
+    // 声明在 init 之前：Kotlin 按声明顺序初始化
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        // 记忆被外部改动（如模型主动调 memory 工具写入）时丢掉注入缓存，
+        // 否则新记忆要等到换会话才生效——主动记忆就白写了。
+        scope.launch {
+            memoryRepository.changes.collect { cachedByKey.clear() }
+        }
+    }
+
     override fun promptFragment(ctx: EngineContext): String? {
         val autoSave = memorySettings.autoDistillEnabledSync()
         // 开关也进缓存 key：切换开关后注入内容要跟着变
@@ -51,7 +70,8 @@ class MemoryModule @Inject constructor(
 
         // 清单为空时也要可能返回规则本身（新用户没有任何记忆时，主动记忆规则必须照样注入）
         val content = listOfNotNull(
-            AUTO_SAVE_RULE.takeIf { autoSave },
+            // 子代理不拿主动记忆规则：写用户画像是主代理的事，子代理只管干活
+            AUTO_SAVE_RULE.takeIf { autoSave && !ctx.isSubAgent },
             buildMemoryList(ctx)
         ).joinToString("\n\n")
 
@@ -68,8 +88,10 @@ class MemoryModule @Inject constructor(
         }
         if (memories.isEmpty()) return null
 
-        val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
-        val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
+        // 注入有上限：记忆多了不能把系统提示词撑爆（未列出的靠 memory(action=list) 取）
+        val listed = memories.take(MAX_INJECTED_MEMORIES)
+        val globalMemories = listed.filter { it.scope == MemoryScope.GLOBAL }
+        val projectMemories = listed.filter { it.scope == MemoryScope.PROJECT }
 
         val content = buildString {
             if (globalMemories.isNotEmpty()) {
@@ -80,6 +102,9 @@ class MemoryModule @Inject constructor(
                 if (isNotEmpty()) append("\n")
                 append("项目记忆 (当前项目专属，需要详情时用 memory(action=read, name=xxx, scope=project))：\n")
                 projectMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
+            }
+            if (memories.size > listed.size) {
+                append("\n（另有 ${memories.size - listed.size} 条未列出，需要时用 memory(action=list) 查看）")
             }
         }.trimEnd()
 
@@ -106,6 +131,18 @@ class MemoryModule @Inject constructor(
             return
         }
         turnsSinceDistill[sessionKey] = 0
+
+        // 归约由引擎并发分发，上一轮可能还没跑完；同一会话不重叠，避免重复写入
+        val lock = distillLocks.getOrPut(sessionKey) { Mutex() }
+        if (!lock.tryLock()) return
+        try {
+            distill(ctx, complete)
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private suspend fun distill(ctx: EngineContext, complete: suspend (String, String) -> String?) {
 
         val existing = runCatching { memoryRepository.listMemories(ctx.projectRoot) }
             .getOrDefault(emptyList())
@@ -217,5 +254,8 @@ class MemoryModule @Inject constructor(
         const val MAX_MESSAGE_CHARS = 1200
         const val MAX_TOOL_CHARS = 400
         const val MAX_ENTRIES_PER_TURN = 5
+
+        /** 注入系统提示词的记忆条数上限，超出的靠 memory(action=list) 取。 */
+        const val MAX_INJECTED_MEMORIES = 40
     }
 }
