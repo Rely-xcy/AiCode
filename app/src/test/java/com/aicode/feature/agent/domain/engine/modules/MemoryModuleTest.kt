@@ -38,7 +38,8 @@ class MemoryModuleTest {
         val (module, repository) = module(settingsEnabled = true)
         val json = """[{"name":"prefers-brief","description":"Prefers brief answers","content":"No preambles."}]"""
 
-        module.onTurnCompleted(ctx { _, _ -> json })
+        // 归约是攒够 DISTILL_EVERY_TURNS 轮才跑一次
+        repeat(5) { module.onTurnCompleted(ctx { _, _ -> json }) }
 
         coVerify(exactly = 1) {
             repository.saveMemory(
@@ -53,10 +54,20 @@ class MemoryModuleTest {
     }
 
     @Test
+    fun onTurnCompleted_waitsUntilEnoughTurnsBeforeDistilling() = runTest {
+        val (module, repository) = module(settingsEnabled = true)
+
+        repeat(4) { module.onTurnCompleted(ctx { _, _ -> """[{"name":"a","content":"b"}]""" }) }
+
+        coVerify(exactly = 0) { repository.saveMemory(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
     fun onTurnCompleted_doesNothingWhenSwitchOff() = runTest {
         val (module, repository) = module(settingsEnabled = false)
 
-        module.onTurnCompleted(ctx { _, _ -> """[{"name":"a","content":"b"}]""" })
+        // 攒够轮数也不写（开关关着直接在计数前返回）
+        repeat(5) { module.onTurnCompleted(ctx { _, _ -> """[{"name":"a","content":"b"}]""" }) }
 
         coVerify(exactly = 0) { repository.saveMemory(any(), any(), any(), any(), any(), any()) }
     }
@@ -75,9 +86,9 @@ class MemoryModuleTest {
     fun onTurnCompleted_ignoresGarbageAndEmptyResults() = runTest {
         val (module, repository) = module(settingsEnabled = true)
 
-        module.onTurnCompleted(ctx { _, _ -> "抱歉，这轮没有值得记住的内容。" })
-        module.onTurnCompleted(ctx { _, _ -> "[]" })
-        module.onTurnCompleted(ctx { _, _ -> null })
+        repeat(5) { module.onTurnCompleted(ctx { _, _ -> "抱歉，这轮没有值得记住的内容。" }) }
+        repeat(5) { module.onTurnCompleted(ctx { _, _ -> "[]" }) }
+        repeat(5) { module.onTurnCompleted(ctx { _, _ -> null }) }
 
         coVerify(exactly = 0) { repository.saveMemory(any(), any(), any(), any(), any(), any()) }
     }

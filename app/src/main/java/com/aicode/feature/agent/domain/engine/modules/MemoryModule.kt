@@ -37,22 +37,36 @@ class MemoryModule @Inject constructor(
     // 注入顺序：记忆清单跟着「项目规则 / 技能」这类上下文走，用默认序即可。
     override val order = 50
 
-    private val cachedByKey = ConcurrentHashMap<Pair<String?, String>, String>()
+    private val cachedByKey = ConcurrentHashMap<Triple<String?, String, Boolean>, String>()
+
+    /** 每个会话已积累的轮数，够 [DISTILL_EVERY_TURNS] 才归约一次。 */
+    private val turnsSinceDistill = ConcurrentHashMap<String, Int>()
 
     override fun promptFragment(ctx: EngineContext): String? {
-        val key = ctx.sessionId to ctx.projectRoot
+        val autoSave = memorySettings.autoDistillEnabledSync()
+        // 开关也进缓存 key：切换开关后注入内容要跟着变
+        val key = Triple(ctx.sessionId, ctx.projectRoot, autoSave)
         val cached = cachedByKey[key]
         if (cached != null) return cached.ifEmpty { null }
 
+        // 清单为空时也要可能返回规则本身（新用户没有任何记忆时，主动记忆规则必须照样注入）
+        val content = listOfNotNull(
+            AUTO_SAVE_RULE.takeIf { autoSave },
+            buildMemoryList(ctx)
+        ).joinToString("\n\n")
+
+        cachedByKey[key] = content
+        trimIfNeeded()
+        return content.ifEmpty { null }
+    }
+
+    private fun buildMemoryList(ctx: EngineContext): String? {
         val memories = try {
             memoryRepository.listMemories(ctx.projectRoot)
         } catch (e: Exception) {
             return null
         }
-        if (memories.isEmpty()) {
-            cachedByKey[key] = ""
-            return null
-        }
+        if (memories.isEmpty()) return null
 
         val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
         val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
@@ -69,8 +83,6 @@ class MemoryModule @Inject constructor(
             }
         }.trimEnd()
 
-        cachedByKey[key] = content
-        trimIfNeeded()
         return content
     }
 
@@ -85,6 +97,15 @@ class MemoryModule @Inject constructor(
         if (ctx.history.isEmpty()) return
         val complete = ctx.oneShot ?: return
         if (!memorySettings.autoDistillEnabled()) return
+        val sessionKey = ctx.sessionId ?: return
+
+        // 攒够若干轮才归约一次：每轮都调模型太贵，而主路的主动记忆已经覆盖了当轮偏好。
+        val turns = (turnsSinceDistill[sessionKey] ?: 0) + 1
+        if (turns < DISTILL_EVERY_TURNS) {
+            turnsSinceDistill[sessionKey] = turns
+            return
+        }
+        turnsSinceDistill[sessionKey] = 0
 
         val existing = runCatching { memoryRepository.listMemories(ctx.projectRoot) }
             .getOrDefault(emptyList())
@@ -112,6 +133,7 @@ class MemoryModule @Inject constructor(
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         cachedByKey.keys.removeAll { it.first == ctx.sessionId }
+        ctx.sessionId?.let { turnsSinceDistill.remove(it) }
     }
 
     /** 交给模型的输入：已有长期记忆（防重复）+ 本轮对话（截断，控制 token）。 */
@@ -165,6 +187,20 @@ class MemoryModule @Inject constructor(
         const val MODULE_ID = "memory"
         const val TAG = "MemoryModule"
         const val SOURCE_CACHE_LIMIT = 64
+
+        /** B 路归约间隔：每这么多轮才跑一次独立归纳。 */
+        const val DISTILL_EVERY_TURNS = 5
+
+        /**
+         * 主动记忆规则（A 路）：开关打开时注入，让主模型在对话中自己把稳定结论存下来。
+         * 判据是语义的（「未来会话里知道这条会不会让我做法不同」），不是关键词清单：
+         * 用户几乎不会明说「记住这个」，偏好大多是隐含的。
+         */
+        val AUTO_SAVE_RULE = """
+            长期记忆：当对话里出现关于用户的稳定结论——偏好、工作习惯、对你的纠正、环境限制、项目约定——
+            用 memory(action=save, scope=global) 记下来，名称用简短稳定的英文 slug，描述一句话，正文一到三行。
+            判断标准是「在未来会话里知道这条会不会让我做法不同」；不要记一次性任务细节、工具输出或代码片段。
+        """.trimIndent()
 
         /** 沉淀提示词：与其它一次性调用一样放 assets/prompts 下。 */
         const val PROMPT_FILE = "agent/memory-distiller.md"
