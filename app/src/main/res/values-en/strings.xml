@@ -969,6 +969,8 @@
     <!-- Memory Settings -->
     <string name="memory_empty">No memories yet</string>
     <string name="memory_empty_hint">Whatever you ask the assistant to remember shows up here</string>
+    <string name="memory_auto_distill">Auto-save long-term memory</string>
+    <string name="memory_auto_distill_desc">After each turn, distill stable conclusions about you into memory (uses the model; off by default)</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>

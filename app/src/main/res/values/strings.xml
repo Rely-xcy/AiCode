@@ -969,6 +969,8 @@
     <!-- Memory Settings -->
     <string name="memory_empty">还没有记忆</string>
     <string name="memory_empty_hint">对话中让 AI 记住的内容会显示在这里</string>
+    <string name="memory_auto_distill">长期记忆自动沉淀</string>
+    <string name="memory_auto_distill_desc">每轮对话结束后归纳关于你的结论并写入记忆（会调用模型，默认关闭）</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">还没有安装技能</string>

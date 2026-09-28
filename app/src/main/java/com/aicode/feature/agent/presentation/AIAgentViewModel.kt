@@ -1740,7 +1740,11 @@ class AIAgentViewModel @Inject constructor(
                         projectRoot = projectRoot,
                         mode = mode,
                         history = history,
-                        isSubAgent = sessionEntity?.parentId != null
+                        isSubAgent = sessionEntity?.parentId != null,
+                        // 模块做归纳时的一次性模型调用：走独立 provider，不占主对话
+                        oneShot = { promptFile, userPrompt ->
+                            agentWorkflow.oneShotComplete(sessionId, promptFile, userPrompt, "memory-distill")
+                        }
                     )
                 )
             }

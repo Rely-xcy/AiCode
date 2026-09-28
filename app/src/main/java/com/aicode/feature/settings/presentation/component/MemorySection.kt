@@ -29,13 +29,14 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.memory.Memory
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.FileText
 
 /**
- * 记忆页：列出当前生效的记忆，左滑删除。
+ * 记忆页：长期记忆自动沉淀开关 + 当前生效的记忆列表（左滑删除）。
  *
  * 全局与项目记忆合并成一份清单、不分栏——用户看到的只是「AI 记住了什么」，
  * 记忆存在哪一侧是实现细节。
@@ -43,48 +44,10 @@ import compose.icons.feathericons.FileText
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
+    autoDistillEnabled: Boolean,
+    onToggleAutoDistill: (Boolean) -> Unit,
     onDelete: (Memory) -> Unit
 ) {
-    if (memories.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = Spacing.xl, vertical = 48.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        FeatherIcons.FileText,
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.memory_empty),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.memory_empty_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-        return
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -94,11 +57,65 @@ internal fun MemorySection(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         SettingsGroup {
-            memories.forEachIndexed { index, memory ->
-                if (index > 0) SettingsDivider()
-                MemoryRow(memory = memory, onDelete = { onDelete(memory) })
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.memory_auto_distill),
+                subtitle = stringResource(R.string.memory_auto_distill_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = autoDistillEnabled,
+                        onCheckedChange = onToggleAutoDistill
+                    )
+                }
+            )
+        }
+
+        if (memories.isEmpty()) {
+            EmptyState()
+        } else {
+            SettingsGroup {
+                memories.forEachIndexed { index, memory ->
+                    if (index > 0) SettingsDivider()
+                    MemoryRow(memory = memory, onDelete = { onDelete(memory) })
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun EmptyState() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                FeatherIcons.FileText,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = stringResource(R.string.memory_empty),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = stringResource(R.string.memory_empty_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 

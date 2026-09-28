@@ -996,6 +996,66 @@ class StatefulAgentWorkflow @Inject constructor(
         FileLogger.w(TAG, "生成提交信息失败", e)
     }.getOrNull()
 
+    /**
+     * 一次性独立模型调用：主聊天模型（拿不到时回退标题专用模型），不占主对话 provider、
+     * 不写入会话消息，只把用量落进 llm_call_records（kind 由调用方给）。
+     */
+    override suspend fun oneShotComplete(
+        sessionId: String?,
+        promptFile: String,
+        userPrompt: String,
+        kind: String
+    ): String? = runCatching {
+        val provider = getEffectiveProvider(sessionId)
+        val prompt = promptProvider.resolvePrompt(promptFile).replace(LEADING_COMMENT, "")
+        val callStartWall = System.currentTimeMillis()
+        val callStartElapsed = SystemClock.elapsedRealtime()
+        var callCompleted = false
+        var callError: String? = null
+        var usage: AIResponse? = null
+        val response = try {
+            val resp = provider.complete(
+                systemPrompt = prompt,
+                messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
+                tools = emptyList()
+            )
+            usage = resp
+            callCompleted = true
+            resp
+        } catch (e: CancellationException) {
+            callError = "cancelled"
+            throw e
+        } catch (e: Exception) {
+            callError = e.message ?: e.javaClass.simpleName
+            throw e
+        } finally {
+            val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
+            runCatching {
+                llmCallRecordDao.insert(
+                    LlmCallRecordEntity(
+                        sessionId = sessionId,
+                        providerId = provider.providerId.ifBlank { null },
+                        model = provider.model,
+                        kind = kind,
+                        inputTokens = usage?.inputTokens ?: 0,
+                        outputTokens = usage?.outputTokens ?: 0,
+                        cachedInputTokens = usage?.cachedInputTokens ?: 0,
+                        cacheCreationTokens = usage?.cacheCreationTokens ?: 0,
+                        ttfbMillis = null,
+                        durationMillis = durationMillis,
+                        status = if (callCompleted) "success" else "error",
+                        errorMessage = callError,
+                        stopReason = usage?.stopReason,
+                        createdAt = callStartWall
+                    )
+                )
+            }
+        }
+        response.content.trim().ifBlank { null }
+    }.onFailure { e ->
+        FileLogger.w(TAG, "一次性模型调用失败: $promptFile", e)
+    }.getOrNull()
+
     private suspend fun runToolStream(
         tool: StreamingAgentTool, 
         toolCall: ToolCall,
