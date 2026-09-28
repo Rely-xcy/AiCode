@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.agent.domain.prompt.PromptFragmentRepository
 import com.aicode.feature.agent.domain.prompt.UserPrompt
-import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.agent.domain.prompt.UserPromptStore
