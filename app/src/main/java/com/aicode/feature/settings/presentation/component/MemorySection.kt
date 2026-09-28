@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -183,6 +184,7 @@ private fun MemoryRow(
  *
  * 注入到系统提示词的只有「名称 + 描述」，正文平时看不到，详情页才展开。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MemoryDetailSheet(
     memory: Memory,
