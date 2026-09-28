@@ -33,7 +33,8 @@ import javax.inject.Singleton
 class ContextCompactor @Inject constructor(
     private val agentMessageDao: AgentMessageDao,
     private val systemPromptProvider: SystemPromptProvider,
-    private val llmCallRecordDao: LlmCallRecordDao
+    private val llmCallRecordDao: LlmCallRecordDao,
+    private val compactedHistoryArchive: CompactedHistoryArchive
 ) {
 
     private companion object {
@@ -135,6 +136,11 @@ class ContextCompactor @Inject constructor(
         sessionId: String?,
         preserveRecentTokens: Int,
         summaryWindowTokens: Int,
+        /**
+         * 折叠前的回调：拿到即将被折叠掉的那段历史（head）。
+         * 给调用方一个「趁还没丢，先把长期价值捞出来」的机会（如抽取长期记忆）。
+         */
+        onBeforeFold: (suspend (List<AgentMessage>) -> Unit)? = null,
         onEvent: suspend (AgentEvent) -> Unit = {}
     ): List<AgentMessage>? {
         var splitIndex = selectTailStartIndex(messages, preserveRecentTokens)
@@ -146,6 +152,13 @@ class ContextCompactor @Inject constructor(
 
         val head = messages.subList(0, splitIndex)
         val tail = messages.subList(splitIndex, messages.size)
+        // 折叠前先把原文存档：摘要没覆盖到的细节不至于永久丢失，模型需要时可读回来
+        val archivePath = compactedHistoryArchive.archive(sessionId, head)
+        // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
+        if (onBeforeFold != null) {
+            runCatching { onBeforeFold(head) }
+                .onFailure { FileLogger.w(TAG, "折叠前回调失败，继续压缩", it) }
+        }
         val previousSummary = extractPreviousSummary(messages)
         val headForSummary = removeCompactionPairs(head).truncateForSummaryWindow(summaryWindowTokens)
         if (headForSummary.isEmpty()) {
@@ -208,6 +221,13 @@ class ContextCompactor @Inject constructor(
 
         FileLogger.i(TAG, "上下文压缩完成，摘要长度：${summaryResponse.length}")
 
+        // 摘要里附上归档路径：这是摘要之外唯一的退路（模型用文件工具就能读）
+        val summaryContent = if (archivePath != null) {
+            "$summaryResponse\n\n（被折叠的历史原文已存档：$archivePath ，需要核对更早的细节时可读取该文件。）"
+        } else {
+            summaryResponse
+        }
+
         val markerId = UUID.randomUUID().toString()
         val compactedId = UUID.randomUUID().toString()
         val markerMessage = AgentMessage.UserMessage(
@@ -216,7 +236,7 @@ class ContextCompactor @Inject constructor(
         )
         val compactedMessage = AgentMessage.AssistantMessage(
             id = compactedId,
-            content = summaryResponse,
+            content = summaryContent,
             toolCalls = emptyList()
         )
 

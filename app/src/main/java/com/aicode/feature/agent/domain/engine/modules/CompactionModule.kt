@@ -4,6 +4,9 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.LlmCall
+import com.aicode.feature.agent.domain.memory.MemoryExtractor
+import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
@@ -38,6 +41,9 @@ class CompactionModule @Inject constructor(
      * Set<EngineModule> → 本模块。模块只在真正要压缩时才取实例。
      */
     private val compactor: Lazy<ContextCompactor>,
+    private val memoryExtractor: MemoryExtractor,
+    /** 同样用 [Lazy]：解析抽取提示词要经 SystemPromptProvider，它又依赖引擎。 */
+    private val systemPromptProvider: Lazy<SystemPromptProvider>,
     private val modelMetadataService: ModelMetadataService,
     private val generalSettingsRepository: GeneralSettingsRepository
 ) : EngineModule {
@@ -101,6 +107,24 @@ class CompactionModule @Inject constructor(
                     sessionId = ctx.sessionId,
                     preserveRecentTokens = tier.preserveRecentTokens,
                     summaryWindowTokens = resolveContextTokens(summaryProvider),
+                    // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
+                    // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
+                    onBeforeFold = { folded ->
+                        val written = memoryExtractor.extract(
+                            projectRoot = ctx.projectRoot,
+                            history = folded,
+                            complete = { userPrompt ->
+                                summaryProvider.complete(
+                                    systemPrompt = systemPromptProvider.get().resolvePrompt(MemoryExtractor.PROMPT_FILE),
+                                    messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
+                                    tools = emptyList()
+                                ).content
+                            }
+                        )
+                        if (written > 0) {
+                            FileLogger.i(TAG, "折叠前从被压缩历史里捞出 $written 条长期记忆")
+                        }
+                    },
                     onEvent = call.onEvent
                 )
                 call.onEvent(AgentEvent.CompactionFinished)

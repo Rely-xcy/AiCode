@@ -4,6 +4,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
@@ -34,6 +35,7 @@ import javax.inject.Singleton
 @Singleton
 class MemoryModule @Inject constructor(
     private val memoryRepository: MemoryRepository,
+    private val memoryExtractor: MemoryExtractor,
     private val memorySettings: MemorySettingsRepository
 ) : EngineModule {
 
@@ -136,39 +138,21 @@ class MemoryModule @Inject constructor(
         val lock = distillLocks.getOrPut(sessionKey) { Mutex() }
         if (!lock.tryLock()) return
         try {
-            distill(ctx, complete)
+            val written = memoryExtractor.extract(
+                projectRoot = ctx.projectRoot,
+                history = ctx.history,
+                complete = { userPrompt -> complete(PROMPT_FILE, userPrompt) }
+            )
+            if (written > 0) {
+                // 本轮新增/更新了记忆 → 丢掉本会话的注入缓存，下一轮注入就带上新内容
+                // （缓存 key 是 Triple(会话, 工作区, 开关)，这里按前两项清，与开关无关）
+                cachedByKey.keys
+                    .filter { it.first == ctx.sessionId && it.second == ctx.projectRoot }
+                    .forEach { cachedByKey.remove(it) }
+            }
         } finally {
             lock.unlock()
         }
-    }
-
-    private suspend fun distill(ctx: EngineContext, complete: suspend (String, String) -> String?) {
-
-        val existing = runCatching { memoryRepository.listMemories(ctx.projectRoot) }
-            .getOrDefault(emptyList())
-            .filter { it.kind == MemoryKind.PROFILE }
-
-        val raw = complete(PROMPT_FILE, buildUserPrompt(ctx, existing)) ?: return
-        val entries = parseEntries(raw)
-        if (entries.isEmpty()) return
-
-        entries.forEach { entry ->
-            // 沉淀出来的结论都是「关于用户」的，跨项目通用，因此统一写全局。
-            memoryRepository.saveMemory(
-                name = entry.name,
-                description = entry.description,
-                content = entry.content,
-                scope = MemoryScope.GLOBAL,
-                projectRoot = ctx.projectRoot,
-                kind = MemoryKind.PROFILE
-            )
-        }
-        FileLogger.i(TAG, "沉淀长期记忆 ${entries.size} 条: ${entries.joinToString { it.name }}")
-        // 本轮新增/更新了记忆 → 丢掉本会话的注入缓存，下一轮注入就带上新内容
-        // （缓存 key 是 Triple(会话, 工作区, 开关)，这里按前两项清，与开关无关）
-        cachedByKey.keys
-            .filter { it.first == ctx.sessionId && it.second == ctx.projectRoot }
-            .forEach { cachedByKey.remove(it) }
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
@@ -176,53 +160,7 @@ class MemoryModule @Inject constructor(
         ctx.sessionId?.let { turnsSinceDistill.remove(it) }
     }
 
-    /** 交给模型的输入：已有长期记忆（防重复）+ 本轮对话（截断，控制 token）。 */
-    private fun buildUserPrompt(ctx: EngineContext, existing: List<Memory>): String =
-        buildString {
-            appendLine("Existing long-term memories (same name = replaces the old entry):")
-            if (existing.isEmpty()) {
-                appendLine("(none)")
-            } else {
-                existing.forEach { appendLine("- ${it.name}: ${it.description}") }
-            }
-            appendLine()
-            appendLine("Transcript of the latest turn:")
-            ctx.history.takeLast(TRANSCRIPT_MESSAGES).forEach { appendLine(renderMessage(it)) }
-        }
-
-    private fun renderMessage(message: AgentMessage): String = when (message) {
-        is AgentMessage.UserMessage -> "user: ${message.content.take(MAX_MESSAGE_CHARS)}"
-        is AgentMessage.AssistantMessage -> "assistant: ${message.content.take(MAX_MESSAGE_CHARS)}"
-        is AgentMessage.ToolResultMessage ->
-            "tool(${message.toolName}): ${(message.modelResult ?: message.result).take(MAX_TOOL_CHARS)}"
-    }
-
-    /** 解析模型输出：容错地取出 JSON 数组段，容忍 ``` 包裹与前后废话。 */
-    private fun parseEntries(raw: String): List<DistilledEntry> {
-        val start = raw.indexOf('[')
-        val end = raw.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
-        return runCatching {
-            Json { ignoreUnknownKeys = true }
-                .decodeFromString(ListSerializer(DistilledEntry.serializer()), raw.substring(start, end + 1))
-                .filter { it.name.isNotBlank() && it.content.isNotBlank() }
-                .take(MAX_ENTRIES_PER_TURN)
-        }.onFailure {
-            FileLogger.w(TAG, "沉淀结果解析失败，已跳过本轮", it)
-        }.getOrDefault(emptyList())
-    }
-
-    private fun trimIfNeeded() {
-        if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
-    }
-
-    @Serializable
-    private data class DistilledEntry(
-        val name: String,
-        val description: String = "",
-        val content: String = ""
-    )
-
+    override suspend fun onSessionDeleted(ctx: EngineContext) {
     private companion object {
         const val MODULE_ID = "memory"
         const val TAG = "MemoryModule"
@@ -247,13 +185,8 @@ class MemoryModule @Inject constructor(
             不要记：一次性任务细节、工具输出、代码片段、明天就过期的状态。
         """.trimIndent()
 
-        /** 沉淀提示词：与其它一次性调用一样放 assets/prompts 下。 */
-        const val PROMPT_FILE = "agent/memory-distiller.md"
-
-        const val TRANSCRIPT_MESSAGES = 20
-        const val MAX_MESSAGE_CHARS = 1200
-        const val MAX_TOOL_CHARS = 400
-        const val MAX_ENTRIES_PER_TURN = 5
+        /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，两个入口（按轮归约 / 折叠前抽取）共用。 */
+        const val PROMPT_FILE = MemoryExtractor.PROMPT_FILE
 
         /** 注入系统提示词的记忆条数上限。
          *

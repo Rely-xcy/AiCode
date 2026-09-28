@@ -115,6 +115,7 @@ class ContextBudgetPolicyTest {
     private fun compactor() = ContextCompactor(
         agentMessageDao = mockk(relaxed = true),
         systemPromptProvider = mockk(relaxed = true),
-        llmCallRecordDao = mockk(relaxed = true)
+        llmCallRecordDao = mockk(relaxed = true),
+        compactedHistoryArchive = mockk(relaxed = true)
     )
 }
