@@ -2,6 +2,7 @@ package com.aicode.feature.settings.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.feature.agent.domain.prompt.PromptFragmentRepository
 import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
@@ -10,6 +11,8 @@ import com.aicode.feature.agent.domain.prompt.UserPromptStore
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,11 +46,15 @@ data class PromptsUiState(
 class PromptsViewModel @Inject constructor(
     private val userPromptStore: UserPromptStore,
     private val fragmentRepository: PromptFragmentRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val listOrderStore: ListOrderStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PromptsUiState())
     val state: StateFlow<PromptsUiState> = _state.asStateFlow()
+
+    /** 各作用域排序落盘的防抖 job，见 [reorderPrompts]。 */
+    private val orderWriteJobs = mutableMapOf<UserPromptScope, Job>()
 
     init {
         refresh()
@@ -122,6 +129,37 @@ class PromptsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 提示词列表长按拖拽排序：先同步改内存列表（reorderable 库要求 onMove 返回前列表已变，否则拖拽项闪烁），
+     * 停手 [REORDER_WRITE_DEBOUNCE_MS] 后把顺序表写一次；注入顺序走 [UserPromptStore.list]，同一张顺序表。
+     *
+     * 参数用 prompt id 而不是下标：列表下标是含分组标题、内置片段行的全局下标，
+     * 用 id 在权威列表里定位更不容易错。
+     */
+    fun reorderPrompts(scope: UserPromptScope, movedId: String, targetId: String) {
+        val current = _state.value
+        val scoped = if (scope == UserPromptScope.GLOBAL) current.globalPrompts else current.projectPrompts
+        val fromIndex = scoped.indexOfFirst { it.id == movedId }
+        val toIndex = scoped.indexOfFirst { it.id == targetId }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val moved = scoped.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        _state.value = if (scope == UserPromptScope.GLOBAL) {
+            current.copy(globalPrompts = moved)
+        } else {
+            current.copy(projectPrompts = moved)
+        }
+        val key = if (scope == UserPromptScope.GLOBAL) {
+            ListOrderStore.KEY_PROMPTS_GLOBAL
+        } else {
+            ListOrderStore.KEY_PROMPTS_PROJECT
+        }
+        orderWriteJobs[scope]?.cancel()
+        orderWriteJobs[scope] = viewModelScope.launch {
+            delay(REORDER_WRITE_DEBOUNCE_MS)
+            listOrderStore.save(key, moved.map { it.id })
+        }
+    }
+
     fun setBuiltinDisabled(disabled: Boolean) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { fragmentRepository.setBuiltinDisabled(disabled) }
@@ -140,6 +178,10 @@ class PromptsViewModel @Inject constructor(
     companion object {
         /** 用户可改的固定片段：00 身份/总纲。其余内置片段在「高级设置」里只读展示。 */
         const val DEFAULT_FRAGMENT_NUMBER = 0
+
+        /** 拖拽排序的落盘延迟：拖动中只改内存，停手这么久后写一次。 */
+        const val REORDER_WRITE_DEBOUNCE_MS = 400L
+
         private const val DEFAULT_FRAGMENT_TITLE = "identity"
     }
 }

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.subagent
 
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.LocalFileAccess
@@ -20,11 +21,23 @@ class AgentDefinitionRepository @Inject constructor(
     private val projectSource: ProjectDirectoryAgentSource,
     private val configRepository: AgentDefinitionConfigRepository,
     private val localFileAccess: LocalFileAccess,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val listOrderStore: ListOrderStore
 ) {
-    /** 全部定义（含来源作用域），未过滤禁用，按名称排序。 */
-    fun listAll(): List<AgentDefinitionEntry> =
-        mergeAll(localSource.listDefinitions(), projectSource.listDefinitions())
+    /**
+     * 全部定义（含来源作用域），未过滤禁用。
+     * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
+     */
+    fun listAll(): List<AgentDefinitionEntry> {
+        val merged = mergeAll(localSource.listDefinitions(), projectSource.listDefinitions())
+        return listOrderStore.sort(
+            merged.filter { it.scope == AgentDefinitionScope.GLOBAL },
+            ListOrderStore.KEY_SUB_AGENTS_GLOBAL
+        ) { it.definition.name } + listOrderStore.sort(
+            merged.filter { it.scope == AgentDefinitionScope.PROJECT },
+            ListOrderStore.KEY_SUB_AGENTS_PROJECT
+        ) { it.definition.name }
+    }
 
     /** 已启用的定义（注入主代理的可派发清单用）。 */
     fun listEnabled(): List<AgentDefinitionEntry> {

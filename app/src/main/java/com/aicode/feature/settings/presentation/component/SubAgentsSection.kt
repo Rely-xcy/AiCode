@@ -1,6 +1,5 @@
 package com.aicode.feature.settings.presentation.component
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,9 +11,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,12 +40,25 @@ import com.aicode.feature.settings.presentation.SubAgentUiEntry
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Users
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * 子代理二级页：与「技能」一致的折叠分组列表——「当前项目 / 全局」两组各自可折叠，
- * 每行一个子代理（图标 + 名称 + 描述 + 模型标签），左滑删除，点击行进入详情。
+ * 每行一个子代理（图标 + 名称 + 描述 + 模型标签），左滑删除，点击行进入详情，长按整行拖拽排序（仅同组内）。
  * 新建入口在顶栏的「＋」，启用开关与编辑入口在详情页。
  */
+
+/** 列表 item key 前缀：既标识身份，也用来判定分组，跨组拖拽会被拦下。 */
+private const val SUB_AGENT_PROJECT_PREFIX = "sub_agent_project_"
+private const val SUB_AGENT_GLOBAL_PREFIX = "sub_agent_global_"
+private const val SUB_AGENT_HEADER_PROJECT_KEY = "sub_agents_header_project"
+private const val SUB_AGENT_HEADER_GLOBAL_KEY = "sub_agents_header_global"
+private const val SUB_AGENT_EMPTY_PROJECT_KEY = "sub_agents_empty_project"
+private const val SUB_AGENT_EMPTY_GLOBAL_KEY = "sub_agents_empty_global"
+
+private fun subAgentItemKey(scope: AgentDefinitionScope, name: String): String =
+    listItemKey(if (scope == AgentDefinitionScope.PROJECT) SUB_AGENT_PROJECT_PREFIX else SUB_AGENT_GLOBAL_PREFIX, name)
+
 @Composable
 internal fun SubAgentsSection(
     projectName: String?,
@@ -99,56 +112,109 @@ internal fun SubAgentsSection(
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
     var globalExpanded by rememberSaveable { mutableStateOf(true) }
 
-    Column(
+    val settingsViewModel = rememberSettingsViewModel()
+    val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
+        // onMove 的 from/to 是含分组标题、空态提示行的全局下标，这里用带分组前缀的 item key 反查身份：
+        // 前缀不一致就是跨组，直接不处理；组内下标交给 VM 在自己的列表里定位。
+        val scope = when {
+            itemIdOf(from.key, SUB_AGENT_PROJECT_PREFIX) != null -> AgentDefinitionScope.PROJECT
+            itemIdOf(from.key, SUB_AGENT_GLOBAL_PREFIX) != null -> AgentDefinitionScope.GLOBAL
+            else -> return@rememberReorderableLazyListState
+        }
+        val prefix =
+            if (scope == AgentDefinitionScope.PROJECT) SUB_AGENT_PROJECT_PREFIX else SUB_AGENT_GLOBAL_PREFIX
+        val moved = itemIdOf(from.key, prefix) ?: return@rememberReorderableLazyListState
+        val target = itemIdOf(to.key, prefix) ?: return@rememberReorderableLazyListState
+        viewModel.reorderSubAgents(scope, moved, target)
+    }
+
+    LazyColumn(
+        state = lazyListState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(bottom = Spacing.xl)
     ) {
-        CollapsibleGroupHeader(
-            text = if (projectName != null) {
-                stringResource(R.string.perm_current_project, projectName)
+        // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
+        // 同组内的行不加间距，才能保持「一组连成一块卡片」。
+        item(key = SUB_AGENT_HEADER_PROJECT_KEY) {
+            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+                CollapsibleGroupHeader(
+                    text = if (projectName != null) {
+                        stringResource(R.string.perm_current_project, projectName)
+                    } else {
+                        stringResource(R.string.perm_current_project_none)
+                    },
+                    expanded = projectExpanded,
+                    onToggle = { projectExpanded = !projectExpanded }
+                )
+            }
+        }
+        if (projectExpanded) {
+            if (projectAgents.isEmpty()) {
+                item(key = SUB_AGENT_EMPTY_PROJECT_KEY) {
+                    SettingsGroup {
+                        SubAgentEmptyHint(stringResource(R.string.subagents_no_project))
+                    }
+                }
             } else {
-                stringResource(R.string.perm_current_project_none)
-            },
-            expanded = projectExpanded,
-            onToggle = { projectExpanded = !projectExpanded }
-        )
-        AnimatedVisibility(visible = projectExpanded) {
-            SettingsGroup {
-                if (projectAgents.isEmpty()) {
-                    SubAgentEmptyHint(stringResource(R.string.subagents_no_project))
-                } else {
-                    projectAgents.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
+                itemsIndexed(
+                    items = projectAgents,
+                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.PROJECT, entry.name) }
+                ) { index, entry ->
+                    ReorderableCardRow(
+                        state = reorderableState,
+                        key = subAgentItemKey(AgentDefinitionScope.PROJECT, entry.name),
+                        isFirst = index == 0,
+                        isLast = index == projectAgents.lastIndex,
+                        dragLabel = "subAgentProjectDrag"
+                    ) { dragModifier ->
                         SubAgentRow(
                             entry = entry,
                             onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
+                            onClick = { onOpenDetail(entry) },
+                            dragModifier = dragModifier
                         )
                     }
                 }
             }
         }
 
-        CollapsibleGroupHeader(
-            text = stringResource(R.string.perm_global),
-            expanded = globalExpanded,
-            onToggle = { globalExpanded = !globalExpanded }
-        )
-        AnimatedVisibility(visible = globalExpanded) {
-            SettingsGroup {
-                if (globalAgents.isEmpty()) {
-                    SubAgentEmptyHint(stringResource(R.string.subagents_no_global))
-                } else {
-                    globalAgents.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
+        item(key = SUB_AGENT_HEADER_GLOBAL_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.perm_global),
+                    expanded = globalExpanded,
+                    onToggle = { globalExpanded = !globalExpanded }
+                )
+            }
+        }
+        if (globalExpanded) {
+            if (globalAgents.isEmpty()) {
+                item(key = SUB_AGENT_EMPTY_GLOBAL_KEY) {
+                    SettingsGroup {
+                        SubAgentEmptyHint(stringResource(R.string.subagents_no_global))
+                    }
+                }
+            } else {
+                itemsIndexed(
+                    items = globalAgents,
+                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.GLOBAL, entry.name) }
+                ) { index, entry ->
+                    ReorderableCardRow(
+                        state = reorderableState,
+                        key = subAgentItemKey(AgentDefinitionScope.GLOBAL, entry.name),
+                        isFirst = index == 0,
+                        isLast = index == globalAgents.lastIndex,
+                        dragLabel = "subAgentGlobalDrag"
+                    ) { dragModifier ->
                         SubAgentRow(
                             entry = entry,
                             onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
+                            onClick = { onOpenDetail(entry) },
+                            dragModifier = dragModifier
                         )
                     }
                 }
@@ -162,7 +228,8 @@ internal fun SubAgentsSection(
 private fun SubAgentRow(
     entry: SubAgentUiEntry,
     onDelete: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    dragModifier: Modifier = Modifier
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
 
@@ -171,6 +238,7 @@ private fun SubAgentRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(rowBackground)
+                .then(dragModifier)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

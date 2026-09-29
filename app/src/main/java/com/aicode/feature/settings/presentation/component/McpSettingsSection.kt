@@ -15,9 +15,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,11 +47,23 @@ import compose.icons.feathericons.Box
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Terminal
 import com.aicode.R
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * MCP 二级页：与提供商/默认模型一致的 iOS 分组列表。
- * 白色分组卡片内每台 server 一行，两行布局（名称+状态 / 类型+摘要），支持左滑删除。
+ * 白色分组卡片内每台 server 一行，两行布局（名称+状态 / 类型+摘要），支持左滑删除、长按整行拖拽排序。
  */
+
+/** 列表 item key 前缀：既标识身份，也用来判定分组（全局 / 项目），跨组拖拽会被拦下。 */
+private const val MCP_GLOBAL_PREFIX = "mcp_global_"
+private const val MCP_PROJECT_PREFIX = "mcp_project_"
+
+private fun mcpKeyPrefix(scope: McpScope): String =
+    if (scope == McpScope.GLOBAL) MCP_GLOBAL_PREFIX else MCP_PROJECT_PREFIX
+
+private fun mcpItemKey(entry: McpServerEntry): String =
+    listItemKey(mcpKeyPrefix(entry.scope), entry.server.name)
+
 @Composable
 internal fun McpSection(
     entries: List<McpServerEntry>,
@@ -100,25 +113,50 @@ internal fun McpSection(
         return
     }
 
-    Column(
+    val statusByName = remember(statuses) { statuses.associateBy { it.name } }
+    val settingsViewModel = rememberSettingsViewModel()
+    val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
+        // onMove 的 from/to 是整条 LazyColumn 里的位置（下标会随分组标题等其它 item 平移），
+        // 这里改用 item key 反查身份：key 带作用域前缀，既能认出是谁，也能拦住跨作用域拖拽。
+        val scope = when {
+            itemIdOf(from.key, MCP_GLOBAL_PREFIX) != null -> McpScope.GLOBAL
+            itemIdOf(from.key, MCP_PROJECT_PREFIX) != null -> McpScope.PROJECT
+            else -> return@rememberReorderableLazyListState
+        }
+        // 只在同组（同作用域）内拖
+        val prefix = mcpKeyPrefix(scope)
+        val moved = itemIdOf(from.key, prefix) ?: return@rememberReorderableLazyListState
+        val target = itemIdOf(to.key, prefix) ?: return@rememberReorderableLazyListState
+        viewModel.reorderMcpServers(scope, moved, target)
+    }
+
+    LazyColumn(
+        state = lazyListState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(bottom = Spacing.xl)
     ) {
-        SettingsGroup {
-            entries.forEachIndexed { index, entry ->
-                if (index > 0) {
-                    SettingsDivider()
-                }
+        itemsIndexed(
+            items = entries,
+            key = { _, entry -> mcpItemKey(entry) }
+        ) { index, entry ->
+            ReorderableCardRow(
+                state = reorderableState,
+                key = mcpItemKey(entry),
+                isFirst = index == 0,
+                isLast = index == entries.lastIndex,
+                dragLabel = "mcpServerDrag"
+            ) { dragModifier ->
                 McpServerRow(
                     server = entry.server,
                     scope = entry.scope,
-                    status = statuses.firstOrNull { it.name == entry.server.name },
+                    status = statusByName[entry.server.name],
                     onClick = { onEdit(entry) },
-                    onDelete = { onDelete(entry.server.name, entry.scope) }
+                    onDelete = { onDelete(entry.server.name, entry.scope) },
+                    dragModifier = dragModifier
                 )
             }
         }
@@ -134,7 +172,8 @@ internal fun McpServerRow(
     scope: McpScope,
     status: McpServerStatus?,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    dragModifier: Modifier = Modifier
 ) {
     val isConnected = server.enabled && status?.state == McpServerStatus.State.CONNECTED
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
@@ -178,6 +217,7 @@ internal fun McpServerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(dragModifier)
                 .padding(horizontal = Spacing.lg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

@@ -1,6 +1,5 @@
 package com.aicode.feature.settings.presentation.component
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,9 +11,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -41,11 +41,24 @@ import com.aicode.feature.settings.presentation.SkillUiEntry
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.ChevronRight
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * 技能二级页：与「工具授权」一致的折叠分组列表——「当前项目 / 全局」两组各自可折叠，
- * 每行一个技能（图标 + 名称 + 描述），左滑删除，点击行进入详情。
+ * 每行一个技能（图标 + 名称 + 描述），左滑删除，点击行进入详情，长按整行拖拽排序（仅同组内）。
  */
+
+/** 列表 item key 前缀：既标识身份，也用来判定分组，跨组拖拽会被拦下。 */
+private const val SKILL_PROJECT_PREFIX = "skill_project_"
+private const val SKILL_GLOBAL_PREFIX = "skill_global_"
+private const val SKILL_HEADER_PROJECT_KEY = "skills_header_project"
+private const val SKILL_HEADER_GLOBAL_KEY = "skills_header_global"
+private const val SKILL_EMPTY_PROJECT_KEY = "skills_empty_project"
+private const val SKILL_EMPTY_GLOBAL_KEY = "skills_empty_global"
+
+private fun skillItemKey(scope: SkillScope, name: String): String =
+    listItemKey(if (scope == SkillScope.PROJECT) SKILL_PROJECT_PREFIX else SKILL_GLOBAL_PREFIX, name)
+
 @Composable
 internal fun SkillsSection(
     projectName: String?,
@@ -99,56 +112,108 @@ internal fun SkillsSection(
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
     var globalExpanded by rememberSaveable { mutableStateOf(true) }
 
-    Column(
+    val settingsViewModel = rememberSettingsViewModel()
+    val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
+        // onMove 的 from/to 是含分组标题、空态提示行的全局下标，这里用带分组前缀的 item key 反查身份：
+        // 前缀不一致就是跨组，直接不处理；组内下标交给 VM 在自己的列表里定位。
+        val scope = when {
+            itemIdOf(from.key, SKILL_PROJECT_PREFIX) != null -> SkillScope.PROJECT
+            itemIdOf(from.key, SKILL_GLOBAL_PREFIX) != null -> SkillScope.GLOBAL
+            else -> return@rememberReorderableLazyListState
+        }
+        val prefix = if (scope == SkillScope.PROJECT) SKILL_PROJECT_PREFIX else SKILL_GLOBAL_PREFIX
+        val moved = itemIdOf(from.key, prefix) ?: return@rememberReorderableLazyListState
+        val target = itemIdOf(to.key, prefix) ?: return@rememberReorderableLazyListState
+        viewModel.reorderSkills(scope, moved, target)
+    }
+
+    LazyColumn(
+        state = lazyListState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(bottom = Spacing.xl)
     ) {
-        CollapsibleGroupHeader(
-            text = if (projectName != null) {
-                stringResource(R.string.perm_current_project, projectName)
+        // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
+        // 同组内的行不加间距，才能保持「一组连成一块卡片」。
+        item(key = SKILL_HEADER_PROJECT_KEY) {
+            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+                CollapsibleGroupHeader(
+                    text = if (projectName != null) {
+                        stringResource(R.string.perm_current_project, projectName)
+                    } else {
+                        stringResource(R.string.perm_current_project_none)
+                    },
+                    expanded = projectExpanded,
+                    onToggle = { projectExpanded = !projectExpanded }
+                )
+            }
+        }
+        if (projectExpanded) {
+            if (projectSkills.isEmpty()) {
+                item(key = SKILL_EMPTY_PROJECT_KEY) {
+                    SettingsGroup {
+                        SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
+                    }
+                }
             } else {
-                stringResource(R.string.perm_current_project_none)
-            },
-            expanded = projectExpanded,
-            onToggle = { projectExpanded = !projectExpanded }
-        )
-        AnimatedVisibility(visible = projectExpanded) {
-            SettingsGroup {
-                if (projectSkills.isEmpty()) {
-                    SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
-                } else {
-                    projectSkills.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
+                itemsIndexed(
+                    items = projectSkills,
+                    key = { _, entry -> skillItemKey(SkillScope.PROJECT, entry.name) }
+                ) { index, entry ->
+                    ReorderableCardRow(
+                        state = reorderableState,
+                        key = skillItemKey(SkillScope.PROJECT, entry.name),
+                        isFirst = index == 0,
+                        isLast = index == projectSkills.lastIndex,
+                        dragLabel = "skillProjectDrag"
+                    ) { dragModifier ->
                         SkillRow(
                             entry = entry,
                             onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
+                            onClick = { onOpenDetail(entry) },
+                            dragModifier = dragModifier
                         )
                     }
                 }
             }
         }
 
-        CollapsibleGroupHeader(
-            text = stringResource(R.string.perm_global),
-            expanded = globalExpanded,
-            onToggle = { globalExpanded = !globalExpanded }
-        )
-        AnimatedVisibility(visible = globalExpanded) {
-            SettingsGroup {
-                if (globalSkills.isEmpty()) {
-                    SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
-                } else {
-                    globalSkills.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
+        item(key = SKILL_HEADER_GLOBAL_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.perm_global),
+                    expanded = globalExpanded,
+                    onToggle = { globalExpanded = !globalExpanded }
+                )
+            }
+        }
+        if (globalExpanded) {
+            if (globalSkills.isEmpty()) {
+                item(key = SKILL_EMPTY_GLOBAL_KEY) {
+                    SettingsGroup {
+                        SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
+                    }
+                }
+            } else {
+                itemsIndexed(
+                    items = globalSkills,
+                    key = { _, entry -> skillItemKey(SkillScope.GLOBAL, entry.name) }
+                ) { index, entry ->
+                    ReorderableCardRow(
+                        state = reorderableState,
+                        key = skillItemKey(SkillScope.GLOBAL, entry.name),
+                        isFirst = index == 0,
+                        isLast = index == globalSkills.lastIndex,
+                        dragLabel = "skillGlobalDrag"
+                    ) { dragModifier ->
                         SkillRow(
                             entry = entry,
                             onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
+                            onClick = { onOpenDetail(entry) },
+                            dragModifier = dragModifier
                         )
                     }
                 }
@@ -162,7 +227,8 @@ internal fun SkillsSection(
 private fun SkillRow(
     entry: SkillUiEntry,
     onDelete: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    dragModifier: Modifier = Modifier
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
 
@@ -171,6 +237,7 @@ private fun SkillRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(rowBackground)
+                .then(dragModifier)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

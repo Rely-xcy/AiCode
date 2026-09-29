@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.net.AppProxy
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LogLevel
@@ -98,6 +99,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -336,7 +338,8 @@ class SettingsViewModel @Inject constructor(
     private val updateCheckService: UpdateCheckService,
     private val providerDashboardRunner: ProviderDashboardRunner,
     private val terminalSettingsRepository: TerminalSettingsRepository,
-    private val proxySettingsRepository: ProxySettingsRepository
+    private val proxySettingsRepository: ProxySettingsRepository,
+    private val listOrderStore: ListOrderStore
 ) : ViewModel() {
     private companion object {
         const val MAX_LOG_LINES = 1200
@@ -344,6 +347,9 @@ class SettingsViewModel @Inject constructor(
         const val STATS_PAGE_SIZE = 5
         /** 背景透明度停止拖动后的落盘延迟。 */
         const val BACKGROUND_ALPHA_WRITE_DEBOUNCE_MS = 80L
+
+        /** 列表拖拽排序的落盘延迟：拖动中只改内存，停手这么久后写一次。 */
+        const val REORDER_WRITE_DEBOUNCE_MS = 400L
 
         /** 技能文件导入接受的扩展名（小写，不含点）。 */
         val MARKDOWN_EXTENSIONS = setOf("md", "markdown", "txt")
@@ -580,6 +586,13 @@ class SettingsViewModel @Inject constructor(
 
     private val _disableSafetyInterception = MutableStateFlow(false)
     val disableSafetyInterception: StateFlow<Boolean> = _disableSafetyInterception.asStateFlow()
+
+    /** 各列表排序落盘的防抖 job，见 [debounceOrderWrite]。 */
+    private val orderWriteJobs = mutableMapOf<String, Job>()
+
+    /** 默认模型页四行的顺序（拖拽排过才不是默认序）。 */
+    private val _defaultModelRowOrder = MutableStateFlow(ListOrderStore.DEFAULT_MODEL_ROW_IDS)
+    val defaultModelRowOrder: StateFlow<List<String>> = _defaultModelRowOrder.asStateFlow()
 
     private val _activeProfileId = MutableStateFlow(ContainerProfile.BUILTIN_ID)
     val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
@@ -911,6 +924,17 @@ class SettingsViewModel @Inject constructor(
 
             launch {
                 refreshSkills()
+            }
+
+            launch {
+                // 默认模型页四行的自定义顺序：顺序表里可能残留已删掉的行 id，
+                // 已知 id 按表序在前，表里没有的按默认序补在后面。
+                val stored = listOrderStore.orderFlow(ListOrderStore.KEY_DEFAULT_MODEL_ROWS).first()
+                if (stored.isNotEmpty()) {
+                    val known = stored.filter { it in ListOrderStore.DEFAULT_MODEL_ROW_IDS }.distinct()
+                    _defaultModelRowOrder.value =
+                        known + ListOrderStore.DEFAULT_MODEL_ROW_IDS.filterNot { it in known }
+                }
             }
 
             launch {
@@ -2019,7 +2043,10 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 提供商列表长按拖拽排序：同步更新内存顺序（reorderable 库要求 onMove 返回前列表已更新，否则拖拽项闪烁），再异步持久化 sortOrder。 */
+    /**
+     * 提供商列表长按拖拽排序：同步更新内存顺序（reorderable 库要求 onMove 返回前列表已更新，否则拖拽项闪烁），
+     * 再防抖持久化 sortOrder。
+     */
     fun reorderProviders(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
         val current = _providers.value
@@ -2028,8 +2055,115 @@ class SettingsViewModel @Inject constructor(
             add(toIndex, removeAt(fromIndex))
         }
         _providers.value = reordered
-        viewModelScope.launch {
-            repository.reorderProviders(reordered)
+        debounceOrderWrite("providers") {
+            repository.reorderProviders(_providers.value)
+        }
+    }
+
+    /**
+     * 列表排序落盘的防抖：拖动中不写盘，停手 [REORDER_WRITE_DEBOUNCE_MS] 后写一次。
+     * 按 key 分开存 job，不同列表的写入互不取消。落盘一律在写之前重读内存顺序，
+     * 因此一次拖拽里连续多次 onMove 只会把最终顺序写一次。
+     */
+    private fun debounceOrderWrite(key: String, write: suspend () -> Unit) {
+        orderWriteJobs[key]?.cancel()
+        orderWriteJobs[key] = viewModelScope.launch {
+            delay(REORDER_WRITE_DEBOUNCE_MS)
+            write()
+        }
+    }
+
+    /**
+     * MCP 服务器长按拖拽排序：只在同一作用域（全局 / 项目）内拖。
+     * MCP 配置数组的顺序就是列表顺序，所以重排直接重写该作用域的数组，不另建顺序表（两处存会 desync）。
+     *
+     * 参数用 name 而不是下标：列表下标是「跳过分组标题等其它 item」的全局下标，
+     * 交给 VM 自己在其权威列表里定位更不容易错（界面上同一作用域的行并不连续）。
+     */
+    fun reorderMcpServers(scope: McpScope, movedName: String, targetName: String) {
+        val current = _mcpEntries.value
+        val scoped = current.filter { it.scope == scope }
+        val fromIndex = scoped.indexOfFirst { it.server.name == movedName }
+        val toIndex = scoped.indexOfFirst { it.server.name == targetName }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val moved = scoped.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        val queue = ArrayDeque(moved)
+        _mcpEntries.value = current.map { if (it.scope == scope) queue.removeFirst() else it }
+        debounceOrderWrite("mcp.${scope.name}") { persistMcpOrder(scope) }
+    }
+
+    /**
+     * 把内存里的顺序写回该作用域的配置数组：可见项按新顺序占位，被项目级同名覆盖而不可见的全局项
+     * 留在原槽位，避免重排把这些配置丢掉。
+     */
+    private suspend fun persistMcpOrder(scope: McpScope) {
+        val visible = _mcpEntries.value.filter { it.scope == scope }.map { it.server.name }
+        if (visible.isEmpty()) return
+        val base = if (scope == McpScope.GLOBAL) {
+            mcpConfigRepository.getGlobalServers()
+        } else {
+            mcpConfigRepository.getProjectServers()
+        }
+        val byName = base.associateBy { it.name }
+        val ordered = visible.mapNotNull { byName[it] }
+        if (ordered.isEmpty()) return
+        val visibleNames = visible.toSet()
+        val slots = base.indices.filter { base[it].name in visibleNames }
+        val next = base.toMutableList()
+        slots.forEachIndexed { index, slot -> next[slot] = ordered[index] }
+        if (scope == McpScope.GLOBAL) {
+            mcpConfigRepository.setGlobalServers(next)
+        } else {
+            mcpConfigRepository.setProjectServers(next)
+        }
+    }
+
+    /** 技能列表长按拖拽排序：只在同一作用域内拖，顺序表按作用域分开存；参数是该作用域内的技能名。 */
+    fun reorderSkills(scope: SkillScope, movedName: String, targetName: String) {
+        val current = _skills.value
+        val scoped = current.filter { it.scope == scope }
+        val fromIndex = scoped.indexOfFirst { it.name == movedName }
+        val toIndex = scoped.indexOfFirst { it.name == targetName }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val moved = scoped.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        val queue = ArrayDeque(moved)
+        _skills.value = current.map { if (it.scope == scope) queue.removeFirst() else it }
+        val key = if (scope == SkillScope.GLOBAL) ListOrderStore.KEY_SKILLS_GLOBAL else ListOrderStore.KEY_SKILLS_PROJECT
+        debounceOrderWrite(key) {
+            listOrderStore.save(key, _skills.value.filter { it.scope == scope }.map { it.name })
+        }
+    }
+
+    /** 子代理列表长按拖拽排序：只在同一作用域内拖，顺序表按作用域分开存；参数是该作用域内的定义名。 */
+    fun reorderSubAgents(scope: AgentDefinitionScope, movedName: String, targetName: String) {
+        val current = _subAgents.value
+        val scoped = current.filter { it.scope == scope }
+        val fromIndex = scoped.indexOfFirst { it.name == movedName }
+        val toIndex = scoped.indexOfFirst { it.name == targetName }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val moved = scoped.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        val queue = ArrayDeque(moved)
+        _subAgents.value = current.map { if (it.scope == scope) queue.removeFirst() else it }
+        val key = if (scope == AgentDefinitionScope.GLOBAL) {
+            ListOrderStore.KEY_SUB_AGENTS_GLOBAL
+        } else {
+            ListOrderStore.KEY_SUB_AGENTS_PROJECT
+        }
+        debounceOrderWrite(key) {
+            listOrderStore.save(key, _subAgents.value.filter { it.scope == scope }.map { it.name })
+        }
+    }
+
+    /** 默认模型页四行的长按拖拽排序（固定四行，顺序只是展示顺序）。 */
+    fun reorderDefaultModelRows(movedId: String, targetId: String) {
+        val current = _defaultModelRowOrder.value
+        val fromIndex = current.indexOf(movedId)
+        val toIndex = current.indexOf(targetId)
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val reordered = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        _defaultModelRowOrder.value = reordered
+        debounceOrderWrite(ListOrderStore.KEY_DEFAULT_MODEL_ROWS) {
+            listOrderStore.save(ListOrderStore.KEY_DEFAULT_MODEL_ROWS, reordered)
         }
     }
 

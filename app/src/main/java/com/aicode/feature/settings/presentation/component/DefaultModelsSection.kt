@@ -16,10 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,7 +41,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
@@ -58,9 +59,17 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
 import compose.icons.feathericons.Type
+import sh.calvin.reorderable.rememberReorderableLazyListState
+
+/** 默认模型页的行 id，与 ListOrderStore.DEFAULT_MODEL_ROW_IDS 一一对应。 */
+private const val ROW_VISION = "vision"
+private const val ROW_COMPACTION = "compaction"
+private const val ROW_TITLE = "title"
+private const val ROW_IMAGE_GEN = "image_gen"
 
 /**
  * 默认模型二级页：集中管理应用中的默认/特定用途模型设置（如识图模型、压缩模型）。
+ * 四行可长按拖拽调整展示顺序（顺序只影响本页展示，存 ListOrderStore）。
  */
 @Composable
 internal fun DefaultModelsSection(
@@ -115,82 +124,112 @@ internal fun DefaultModelsSection(
         imageGenModel
     }
 
-    Column(
+    val settingsViewModel = rememberSettingsViewModel()
+    val defaultRowOrder = remember { ListOrderStore.DEFAULT_MODEL_ROW_IDS }
+    // VM 缺失（非 Activity 宿主）时退回默认顺序，页面照常渲染，只是拖不动
+    val rowOrder = if (settingsViewModel != null) {
+        settingsViewModel.defaultModelRowOrder.collectAsStateWithLifecycle().value
+    } else {
+        defaultRowOrder
+    }
+    val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
+        // 这一页只有四行、没有分组标题等其它 item，key 就是行 id，直接交给 VM 在自己的顺序里定位。
+        val moved = from.key as? String ?: return@rememberReorderableLazyListState
+        val target = to.key as? String ?: return@rememberReorderableLazyListState
+        viewModel.reorderDefaultModelRows(moved, target)
+    }
+
+    LazyColumn(
+        state = lazyListState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(bottom = Spacing.xl)
     ) {
-        SettingsGroup {
-            SettingsRow(
-                icon = FeatherIcons.Image,
-                title = stringResource(R.string.settings_vision_model),
-                onClick = { showVisionSheet = true },
-                trailing = {
-                    Text(
-                        text = visionValue,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+        itemsIndexed(items = rowOrder, key = { _, id -> id }) { index, id ->
+            ReorderableCardRow(
+                state = reorderableState,
+                key = id,
+                isFirst = index == 0,
+                isLast = index == rowOrder.lastIndex,
+                dragLabel = "defaultModelRowDrag"
+            ) { dragModifier ->
+                when (id) {
+                    ROW_VISION -> SettingsRow(
+                        icon = FeatherIcons.Image,
+                        title = stringResource(R.string.settings_vision_model),
+                        onClick = { showVisionSheet = true },
+                        trailing = {
+                            Text(
+                                text = visionValue,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(2f)
+                            )
+                        },
+                        modifier = dragModifier
+                    )
+
+                    ROW_COMPACTION -> SettingsRow(
+                        icon = FeatherIcons.Minimize2,
+                        title = stringResource(R.string.settings_compaction_model),
+                        onClick = { showCompactionSheet = true },
+                        trailing = {
+                            Text(
+                                text = compactionValue,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(2f)
+                            )
+                        },
+                        modifier = dragModifier
+                    )
+
+                    ROW_TITLE -> SettingsRow(
+                        icon = FeatherIcons.Type,
+                        title = stringResource(R.string.settings_title_model),
+                        onClick = { showTitleSheet = true },
+                        trailing = {
+                            Text(
+                                text = titleValue,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(2f)
+                            )
+                        },
+                        modifier = dragModifier
+                    )
+
+                    ROW_IMAGE_GEN -> SettingsRow(
+                        icon = FeatherIcons.Camera,
+                        title = stringResource(R.string.settings_image_gen_model),
+                        onClick = { showImageGenSheet = true },
+                        trailing = {
+                            Text(
+                                text = imageGenValue,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(2f)
+                            )
+                        },
+                        modifier = dragModifier
                     )
                 }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Minimize2,
-                title = stringResource(R.string.settings_compaction_model),
-                onClick = { showCompactionSheet = true },
-                trailing = {
-                    Text(
-                        text = compactionValue,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
-                    )
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Type,
-                title = stringResource(R.string.settings_title_model),
-                onClick = { showTitleSheet = true },
-                trailing = {
-                    Text(
-                        text = titleValue,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
-                    )
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Camera,
-                title = stringResource(R.string.settings_image_gen_model),
-                onClick = { showImageGenSheet = true },
-                trailing = {
-                    Text(
-                        text = imageGenValue,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
-                    )
-                }
-            )
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.prompt
 
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
@@ -22,7 +23,9 @@ import javax.inject.Singleton
 @Singleton
 class UserPromptStore @Inject constructor(
     private val containerInstaller: ContainerInstaller,
-    private val projectAicodeRoot: ProjectAicodeRoot
+    private val projectAicodeRoot: ProjectAicodeRoot,
+    /** 用户拖拽排过的顺序表；单元测试直接构造本类时不需要（为空即按创建顺序）。 */
+    private val listOrderStore: ListOrderStore? = null
 ) {
 
     /** 新建一条：id 由这里生成（时间戳 + 随机后缀，保证文件名不冲突）。 */
@@ -37,13 +40,22 @@ class UserPromptStore @Inject constructor(
         content = content
     )
 
-    /** 列出某作用域下的用户提示词，按创建顺序（文件名内嵌时间戳，字典序即创建序）。 */
+    /**
+     * 列出某作用域下的用户提示词：用户拖拽排过的顺序优先，没排过的按创建顺序
+     * （文件名内嵌时间戳，字典序即创建序）。注入顺序也走这里，所以拖拽调整的顺序会直接反映到注入顺序。
+     */
     fun list(scope: UserPromptScope, projectRoot: String?): List<UserPrompt> {
         val dir = userDir(scope, projectRoot) ?: return emptyList()
         if (!dir.isDirectory) return emptyList()
-        return (dir.listFiles { file -> file.isFile && file.extension == "md" } ?: return emptyList())
+        val prompts = (dir.listFiles { file -> file.isFile && file.extension == "md" } ?: return emptyList())
             .sortedBy { it.name }
             .mapNotNull { parse(it) }
+        return listOrderStore?.sort(prompts, orderKey(scope)) { it.id } ?: prompts
+    }
+
+    private fun orderKey(scope: UserPromptScope): String = when (scope) {
+        UserPromptScope.GLOBAL -> ListOrderStore.KEY_PROMPTS_GLOBAL
+        UserPromptScope.PROJECT -> ListOrderStore.KEY_PROMPTS_PROJECT
     }
 
     fun save(scope: UserPromptScope, projectRoot: String?, prompt: UserPrompt): Boolean {

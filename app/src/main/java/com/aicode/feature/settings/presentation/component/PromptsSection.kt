@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -36,11 +40,13 @@ import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.settings.presentation.PromptsUiState
+import com.aicode.feature.settings.presentation.PromptsViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Sliders
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * 编辑目标：区分三种入口。
@@ -58,8 +64,24 @@ internal data class PromptEditTarget(
 /**
  * 自定义提示词页：顶部一句说明 + 固定内置片段（00）+ 全局/项目两组用户提示词。
  *
- * 用户提示词按「创建顺序」注入，分「最前 / 最后 / 关闭」三种位置，见 [UserPromptPosition]。
+ * 用户提示词按「创建顺序」注入，分「最前 / 最后 / 关闭」三种位置，见 [UserPromptPosition]；
+ * 长按整行可拖拽调整顺序（仅同组内），顺序表存 ListOrderStore，注入顺序同步跟随。
  */
+
+/** 列表 item key 前缀：既标识身份，也用来判定分组，跨组拖拽会被拦下。 */
+private const val PROMPT_GLOBAL_PREFIX = "prompt_global_"
+private const val PROMPT_PROJECT_PREFIX = "prompt_project_"
+private const val PROMPT_HINT_KEY = "prompts_hint"
+private const val PROMPT_HEADER_DEFAULT_KEY = "prompts_header_default"
+private const val PROMPT_DEFAULT_ROW_KEY = "prompts_default_row"
+private const val PROMPT_HEADER_GLOBAL_KEY = "prompts_header_global"
+private const val PROMPT_HEADER_PROJECT_KEY = "prompts_header_project"
+private const val PROMPT_EMPTY_GLOBAL_KEY = "prompts_empty_global"
+private const val PROMPT_EMPTY_PROJECT_KEY = "prompts_empty_project"
+
+private fun promptItemKey(scope: UserPromptScope, id: String): String =
+    listItemKey(if (scope == UserPromptScope.GLOBAL) PROMPT_GLOBAL_PREFIX else PROMPT_PROJECT_PREFIX, id)
+
 @Composable
 internal fun PromptsSection(
     state: PromptsUiState,
@@ -74,67 +96,128 @@ internal fun PromptsSection(
         return
     }
 
-    Column(
+    val promptsViewModel: PromptsViewModel = hiltViewModel()
+    val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        // onMove 的 from/to 是含说明文案、分组标题、内置片段行的全局下标，
+        // 这里用带分组前缀的 item key 反查身份：前缀不一致就是跨组；组内下标交给 VM 在自己列表里定位。
+        val scope = when {
+            itemIdOf(from.key, PROMPT_GLOBAL_PREFIX) != null -> UserPromptScope.GLOBAL
+            itemIdOf(from.key, PROMPT_PROJECT_PREFIX) != null -> UserPromptScope.PROJECT
+            else -> return@rememberReorderableLazyListState
+        }
+        val prefix = if (scope == UserPromptScope.GLOBAL) PROMPT_GLOBAL_PREFIX else PROMPT_PROJECT_PREFIX
+        val moved = itemIdOf(from.key, prefix) ?: return@rememberReorderableLazyListState
+        val target = itemIdOf(to.key, prefix) ?: return@rememberReorderableLazyListState
+        promptsViewModel.reorderPrompts(scope, moved, target)
+    }
+
+    LazyColumn(
+        state = lazyListState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(bottom = Spacing.xl)
     ) {
-        Text(
-            text = stringResource(R.string.prompts_hint),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.xs)
-        )
-
-        SettingsGroupHeader(text = stringResource(R.string.prompts_group_default))
-        SettingsGroup {
-            PromptRow(
-                title = stringResource(R.string.prompts_default_title),
-                subtitle = stringResource(
-                    if (state.defaultFragmentOverridden) R.string.prompts_state_overridden
-                    else R.string.prompts_state_builtin
-                ),
-                onClick = onOpenDefaultFragment
-            )
+        // 各组之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
+        // 同组内的行不加间距，才能保持「一组连成一块卡片」。
+        item(key = PROMPT_HINT_KEY) {
+            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+                Text(
+                    text = stringResource(R.string.prompts_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.xs)
+                )
+            }
         }
 
-        SettingsGroupHeader(text = stringResource(R.string.perm_global))
-        SettingsGroup {
-            if (state.globalPrompts.isEmpty()) {
-                PromptEmptyHint(stringResource(R.string.prompts_empty))
-            } else {
-                state.globalPrompts.forEachIndexed { index, prompt ->
-                    if (index > 0) SettingsDivider()
+        item(key = PROMPT_HEADER_DEFAULT_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                SettingsGroupHeader(text = stringResource(R.string.prompts_group_default))
+            }
+        }
+        item(key = PROMPT_DEFAULT_ROW_KEY) {
+            SettingsGroup {
+                PromptRow(
+                    title = stringResource(R.string.prompts_default_title),
+                    subtitle = stringResource(
+                        if (state.defaultFragmentOverridden) R.string.prompts_state_overridden
+                        else R.string.prompts_state_builtin
+                    ),
+                    onClick = onOpenDefaultFragment
+                )
+            }
+        }
+
+        item(key = PROMPT_HEADER_GLOBAL_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                SettingsGroupHeader(text = stringResource(R.string.perm_global))
+            }
+        }
+        if (state.globalPrompts.isEmpty()) {
+            item(key = PROMPT_EMPTY_GLOBAL_KEY) {
+                SettingsGroup {
+                    PromptEmptyHint(stringResource(R.string.prompts_empty))
+                }
+            }
+        } else {
+            itemsIndexed(
+                items = state.globalPrompts,
+                key = { _, prompt -> promptItemKey(UserPromptScope.GLOBAL, prompt.id) }
+            ) { index, prompt ->
+                ReorderableCardRow(
+                    state = reorderableState,
+                    key = promptItemKey(UserPromptScope.GLOBAL, prompt.id),
+                    isFirst = index == 0,
+                    isLast = index == state.globalPrompts.lastIndex,
+                    dragLabel = "promptGlobalDrag"
+                ) { dragModifier ->
                     PromptRow(
                         title = prompt.name,
                         subtitle = positionLabel(prompt.position),
                         onClick = { onOpenPrompt(prompt, UserPromptScope.GLOBAL) },
-                        onDelete = { onDeletePrompt(prompt, UserPromptScope.GLOBAL) }
+                        onDelete = { onDeletePrompt(prompt, UserPromptScope.GLOBAL) },
+                        dragModifier = dragModifier
                     )
                 }
             }
         }
 
-        SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
-        SettingsGroup {
-            if (state.projectPrompts.isEmpty()) {
-                PromptEmptyHint(
-                    stringResource(
-                        if (state.hasWorkspace) R.string.prompts_empty
-                        else R.string.prompts_no_workspace
+        item(key = PROMPT_HEADER_PROJECT_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
+            }
+        }
+        if (state.projectPrompts.isEmpty()) {
+            item(key = PROMPT_EMPTY_PROJECT_KEY) {
+                SettingsGroup {
+                    PromptEmptyHint(
+                        stringResource(
+                            if (state.hasWorkspace) R.string.prompts_empty
+                            else R.string.prompts_no_workspace
+                        )
                     )
-                )
-            } else {
-                state.projectPrompts.forEachIndexed { index, prompt ->
-                    if (index > 0) SettingsDivider()
+                }
+            }
+        } else {
+            itemsIndexed(
+                items = state.projectPrompts,
+                key = { _, prompt -> promptItemKey(UserPromptScope.PROJECT, prompt.id) }
+            ) { index, prompt ->
+                ReorderableCardRow(
+                    state = reorderableState,
+                    key = promptItemKey(UserPromptScope.PROJECT, prompt.id),
+                    isFirst = index == 0,
+                    isLast = index == state.projectPrompts.lastIndex,
+                    dragLabel = "promptProjectDrag"
+                ) { dragModifier ->
                     PromptRow(
                         title = prompt.name,
                         subtitle = positionLabel(prompt.position),
                         onClick = { onOpenPrompt(prompt, UserPromptScope.PROJECT) },
-                        onDelete = { onDeletePrompt(prompt, UserPromptScope.PROJECT) }
+                        onDelete = { onDeletePrompt(prompt, UserPromptScope.PROJECT) },
+                        dragModifier = dragModifier
                     )
                 }
             }
@@ -305,13 +388,15 @@ private fun PromptRow(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    dragModifier: Modifier = Modifier
 ) {
     val row: @Composable () -> Unit = {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.semanticColors.cardSurface)
+                .then(dragModifier)
                 .padding(start = Spacing.lg, end = Spacing.lg, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

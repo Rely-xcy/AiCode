@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.skill
 
+import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.LocalFileAccess
@@ -20,11 +21,23 @@ class SkillRepository @Inject constructor(
     private val projectDirectorySkillSource: ProjectDirectorySkillSource,
     private val skillConfigRepository: SkillConfigRepository,
     private val localFileAccess: LocalFileAccess,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val listOrderStore: ListOrderStore
 ) {
-    /** 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。 */
-    fun listAllSkills(): List<SkillEntry> =
-        mergeAll(localDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
+    /**
+     * 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。
+     * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
+     */
+    fun listAllSkills(): List<SkillEntry> {
+        val merged = mergeAll(localDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
+        return listOrderStore.sort(
+            merged.filter { it.scope == SkillScope.GLOBAL },
+            ListOrderStore.KEY_SKILLS_GLOBAL
+        ) { it.skill.name } + listOrderStore.sort(
+            merged.filter { it.scope == SkillScope.PROJECT },
+            ListOrderStore.KEY_SKILLS_PROJECT
+        ) { it.skill.name }
+    }
 
     /** 启用的技能列表（注入系统提示词用），禁用技能被过滤。 */
     fun listSkills(): List<Skill> =
