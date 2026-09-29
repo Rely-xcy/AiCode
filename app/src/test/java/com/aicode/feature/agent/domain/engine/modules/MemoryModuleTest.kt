@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.feature.agent.domain.engine.EngineContext
+import com.aicode.feature.agent.domain.memory.MemoryCurator
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryRepository
@@ -18,23 +19,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 记忆模块的沉淀调度：开关、子代理、轮次节流。
+ * 记忆模块的调度：开关、子代理、**按时间触发治理**（不再按轮）。
  *
- * 抽取本身（提示词、解析、写入）已搬到 [MemoryExtractor]，这里只验证「什么时候叫它」。
+ * 治理本身（本地规则 + 模型判定）在 [MemoryCurator]，这里只验证「什么时候叫它」。
  */
 class MemoryModuleTest {
 
     private val history = listOf(AgentMessage.UserMessage(content = "以后回答短一点"))
 
-    private fun module(settingsEnabled: Boolean): Pair<MemoryModule, MemoryExtractor> {
+    private class Harness(
+        val module: MemoryModule,
+        val curator: MemoryCurator,
+        val settings: MemorySettingsRepository
+    )
+
+    private fun harness(
+        settingsEnabled: Boolean = true,
+        lastCuratedAt: Long = 0L,
+        intervalHours: Int = 24
+    ): Harness {
         val repository = mockk<MemoryRepository>(relaxed = true)
-        val extractor = mockk<MemoryExtractor>(relaxed = true)
+        val curator = mockk<MemoryCurator>(relaxed = true)
         val settings = mockk<MemorySettingsRepository>()
         coEvery { settings.autoDistillEnabled() } returns settingsEnabled
+        coEvery { settings.curationIntervalHours() } returns intervalHours
+        coEvery { settings.lastCuratedAt() } returns lastCuratedAt
         every { repository.listMemories(any()) } returns emptyList()
         // changes 的类型是 SharedFlow，不能用 emptyFlow（那是 Flow）
         every { repository.changes } returns MutableSharedFlow()
-        return MemoryModule(repository, extractor, settings) to extractor
+        return Harness(MemoryModule(repository, curator, settings), curator, settings)
     }
 
     private fun ctx(oneShot: (suspend (String, String) -> String?)?) = EngineContext(
@@ -45,58 +58,60 @@ class MemoryModuleTest {
     )
 
     @Test
-    fun onTurnCompleted_distillsAfterEnoughTurns() = runTest {
-        val (module, extractor) = module(settingsEnabled = true)
+    fun onTurnCompleted_curatesOnceIntervalElapsed() = runTest {
+        val h = harness(lastCuratedAt = System.currentTimeMillis() - 25L * 60 * 60 * 1000)
 
-        // 归约是攒够 DISTILL_EVERY_TURNS 轮才跑一次
-        repeat(5) { module.onTurnCompleted(ctx { _, _ -> "[]" }) }
+        h.module.onTurnCompleted(ctx { _, _ -> "[]" })
 
-        coVerify(exactly = 1) {
-            extractor.extract(
-                projectRoot = "/ws",
-                history = any(),
-                source = MemoryExtractor.SOURCE_AUTO_DISTILL,
-                complete = any()
-            )
-        }
+        coVerify(exactly = 1) { h.curator.curate(projectRoot = "/ws", complete = any()) }
+        // 看过就记时间戳：即使这轮没有改动，也不该每轮重看
+        coVerify(exactly = 1) { h.settings.setLastCuratedAt(any()) }
     }
 
     @Test
-    fun onTurnCompleted_waitsUntilEnoughTurnsBeforeDistilling() = runTest {
-        val (module, extractor) = module(settingsEnabled = true)
+    fun onTurnCompleted_skipsBeforeIntervalElapsed() = runTest {
+        val h = harness(lastCuratedAt = System.currentTimeMillis() - 60L * 1000)
 
-        repeat(4) { module.onTurnCompleted(ctx { _, _ -> "[]" }) }
+        repeat(5) { h.module.onTurnCompleted(ctx { _, _ -> "[]" }) }
 
-        coVerify(exactly = 0) { extractor.extract(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { h.curator.curate(any(), any()) }
+    }
+
+    @Test
+    fun onTurnCompleted_curatesWhenNeverCurated() = runTest {
+        val h = harness(lastCuratedAt = 0L)
+
+        h.module.onTurnCompleted(ctx { _, _ -> "[]" })
+
+        coVerify(exactly = 1) { h.curator.curate(any(), any()) }
     }
 
     @Test
     fun onTurnCompleted_doesNothingWhenSwitchOff() = runTest {
-        val (module, extractor) = module(settingsEnabled = false)
+        val h = harness(settingsEnabled = false, lastCuratedAt = 0L)
 
-        // 攒够轮数也不写（开关关着直接在计数前返回）
-        repeat(5) { module.onTurnCompleted(ctx { _, _ -> "[]" }) }
+        h.module.onTurnCompleted(ctx { _, _ -> "[]" })
 
-        coVerify(exactly = 0) { extractor.extract(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { h.curator.curate(any(), any()) }
     }
 
     @Test
     fun onTurnCompleted_doesNothingForSubAgentSession() = runTest {
-        val (module, extractor) = module(settingsEnabled = true)
-        val subCtx = ctx { _, _ -> "[]" }.copy(isSubAgent = true)
+        val h = harness(lastCuratedAt = 0L)
 
-        module.onTurnCompleted(subCtx)
+        h.module.onTurnCompleted(ctx { _, _ -> "[]" }.copy(isSubAgent = true))
 
-        coVerify(exactly = 0) { extractor.extract(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { h.curator.curate(any(), any()) }
     }
 
     @Test
-    fun onTurnCompleted_doesNothingWithoutOneShotCapability() = runTest {
-        val (module, extractor) = module(settingsEnabled = true)
+    fun onTurnCompleted_stillCuratesWithoutModelCapability() = runTest {
+        // 拿不到一次性调用能力时仍要跑本地那层零成本规则
+        val h = harness(lastCuratedAt = 0L)
 
-        repeat(5) { module.onTurnCompleted(ctx(oneShot = null)) }
+        h.module.onTurnCompleted(ctx(oneShot = null))
 
-        coVerify(exactly = 0) { extractor.extract(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { h.curator.curate(projectRoot = "/ws", complete = null) }
     }
 
     @Test

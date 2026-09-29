@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.engine.modules
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
+import com.aicode.feature.agent.domain.memory.MemoryCurator
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryRanker
@@ -32,7 +33,7 @@ import javax.inject.Singleton
 @Singleton
 class MemoryModule @Inject constructor(
     private val memoryRepository: MemoryRepository,
-    private val memoryExtractor: MemoryExtractor,
+    private val memoryCurator: MemoryCurator,
     private val memorySettings: MemorySettingsRepository
 ) : EngineModule {
 
@@ -56,11 +57,8 @@ class MemoryModule @Inject constructor(
 
     private val cachedByKey = ConcurrentHashMap<CacheKey, String>()
 
-    /** 每个会话已积累的轮数，够 [DISTILL_EVERY_TURNS] 才归约一次。 */
-    private val turnsSinceDistill = ConcurrentHashMap<String, Int>()
-
-    /** 每会话一把锁：归约是并发分发的，上一次没跑完就不开新的，避免重复写入。 */
-    private val distillLocks = ConcurrentHashMap<String, Mutex>()
+    /** 每个会话已积累的轮数已不再使用：沉淀改成按时间治理，不按轮。 */
+    private val curationLocks = ConcurrentHashMap<String, Mutex>()
 
     // 声明在 init 之前：Kotlin 按声明顺序初始化
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -141,38 +139,37 @@ class MemoryModule @Inject constructor(
             .take(QUERY_MAX_CHARS)
 
     /**
-     * 每轮对话结束后沉淀长期记忆。
+     * 一轮结束后：到点就做一次记忆治理。
      *
-     * 只有开关打开、非子代理会话、且调用方递进了一次性模型调用能力时才干活；
-     * 归纳结果解析失败或模型返回空数组都算「这轮没什么可记的」，静默跳过。
+     * 不再「每 N 轮归约」——开发过程中大多是写新功能或修 bug，很少会冒出值得沉淀的稳定偏好，
+     * 每几轮跑一次模型既费钱又依赖模型能力（模型不够聪明就不会按格式输出）。
+     * 改为：日常靠主模型用 memory 工具主动记（用户可见），沉淀靠低频治理。
      */
     override suspend fun onTurnCompleted(ctx: EngineContext) {
         if (ctx.isSubAgent) return
         if (ctx.history.isEmpty()) return
-        val complete = ctx.oneShot ?: return
         if (!memorySettings.autoDistillEnabled()) return
         val sessionKey = ctx.sessionId ?: return
 
-        // 攒够若干轮才归约一次：每轮都调模型太贵，而主路的主动记忆已经覆盖了当轮偏好。
-        val turns = (turnsSinceDistill[sessionKey] ?: 0) + 1
-        if (turns < DISTILL_EVERY_TURNS) {
-            turnsSinceDistill[sessionKey] = turns
-            return
-        }
-        turnsSinceDistill[sessionKey] = 0
+        val intervalHours = memorySettings.curationIntervalHours()
+        val lastCuratedAt = memorySettings.lastCuratedAt()
+        val elapsed = System.currentTimeMillis() - lastCuratedAt
+        if (lastCuratedAt > 0 && elapsed < intervalHours * 60L * 60 * 1000) return
 
-        // 归约由引擎并发分发，上一轮可能还没跑完；同一会话不重叠，避免重复写入
-        val lock = distillLocks.getOrPut(sessionKey) { Mutex() }
+        // 治理是并发分发的，上一次没跑完就不开新的，避免重复处理同一批记忆
+        val lock = curationLocks.getOrPut(sessionKey) { Mutex() }
         if (!lock.tryLock()) return
         try {
-            val written = memoryExtractor.extract(
+            val complete = ctx.oneShot
+            val result = memoryCurator.curate(
                 projectRoot = ctx.projectRoot,
-                history = ctx.history,
-                source = MemoryExtractor.SOURCE_AUTO_DISTILL,
-                complete = { userPrompt -> complete(PROMPT_FILE, userPrompt) }
+                complete = complete?.let { oneShot ->
+                    { userPrompt -> oneShot(CURATOR_PROMPT_FILE, userPrompt) }
+                }
             )
-            if (written > 0) {
-                // 本轮新增/更新了记忆 → 丢掉本会话的注入缓存，下一轮注入就带上新内容
+            // 无论有没有改动都记时间戳：没改动也说明这轮看过了，不该每轮重看
+            memorySettings.setLastCuratedAt(System.currentTimeMillis())
+            if (result.changed) {
                 cachedByKey.keys
                     .filter { it.sessionId == ctx.sessionId && it.projectRoot == ctx.projectRoot }
                     .forEach { cachedByKey.remove(it) }
@@ -184,7 +181,7 @@ class MemoryModule @Inject constructor(
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         cachedByKey.keys.removeAll { it.sessionId == ctx.sessionId }
-        ctx.sessionId?.let { turnsSinceDistill.remove(it) }
+        ctx.sessionId?.let { curationLocks.remove(it) }
     }
 
     /** 注入缓存上限：会话多了不能让缓存无限长大。 */
@@ -197,8 +194,8 @@ class MemoryModule @Inject constructor(
         const val TAG = "MemoryModule"
         const val SOURCE_CACHE_LIMIT = 64
 
-        /** B 路归约间隔：每这么多轮才跑一次独立归纳。 */
-        const val DISTILL_EVERY_TURNS = 5
+        /** 治理提示词：只发名称+描述，不发正文（省钱）。 */
+        const val CURATOR_PROMPT_FILE = "agent/memory-curator.md"
 
         /**
          * 主动记忆规则（A 路）：开关打开时注入，让主模型在对话中自己把稳定结论存下来。
@@ -206,17 +203,19 @@ class MemoryModule @Inject constructor(
          * 用户几乎不会明说「记住这个」，偏好大多是隐含的。
          */
         val AUTO_SAVE_RULE = """
-            长期记忆（开关已打开，你需要主动维护）：
+            长期记忆（开关已打开，你需要主动维护，用户能在设置里的记忆页看到）：
             每轮回复收尾前，先判断这一轮是否出现了关于用户的稳定结论——
             偏好与表达习惯、工作方式、对你做法的纠正、环境或工具限制（设备/网络/权限/跑不起来的东西）、
             项目约定与架构决策、反复出现的术语与路径、关于用户自身的稳定事实。
             判据：如果未来某次会话一开始就知道这条，你会不会做得不一样？会 → 调用
             memory(action=save, scope=global, name=<短英文 slug>, description=<一句话>, content=<1-3 行>) 存下来。
-            不要等用户说「记住」，也不要等他要求；发现即记。保存成功后在回复末尾用一行说明记了什么。
+            宁多勿少：漏记比多记更糟，用户可以自己删；不要等用户说「记住」，发现即记。
+            没有条数上限，但也不要为了凑数把同一件事拆成多条。
+            保存成功后在回复末尾用一行说明记了什么。
             不要记：一次性任务细节、工具输出、代码片段、明天就过期的状态。
         """.trimIndent()
 
-        /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，两个入口（按轮归约 / 折叠前抽取）共用。 */
+        /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，供压缩前抽取使用。 */
         const val PROMPT_FILE = MemoryExtractor.PROMPT_FILE
 
         /** 单条记忆注入系统提示词时的条数上限。
