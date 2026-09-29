@@ -243,17 +243,23 @@ class ContextCompactor @Inject constructor(
         if (sessionId != null) {
             try {
                 val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
-                val tailFirstTs = tail.firstNotNullOfOrNull { msg ->
-                    dbEntities.find { it.id == msg.id }?.timestamp
-                }
-                val anchorTs = tailFirstTs ?: System.currentTimeMillis()
+                // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
+                // user/assistant 落库是随机 UUID、内存态常为空串。所以逐级兜底匹配，不能只比 id。
+                val anchorTs = tail.firstNotNullOfOrNull { msg -> resolveRowTimestamp(dbEntities, msg) }
 
-                agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
+                // 找不到锚点就什么都不标记：宁可让 head 下一轮多回放一次（重复总比丢好），
+                // 也绝不能用「当前时间」当锚点——它大于会话里所有行，会把要保留的 tail
+                // 一起标成已压缩；而 tail 没进归档，下一轮就直接从回放里消失。
+                if (anchorTs == null) {
+                    FileLogger.w(TAG, "压缩时匹配不到 tail 对应的库行，跳过 isCompacted 标记，会话 $sessionId")
+                } else {
+                    agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
+                }
 
                 // 摘要放在 tail 之前：回放/UI 顺序 = 摘要 → tail。
                 // 接手摘要作为背景，最后一条仍是用户请求 / tool 结果，模型才会继续干活；
                 // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下。
-                val markerTs = (anchorTs - 2).coerceAtLeast(1L)
+                val markerTs = ((anchorTs ?: System.currentTimeMillis()) - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
                 agentMessageDao.insert(
                     AgentMessageEntity(
@@ -282,6 +288,24 @@ class ContextCompactor @Inject constructor(
         }
 
         return listOf(markerMessage, compactedMessage) + tail
+    }
+
+    /**
+     * 内存态消息 → 库行时间戳：id 直接匹配、tool 前缀匹配、内容匹配逐级兜底。
+     *
+     * 内容匹配用**最早**一条：宁可把锚点取早（少标几条 head，下一轮多回放一次），
+     * 也不可取晚——取晚就会把 tail 标进去，那是真丢数据。
+     */
+    private fun resolveRowTimestamp(rows: List<AgentMessageEntity>, message: AgentMessage): Long? {
+        rows.firstOrNull { it.id == message.id }?.let { return it.timestamp }
+        rows.firstOrNull { it.id == "tool_${message.id}" }?.let { return it.timestamp }
+        val content = when (message) {
+            is AgentMessage.UserMessage -> message.content
+            is AgentMessage.AssistantMessage -> message.content
+            is AgentMessage.ToolResultMessage -> message.result
+        }
+        if (content.isBlank()) return null
+        return rows.firstOrNull { it.content == content }?.timestamp
     }
 
     /** 把单条消息的正文压到 [budgetTokens] 以内；工具结果改写 modelResult，其余改写 content。 */

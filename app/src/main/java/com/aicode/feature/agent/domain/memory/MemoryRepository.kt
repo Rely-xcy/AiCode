@@ -78,10 +78,16 @@ class MemoryRepository @Inject constructor(
             if (recordedHits.size > HIT_CACHE_LIMIT) recordedHits.clear()
             runCatching {
                 val parsed = MemoryParser.parse(file, memory.scope)
-                if (parsed == null) {
-                    FileLogger.w(TAG, "记录命中时读不到记忆: ${memory.name}")
-                } else {
-                    file.writeText(
+                when {
+                    parsed == null ->
+                        FileLogger.w(TAG, "记录命中时读不到记忆: ${memory.name}")
+
+                    // frontmatter 解析失败时各字段全空。此时重写会把旧元数据抹掉（且不归档），
+                    // 宁可少记一次命中，也不能拿「空解析结果」当真写回去。
+                    parsed.description.isEmpty() && parsed.source.isEmpty() && parsed.createdAt == 0L ->
+                        FileLogger.w(TAG, "记忆元数据解析为空，跳过命中记账以免覆盖: ${memory.name}")
+
+                    else -> file.writeText(
                         MemoryParser.format(
                             name = parsed.name,
                             description = parsed.description,

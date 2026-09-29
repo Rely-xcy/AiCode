@@ -59,11 +59,20 @@ class ProjectMemorySource(
             if (!memoryRoot.exists()) memoryRoot.mkdirs()
             val file = MemorySource.resolveMemoryFile(memoryRoot, name)
             MemorySource.archiveBeforeOverwrite(memoryRoot, file)
-            // 覆盖时保留原创建时间，避免每次更新都把「这条记了多久」重置掉
-            val previous = MemoryParser.parse(file, MemoryScope.PROJECT)?.createdAt ?: 0L
-            val created = if (createdAt > 0) createdAt else previous.takeIf { it > 0 } ?: System.currentTimeMillis()
+            // 覆盖时保留原创建时间与命中统计：它们描述的是「这条记忆本身」，与本次正文无关
+            val previous = MemoryParser.parse(file, MemoryScope.PROJECT)
+            val created = if (createdAt > 0) createdAt else previous?.createdAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
             file.writeText(
-                MemoryParser.format(MemorySource.sanitizeName(name), description, content, kind, source, created)
+                MemoryParser.format(
+                    name = MemorySource.sanitizeName(name),
+                    description = description,
+                    content = content,
+                    kind = kind,
+                    source = source,
+                    createdAt = created,
+                    hitCount = previous?.hitCount ?: 0,
+                    lastHitAt = previous?.lastHitAt ?: 0L
+                )
             )
             true
         } catch (e: Exception) {
