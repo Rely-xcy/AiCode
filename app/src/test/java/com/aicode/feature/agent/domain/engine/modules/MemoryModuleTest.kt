@@ -14,6 +14,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -103,13 +104,17 @@ class MemoryModuleTest {
         val repository = mockk<MemoryRepository>(relaxed = true)
         every { repository.listMemories(any()) } returns emptyList()
         val extractor = MemoryExtractor(repository)
-        val json = """[{"name":"prefers-brief","description":"Prefers brief answers","content":"No preambles."}]"""
+        val output = """
+            name: prefers-brief
+            description: Prefers brief answers
+            content: No preambles.
+        """.trimIndent()
 
         val written = extractor.extract(
             projectRoot = "/ws",
             history = history,
             source = MemoryExtractor.SOURCE_AUTO_DISTILL,
-            complete = { json }
+            complete = { output }
         )
 
         assertEquals(1, written)
@@ -141,5 +146,41 @@ class MemoryModuleTest {
         assertEquals(0, empty)
         assertEquals(0, nothing)
         coVerify(exactly = 0) { repository.saveMemory(any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun parseEntries_acceptsTagFormatWithNoise() {
+        // 真实模型输出往往带前言、代码块围栏、项目符号、中文冒号、多行 content
+        val raw = """
+            ```text
+            好的，这是本轮的记忆：
+            - name: prefers-brief
+              description：偏好简短回答
+              content: 不要铺垫，直接给结论。
+              第二行细节
+            ---
+            name: build-env
+            content: 本地跑不了 gradle，只能靠 CI
+            ```
+        """.trimIndent()
+
+        val entries = MemoryExtractor.parseEntries(raw)
+
+        assertEquals(2, entries.size)
+        assertEquals("prefers-brief", entries[0].name)
+        assertEquals("偏好简短回答", entries[0].description)
+        assertTrue(entries[0].content.contains("不要铺垫"))
+        assertTrue(entries[0].content.contains("第二行细节"))
+        assertEquals("build-env", entries[1].name)
+    }
+
+    @Test
+    fun parseEntries_fallsBackToJson() {
+        val raw = """[{"name":"a","description":"d","content":"c"}]"""
+
+        val entries = MemoryExtractor.parseEntries(raw)
+
+        assertEquals(1, entries.size)
+        assertEquals("a", entries[0].name)
     }
 }
