@@ -103,10 +103,15 @@ internal fun MemorySection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.memory_curation_interval),
+                // 自动沉淀关了就没什么可治理的：整行置灰、行尾显示「关闭」。
+                // 否则开关明明是关的，周期却还写着「1 天」，看着像还在按周期跑。
+                // enabled=false 会真正摘掉 clickable，弹层也打不开。
+                enabled = autoDistillEnabled,
                 onClick = { showCurationIntervalSheet = true },
                 trailing = {
                     Text(
-                        text = curationIntervalLabel(curationIntervalHours),
+                        text = if (autoDistillEnabled) curationIntervalLabel(curationIntervalHours)
+                        else stringResource(R.string.memory_curation_interval_off),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
                     )
