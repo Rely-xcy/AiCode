@@ -86,6 +86,7 @@ class ContextCompactor @Inject constructor(
             }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
         for (index in argCandidates) {
+            if (estimate <= targetTokens) break
             val message = result[index] as AgentMessage.AssistantMessage
             val rebuilt = message.toolCalls.map { call -> rebuildToolCallArguments(call, SOFT_TRIM_TOOL_CHARS) }
             if (rebuilt == message.toolCalls) continue
@@ -317,8 +318,11 @@ class ContextCompactor @Inject constructor(
                 )
                 FileLogger.i(TAG, "已持久化压缩结果到数据库，会话 $sessionId")
 
-                // 标记放在插入之后：标记失败只是让 head 下一轮再回放一次（重复），不会丢
-                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs) }
+                // 标记放在插入之后：标记失败只是让 head 下一轮再回放一次（重复），不会丢。
+                // cutoff 必须用 markerTs 而不是 anchorTs：markerTs / summaryTs 都小于 anchorTs，
+                // 用 anchorTs 会把刚插进去的这两行自己也标成 isCompacted，
+                // 而回放时会滤掉 isCompacted 的行——摘要就只在内存态活一轮，下一个用户轮次直接消失。
+                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs) }
                     .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
             } catch (e: Exception) {
                 FileLogger.e(TAG, "持久化压缩结果失败，放弃本次压缩（不标记 head）", e)

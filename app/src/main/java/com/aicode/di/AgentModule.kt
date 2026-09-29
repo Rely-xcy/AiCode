@@ -89,6 +89,7 @@ import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
+import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
@@ -339,6 +340,7 @@ object AgentModule {
         titleModelSettingsRepository: TitleModelSettingsRepository,
         defaultModelSettingsRepository: DefaultModelSettingsRepository,
         generalSettingsRepository: GeneralSettingsRepository,
+        memorySettingsRepository: MemorySettingsRepository,
         sessionUseCase: SessionUseCase,
         messagePersistenceUseCase: MessagePersistenceUseCase,
         checkpointManager: CheckpointManager,
@@ -365,6 +367,7 @@ object AgentModule {
             titleModelSettingsRepository,
             defaultModelSettingsRepository,
             generalSettingsRepository,
+            memorySettingsRepository,
             sessionUseCase,
             messagePersistenceUseCase,
             checkpointManager,

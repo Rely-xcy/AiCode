@@ -12,6 +12,7 @@ import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.memory.MemoryClaimGuard
 import com.aicode.feature.agent.domain.notification.AgentEventInjector
 import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
 import com.aicode.feature.agent.domain.notification.AgentNotificationKind
@@ -47,6 +48,7 @@ import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
+import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
@@ -100,6 +102,7 @@ class StatefulAgentWorkflow @Inject constructor(
     private val titleModelSettingsRepository: TitleModelSettingsRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
+    private val memorySettingsRepository: MemorySettingsRepository,
     private val sessionUseCase: SessionUseCase,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val checkpointManager: CheckpointManager,
@@ -149,12 +152,20 @@ class StatefulAgentWorkflow @Inject constructor(
         /** 已批准、待并行执行的 toolCall */
         val approvedToolCalls: List<ToolCall> = emptyList(),
         /** 被策略/系统拒绝（非用户拒绝）的 tool 结果，key = toolCall.id */
-        val rejectedToolResults: Map<String, ToolBatchResult> = emptyMap()
+        val rejectedToolResults: Map<String, ToolBatchResult> = emptyMap(),
+        /** 本轮是否启用「声称记住了却没调用工具」的兜底提醒（主代理 + 自动沉淀开关打开）。 */
+        val memoryGuardEnabled: Boolean = false,
+        /** 本轮是否已经补过提醒：兜底只补一次，避免模型反复只说不做时无限重发。 */
+        val memoryReminderSent: Boolean = false
     )
 
     /** 改变状态的动作 (Action) */
     sealed interface AgentAction {
-        data class InitRequest(val initialMessages: List<AgentMessage>) : AgentAction
+        data class InitRequest(
+            val initialMessages: List<AgentMessage>,
+            /** 由调用方（拿得到设置的地方）决定，[reduce] 保持纯函数。 */
+            val memoryGuardEnabled: Boolean = false
+        ) : AgentAction
         data class LlmResponse(val response: AIResponse) : AgentAction
         data class LlmError(val error: String) : AgentAction
         data class PermissionEvaluated(
@@ -335,7 +346,10 @@ class StatefulAgentWorkflow @Inject constructor(
 
         when (action) {
             is AgentAction.InitRequest -> {
-                newState = state.copy(messages = action.initialMessages)
+                newState = state.copy(
+                    messages = action.initialMessages,
+                    memoryGuardEnabled = action.memoryGuardEnabled
+                )
                 effects.add(AgentSideEffect.CallLlm)
             }
             is AgentAction.LlmResponse -> {
@@ -363,6 +377,15 @@ class StatefulAgentWorkflow @Inject constructor(
                     } else if (action.response.isTruncated) {
                         newState = newState.copy(
                             messages = newState.messages + AgentMessage.UserMessage(content = "你的回复因长度限制被截断了，请从截断处继续。")
+                        )
+                        effects.add(AgentSideEffect.CallLlm)
+                    } else if (shouldRemindMemory(newState, action.response.content)) {
+                        // 兜底：回复声称记住了、本轮却没有任何 memory 工具调用（提示词管「倾向」，这里管「保证」）。
+                        // 补一条系统提醒让它当场补调用；提醒消息只进本轮上下文，不落库、不上 UI。
+                        FileLogger.w(TAG, "回复声称已写入记忆但本轮无 memory 工具调用，注入提醒重发")
+                        newState = newState.copy(
+                            messages = newState.messages + AgentMessage.UserMessage(content = MemoryClaimGuard.REMINDER),
+                            memoryReminderSent = true
                         )
                         effects.add(AgentSideEffect.CallLlm)
                     } else {
@@ -480,6 +503,14 @@ class StatefulAgentWorkflow @Inject constructor(
         return Pair(newState, effects)
     }
 
+    /**
+     * 要不要补一次「记忆没真的写」的提醒：开关打开、本轮还没补过、且回复确实声称写入了。
+     * 判据在 [MemoryClaimGuard]，这里只做状态与开关门禁。
+     */
+    private fun shouldRemindMemory(state: AgentSessionState, finalText: String): Boolean =
+        state.memoryGuardEnabled && !state.memoryReminderSent &&
+            MemoryClaimGuard.needsReminder(state.messages, finalText)
+
     override fun executeEvents(
         userRequest: String,
         context: AgentContext,
@@ -491,16 +522,29 @@ class StatefulAgentWorkflow @Inject constructor(
         val actionQueue = ArrayDeque<AgentAction>()
         // 模式提醒仅在模式变化时随最新用户消息注入一次（不进 system，避免切换时 system 前缀变化打断缓存）。
         val modeReminder = takeModeReminderIfChanged(currentContext.sessionId, currentContext.mode)
+        // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，开关关着时规则都没注入，不必兜。
+        val memoryGuardEnabled = currentContext.agentDefinition == null &&
+            runCatching { memorySettingsRepository.autoDistillEnabled() }.getOrDefault(false)
         actionQueue.addLast(
             AgentAction.InitRequest(
-                currentContext.history + AgentMessage.UserMessage(
+                initialMessages = currentContext.history + AgentMessage.UserMessage(
                     content = if (modeReminder == null) userRequest else "$userRequest\n\n$modeReminder",
                     images = currentContext.inputImages
-                )
+                ),
+                memoryGuardEnabled = memoryGuardEnabled
             )
         )
 
-        val systemPrompt = promptProvider.build(currentContext)
+        // 记忆召回按「这一轮在问什么」挑：history 是发请求之前的快照，不含本轮用户消息，
+        // 不补进去的话新话题的第一轮还在按上一轮的旧话题召回。只有引擎片段读 history（见
+        // SystemPromptProvider.EngineFragmentSource），其它来源不受影响。
+        val promptContext = if (userRequest.isBlank()) currentContext else currentContext.copy(
+            history = currentContext.history + AgentMessage.UserMessage(
+                content = userRequest,
+                images = currentContext.inputImages
+            )
+        )
+        val systemPrompt = promptProvider.build(promptContext)
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
         // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，
         // 只靠 lastInputTokens 间接体现（provider 不回传 usage 时恒为 0）会系统性低估。

@@ -14,6 +14,15 @@ package com.aicode.feature.agent.domain.memory
  */
 object MemoryRanker {
 
+    /**
+     * 每轮注入系统提示词的坑位数（上限）。
+     *
+     * 条数不是真正的成本单位（成本是描述总长），所以调用方还会按描述长度预算再裁一道；
+     * 这里给的是硬上限。同时它也是「公平性」判据：记忆条数不超过坑位数时，每条都每轮参与竞争，
+     * `hitCount == 0` 才能说明「它没被选中过」——治理器判死条目用的就是这条（见 [MemoryCurator]）。
+     */
+    const val INJECTION_SLOTS = 5
+
     private const val NAME_WEIGHT = 3
     private const val DESCRIPTION_WEIGHT = 2
     private const val CONTENT_WEIGHT = 1
@@ -21,9 +30,17 @@ object MemoryRanker {
     /** 正文只扫前这么多字符：记忆正文可能很长，打分不必读完。 */
     private const val CONTENT_SCAN_CHARS = 2_000
 
-    /** 陈旧阈值：创建超过这个时长且从未被用过，排序时退一步（降级，不删除）。 */
+    /** 陈旧阈值：创建超过这个时长且从未被用过，排序时按 [STALE_FACTOR] 降权（降级，不删除）。 */
     private const val STALE_AFTER_MS = 30L * 24 * 60 * 60 * 1000
-    private const val STALE_PENALTY = 1
+
+    /**
+     * 陈旧降权系数。
+     *
+     * 原来是「减 1 分」——但分数是整数，命中一条名称就是 3 分，减 1 几乎永远改变不了顺序，
+     * 等于这层机制写了没生效。改成按比例：强烈相关的陈旧条目仍然能排前面，
+     * 但相关度接近时会输给新鲜的（这才叫「降级而不是删除」）。
+     */
+    private const val STALE_FACTOR = 0.5
 
     /** 去重阈值：token 集合的 Jaccard 相似度超过它就算「说的是同一件事」。 */
     private const val DEDUPE_THRESHOLD = 0.7
@@ -75,14 +92,14 @@ object MemoryRanker {
         return union > 0 && intersection.toDouble() / union >= DEDUPE_THRESHOLD
     }
 
-    private fun score(memory: Memory, tokens: Set<String>, now: Long): Int {
+    private fun score(memory: Memory, tokens: Set<String>, now: Long): Double {
         val name = tokenize(memory.name)
         val description = tokenize(memory.description)
         val content = tokenize(memory.content.take(CONTENT_SCAN_CHARS))
         val overlap = tokens.count { it in name } * NAME_WEIGHT +
             tokens.count { it in description } * DESCRIPTION_WEIGHT +
             tokens.count { it in content } * CONTENT_WEIGHT
-        return overlap - if (isStale(memory, now)) STALE_PENALTY else 0
+        return overlap * if (isStale(memory, now)) STALE_FACTOR else 1.0
     }
 
     /**
@@ -90,6 +107,9 @@ object MemoryRanker {
      *
      * 只降权不删除——「好的记忆系统和好的遗忘机制是同一件事的两面」，
      * 但删除是不可逆的，降级把坑位让出去就够了（真需要时还能 memory(action=list) 找到）。
+     * 注意：它只在记忆条数超过坑位数时才有机会生效（不超过时 [rank] 直接原样返回），
+     * 那种场景下「从没被注入」不完全等于「没用」——所以这里只是软降权，
+     * 硬判死（归档）在 [MemoryCurator]，那里另有公平性门禁。
      */
     private fun isStale(memory: Memory, now: Long): Boolean =
         memory.hitCount == 0 && memory.createdAt > 0 && now - memory.createdAt > STALE_AFTER_MS

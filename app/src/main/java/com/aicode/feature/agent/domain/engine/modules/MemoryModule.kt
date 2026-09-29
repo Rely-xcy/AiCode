@@ -98,10 +98,16 @@ class MemoryModule @Inject constructor(
         }
         if (memories.isEmpty()) return null
 
-        // 注入有上限：记忆多了反而干扰决策（实测 10 条已开始干扰、3 条是甜点值）。
+        // 注入有上限：记忆多了反而干扰决策（实测 10 条已开始干扰）。
         // 挑哪几条不能按名字序——名字是写入时随手起的 slug，与「这轮该用哪条」无关，
-        // 所以先按与当前话题的重合度粗排，再取前 N（未列出的靠 memory(action=list) 取）。
-        val listed = MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES)
+        // 所以先按与当前话题的重合度粗排，再按「描述长度预算」裁：至少 3 条（实测的甜点值，
+        // 3 条以内不可能干扰），之后只在描述够短时才继续放——真正吃窗口的是描述长度，不是条数。
+        val listed = withinDescriptionBudget(
+            MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES)
+        )
+        if (listed.isNotEmpty()) {
+            FileLogger.d(TAG, "注入记忆 ${listed.size}/${memories.size} 条: ${listed.joinToString { it.name }}")
+        }
         // 记账异步做：注入路径上不能卡 I/O。同一会话同一记忆只记一次（仓库内部去重）。
         scope.launch { runCatching { memoryRepository.recordHits(listed, ctx.sessionId) } }
         val globalMemories = listed.filter { it.scope == MemoryScope.GLOBAL }
@@ -120,11 +126,35 @@ class MemoryModule @Inject constructor(
                 projectMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
             }
             if (memories.size > listed.size) {
-                append("\n（另有 ${memories.size - listed.size} 条未列出，需要时用 memory(action=list) 查看）")
+                // 未展开的条目至少把名字列出来：只说「另有 N 条」时模型不知道有没有自己要的那条，
+                // 也就不会去 read；名字很短，几乎不占窗口。
+                val listedNames = listed.mapTo(mutableSetOf()) { it.name }
+                val notListed = memories.filter { it.name !in listedNames }
+                append("\n（另有 ${notListed.size} 条未展开：")
+                append(notListed.take(MAX_LISTED_NAMES).joinToString(", ") { it.name })
+                if (notListed.size > MAX_LISTED_NAMES) append(" …")
+                append("；需要详情时用 memory(action=read, name=xxx)）")
             }
         }.trimEnd()
 
         return content
+    }
+
+    /**
+     * 按描述长度预算裁剪已排序的记忆：前 [MIN_INJECTED_MEMORIES] 条无条件保留，
+     * 之后只在描述总长不超 [DESCRIPTION_BUDGET_CHARS] 时继续放。
+     */
+    private fun withinDescriptionBudget(ranked: List<Memory>): List<Memory> {
+        if (ranked.size <= MIN_INJECTED_MEMORIES) return ranked
+        val kept = mutableListOf<Memory>()
+        var used = 0
+        ranked.forEach { memory ->
+            val fits = kept.size < MIN_INJECTED_MEMORIES || used + memory.description.length <= DESCRIPTION_BUDGET_CHARS
+            if (!fits) return@forEach
+            used += memory.description.length
+            kept += memory
+        }
+        return kept
     }
 
     /**
@@ -226,12 +256,22 @@ class MemoryModule @Inject constructor(
         /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，供压缩前抽取使用。 */
         const val PROMPT_FILE = MemoryExtractor.PROMPT_FILE
 
-        /** 单条记忆注入系统提示词时的条数上限。
+        /** 单条记忆注入系统提示词时的条数上限（硬上限，共享给治理器做公平性判据）。
          *
          * 实测结论（MemOS 落地笔记“宁少勿多”）：记忆条数多了反而干扰决策，
-         * 3 条是甜点值、10 条已开始干扰。超出部分不注入，靠 memory(action=list) 按需取。
+         * 3 条是甜点值、10 条已开始干扰。超出部分不展开，靠 [MIN_INJECTED_MEMORIES] 之后的
+         * 描述长度预算与 memory(action=list) 兑付。
          */
-        const val MAX_INJECTED_MEMORIES = 3
+        const val MAX_INJECTED_MEMORIES = MemoryRanker.INJECTION_SLOTS
+
+        /** 无条件保留的条数：3 条以内不会干扰决策（实测甜点值）。 */
+        const val MIN_INJECTED_MEMORIES = 3
+
+        /** 超过甜点值后继续放行的描述总长预算（字符）——真正吃窗口的是描述长度。 */
+        const val DESCRIPTION_BUDGET_CHARS = 600
+
+        /** 未展开条目最多列几个名字：再多就变成另一份清单，不如让模型自己 list。 */
+        const val MAX_LISTED_NAMES = 12
 
         /** 话题文本（用于召回排序）最多取多少字符。 */
         const val QUERY_MAX_CHARS = 600
