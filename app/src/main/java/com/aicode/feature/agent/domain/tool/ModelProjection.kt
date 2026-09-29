@@ -27,8 +27,22 @@ fun modelToolResultText(toolName: String, transportJson: String): String? {
     return when (toolName) {
         "editFile" -> editProjection(data)
         "writeFile" -> writeProjection(data)
+        "todo" -> todoProjection(data)
         else -> null
     }
+}
+
+/**
+ * todo 工具：只给「这一步改了什么 + 当前清单」，不回显 items 的完整 JSON。
+ *
+ * 清单本来就每轮注入系统提示词，工具结果只需确认这次改动后的状态——
+ * 增量更新的意义就在这里：完成一步只花几十个 token。
+ */
+private fun todoProjection(data: JsonObject): String? {
+    val message = data["message"]?.jsonPrimitive?.contentOrNull
+    val text = data["text"]?.jsonPrimitive?.contentOrNull
+    if (message.isNullOrBlank() && text.isNullOrBlank()) return null
+    return listOf(message.orEmpty(), text.orEmpty()).filter { it.isNotBlank() }.joinToString("\n")
 }
 
 private fun editProjection(data: JsonObject): String? {

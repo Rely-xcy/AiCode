@@ -29,7 +29,8 @@ class AgentEngineTest {
         private val fragment: String? = null,
         private val providedTools: List<AgentTool> = emptyList(),
         private val fragmentThrows: Boolean = false,
-        private val hookThrows: Boolean = false
+        private val hookThrows: Boolean = false,
+        private val subAgentFragment: String? = null
     ) : EngineModule {
         var turnCompleted = 0
         var sessionDeleted = 0
@@ -38,6 +39,8 @@ class AgentEngineTest {
             if (fragmentThrows) error("fragment boom")
             return fragment
         }
+
+        override fun subAgentRules(ctx: EngineContext): String? = subAgentFragment
 
         override fun tools(ctx: EngineContext): List<AgentTool> = providedTools
 
@@ -115,5 +118,27 @@ class AgentEngineTest {
         scope.advanceUntilIdle()
 
         assertEquals(1, module.sessionDeleted)
+    }
+
+    @Test
+    fun subAgentRules_joinsByOrderAndSkipsBlank() {
+        val late = FakeModule(id = "late", order = 200, subAgentFragment = "B")
+        val early = FakeModule(id = "early", order = 10, subAgentFragment = "A")
+        val blank = FakeModule(id = "blank", order = 20, subAgentFragment = "  ")
+
+        val engine = AgentEngine(setOf(late, early, blank), TestScope())
+
+        assertEquals("A\n\nB", engine.subAgentRules(ctx))
+        assertNull(AgentEngine(setOf(blank), TestScope()).subAgentRules(ctx))
+    }
+
+    @Test
+    fun subAgentRules_areIndependentOfPromptFragment() {
+        // 纪律段不受 inject 门禁：模块没提供 promptFragment 时它照样得出来
+        val module = FakeModule(id = "rules", subAgentFragment = "R")
+        val engine = AgentEngine(setOf(module), TestScope())
+
+        assertNull(engine.promptFragment(ctx))
+        assertEquals("R", engine.subAgentRules(ctx))
     }
 }
