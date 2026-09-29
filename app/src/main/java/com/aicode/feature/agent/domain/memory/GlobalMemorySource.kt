@@ -44,7 +44,8 @@ class GlobalMemorySource @Inject constructor(
             // 覆盖时保留原创建时间与命中统计：它们描述的是「这条记忆本身」，与本次正文无关
             val previous = MemoryParser.parse(file, MemoryScope.GLOBAL)
             val created = if (createdAt > 0) createdAt else previous?.createdAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
-            file.writeText(
+            MemorySource.writeAtomically(
+                file,
                 MemoryParser.format(
                     name = MemorySource.sanitizeName(name),
                     description = description,

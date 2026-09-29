@@ -85,8 +85,13 @@ interface MemorySource {
             else content.replaceFirst(e.oldString, e.newString)
         }
 
+        val root = file.parentFile
+            ?: return MemoryEditResult.Error("NO_PARENT_DIR", "记忆文件没有父目录，无法归档旧版本")
         return try {
-            file.writeText(MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
+            // 改之前先归档旧版本：编辑是覆盖写，改错了还能从 .superseded/ 里找回来
+            // （saveMemory 一直有这一步，editMemory 原来没有）
+            archiveBeforeOverwrite(root, file)
+            writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
             MemoryEditResult.Success
         } catch (e: Exception) {
             FileLogger.e("MemorySource", "Failed to edit memory: $name", e)
@@ -106,6 +111,25 @@ interface MemorySource {
          * 结果只含合法文件名字符、不含路径分隔符，且对同一输入确定性可逆，保证
          * 「写出去的文件名 ↔ MemoryParser.parse 回读的 name」一致。
          */
+        /**
+         * 原子写：先写临时文件再 rename 覆盖。
+         *
+         * 直接 writeText 写到一半被中断（进程被杀、磁盘满）会留下半截记忆文件，
+         * 而记忆文件是模型后续要读的输入，半截内容比旧内容更糟。
+         * rename 在同一文件系统内是原子的：要么全新、要么全旧。
+         */
+        fun writeAtomically(file: File, text: String) {
+            val parent = file.parentFile ?: run { file.writeText(text); return }
+            val tmp = File(parent, "${file.name}.tmp")
+            try {
+                tmp.writeText(text)
+                // 少数文件系统上 rename 覆盖会失败：退回直接写，至少不把内容丢掉
+                if (!tmp.renameTo(file)) file.writeText(text)
+            } finally {
+                if (tmp.exists()) tmp.delete()
+            }
+        }
+
         fun sanitizeName(raw: String): String {
             val cleaned = raw.map { ch ->
                 if (ch.isLetterOrDigit() || ch == '-' || ch == '_') ch else '-'

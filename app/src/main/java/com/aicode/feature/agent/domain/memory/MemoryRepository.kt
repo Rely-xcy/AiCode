@@ -87,7 +87,8 @@ class MemoryRepository @Inject constructor(
                     parsed.description.isEmpty() && parsed.source.isEmpty() && parsed.createdAt == 0L ->
                         FileLogger.w(TAG, "记忆元数据解析为空，跳过命中记账以免覆盖: ${memory.name}")
 
-                    else -> file.writeText(
+                    else -> MemorySource.writeAtomically(
+                        file,
                         MemoryParser.format(
                             name = parsed.name,
                             description = parsed.description,
