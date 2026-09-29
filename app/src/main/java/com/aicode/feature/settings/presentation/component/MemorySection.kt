@@ -54,8 +54,10 @@ import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryScope
+import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
@@ -318,6 +320,11 @@ private fun MemoryRow(
                     )
                     Spacer(modifier = Modifier.width(Spacing.xs))
                     MemoryScopePill(scope = memory.scope)
+                    // 来源只给自动沉淀类挂：NOTE 全是「对话中记录」，每行都挂就是噪音
+                    if (memory.kind == MemoryKind.PROFILE && memory.source.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        MemorySourcePill(memory = memory)
+                    }
                 }
                 Text(
                     text = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
@@ -336,6 +343,33 @@ private fun MemoryRow(
  *
  * 配色与 MCP 页的 pill 保持一致（项目级用主色，全局用中性色），复用同一个 [McpPill]。
  */
+/**
+ * 来源文案：自动沉淀 / 压缩前抽取 / 对话中记录。
+ *
+ * 老条目没写 source（那之前的版本只存 kind），按 kind 回退：PROFILE 一定是沉淀出来的，
+ * 其余当作对话中记的。
+ */
+@Composable
+private fun memorySourceText(memory: Memory): String = when (memory.source) {
+    MemoryExtractor.SOURCE_AUTO_DISTILL -> stringResource(R.string.memory_source_auto)
+    MemoryExtractor.SOURCE_PRE_FOLD -> stringResource(R.string.memory_source_pre_fold)
+    MemorySource.SOURCE_MODEL_TOOL -> stringResource(R.string.memory_source_manual)
+    else -> stringResource(
+        if (memory.kind == MemoryKind.PROFILE) R.string.memory_source_auto
+        else R.string.memory_source_manual
+    )
+}
+
+/** 来源徐章：与作用域徐章同款 McpPill，靠文案区分。 */
+@Composable
+private fun MemorySourcePill(memory: Memory) {
+    McpPill(
+        text = memorySourceText(memory),
+        textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    )
+}
+
 @Composable
 private fun MemoryScopePill(scope: MemoryScope) {
     val isProject = scope == MemoryScope.PROJECT
@@ -379,10 +413,7 @@ internal fun MemoryDetailSheet(
                 SettingsRow(
                     icon = null,
                     title = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
-                    subtitle = stringResource(
-                        if (memory.kind == MemoryKind.PROFILE) R.string.memory_source_auto
-                        else R.string.memory_source_manual
-                    )
+                    subtitle = memorySourceText(memory)
                 )
             }
             SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
