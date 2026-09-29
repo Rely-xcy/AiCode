@@ -247,19 +247,21 @@ class ContextCompactor @Inject constructor(
                 // user/assistant 落库是随机 UUID、内存态常为空串。所以逐级兜底匹配，不能只比 id。
                 val anchorTs = tail.firstNotNullOfOrNull { msg -> resolveRowTimestamp(dbEntities, msg) }
 
-                // 找不到锚点就什么都不标记：宁可让 head 下一轮多回放一次（重复总比丢好），
-                // 也绝不能用「当前时间」当锚点——它大于会话里所有行，会把要保留的 tail
-                // 一起标成已压缩；而 tail 没进归档，下一轮就直接从回放里消失。
+                // 找不到锚点就放弃这次压缩：只不标记却仍插 marker/summary 会新开一个坑——
+                // 那两条的落点只能取当前时间，会排在全部历史之后，回放变成「原文 + 摘要 + tail」，
+                // head 没被折叠、摘要还被摆到末尾（正是上面注释里警告的「模型把摘要当成自己上一轮」），
+                // 下一轮又会再次触发摘要调用。所以宁可这轮不压（重复总比丢好），直接放弃。
                 if (anchorTs == null) {
-                    FileLogger.w(TAG, "压缩时匹配不到 tail 对应的库行，跳过 isCompacted 标记，会话 $sessionId")
-                } else {
-                    agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
+                    FileLogger.w(TAG, "压缩时匹配不到 tail 对应的库行，放弃本次压缩，会话 $sessionId")
+                    onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
+                    return null
                 }
+                agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
 
                 // 摘要放在 tail 之前：回放/UI 顺序 = 摘要 → tail。
                 // 接手摘要作为背景，最后一条仍是用户请求 / tool 结果，模型才会继续干活；
                 // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下。
-                val markerTs = ((anchorTs ?: System.currentTimeMillis()) - 2).coerceAtLeast(1L)
+                val markerTs = (anchorTs - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
                 agentMessageDao.insert(
                     AgentMessageEntity(

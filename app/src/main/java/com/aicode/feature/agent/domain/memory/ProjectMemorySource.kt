@@ -57,7 +57,7 @@ class ProjectMemorySource(
         if (projectRoot.isBlank()) return false
         return try {
             if (!memoryRoot.exists()) memoryRoot.mkdirs()
-            val file = MemorySource.resolveMemoryFile(memoryRoot, name)
+            val file = existingMemoryFile(name) ?: MemorySource.resolveMemoryFile(memoryRoot, name)
             MemorySource.archiveBeforeOverwrite(memoryRoot, file)
             // 覆盖时保留原创建时间与命中统计：它们描述的是「这条记忆本身」，与本次正文无关
             val previous = MemoryParser.parse(file, MemoryScope.PROJECT)
@@ -83,7 +83,13 @@ class ProjectMemorySource(
 
     override fun deleteMemory(name: String): Boolean {
         if (projectRoot.isBlank()) return false
-        val file = MemorySource.resolveMemoryFile(memoryRoot, name)
+        // 按真实文件路径删：名字里可能有 sanitize 会改写的字符（点、空格、非 ASCII），
+        // 重拼文件名会找不到文件 → 删除静默失败（列表刷新后条目还在）
+        val file = existingMemoryFile(name) ?: MemorySource.resolveMemoryFile(memoryRoot, name)
         return if (file.exists()) file.delete() else false
     }
+
+    /** 按解析出的名字找已有文件；找不到返回 null（调用方回退到 sanitize 拼路径）。 */
+    private fun existingMemoryFile(name: String): File? =
+        listMemories().firstOrNull { it.name == name }?.file
 }

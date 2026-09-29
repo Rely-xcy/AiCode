@@ -81,12 +81,15 @@ internal fun PromptEditorSection(
                 )
                 FilterChip(
                     selected = scope == UserPromptScope.PROJECT,
-                    enabled = hasWorkspace,
+                    // 编辑态锁死：改作用域会往新作用域写一份同名文件，而旧文件不删——
+                    // 结果是两条副本各自演化、注入两遍，左滑删又只能删掉一条（看着删不掉）
+                    enabled = isNew && hasWorkspace,
                     onClick = { scope = UserPromptScope.PROJECT },
                     label = { Text(stringResource(R.string.subagent_scope_project)) }
                 )
                 FilterChip(
                     selected = scope == UserPromptScope.GLOBAL,
+                    enabled = isNew,
                     onClick = { scope = UserPromptScope.GLOBAL },
                     label = { Text(stringResource(R.string.subagent_scope_global)) }
                 )
