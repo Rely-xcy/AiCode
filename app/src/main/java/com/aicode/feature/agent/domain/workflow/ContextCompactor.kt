@@ -6,6 +6,7 @@ import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.model.id
@@ -345,11 +346,65 @@ class ContextCompactor @Inject constructor(
                 if (message.content.length <= limitOf(message.content)) message
                 else message.copy(content = headTailTrim(message.content, limitOf(message.content)))
 
-            is AgentMessage.AssistantMessage ->
-                if (message.content.length <= limitOf(message.content)) message
-                else message.copy(content = headTailTrim(message.content, limitOf(message.content)))
+            is AgentMessage.AssistantMessage -> {
+                val trimmedContent =
+                    if (message.content.length <= limitOf(message.content)) message.content
+                    else headTailTrim(message.content, limitOf(message.content))
+                // 工具参数按字段重建。只削正文不动 reasoning：reasoning / signature /
+                // thinkingBlocksJson 必须原样回传，动了 DeepSeek 思考模式与 Anthropic thinking 直接 400。
+                val trimmedCalls = message.toolCalls.map { call -> rebuildToolCallArguments(call, limitOf(call.arguments.toString())) }
+                if (trimmedContent == message.content && trimmedCalls == message.toolCalls) message
+                else message.copy(content = trimmedContent, toolCalls = trimmedCalls)
+            }
         }
     }
+
+    /**
+     * 工具参数按字段重建：把「能重新读回来」的大块正文换成一句说明，其它超长值头尾截断，
+     * 小字段（路径、命令开头这类定位信息）原样保留。
+     *
+     * 为什么不做头尾截断：截出来的是一段**残缺代码**，模型容易把它当成「文件当时就是这个内容」，
+     * 进而以为里面没有某个函数、又写一遍。换成「[已省略 N 字符]」说的是真话——我写过这个文件，
+     * 正文在磁盘上，需要时 read 回来。
+     *
+     * id 与 name 一律不动：tool call 与 tool result 的配对靠 id，动了就成孤儿消息，API 直接 400。
+     */
+    private fun rebuildToolCallArguments(call: ToolCall, budgetChars: Int): ToolCall {
+        if (call.arguments.isEmpty()) return call
+        var changed = false
+        val rebuilt = call.arguments.mapValues { (key, value) ->
+            val text = value.toString()
+            val limit = if (BULK_ARG_KEYS.contains(key.lowercase())) {
+                // 大块正文类：不需要「保留一点看看」，直接给占位说明
+                minOf(budgetChars, BULK_ARG_LIMIT_CHARS)
+            } else {
+                budgetChars
+            }
+            when {
+                text.length <= limit -> value
+
+                BULK_ARG_KEYS.contains(key.lowercase()) -> {
+                    changed = true
+                    kotlinx.serialization.json.JsonPrimitive("[已省略 ${text.length} 字符，正文不在上下文中，需要时用 read 工具读回]")
+                }
+
+                // 其它字段（命令、路径等）保留头尾，让模型能认出是哪一条
+                else -> {
+                    changed = true
+                    kotlinx.serialization.json.JsonPrimitive(headTailTrim(text, limit))
+                }
+            }
+        }
+        return if (changed) call.copy(arguments = rebuilt) else call
+    }
+
+    /** 这些参数是「能重新读回来」的大块正文，超限直接换占位说明。 */
+    private val BULK_ARG_KEYS = setOf(
+        "content", "old_string", "new_string", "oldstring", "newstring", "text", "newtext"
+    )
+
+    /** 大块正文的硬上限：即使兜底预算很大，也没必要把整份文件重新塞回上下文。 */
+    private val BULK_ARG_LIMIT_CHARS = 200
 
     /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
     private fun headTailTrim(text: String, maxChars: Int): String {
