@@ -41,7 +41,9 @@ class MemoryTool @Inject constructor(
     }
     override val description =
         "管理长期记忆（读取/保存/局部编辑/删除/列表）。记忆跨会话生效，用于保留用户的稳定偏好、" +
-            "项目约定、架构决策等；保存与编辑无需用户确认。什么时候该主动保存，见系统提示词里的长期记忆规则。"
+            "项目约定、架构决策等；保存与编辑无需用户确认。什么时候该主动保存，见系统提示词里的长期记忆规则。" +
+            "注意：只在回复里声称「已记住」而不调用本工具是无效的——用户会去记忆页找，找不到就是 bug。" +
+            "决定要记就当场调用，不要拖到下一轮。"
 
     /** edits 数组单个元素的结构，供 function-calling 的 items schema，语义与 editFile 一致。 */
     private val editItemSchema: Map<String, Any> = mapOf(
