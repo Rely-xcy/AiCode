@@ -129,6 +129,7 @@ AiCode 的系统提示词可以自己改。默认提示词随 App 内置、升�
 | `agent/plan-mode.md` | PLAN 模式提醒（按需注入） |
 | `agent/auto-mode.md` | AUTO 模式提醒（按需注入） |
 | `agent/subagent-base.md` | 子代理基础运行规范（按需注入） |
+| `agent/subagent-rules.md` | 子代理固定纪律段（角色行 + 硬规则，子代理会话必定注入） |
 | `agent/compact-summary.md` | 长对话上下文压缩的提示词 |
 | `agent/title-generator.md` | 会话标题生成的提示词 |
 | `agent/init.md` | `/init` 命令的指令正文（分析代码库并生成/改进 `AGENTS.md`），可在对话输入框用 `/init` 触发 |
