@@ -11,7 +11,9 @@ import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -44,6 +46,9 @@ class MemoryModuleTest {
         coEvery { settings.autoDistillEnabled() } returns settingsEnabled
         coEvery { settings.curationIntervalHours() } returns intervalHours
         coEvery { settings.lastCuratedAt() } returns lastCuratedAt
+        // 治理跑完一定会写时间戳（「看过就记」），严格 mock 不给答案会抛 MockKException，
+        // 盖住各用例真正要断言的「什么时候叫治理」；这里只让它是个 no-op，调用次数由用例自己 coVerify。
+        coEvery { settings.setLastCuratedAt(any()) } just runs
         every { repository.listMemories(any()) } returns emptyList()
         // changes 的类型是 SharedFlow，不能用 emptyFlow（那是 Flow）
         every { repository.changes } returns MutableSharedFlow()

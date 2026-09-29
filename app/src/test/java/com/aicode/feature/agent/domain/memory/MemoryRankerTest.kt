@@ -90,9 +90,11 @@ class MemoryRankerTest {
             memory("editor-preference", "编辑器用 Neovim")
         )
 
-        val picked = MemoryRanker.rank(memories, "本地构建怎么弄", 3)
+        val picked = MemoryRanker.rank(memories, "本地构建怎么弄", 2)
 
-        // 两条近似重复的只能进来一条，另一个坑位留给其它记忆
+        // 两条近似重复的只能进来一条，另一个坑位留给其它记忆。
+        // limit 必须小于候选条数：rank 在「条数不超上限」时原样返回（不跑去重，保证每条都每轮参与竞争），
+        // limit=3 时这个用例根本没走到去重那一步。
         assertEquals(2, picked.size)
         assertTrue(picked.any { it.name == "editor-preference" })
     }

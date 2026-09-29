@@ -48,10 +48,13 @@ class TaskModuleTest {
 
     @Test
     fun items_showProgressAndFreshness() {
+        // 新鲜度按清单里「最后一次变动」算（items 里最新的 updatedAt），所以两条都要是 12 分钟前；
+        // 给其中一条默认的「此刻」会把整张清单的新鲜度拉成「刚刚更新过」。
+        val twelveMinutesAgo = minutesAgo(12)
         val block = module.renderBlock(
             items = listOf(
-                todo("分析现有实现", TodoStatus.COMPLETED, order = 0),
-                todo("重写 TodoTool", TodoStatus.IN_PROGRESS, order = 1, updatedAt = minutesAgo(12))
+                todo("分析现有实现", TodoStatus.COMPLETED, order = 0, updatedAt = twelveMinutesAgo),
+                todo("重写 TodoTool", TodoStatus.IN_PROGRESS, order = 1, updatedAt = twelveMinutesAgo)
             ),
             ctx = ctx()
         )
