@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -146,13 +147,18 @@ private fun MemoryGroup(
 ) {
     SettingsGroup {
         memories.forEachIndexed { index, memory ->
-            if (index > 0) SettingsDivider()
-            MemoryRow(
-                memory = memory,
-                onOpenDetail = { onOpenDetail(memory) },
-                onLongClick = { onLongClick(memory) },
-                onDelete = { onDelete(memory) }
-            )
+            // 必须带 key：SwipeToDeleteRow 的滑开位移是行内 remember 的位置状态，
+            // 不带 key 时 Compose 按位置匹配，删掉一条后剩下的行会继承上一条的滑开状态，
+            // 用户以为在删 A、实际删掉的是 B
+            key(memory.name) {
+                if (index > 0) SettingsDivider()
+                MemoryRow(
+                    memory = memory,
+                    onOpenDetail = { onOpenDetail(memory) },
+                    onLongClick = { onLongClick(memory) },
+                    onDelete = { onDelete(memory) }
+                )
+            }
         }
     }
 }
