@@ -10,7 +10,7 @@ Entries marked with a version (e.g. "since 1.11.0") were introduced in that vers
 
 | Feature | Description |
 | --- | --- |
-| Chat & workspace | Title bar, sidebar, toolbar, message queue, workspace switching |
+| Chat & workspace | Title bar, sidebar, toolbar, message queue, todo list, workspace switching |
 | Modes (three modes) | Permission control and use cases for Build / Plan / Auto |
 | Checkpoints & undo | Automatic snapshot before AI edits, one-tap safe rollback |
 | Terminal | Multi-tab sessions, auxiliary key bar, color and font settings |
