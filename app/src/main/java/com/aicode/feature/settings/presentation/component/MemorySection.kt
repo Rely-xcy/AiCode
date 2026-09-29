@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -19,10 +20,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -46,11 +50,13 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryScope
+import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit2
@@ -76,8 +82,8 @@ internal fun MemorySection(
 ) {
     // 长按哪条就为哪条弹操作菜单；null 表示菜单未打开
     var actionMemory by remember { mutableStateOf<Memory?>(null) }
-    // 治理周期选择弹层
-    var showCurationIntervalSheet by remember { mutableStateOf(false) }
+    // 自定义治理周期输入弹窗
+    var showCustomIntervalDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -100,23 +106,52 @@ internal fun MemorySection(
                 }
             )
             SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.memory_curation_interval),
-                // 自动沉淀关了就没什么可治理的：整行置灰、行尾显示「关闭」。
-                // 否则开关明明是关的，周期却还写着「1 天」，看着像还在按周期跑。
-                // enabled=false 会真正摘掉 clickable，弹层也打不开。
-                enabled = autoDistillEnabled,
-                onClick = { showCurationIntervalSheet = true },
-                trailing = {
+            // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
+            // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.semanticColors.cardSurface)
+                    .padding(horizontal = Spacing.lg, vertical = 12.dp)
+                    // 自动沉淀关了就没什么可治理的：整块置灰、不响应点击。
+                    // 否则开关明明是关的，周期却还写着「1 天」，看着像还在按周期跑。
+                    .alpha(if (autoDistillEnabled) 1f else 0.45f)
+            ) {
+                Text(
+                    text = stringResource(R.string.memory_curation_interval),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                SegmentedTabs(
+                    selected = curationIntervalIndex(curationIntervalHours),
+                    labels = listOf(
+                        stringResource(R.string.memory_curation_interval_off_short),
+                        stringResource(R.string.memory_curation_interval_1d),
+                        stringResource(R.string.memory_curation_interval_7d),
+                        stringResource(R.string.memory_curation_interval_custom)
+                    ),
+                    onSelect = { index ->
+                        if (!autoDistillEnabled) return@SegmentedTabs
+                        when (index) {
+                            0 -> onSelectCurationInterval(0)
+                            1 -> onSelectCurationInterval(24)
+                            2 -> onSelectCurationInterval(168)
+                            else -> showCustomIntervalDialog = true
+                        }
+                    }
+                )
+                // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
+                val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
+                if (autoDistillEnabled && isCustom) {
                     Text(
-                        text = if (autoDistillEnabled) curationIntervalLabel(curationIntervalHours)
-                        else stringResource(R.string.memory_curation_interval_off),
+                        text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText
+                        color = MaterialTheme.semanticColors.subtleText,
+                        modifier = Modifier.padding(top = Spacing.xs)
                     )
                 }
-            )
+            }
         }
 
         if (memories.isEmpty()) {
@@ -160,14 +195,14 @@ internal fun MemorySection(
         )
     }
 
-    if (showCurationIntervalSheet) {
-        CurationIntervalSheet(
-            selectedHours = curationIntervalHours,
-            onSelect = {
+    if (showCustomIntervalDialog) {
+        CustomCurationIntervalDialog(
+            initialHours = curationIntervalHours,
+            onConfirm = {
                 onSelectCurationInterval(it)
-                showCurationIntervalSheet = false
+                showCustomIntervalDialog = false
             },
-            onDismiss = { showCurationIntervalSheet = false }
+            onDismiss = { showCustomIntervalDialog = false }
         )
     }
 }
@@ -405,80 +440,59 @@ private fun MemoryActionsSheet(
     }
 }
 
-/** 治理周期可选值（小时）：0 = 关闭。与设置页展示的六项一一对应。 */
-private val CURATION_INTERVAL_OPTIONS = listOf(0, 6, 12, 24, 72, 168)
+/** 治理周期预设档位（小时）：关闭 / 1 天 / 7 天；其余值一律算「自定义」。 */
+private val CURATION_PRESET_HOURS = listOf(0, 24, 168)
 
-/** 周期展示文案：六个预设值各自一条；其它值（手改过 DataStore）按「每 N 小时」显示。 */
-@Composable
-private fun curationIntervalLabel(hours: Int): String = when (hours) {
-    0 -> stringResource(R.string.memory_curation_interval_off)
-    6 -> stringResource(R.string.memory_curation_interval_6h)
-    12 -> stringResource(R.string.memory_curation_interval_12h)
-    24 -> stringResource(R.string.memory_curation_interval_1d)
-    72 -> stringResource(R.string.memory_curation_interval_3d)
-    168 -> stringResource(R.string.memory_curation_interval_7d)
-    else -> stringResource(R.string.memory_curation_interval_hours, hours)
-}
+/** 「自定义」胶囊的下标（排在三个预设之后）。 */
+private const val CURATION_CUSTOM_INDEX = 3
 
-/** 治理周期选择弹层：关闭 / 6 小时 / 12 小时 / 1 天 / 3 天 / 7 天。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 当前值对应哪一枚胶囊：命中预设就用它的下标，其余值（含旧的 6h/12h/3d）算自定义。 */
+private fun curationIntervalIndex(hours: Int): Int =
+    CURATION_PRESET_HOURS.indexOf(hours).takeIf { it >= 0 } ?: CURATION_CUSTOM_INDEX
+
+/**
+ * 自定义治理周期：输入小时数（0 = 关闭，上限沿用仓库的 720）。
+ *
+ * 不合法时禁用确认按钮——超范围的值写进 DataStore 会被静默夹紧，用户却以为已生效。
+ */
 @Composable
-private fun CurationIntervalSheet(
-    selectedHours: Int,
-    onSelect: (Int) -> Unit,
+private fun CustomCurationIntervalDialog(
+    initialHours: Int,
+    onConfirm: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = Spacing.xl)
-        ) {
-            Text(
-                text = stringResource(R.string.memory_curation_interval),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .padding(horizontal = Spacing.lg)
-                    .padding(bottom = Spacing.md)
-            )
+    var text by remember { mutableStateOf(if (initialHours > 0) initialHours.toString() else "") }
+    val hours = text.trim().toIntOrNull()
+    val valid = hours != null && hours in
+        MemorySettingsRepository.MIN_CURATION_INTERVAL_HOURS..MemorySettingsRepository.MAX_CURATION_INTERVAL_HOURS
 
-            CURATION_INTERVAL_OPTIONS.forEach { hours ->
-                val isSelected = hours == selectedHours
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelect(hours) }
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = curationIntervalLabel(hours),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (isSelected) {
-                        Icon(
-                            imageVector = FeatherIcons.Check,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.memory_curation_interval_custom_title)) },
+        text = {
+            Column {
+                AppTextField(
+                    value = text,
+                    onValueChange = { text = it.filter(Char::isDigit).take(4) },
+                    label = stringResource(R.string.memory_curation_interval_custom_label)
+                )
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.memory_curation_interval_custom_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.semanticColors.subtleText
+                )
             }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = { hours?.let(onConfirm) }) {
+                Text(stringResource(R.string.common_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         }
-    }
+    )
 }
 
 /** 记忆编辑器目标：[memory] 为 null 表示新建一条。 */

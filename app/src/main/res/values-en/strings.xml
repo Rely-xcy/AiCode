@@ -989,6 +989,11 @@
     <string name="memory_delete_failed">Delete failed; the entry may no longer exist</string>
     <string name="memory_curation_interval">Curation interval</string>
     <string name="memory_curation_interval_off">Off (no auto curation)</string>
+    <string name="memory_curation_interval_off_short">Off</string>
+    <string name="memory_curation_interval_custom">Custom</string>
+    <string name="memory_curation_interval_custom_title">Custom curation interval</string>
+    <string name="memory_curation_interval_custom_label">Hours</string>
+    <string name="memory_curation_interval_custom_hint">0 disables it, up to 720 hours</string>
     <string name="memory_curation_interval_6h">6 hours</string>
     <string name="memory_curation_interval_12h">12 hours</string>
     <string name="memory_curation_interval_1d">1 day</string>
