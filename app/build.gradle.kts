@@ -403,6 +403,9 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // 少数测试文件用 kotlin.test.*（Test/assertEquals 等）；缺它整份测试源码集编译不过（CI 长期红）。
+    // 用 kotlin("test") 而非钉版本：插件会按 JUnit4 自动选 kotlin-test-junit 变体，版本跟随 Kotlin。
+    testImplementation(kotlin("test"))
     // 迁移测试：MigrationTestHelper + Robolectric（在 JVM 上跑 Room 迁移，需真实 resources）
     testImplementation("androidx.room:room-testing:2.7.1")
     testImplementation("org.robolectric:robolectric:4.15.1")
