@@ -180,11 +180,15 @@ class WriteLeaseRegistry @Inject constructor(
     }
 
     /**
-     * 把「声明用的模式」规范成判定用的段序列：非通配模式补上尾随 `**`，
-     * 语义是「该路径本身及其子树」——这样 `app/src`、`app/src/`、`app/src/**` 三种写法等价，
-     * 派发方不必记住要不要带尾斜杠。覆盖整个工作区或整个容器根的模式视为无效声明，返回 null。
+     * 把「声明用的模式」规范成判定用的段序列：非通配模式补上尾随的双星号，
+     * 语义是「该路径本身及其子树」，派发方不必记「目录要不要带尾斜杠」这种细节。
+     * 覆盖整个工作区或整个容器根的模式视为无效声明，返回 null。
+     *
+     * 等价写法的具体例子见函数体里的行注释：块注释里不能出现「斜杠 + 星号」的组合，
+     * Kotlin 的块注释会**嵌套**，写进去会把整个文件后半段吞掉（编译期报一堆 Unresolved reference）。
      */
     private fun scopeOf(pattern: String, projectRoot: String): Pair<String, List<String>>? {
+        // 等价写法：`app/src`、`app/src/`、`app/src` 再接双星号后缀，三种归一成同一份段序列。
         val raw = pattern.trim()
         if (raw.isEmpty()) return null
         val canonical = canonicalSegments(raw) ?: return null
@@ -194,7 +198,7 @@ class WriteLeaseRegistry @Inject constructor(
         } else {
             relative + WriteScopePattern.ANY_DEPTH
         }
-        // 覆盖整个工作区（`.`、`**`、`~/workspace`、`~/workspace/**`）的声明等于「独占全部文件」，
+        // 覆盖整个工作区（`.`、双星号、`~/workspace` 及其双星号后缀）的声明等于「独占全部文件」，
         // 会让所有并行都退化成串行，直接拒绝而不是默默接受。
         if (effective.size <= 1 || WriteScopePattern.overlaps(effective, rootSegments(projectRoot))) {
             FileLogger.w(TAG, "忽略过宽的写范围声明：$raw")
@@ -284,12 +288,17 @@ class WriteLeaseRegistry @Inject constructor(
 /**
  * 写范围模式的规范化与重叠判定：纯函数，不碰磁盘、不依赖 DI。
  *
- * 模式是「以 `/` 分段的路径」：段内 `*` 匹配任意字符，整段 `**` 匹配任意层（含 0 层）。
+ * 模式是「以斜杠分段的路径」：段内单个星号匹配任意字符，整段双星号匹配任意层（含 0 层）。
  * 重叠判定用两条模式的乘积自动机做可达性分析——判的是「是否存在一条路径同时匹配两者」，
- * 而不是「字符串前缀是否相同」。这点很关键：`**/strings.xml` 只和真正的 strings.xml 冲突，
+ * 而不是「字符串前缀是否相同」。这点很关键：双星号开头的同名文件模式，只会和真正的那个文件冲突，
  * 不会因为字面前缀为空就误判成和整个工作区冲突。
+ *
+ * 具体例子写在对象体里的行注释：块注释里出现「斜杠 + 星号」会被当成嵌套注释，
+ * 而「星号 + 斜杠」会提前把注释关掉，两者都会把文件后半段变成语法错误。
  */
 internal object WriteScopePattern {
+
+    // 具体例子：双星号加 `/strings.xml` 只与真正叫 strings.xml 的文件冲突，不与 Foo.kt 冲突。
 
     const val WILDCARD = "*"
     const val ANY_DEPTH = "**"
