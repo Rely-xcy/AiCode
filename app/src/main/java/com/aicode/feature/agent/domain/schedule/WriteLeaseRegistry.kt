@@ -210,7 +210,17 @@ class WriteLeaseRegistry @Inject constructor(
     /** 把路径映射成宿主绝对路径再切段：`~/workspace/...`、`$HOME/workspace/...`、相对路径、绝对路径都归一到同一份。 */
     private fun canonicalSegments(path: String): List<String>? = try {
         val host = pathMapper.toHostFile(path).absolutePath.replace('\\', '/')
-        host.split('/').filter { it.isNotEmpty() }
+        // 归一化 `.` / `..`：声明 `.`（或 `./`）时 toHostFile 会原样留下这个点段，
+        // 不消掉的话它不会被认成「工作区根」，过宽声明就被默默接受了。
+        val segments = mutableListOf<String>()
+        host.split('/').filter { it.isNotEmpty() }.forEach { segment ->
+            when (segment) {
+                "." -> Unit
+                ".." -> if (segments.isNotEmpty()) segments.removeAt(segments.size - 1)
+                else -> segments.add(segment)
+            }
+        }
+        segments
     } catch (e: Exception) {
         FileLogger.w(TAG, "规范化路径失败: $path", e)
         null

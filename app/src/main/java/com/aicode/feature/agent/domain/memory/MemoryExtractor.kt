@@ -114,7 +114,10 @@ class MemoryExtractor @Inject constructor(
             // trimmed 保留原样（正文行原样落盘，markdown 的项目符号/反引号不能被吃掉）；
             // cleaned 另去一层「行首项目符号 / 代码块反引号」，只用于「这行是不是标签」的判定。
             val trimmed = line.trim()
-            val cleaned = trimmed.removePrefix("-").removePrefix("*").trim().trim('`').trim()
+            // 分隔行（---）必须先判：先 removePrefix("-") 会吃掉一个连字符得 "--"，
+            // 下面所有 cleaned == "---" 的判定就永远不成立，下一条记忆会被当成上文正文吞掉。
+            val cleaned = if (trimmed.startsWith("---")) "---"
+            else trimmed.removePrefix("-").removePrefix("*").trim().trim('`').trim()
 
             // 「值写到下一行」：上一行是裸标签，这一行就是它的值
             val pending = pendingLabel
