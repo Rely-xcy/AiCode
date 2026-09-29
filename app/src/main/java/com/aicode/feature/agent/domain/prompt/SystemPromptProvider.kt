@@ -234,7 +234,7 @@ class SystemPromptProvider @Inject constructor(
                 userPromptStore.list(UserPromptScope.GLOBAL, ctx.projectRoot) +
                     userPromptStore.list(UserPromptScope.PROJECT, ctx.projectRoot)
             }.getOrDefault(emptyList())
-                .filter { it.position == position && it.content.isNotBlank() }
+                .filter { it.enabled && it.position == position && it.content.isNotBlank() }
             if (prompts.isEmpty()) return null
             return prompts.joinToString("\n\n") { it.content.trim() }
         }

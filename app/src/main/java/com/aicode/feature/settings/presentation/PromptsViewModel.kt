@@ -108,13 +108,14 @@ class PromptsViewModel @Inject constructor(
         name: String,
         scope: UserPromptScope,
         position: UserPromptPosition,
-        content: String
+        content: String,
+        enabled: Boolean
     ) {
         viewModelScope.launch {
             val projectRoot = workspaceRepository.currentPath()
             withContext(Dispatchers.IO) {
-                val prompt = existing?.copy(name = name, position = position, content = content)
-                    ?: userPromptStore.newPrompt(name, position, content)
+                val prompt = existing?.copy(name = name, position = position, content = content, enabled = enabled)
+                    ?: userPromptStore.newPrompt(name, position, content, enabled)
                 userPromptStore.save(scope, projectRoot, prompt)
             }
             refresh()

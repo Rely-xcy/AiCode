@@ -32,12 +32,14 @@ class UserPromptStore @Inject constructor(
     fun newPrompt(
         name: String,
         position: UserPromptPosition,
-        content: String
+        content: String,
+        enabled: Boolean = true
     ): UserPrompt = UserPrompt(
         id = "p" + System.currentTimeMillis().toString(36) + "-" + UUID.randomUUID().toString().take(4),
         name = name,
         position = position,
-        content = content
+        content = content,
+        enabled = enabled
     )
 
     /**
@@ -91,16 +93,24 @@ class UserPromptStore @Inject constructor(
             return null
         }
         val (frontmatter, body) = splitFrontmatter(text)
+        // 兼容旧文件：那时「不注入」写在 position 里（off），现在拆成独立开关 enabled。
+        // 读到 off 就转成 enabled=false、位置回落到「最后」；旧文件下次保存时自动改写成新格式。
+        val storedPosition = UserPromptPosition.fromStorage(frontmatter["position"]?.toString())
+        val legacyOff = storedPosition == UserPromptPosition.OFF
         return UserPrompt(
             id = file.nameWithoutExtension,
             name = frontmatter["name"]?.toString()?.takeIf { it.isNotBlank() } ?: file.nameWithoutExtension,
-            position = UserPromptPosition.fromStorage(frontmatter["position"]?.toString()),
-            content = body.trim()
+            position = if (legacyOff) UserPromptPosition.AFTER_SYSTEM else storedPosition,
+            content = body.trim(),
+            enabled = !legacyOff && frontmatter["enabled"]?.toString()?.trim()?.lowercase() != "false"
         )
     }
 
-    private fun format(prompt: UserPrompt): String =
-        "---\nname: ${yamlScalar(prompt.name)}\nposition: ${prompt.position.toStorage()}\n---\n${prompt.content}"
+    private fun format(prompt: UserPrompt): String {
+        // 只在不启用时写 enabled 字段：默认值不落盘，既有文件保持字节不变
+        val enabledLine = if (prompt.enabled) "" else "enabled: false\n"
+        return "---\nname: ${yamlScalar(prompt.name)}\nposition: ${prompt.position.toStorage()}\n$enabledLine---\n${prompt.content}"
+    }
 
     private fun splitFrontmatter(text: String): Pair<Map<String, Any>, String> {
         val normalized = text.replace("\r\n", "\n")

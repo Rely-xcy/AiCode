@@ -1019,6 +1019,8 @@
     <string name="prompts_position_short_after_system">Last</string>
     <string name="prompts_position_short_off">Off</string>
     <string name="prompts_field_basic">Basic</string>
+    <string name="prompts_enabled">Enable this prompt</string>
+    <string name="prompts_enabled_hint">When off it is not injected; its position is kept, so turning it back on restores the same slot</string>
     <string name="prompts_field_name">Name</string>
     <string name="prompts_field_name_placeholder">e.g. Answer style</string>
     <string name="prompts_field_scope">Scope</string>

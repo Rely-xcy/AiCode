@@ -1019,6 +1019,8 @@
     <string name="prompts_position_short_after_system">最后</string>
     <string name="prompts_position_short_off">关闭</string>
     <string name="prompts_field_basic">基本信息</string>
+    <string name="prompts_enabled">启用该提示词</string>
+    <string name="prompts_enabled_hint">关闭后不参与注入；注入位置保留，重新打开仍回原槽位</string>
     <string name="prompts_field_name">名称</string>
     <string name="prompts_field_name_placeholder">例如：回答风格</string>
     <string name="prompts_field_scope">作用域</string>

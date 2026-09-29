@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
@@ -41,13 +42,15 @@ internal fun PromptEditorSection(
     initialScope: UserPromptScope,
     initialPosition: UserPromptPosition,
     initialContent: String,
+    initialEnabled: Boolean,
     hasWorkspace: Boolean,
-    onSave: (name: String, scope: UserPromptScope, position: UserPromptPosition, content: String) -> Unit
+    onSave: (name: String, scope: UserPromptScope, position: UserPromptPosition, content: String, enabled: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(initialName) }
     var scope by remember { mutableStateOf(initialScope) }
     var position by remember { mutableStateOf(initialPosition) }
     var content by remember { mutableStateOf(initialContent) }
+    var enabled by remember { mutableStateOf(initialEnabled) }
 
     Column(
         modifier = Modifier
@@ -57,6 +60,19 @@ internal fun PromptEditorSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        // 开关放最上方：它决定这条提示词参不参与注入，比后面那些字段都先被读到。
+        // 与「注入位置」相互独立——关掉它不动位置，重新打开仍在原槽位。
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.prompts_enabled),
+                subtitle = stringResource(R.string.prompts_enabled_hint),
+                trailing = {
+                    AppSwitch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+            )
+        }
+
         SettingsGroupHeader(text = stringResource(R.string.prompts_field_basic))
         SettingsGroup {
             Column(modifier = Modifier.padding(Spacing.lg)) {
@@ -114,11 +130,6 @@ internal fun PromptEditorSection(
                     onClick = { position = UserPromptPosition.AFTER_SYSTEM },
                     label = { Text(stringResource(R.string.prompts_position_short_after_system)) }
                 )
-                FilterChip(
-                    selected = position == UserPromptPosition.OFF,
-                    onClick = { position = UserPromptPosition.OFF },
-                    label = { Text(stringResource(R.string.prompts_position_short_off)) }
-                )
             }
         }
 
@@ -151,7 +162,7 @@ internal fun PromptEditorSection(
                 title = stringResource(if (isNew) R.string.prompts_action_add else R.string.prompts_action_save),
                 enabled = name.isNotBlank(),
                 onClick = {
-                    onSave(name.trim(), scope, position, content)
+                    onSave(name.trim(), scope, position, content, enabled)
                 }
             )
         }

@@ -10,12 +10,14 @@ package com.aicode.feature.agent.domain.prompt
  * @param name 用户起的名字，用于列表显示
  * @param position 注入位置
  * @param content 提示词正文
+ * @param enabled 是否参与注入；与 [position] 相互独立——关掉它只停注入，不动位置
  */
 data class UserPrompt(
     val id: String,
     val name: String,
     val position: UserPromptPosition,
-    val content: String
+    val content: String,
+    val enabled: Boolean = true
 )
 
 /** 作用域：全局（跟 App 走）与项目（跟工作区走）。 */
@@ -30,7 +32,8 @@ enum class UserPromptScope {
  * 内置片段的顺序由编号固定，用户提示词不掺进那套编号，而是走两个独立槽位：
  * - [BEFORE_ALL]：拼在所有提示词之前（基线之前）
  * - [AFTER_SYSTEM]：拼在系统提示词之后（动态段之后）
- * - [OFF]：暂时关闭，保留内容但不注入
+ * - [OFF]：旧版用来表示「不注入」，现已由 [UserPrompt.enabled] 承担；
+ *   读旧文件时会转成 enabled=false，写盘不再产生该值（保留枚举值仅为兼容读取）。
  */
 enum class UserPromptPosition {
     BEFORE_ALL,

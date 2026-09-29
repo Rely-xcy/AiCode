@@ -175,7 +175,7 @@ internal fun PromptsSection(
                 ) { dragModifier ->
                     PromptRow(
                         title = prompt.name,
-                        subtitle = positionLabel(prompt.position),
+                        subtitle = promptLabel(prompt),
                         onClick = { onOpenPrompt(prompt, UserPromptScope.GLOBAL) },
                         onDelete = { onDeletePrompt(prompt, UserPromptScope.GLOBAL) },
                         dragModifier = dragModifier
@@ -214,7 +214,7 @@ internal fun PromptsSection(
                 ) { dragModifier ->
                     PromptRow(
                         title = prompt.name,
-                        subtitle = positionLabel(prompt.position),
+                        subtitle = promptLabel(prompt),
                         onClick = { onOpenPrompt(prompt, UserPromptScope.PROJECT) },
                         onDelete = { onDeletePrompt(prompt, UserPromptScope.PROJECT) },
                         dragModifier = dragModifier
@@ -445,9 +445,15 @@ private fun PromptEmptyHint(text: String) {
     )
 }
 
+/** 行副标题：关闭时直说「已关闭」，否则显示注入位置。 */
 @Composable
-private fun positionLabel(position: UserPromptPosition): String = when (position) {
-    UserPromptPosition.BEFORE_ALL -> stringResource(R.string.prompts_position_before_all)
-    UserPromptPosition.AFTER_SYSTEM -> stringResource(R.string.prompts_position_after_system)
-    UserPromptPosition.OFF -> stringResource(R.string.prompts_position_off)
-}
+private fun promptLabel(prompt: UserPrompt): String =
+    if (!prompt.enabled) {
+        stringResource(R.string.prompts_position_off)
+    } else {
+        when (prompt.position) {
+            UserPromptPosition.BEFORE_ALL -> stringResource(R.string.prompts_position_before_all)
+            UserPromptPosition.AFTER_SYSTEM -> stringResource(R.string.prompts_position_after_system)
+            UserPromptPosition.OFF -> stringResource(R.string.prompts_position_off)
+        }
+    }

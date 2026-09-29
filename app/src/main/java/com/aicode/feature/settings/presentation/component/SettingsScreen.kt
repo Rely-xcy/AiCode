@@ -951,9 +951,10 @@ fun SettingsScreen(
                             initialScope = target?.scope ?: UserPromptScope.GLOBAL,
                             initialPosition = target?.prompt?.position ?: UserPromptPosition.AFTER_SYSTEM,
                             initialContent = target?.prompt?.content.orEmpty(),
+                            initialEnabled = target?.prompt?.enabled ?: true,
                             hasWorkspace = promptsState.hasWorkspace,
-                            onSave = { name, scope, position, content ->
-                                promptsViewModel.savePrompt(target?.prompt, name, scope, position, content)
+                            onSave = { name, scope, position, content, enabled ->
+                                promptsViewModel.savePrompt(target?.prompt, name, scope, position, content, enabled)
                                 section = SettingsSection.Prompts
                             }
                         )
