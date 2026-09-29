@@ -71,6 +71,7 @@ import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
 import com.aicode.R
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
+import com.aicode.feature.agent.domain.prompt.UserPrompt
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
@@ -193,6 +194,9 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.Log -> 2
     else -> 1
 }
+
+/** 待确认删除的提示词：删除需要 prompt 与它所在作用域两个参数。 */
+private data class PromptDeleteTarget(val prompt: UserPrompt, val scope: UserPromptScope)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -339,8 +343,12 @@ fun SettingsScreen(
     // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
+    // 待确认删除的提示词：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
+    var promptToDelete by remember { mutableStateOf<PromptDeleteTarget?>(null) }
     // 记忆编辑器弹层：null 表示关闭；MemoryEditorTarget(memory = null) 表示从右上角「+」新建
     var memoryEditorTarget by remember { mutableStateOf<MemoryEditorTarget?>(null) }
+    // 待确认删除的记忆：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
+    var memoryToDelete by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
@@ -877,7 +885,9 @@ fun SettingsScreen(
                             promptEditTarget = PromptEditTarget(prompt = prompt, scope = scope)
                             section = SettingsSection.PromptEditor
                         },
-                        onDeletePrompt = { prompt, scope -> promptsViewModel.deletePrompt(prompt, scope) }
+                        onDeletePrompt = { prompt, scope ->
+                            promptToDelete = PromptDeleteTarget(prompt, scope)
+                        }
                     )
                     if (showPromptsAddSheet) {
                         PromptsAddSheet(
@@ -894,6 +904,23 @@ fun SettingsScreen(
                             onHelp = {
                                 showPromptsAddSheet = false
                                 section = SettingsSection.PromptsHelp
+                            }
+                        )
+                    }
+                    // 删除提示词二次确认：确认按钮里才真正删（需要 prompt + scope，状态带住两个）
+                    promptToDelete?.let { target ->
+                        AlertDialog(
+                            onDismissRequest = { promptToDelete = null },
+                            title = { Text(stringResource(R.string.prompts_delete_confirm_title)) },
+                            text = { Text(stringResource(R.string.prompts_delete_confirm_message, target.prompt.name)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    promptsViewModel.deletePrompt(target.prompt, target.scope)
+                                    promptToDelete = null
+                                }) { Text(stringResource(R.string.common_delete)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { promptToDelete = null }) { Text(stringResource(R.string.common_cancel)) }
                             }
                         )
                     }
@@ -948,6 +975,7 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
                     val autoDistill by memoryViewModel.autoDistillEnabled.collectAsStateWithLifecycle()
+                    val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
                     // 每次进入本分区重扫：引擎可能在后台刚沉淀了新条目，
                     // 而 VM 在设置页返回栈里常驻，只在 init 扫一次会永远是旧列表。
                     LaunchedEffect(Unit) { memoryViewModel.refresh() }
@@ -956,9 +984,11 @@ fun SettingsScreen(
                         memories = memories,
                         autoDistillEnabled = autoDistill,
                         onToggleAutoDistill = memoryViewModel::setAutoDistillEnabled,
+                        curationIntervalHours = curationInterval,
+                        onSelectCurationInterval = memoryViewModel::setCurationIntervalHours,
                         onOpenDetail = { detailMemory = it },
                         onEdit = { memoryEditorTarget = MemoryEditorTarget(it) },
-                        onDelete = memoryViewModel::delete
+                        onDelete = { memoryToDelete = it }
                     )
                     detailMemory?.let { memory ->
                         MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
@@ -971,6 +1001,23 @@ fun SettingsScreen(
                                 memoryEditorTarget = null
                             },
                             onDismiss = { memoryEditorTarget = null }
+                        )
+                    }
+                    // 删除记忆二次确认：确认按钮里才真正删；显示名用列表行同一个字段（memory.name）
+                    memoryToDelete?.let { memory ->
+                        AlertDialog(
+                            onDismissRequest = { memoryToDelete = null },
+                            title = { Text(stringResource(R.string.memory_delete_confirm_title)) },
+                            text = { Text(stringResource(R.string.memory_delete_confirm_message, memory.name)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    memoryViewModel.delete(memory)
+                                    memoryToDelete = null
+                                }) { Text(stringResource(R.string.common_delete)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { memoryToDelete = null }) { Text(stringResource(R.string.common_cancel)) }
+                            }
                         )
                     }
                 }

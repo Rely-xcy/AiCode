@@ -21,7 +21,7 @@ import javax.inject.Inject
 
 /**
  * 记忆页状态：列出当前生效的记忆（全局与项目由 Repository 合并去重，界面不再分栏），
- * 支持删除，并提供「长期记忆自动沉淀」开关。
+ * 支持删除，并提供「长期记忆自动沉淀」开关与治理周期。
  *
  * 扫描磁盘记忆文件与删除都是 IO，统一放 IO 线程。
  */
@@ -37,6 +37,14 @@ class MemoryViewModel @Inject constructor(
 
     val autoDistillEnabled: StateFlow<Boolean> = memorySettings.autoDistillEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 治理周期（小时）：0 表示关闭治理。初始值取仓库默认值，避免先闪一下「关闭」。 */
+    val curationIntervalHours: StateFlow<Int> = memorySettings.curationIntervalHoursFlow
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            MemorySettingsRepository.DEFAULT_CURATION_INTERVAL_HOURS
+        )
 
     init {
         refresh()
@@ -54,6 +62,12 @@ class MemoryViewModel @Inject constructor(
     fun setAutoDistillEnabled(enabled: Boolean) {
         viewModelScope.launch {
             memorySettings.setAutoDistillEnabled(enabled)
+        }
+    }
+
+    fun setCurationIntervalHours(hours: Int) {
+        viewModelScope.launch {
+            memorySettings.setCurationIntervalHours(hours)
         }
     }
 

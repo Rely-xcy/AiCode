@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
@@ -66,12 +68,16 @@ internal fun MemorySection(
     memories: List<Memory>,
     autoDistillEnabled: Boolean,
     onToggleAutoDistill: (Boolean) -> Unit,
+    curationIntervalHours: Int,
+    onSelectCurationInterval: (Int) -> Unit,
     onOpenDetail: (Memory) -> Unit,
     onEdit: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
 ) {
     // 长按哪条就为哪条弹操作菜单；null 表示菜单未打开
     var actionMemory by remember { mutableStateOf<Memory?>(null) }
+    // 治理周期选择弹层
+    var showCurationIntervalSheet by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -90,6 +96,19 @@ internal fun MemorySection(
                     AppSwitch(
                         checked = autoDistillEnabled,
                         onCheckedChange = onToggleAutoDistill
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.memory_curation_interval),
+                onClick = { showCurationIntervalSheet = true },
+                trailing = {
+                    Text(
+                        text = curationIntervalLabel(curationIntervalHours),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
                     )
                 }
             )
@@ -133,6 +152,17 @@ internal fun MemorySection(
                 onDelete(memory)
             },
             onDismiss = { actionMemory = null }
+        )
+    }
+
+    if (showCurationIntervalSheet) {
+        CurationIntervalSheet(
+            selectedHours = curationIntervalHours,
+            onSelect = {
+                onSelectCurationInterval(it)
+                showCurationIntervalSheet = false
+            },
+            onDismiss = { showCurationIntervalSheet = false }
         )
     }
 }
@@ -365,6 +395,82 @@ private fun MemoryActionsSheet(
                     title = stringResource(R.string.common_delete),
                     onClick = onDelete
                 )
+            }
+        }
+    }
+}
+
+/** 治理周期可选值（小时）：0 = 关闭。与设置页展示的六项一一对应。 */
+private val CURATION_INTERVAL_OPTIONS = listOf(0, 6, 12, 24, 72, 168)
+
+/** 周期展示文案：六个预设值各自一条；其它值（手改过 DataStore）按「每 N 小时」显示。 */
+@Composable
+private fun curationIntervalLabel(hours: Int): String = when (hours) {
+    0 -> stringResource(R.string.memory_curation_interval_off)
+    6 -> stringResource(R.string.memory_curation_interval_6h)
+    12 -> stringResource(R.string.memory_curation_interval_12h)
+    24 -> stringResource(R.string.memory_curation_interval_1d)
+    72 -> stringResource(R.string.memory_curation_interval_3d)
+    168 -> stringResource(R.string.memory_curation_interval_7d)
+    else -> stringResource(R.string.memory_curation_interval_hours, hours)
+}
+
+/** 治理周期选择弹层：关闭 / 6 小时 / 12 小时 / 1 天 / 3 天 / 7 天。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CurationIntervalSheet(
+    selectedHours: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.memory_curation_interval),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.md)
+            )
+
+            CURATION_INTERVAL_OPTIONS.forEach { hours ->
+                val isSelected = hours == selectedHours
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(hours) }
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = curationIntervalLabel(hours),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isSelected) {
+                        Icon(
+                            imageVector = FeatherIcons.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
             }
         }
     }

@@ -78,6 +78,16 @@ class MemoryModuleTest {
     }
 
     @Test
+    fun onTurnCompleted_doesNothingWhenCurationOff() = runTest {
+        // 治理周期选「关闭」（0 小时）：即使从未治理过也不应该跑
+        val h = harness(lastCuratedAt = 0L, intervalHours = 0)
+
+        h.module.onTurnCompleted(ctx { _, _ -> "[]" })
+
+        coVerify(exactly = 0) { h.curator.curate(any(), any()) }
+    }
+
+    @Test
     fun onTurnCompleted_curatesWhenNeverCurated() = runTest {
         val h = harness(lastCuratedAt = 0L)
 

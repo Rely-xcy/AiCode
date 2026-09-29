@@ -152,6 +152,8 @@ class MemoryModule @Inject constructor(
         val sessionKey = ctx.sessionId ?: return
 
         val intervalHours = memorySettings.curationIntervalHours()
+        // 周期 <= 0 是设置页里的「关闭治理」：直接返回，不参与下面的间隔比较
+        if (intervalHours <= 0) return
         val lastCuratedAt = memorySettings.lastCuratedAt()
         val elapsed = System.currentTimeMillis() - lastCuratedAt
         if (lastCuratedAt > 0 && elapsed < intervalHours * 60L * 60 * 1000) return
