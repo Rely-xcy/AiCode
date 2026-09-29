@@ -56,12 +56,14 @@ class ContextCompactor @Inject constructor(
     }
 
     /**
-     * 软精简：把历史里超长的工具输出裁短，直到估算落回 [targetTokens] 以内。
+     * 软精简：把历史里超长的工具输出与工具参数裁短，直到估算落回 [targetTokens] 以内。
      *
-     * 三个要点：
-     * 1. 只改喂模型的 `modelResult`，不动 `result`（UI 与持久化仍用完整内容）；
-     * 2. 按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
-     * 3. 幂等：已带标记的不再处理，重复调用不会把内容越裁越短。
+     * 四个要点：
+     * 1. 只改喂模型的那一份，不动落库/UI 的内容：工具输出改 `modelResult`（`result` 保持完整），
+     *    工具参数按字段重建（返回新消息对象，原列表里的对象不动）；
+     * 2. 先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
+     * 3. 按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
+     * 4. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
      *
      * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
      */
@@ -70,12 +72,33 @@ class ContextCompactor @Inject constructor(
         var estimate = TokenEstimator.estimateMessages(messages)
         if (estimate <= targetTokens) return messages
 
-        val candidates = messages.indices
-            .filter { messages[it] is AgentMessage.ToolResultMessage }
-            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
-
         var changed = false
         val result = messages.toMutableList()
+
+        // 工具参数投影：write/edit 把整个文件塞进 arguments，而这段正文对模型是纯冗余——
+        // 文件已经在磁盘上，需要时 read 回来即可，但每一轮请求都要原样再发一遍。
+        // 这就是工具结果那层 modelResult 的对称做法，只是参数没有独立字段，
+        // 所以用 copy() 造一份新对象喂模型，原对象（UI/落库）不受影响。
+        val argCandidates = messages.indices
+            .filter {
+                val message = messages[it]
+                message is AgentMessage.AssistantMessage && message.toolCalls.isNotEmpty()
+            }
+            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+        for (index in argCandidates) {
+            val message = result[index] as AgentMessage.AssistantMessage
+            val rebuilt = message.toolCalls.map { call -> rebuildToolCallArguments(call, SOFT_TRIM_TOOL_CHARS) }
+            if (rebuilt == message.toolCalls) continue
+            val trimmed = message.copy(toolCalls = rebuilt)
+            estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
+            result[index] = trimmed
+            changed = true
+        }
+
+        val candidates = result.indices
+            .filter { result[it] is AgentMessage.ToolResultMessage }
+            .sortedByDescending { TokenEstimator.estimateMessage(result[it]) }
+
         for (index in candidates) {
             if (estimate <= targetTokens) break
             val message = result[index] as AgentMessage.ToolResultMessage
