@@ -40,23 +40,25 @@ class GlobalMemorySource @Inject constructor(
         return try {
             if (!memoryRoot.exists()) memoryRoot.mkdirs()
             val file = existingMemoryFile(name) ?: MemorySource.resolveMemoryFile(memoryRoot, name)
-            MemorySource.archiveBeforeOverwrite(memoryRoot, file)
-            // 覆盖时保留原创建时间与命中统计：它们描述的是「这条记忆本身」，与本次正文无关
-            val previous = MemoryParser.parse(file, MemoryScope.GLOBAL)
-            val created = if (createdAt > 0) createdAt else previous?.createdAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
-            MemorySource.writeAtomically(
-                file,
-                MemoryParser.format(
-                    name = MemorySource.sanitizeName(name),
-                    description = description,
-                    content = content,
-                    kind = kind,
-                    source = source,
-                    createdAt = created,
-                    hitCount = previous?.hitCount ?: 0,
-                    lastHitAt = previous?.lastHitAt ?: 0L
+            MemorySource.withFileLock(file) {
+                MemorySource.archiveBeforeOverwrite(memoryRoot, file)
+                // 覆盖时保留原创建时间与命中统计：它们描述的是「这条记忆本身」，与本次正文无关
+                val previous = MemoryParser.parse(file, MemoryScope.GLOBAL)
+                val created = if (createdAt > 0) createdAt else previous?.createdAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
+                MemorySource.writeAtomically(
+                    file,
+                    MemoryParser.format(
+                        name = MemorySource.sanitizeName(name),
+                        description = description,
+                        content = content,
+                        kind = kind,
+                        source = source,
+                        createdAt = created,
+                        hitCount = previous?.hitCount ?: 0,
+                        lastHitAt = previous?.lastHitAt ?: 0L
+                    )
                 )
-            )
+            }
             true
         } catch (e: Exception) {
             FileLogger.e("GlobalMemorySource", "Failed to save memory: $name", e)
@@ -68,7 +70,13 @@ class GlobalMemorySource @Inject constructor(
         // 按真实文件路径删：名字里可能有 sanitize 会改写的字符（点、空格、非 ASCII），
         // 重拼文件名会找不到文件 → 删除静默失败（列表刷新后条目还在）
         val file = existingMemoryFile(name) ?: MemorySource.resolveMemoryFile(memoryRoot, name)
-        return if (file.exists()) file.delete() else false
+        if (!file.exists()) return false
+        return MemorySource.withFileLock(file) {
+            // 删除同样留底：用户在记忆页删、模型调 memory(action=delete) 删，都是不可逆动作，
+            // 覆盖/编辑/治理都归档，删除没理由例外（旧版本进 .superseded/，随目录限量清理）
+            MemorySource.archiveBeforeOverwrite(memoryRoot, file)
+            file.delete()
+        }
     }
 
     /** 按解析出的名字找已有文件；找不到返回 null（调用方回退到 sanitize 拼路径）。 */

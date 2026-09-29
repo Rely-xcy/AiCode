@@ -69,6 +69,9 @@ class MemoryRepository @Inject constructor(
      * 统计的是**会话数**而不是次数：按次数记会退化成「聊得越久越重要」，
      * 按会话数记才是「多少个不同场景里真的用到了它」。同一会话只记一次。
      * 写盘失败只记日志——统计不能反过来影响注入本身。
+     *
+     * 读-改-写全程持文件锁（[MemorySource.withFileLock]）：这条路径在 IO 协程里异步跑，
+     * 而模型可能正同时调 memory 工具写盘，不加锁就是拿旧内容把刚保存的正文盖回去。
      */
     fun recordHits(memories: List<Memory>, sessionId: String?) {
         memories.forEach { memory ->
@@ -77,29 +80,31 @@ class MemoryRepository @Inject constructor(
             if (!recordedHits.add(key)) return@forEach
             if (recordedHits.size > HIT_CACHE_LIMIT) recordedHits.clear()
             runCatching {
-                val parsed = MemoryParser.parse(file, memory.scope)
-                when {
-                    parsed == null ->
-                        FileLogger.w(TAG, "记录命中时读不到记忆: ${memory.name}")
+                MemorySource.withFileLock(file) {
+                    val parsed = MemoryParser.parse(file, memory.scope)
+                    when {
+                        parsed == null ->
+                            FileLogger.w(TAG, "记录命中时读不到记忆: ${memory.name}")
 
-                    // frontmatter 解析失败时各字段全空。此时重写会把旧元数据抹掉（且不归档），
-                    // 宁可少记一次命中，也不能拿「空解析结果」当真写回去。
-                    parsed.description.isEmpty() && parsed.source.isEmpty() && parsed.createdAt == 0L ->
-                        FileLogger.w(TAG, "记忆元数据解析为空，跳过命中记账以免覆盖: ${memory.name}")
+                        // frontmatter 解析失败时各字段全空。此时重写会把旧元数据抹掉（且不归档），
+                        // 宁可少记一次命中，也不能拿「空解析结果」当真写回去。
+                        parsed.description.isEmpty() && parsed.source.isEmpty() && parsed.createdAt == 0L ->
+                            FileLogger.w(TAG, "记忆元数据解析为空，跳过命中记账以免覆盖: ${memory.name}")
 
-                    else -> MemorySource.writeAtomically(
-                        file,
-                        MemoryParser.format(
-                            name = parsed.name,
-                            description = parsed.description,
-                            content = parsed.content,
-                            kind = parsed.kind,
-                            source = parsed.source,
-                            createdAt = parsed.createdAt,
-                            hitCount = parsed.hitCount + 1,
-                            lastHitAt = System.currentTimeMillis()
+                        else -> MemorySource.writeAtomically(
+                            file,
+                            MemoryParser.format(
+                                name = parsed.name,
+                                description = parsed.description,
+                                content = parsed.content,
+                                kind = parsed.kind,
+                                source = parsed.source,
+                                createdAt = parsed.createdAt,
+                                hitCount = parsed.hitCount + 1,
+                                lastHitAt = System.currentTimeMillis()
+                            )
                         )
-                    )
+                    }
                 }
             }.onFailure { FileLogger.w(TAG, "记录记忆命中失败: ${memory.name}", it) }
         }

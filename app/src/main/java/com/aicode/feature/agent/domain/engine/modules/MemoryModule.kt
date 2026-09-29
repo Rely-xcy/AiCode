@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.engine.modules
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
+import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryCurator
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
@@ -57,8 +58,14 @@ class MemoryModule @Inject constructor(
 
     private val cachedByKey = ConcurrentHashMap<CacheKey, String>()
 
-    /** 每个会话已积累的轮数已不再使用：沉淀改成按时间治理，不按轮。 */
-    private val curationLocks = ConcurrentHashMap<String, Mutex>()
+    /**
+     * 治理锁是**全局**的，不按会话。
+     *
+     * 治理处理的是同一批记忆文件（全局 + 当前项目），而治理由引擎并发分发：
+     * 两个会话同时结束一轮时会同时通过「距上次治理足够久」的检查，各跑一次治理
+     * （重复调模型、并发改同一批记忆）。拿锁后再复核一次时间戳就成了一次。
+     */
+    private val curationLock = Mutex()
 
     // 声明在 init 之前：Kotlin 按声明顺序初始化
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -179,7 +186,6 @@ class MemoryModule @Inject constructor(
         if (ctx.isSubAgent) return
         if (ctx.history.isEmpty()) return
         if (!memorySettings.autoDistillEnabled()) return
-        val sessionKey = ctx.sessionId ?: return
 
         val intervalHours = memorySettings.curationIntervalHours()
         // 周期 <= 0 是设置页里的「关闭治理」：直接返回，不参与下面的间隔比较
@@ -188,10 +194,14 @@ class MemoryModule @Inject constructor(
         val elapsed = System.currentTimeMillis() - lastCuratedAt
         if (lastCuratedAt > 0 && elapsed < intervalHours * 60L * 60 * 1000) return
 
-        // 治理是并发分发的，上一次没跑完就不开新的，避免重复处理同一批记忆
-        val lock = curationLocks.getOrPut(sessionKey) { Mutex() }
-        if (!lock.tryLock()) return
+        // 上次没跑完就不开新的，避免重复处理同一批记忆
+        if (!curationLock.tryLock()) return
         try {
+            // 拿到锁后复核间隔：并发分发下多个会话可能同时通过了上面的检查
+            val checkedAt = System.currentTimeMillis()
+            val lockedLastCuratedAt = memorySettings.lastCuratedAt()
+            if (lockedLastCuratedAt > 0 && checkedAt - lockedLastCuratedAt < intervalHours * 60L * 60 * 1000) return
+
             val complete = ctx.oneShot
             val result = memoryCurator.curate(
                 projectRoot = ctx.projectRoot,
@@ -207,13 +217,12 @@ class MemoryModule @Inject constructor(
                     .forEach { cachedByKey.remove(it) }
             }
         } finally {
-            lock.unlock()
+            curationLock.unlock()
         }
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         cachedByKey.keys.removeAll { it.sessionId == ctx.sessionId }
-        ctx.sessionId?.let { curationLocks.remove(it) }
     }
 
     /** 注入缓存上限：会话多了不能让缓存无限长大。 */

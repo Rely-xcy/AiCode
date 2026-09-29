@@ -21,6 +21,11 @@ data class EngineContext(
     /** 是否为子代理会话（按自定义子代理定义运行）。 */
     val isSubAgent: Boolean = false,
     /**
+     * 子代理定义的名称；非 null 表示本会话是子代理。
+     * 与 [isSubAgent] 的区别：这个字段带上名字，供模块在固定提示段里渲染角色行。
+     */
+    val subAgentName: String? = null,
+    /**
      * 一次性模型调用能力，由会话运行侧注入（不占主对话 provider、不写入会话消息）。
      * 模块拿它做归纳类工作；null 表示当前不可用（如未配置模型）。
      *
@@ -60,6 +65,7 @@ data class LlmCall(
  *
  * 所有回调都有默认空实现，模块只覆写自己关心的那几个：
  * - [promptFragment]：本轮要不要往系统提示词里加东西；
+ * - [subAgentRules]：会话是子代理时要加的固定纪律段（不受 inject 门禁）；
  * - [tools]：本轮要不要额外提供工具；
  * - [beforeLlmCall]：调模型前对即将发送的消息做处理（压缩、精简、过滤）；
  * - [onTurnCompleted]：一轮对话正常结束后的沉淀/维护；
@@ -77,6 +83,15 @@ interface EngineModule {
 
     /** 本轮注入系统提示词的片段；返回 null 或空白表示本轮不参与。 */
     fun promptFragment(ctx: EngineContext): String? = null
+
+    /**
+     * 子代理会话的固定规则片段：本会话是子代理时**必定**注入，不受 `AgentDefinition.inject` 门禁。
+     *
+     * 与 [promptFragment] 分开的原因：后者在子代理路径上跟着 `inject` 走（如关掉 `MEMORY` 就整段不注入），
+     * 而子代理的纪律要求是「能安全干活」的最低条件，不能由定义作者关掉、也不能靠派发的人每次记得写。
+     * 需要改内容时改提示词文件（可用 `prompts.custom/agent/` 同名覆盖），不要把规则写回代码字符串。
+     */
+    fun subAgentRules(ctx: EngineContext): String? = null
 
     /** 本轮额外提供的工具；与内置工具合并时同名以内置为准。 */
     fun tools(ctx: EngineContext): List<AgentTool> = emptyList()

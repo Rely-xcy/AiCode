@@ -42,11 +42,18 @@ class MemoryCurator @Inject constructor(
 
         // ---- 第一层：零成本本地规则 ----
         val now = System.currentTimeMillis()
+        // 判「死条目」的前提是它每轮都参与过竞争：条数超过注入坑位数时，排在坑位外的条目
+        // 永远拿不到 hitCount，「30 天没被命中」就不再等于「没用」——照旧归档等于随机删好记忆。
+        // 这种场景只做空壳清理与合并，判死交给第二层的模型（它看得懂语义）。
+        val canJudgeDead = memories.size <= MemoryRanker.INJECTION_SLOTS
+        if (!canJudgeDead) {
+            FileLogger.i(TAG, "记忆 ${memories.size} 条超过注入坑位 ${MemoryRanker.INJECTION_SLOTS} 个，本轮不按 hitCount 判死条目")
+        }
         val alive = mutableListOf<Memory>()
         memories.forEach { memory ->
             when {
                 memory.description.isBlank() || memory.content.isBlank() -> toArchive += memory.name
-                memory.hitCount == 0 && memory.createdAt > 0 && now - memory.createdAt > DEAD_AFTER_MS ->
+                canJudgeDead && memory.hitCount == 0 && memory.createdAt > 0 && now - memory.createdAt > DEAD_AFTER_MS ->
                     toArchive += memory.name
 
                 else -> alive += memory
@@ -90,11 +97,11 @@ class MemoryCurator @Inject constructor(
         mergeGroups.forEach { (keepName, otherNames) ->
             if (merge(keepName, otherNames, projectRoot)) merged++
         }
-        // 归档要按名字找回 Memory 对象：archive() 需要真实文件路径
+        // 退场要按名字找回 Memory 对象：deleteMemory 需要 name 与作用域
         val byName = memories.associateBy { it.name }
         toArchive.forEach { name ->
             val memory = byName[name] ?: return@forEach
-            if (archive(memory, projectRoot)) archived++
+            if (retire(memory, projectRoot)) archived++
         }
 
         if (archived > 0 || merged > 0) {
@@ -112,13 +119,17 @@ class MemoryCurator @Inject constructor(
 
         val mergedContent = buildString {
             append(keep.content.trim())
+            val keptSignature = MemoryRanker.tokenize(keep.content)
             others.forEach { other ->
                 val text = other.content.trim()
-                if (text.isNotBlank() && !keep.content.contains(text)) {
-                    appendLine()
-                    appendLine()
-                    append(text)
-                }
+                // 近重复的正文不并进来：合并是覆盖写保留项，把几乎相同的段落再拼一遍只会让正文越滚越长，
+                // 而正文也参与召回打分与注入预算。只有确实说了别的内容才追加。
+                val duplicate = text.isBlank() || keep.content.contains(text) ||
+                    similar(keptSignature, MemoryRanker.tokenize(text))
+                if (duplicate) return@forEach
+                appendLine()
+                appendLine()
+                append(text)
             }
         }.trim()
 
@@ -133,17 +144,18 @@ class MemoryCurator @Inject constructor(
             createdAt = keep.createdAt
         )
         if (!saved) return false
-        others.forEach { other -> archive(other, projectRoot) }
+        others.forEach { other -> retire(other, projectRoot) }
         return true
     }
 
-    /** 归档一条：先复制到 .superseded/（留底），再删原文件——等于移动，不真删干净。 */
-    private fun archive(memory: Memory, projectRoot: String): Boolean {
-        val file = memory.file ?: return false
-        val root = file.parentFile ?: return false
-        MemorySource.archiveBeforeOverwrite(root, file)
-        return memoryRepository.deleteMemory(memory.name, memory.scope, projectRoot)
-    }
+    /**
+     * 让一条记忆退场：归档留底 + 删原文件（等于移动，不真删干净）。
+     *
+     * 归档本身由数据源的 deleteMemory 统一负责——用户在记忆页删、模型调 memory(action=delete) 删
+     * 走的是同一条路径，留底行为一致；这里再归档一次只会留两份重复的旧版本。
+     */
+    private fun retire(memory: Memory, projectRoot: String): Boolean =
+        memoryRepository.deleteMemory(memory.name, memory.scope, projectRoot)
 
     /** 给模型的输入：每条一行，只有名称与描述。 */
     private fun buildDigest(memories: List<Memory>): String = buildString {

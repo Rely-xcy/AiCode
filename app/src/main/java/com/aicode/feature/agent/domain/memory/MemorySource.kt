@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.memory
 
 import com.aicode.core.util.FileLogger
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /** 单个编辑项，语义与 editFile 的 edits 一致。 */
 data class MemoryEdit(
@@ -90,8 +91,10 @@ interface MemorySource {
         return try {
             // 改之前先归档旧版本：编辑是覆盖写，改错了还能从 .superseded/ 里找回来
             // （saveMemory 一直有这一步，editMemory 原来没有）
-            archiveBeforeOverwrite(root, file)
-            writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
+            withFileLock(file) {
+                archiveBeforeOverwrite(root, file)
+                writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
+            }
             MemoryEditResult.Success
         } catch (e: Exception) {
             FileLogger.e("MemorySource", "Failed to edit memory: $name", e)
@@ -120,7 +123,8 @@ interface MemorySource {
          */
         fun writeAtomically(file: File, text: String) {
             val parent = file.parentFile ?: run { file.writeText(text); return }
-            val tmp = File(parent, "${file.name}.tmp")
+            // 临时文件名带纳秒后缀：与 withFileLock 是两道保险（万一有绕过锁的写入路径，也不互相覆盖临时文件）
+            val tmp = File(parent, "${file.name}.${System.nanoTime()}.tmp")
             try {
                 tmp.writeText(text)
                 // 少数文件系统上 rename 覆盖会失败：退回直接写，至少不把内容丢掉
@@ -129,6 +133,18 @@ interface MemorySource {
                 if (tmp.exists()) tmp.delete()
             }
         }
+
+        /**
+         * 同一记忆文件的「读-改-写」互斥。
+         *
+         * 命中记账、保存、编辑、归档都是「读旧内容 → 整文件重写」：注入触发的记账在 IO 协程里异步跑，
+         * 模型同时调 memory 工具写盘就会撞上——后写的把先写的整段盖回去（刚存的内容被旧内容顶掉）。
+         * 临界区里只有文件 IO、没有挂起点，所以用 JVM 监视器就够，不必把整套 API 改成 suspend。
+         */
+        private val fileLocks = ConcurrentHashMap<String, Any>()
+
+        fun <T> withFileLock(file: File, block: () -> T): T =
+            synchronized(fileLocks.computeIfAbsent(file.absolutePath) { Any() }) { block() }
 
         fun sanitizeName(raw: String): String {
             val cleaned = raw.map { ch ->

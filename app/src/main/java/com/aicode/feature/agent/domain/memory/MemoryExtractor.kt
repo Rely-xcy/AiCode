@@ -111,7 +111,10 @@ class MemoryExtractor @Inject constructor(
         }
 
         raw.lines().forEach { line ->
-            val cleaned = line.trim().removePrefix("-").removePrefix("*").trim().trim('`').trim()
+            // trimmed 保留原样（正文行原样落盘，markdown 的项目符号/反引号不能被吃掉）；
+            // cleaned 另去一层「行首项目符号 / 代码块反引号」，只用于「这行是不是标签」的判定。
+            val trimmed = line.trim()
+            val cleaned = trimmed.removePrefix("-").removePrefix("*").trim().trim('`').trim()
 
             // 「值写到下一行」：上一行是裸标签，这一行就是它的值
             val pending = pendingLabel
@@ -119,7 +122,8 @@ class MemoryExtractor @Inject constructor(
                 when (pending) {
                     "name" -> name = cleaned
                     "description" -> description = cleaned
-                    else -> content.appendLine(cleaned)
+                    // 正文行按原样收（项目符号是用户能看到的格式，不该被抹平）
+                    else -> content.appendLine(trimmed)
                 }
                 pendingLabel = null
                 previousWasBlank = false
@@ -137,7 +141,7 @@ class MemoryExtractor @Inject constructor(
                     val value = NAME_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
                     if (name.isNotBlank() && content.isNotBlank() && !previousWasBlank) {
                         // 已在一个条目里、上一行又不是空行 → 这是正文里的字面 "name:"，不是新条目
-                        content.appendLine(cleaned)
+                        content.appendLine(trimmed)
                     } else if (value.isBlank()) {
                         flush()
                         pendingLabel = "name"
@@ -157,8 +161,8 @@ class MemoryExtractor @Inject constructor(
                     if (value.isBlank()) pendingLabel = "content" else content.appendLine(value)
                 }
 
-                // 多行 content：从属于上一条 name
-                name.isNotBlank() -> content.appendLine(cleaned)
+                // 多行 content：从属于上一条 name（同样原样收，只去首尾空白）
+                name.isNotBlank() -> content.appendLine(trimmed)
             }
             previousWasBlank = false
         }

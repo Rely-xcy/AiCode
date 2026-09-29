@@ -39,7 +39,7 @@ object MemoryClaimGuard {
      */
     private val CHINESE_CLAIM = Regex(
         "(?<!没)(?<!不)(?<!不会)(记住(?!不)|记下(?!不)|记好了)|" +
-            "(已|已经)?(保存|存|写|记|收录|更新|添加)(进|入|到)?(长期)?记忆|" +
+            "(已|已经)?(保存|存|写|记|收录|更新|添加)(进|入|到)?(了)?(长期)?记忆|" +
             "记忆(里|中)(已|已经)?(保存|存|写|记)"
     )
 
@@ -51,8 +51,8 @@ object MemoryClaimGuard {
         Regex("""\bI('ve| have|'ll| will| am going to)\s+(just\s+)?(remember|remembered|memorize|memorise|memorized|note|noted|save|saved|store|stored|record|recorded|keep)\b""", RegexOption.IGNORE_CASE),
         Regex("""\b(saved|stored|recorded|added|written|wrote|preserved)\b[^.\n]{0,40}\b(memory|memories)\b""", RegexOption.IGNORE_CASE),
         Regex("""\b(memorized|memorised)\b""", RegexOption.IGNORE_CASE),
-        // 整行就是一句「记下了 / Noted.」：英文里最常见的空口承诺形态
-        Regex("""(^|\n)\s*(noted|saved|memorized|记下了?|记住了?)[。.!]?\s*($|\n)""", RegexOption.IGNORE_CASE)
+        // 整行就是一句「记下了 / Noted.」：英文里最常见的空口承诺形态（用 \z 而非 $，避免与 Kotlin 模板语法混淆）
+        Regex("""(^|\n)[ \t]*(noted|saved|memorized|记下了?|记住了?)[。.!]?[ \t]*(\n|\z)""", RegexOption.IGNORE_CASE)
     )
 
     /** 这段文本是否声称已经写入（或承诺写入）长期记忆。 */

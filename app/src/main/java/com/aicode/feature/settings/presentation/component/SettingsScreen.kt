@@ -2,6 +2,7 @@ package com.aicode.feature.settings.presentation.component
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -976,6 +977,15 @@ fun SettingsScreen(
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
                     val autoDistill by memoryViewModel.autoDistillEnabled.collectAsStateWithLifecycle()
                     val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
+                    val deleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
+                    // 删除失败（条目已不存在等）给一次提示：否则条目还在、用户不知道发生了什么
+                    val memoryToastContext = LocalContext.current
+                    LaunchedEffect(deleteFailed) {
+                        if (deleteFailed) {
+                            Toast.makeText(memoryToastContext, memoryToastContext.getString(R.string.memory_delete_failed), Toast.LENGTH_SHORT).show()
+                            memoryViewModel.clearDeleteFailed()
+                        }
+                    }
                     // 每次进入本分区重扫：引擎可能在后台刚沉淀了新条目，
                     // 而 VM 在设置页返回栈里常驻，只在 init 扫一次会永远是旧列表。
                     LaunchedEffect(Unit) { memoryViewModel.refresh() }

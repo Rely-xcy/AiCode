@@ -12,7 +12,8 @@ import javax.inject.Singleton
  * 统一智能调度：所有 [EngineModule] 由这里调度，调用方只跟引擎打交道。
  *
  * 三件事：
- * 1. 片段聚合——按 [EngineModule.order] 取各模块本轮的系统提示词片段，拼成一段；
+ * 1. 片段聚合——按 [EngineModule.order] 取各模块本轮的系统提示词片段，拼成一段
+ *    （[subAgentRules] 同理，但它只给子代理会话、且不受 `inject` 门禁）；
  * 2. 工具聚合——收集各模块额外提供的工具（同名以内置/先注册者为准，由调用方去重）；
  * 3. 钩子分发——轮次结束、会话删除这类「一次触发、多个模块响应」的动作，并发分发。
  *
@@ -39,6 +40,19 @@ class AgentEngine @Inject constructor(
         sortedModules()
             .flatMap { module -> runModule(module, "tools") { it.tools(ctx) } ?: emptyList() }
             .distinctBy { it.name }
+
+    /**
+     * 子代理会话的固定纪律段，按 [EngineModule.order] 拼接；全部为空时返回 null。
+     *
+     * 与 [promptFragment] 分开：调用方（子代理提示词组装）无条件调它，不再叠加 `inject` 门禁。
+     */
+    fun subAgentRules(ctx: EngineContext): String? {
+        val pieces = sortedModules().mapNotNull { module ->
+            runModule(module, "subAgentRules") { it.subAgentRules(ctx) }
+                ?.takeIf { it.isNotBlank() }
+        }
+        return pieces.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
+    }
 
     /** 一轮对话正常结束：并发分发给所有模块，调用方不等待。 */
     fun onTurnCompleted(ctx: EngineContext) {

@@ -3,6 +3,8 @@ package com.aicode.di
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.modules.CompactionModule
 import com.aicode.feature.agent.domain.engine.modules.MemoryModule
+import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
+import com.aicode.feature.agent.domain.engine.modules.TaskModule
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -27,4 +29,12 @@ abstract class EngineBindingsModule {
     @Binds
     @IntoSet
     abstract fun bindCompactionModule(module: CompactionModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindSubAgentModule(module: SubAgentModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindTaskModule(module: TaskModule): EngineModule
 }

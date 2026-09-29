@@ -188,16 +188,27 @@ class SystemPromptProvider @Inject constructor(
          * 引擎聚合片段：由 [AgentEngine] 按模块 order 调度各模块本轮的片段。
          * 记忆清单原本在这里读盘，现已迁进 MemoryModule（连同它的会话级缓存）。
          */
-        override fun build(ctx: AgentContext): String? = agentEngine.promptFragment(
-            EngineContext(
-                sessionId = ctx.sessionId,
-                projectRoot = ctx.projectRoot,
-                mode = ctx.mode,
-                history = ctx.history,
-                isSubAgent = ctx.agentDefinition != null
-            )
-        )
+        override fun build(ctx: AgentContext): String? = agentEngine.promptFragment(engineContextOf(ctx))
     }
+
+    /**
+     * 子代理固定纪律段（角色行 + 硬规则）：走 [AgentEngine.subAgentRules]，与 [EngineFragmentSource] 分开，
+     * 因为它不受 `inject` 门禁——关掉 MEMORY 不代表子代理可以凭记忆写 API。
+     * 内容在 `prompts/agent/subagent-rules.md`，可用 `prompts.custom/agent/` 同名覆盖。
+     */
+    private inner class SubAgentRulesSource : PromptSource {
+        override fun build(ctx: AgentContext): String? = agentEngine.subAgentRules(engineContextOf(ctx))
+    }
+
+    /** 两处引擎调用共用的上下文快照。 */
+    private fun engineContextOf(ctx: AgentContext): EngineContext = EngineContext(
+        sessionId = ctx.sessionId,
+        projectRoot = ctx.projectRoot,
+        mode = ctx.mode,
+        history = ctx.history,
+        isSubAgent = ctx.agentDefinition != null,
+        subAgentName = ctx.agentDefinition?.name
+    )
 
     /** 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。 */
     private data class SourceCacheKey(val sessionId: String?, val projectRoot: String)
@@ -206,6 +217,7 @@ class SystemPromptProvider @Inject constructor(
     private val subAgentBaseSource = SubAgentBaseSource()
     private val subAgentListSource = SubAgentListSource()
     private val engineFragmentSource = EngineFragmentSource()
+    private val subAgentRulesSource = SubAgentRulesSource()
 
     /**
      * 用户自定义提示词：不参与内置片段的编号排序，只按注入位置拼在两端。
@@ -330,7 +342,8 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /**
-     * 按子代理定义组装提示词：只注入 [AgentDefinition.inject] 列出的片段，再接 agent 自己的提示词。
+     * 按子代理定义组装提示词：先注入 [AgentDefinition.inject] 列出的片段，再接固定纪律段，
+     * 最后接 agent 自己的提示词（任务相关指令放最后，紧邻对话，位置更有效）。
      * 不注入可用子代理清单（子代理不能嵌套派发）。定义正文里的 `{{AICODE_*}}` 变量同样会展开。
      */
     private fun buildForSubAgent(
@@ -346,8 +359,12 @@ class SystemPromptProvider @Inject constructor(
             append("\n\n")
         }
 
-        append("当前角色 (subagent: ${definition.name})：你是一个由主代理派发的子代理，拥有独立上下文，看不到主对话历史。")
-        append("专注完成本会话交给你的任务，并在最后一条回复里给出完整结论——主代理只能读到你的最后一条回复，中间过程与工具结果它看不到。\n\n")
+        // 固定纪律段：不受 inject 门禁，且不靠派发的人每次记得写。
+        subAgentRulesSource.build(agentContext)?.let {
+            append(it)
+            append("\n\n")
+        }
+
         append(
             renderVariables(
                 definition.prompt,

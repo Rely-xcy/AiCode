@@ -93,7 +93,18 @@ data class AgentDefinition(
         return toolName.equals(p, ignoreCase = true)
     }
 
+    /**
+     * 这个定义是不是只读的（工具集里没有任何会改工作区文件的工具）。
+     *
+     * 判定走 [filterToolNames]——工具集裁剪的唯一权威；这里只提供一份候选名单，
+     * 所以名单宁宽勿窄：多算一个写工具只会多要一次写范围声明，少算一个就是漏拦。
+     */
+    fun isReadOnly(): Boolean = filterToolNames(WRITE_TOOLS.toList()).isEmpty()
+
     companion object {
+        /** 会改动工作区文件的工具（保守超集）。只用来决定「要不要写范围声明」，不参与准入判定。 */
+        val WRITE_TOOLS: Set<String> = setOf("editFile", "writeFile", "Bash", "terminal")
+
         /** 省略 `inject` 时的默认注入项：精简基线 + 技能 + 记忆 + 项目规则。 */
         val DEFAULT_INJECT: Set<InjectPart> = setOf(
             InjectPart.BASE,

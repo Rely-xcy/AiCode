@@ -5,6 +5,7 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.ReasoningEffort
+import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -20,6 +21,7 @@ import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
@@ -54,7 +56,8 @@ class TaskTool @Inject constructor(
     private val agentMessageDao: AgentMessageDao,
     private val eventBus: SubAgentEventBus,
     private val agentDefinitionRepository: AgentDefinitionRepository,
-    private val aiProviderRepository: AIProviderRepository
+    private val aiProviderRepository: AIProviderRepository,
+    private val writeLeaseRegistry: WriteLeaseRegistry
 ) : AbstractContextualTool() {
 
     private companion object {
@@ -76,7 +79,8 @@ class TaskTool @Inject constructor(
         }
     }
 
-    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。"
+    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。" +
+        "会写文件的子代理必须在 create 时用 writeScope 声明它要改哪些文件/目录：多个子代理共享同一工作区，不声明就无法在启动前发现两个子代理改同一个文件，后到者只能在写入时被拒。"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
@@ -108,6 +112,15 @@ class TaskTool @Inject constructor(
             type = ParameterType.STRING,
             description = "自定义子代理名（create 可选）：取系统提示词「可用子代理」清单中的名称，按其专属提示词、模型与工具集运行；省略则用继承本会话模型的默认通用子代理",
             required = false
+        ),
+        "writeScope" to ToolParameter(
+            name = "writeScope",
+            type = ParameterType.ARRAY,
+            description = "该子代理要写入的路径（create 可选，会写文件的子代理必填）：相对工作区的文件或目录，支持 `*`（段内任意字符）与 `**`（任意层）。" +
+                "不带通配符时表示「该路径本身及其子树」，所以目录写 `app/src/main/java/.../memory` 就够，不必列全每个文件。" +
+                "范围与已在跑的子代理重叠时本次 create 会被拒（不会创建会话）；只读子代理（如 Explore）不用传。",
+            required = false,
+            itemsSchema = mapOf("type" to "string")
         ),
         "message" to ToolParameter(
             name = "message",
@@ -179,8 +192,29 @@ class TaskTool @Inject constructor(
             },
             mode = definition?.mode
         )
-        sessionUseCase.upsertSession(subSession)
         val subSessionId = subSession.id
+
+        // 写范围：在真正建会话之前先认领，冲突就在这里被拦住——否则子代理要跑到第一次写入才发现自己写不了。
+        // 只读子代理（如 Explore）不参与登记，它们根本调不到写工具。
+        val requestedScope = parseScopeArg(args["writeScope"])
+        val readOnly = definition?.isReadOnly() == true
+        if (!readOnly && requestedScope.isNotEmpty()) {
+            val conflicts = writeLeaseRegistry.claim(
+                holderId = subSessionId,
+                holderLabel = description,
+                patterns = requestedScope,
+                projectRoot = parentSession.workspacePath,
+                // 父会话刚写完的文件交给子代理继续改是正常流程，不该被自己的租约拦住。
+                handoverFrom = setOf(parentSessionId)
+            )
+            if (conflicts.isNotEmpty()) {
+                val reason = conflicts.joinToString("；") { it.describe(requestedScope.joinToString(", ")) }
+                FileLogger.w(TAG, "子代理创建被拒（写范围冲突）: $description -> $reason")
+                return ToolResult.Error(reason, "WRITE_LEASE_CONFLICT")
+            }
+        }
+
+        sessionUseCase.upsertSession(subSession)
 
         // 通知 ViewModel 在子会话上启动 AI 工作流
         eventBus.emit(
@@ -191,14 +225,31 @@ class TaskTool @Inject constructor(
                 detail = prompt
             )
         )
-        FileLogger.i(TAG, "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"}")
+        FileLogger.i(
+            TAG,
+            "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"} " +
+                "writeScope=${requestedScope.ifEmpty { listOf("（未声明）") }}"
+        )
 
         return ToolResult.Success(
             buildJsonObject {
                 put("id", subSessionId)
                 put("state", "running")
                 definition?.let { put("agent", it.name) }
-                put("message", "子代理已创建并开始执行，任务完成后会通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
+                if (requestedScope.isNotEmpty() && !readOnly) {
+                    put("writeScope", JsonArray(requestedScope.map { JsonPrimitive(it) }))
+                }
+                put("message", buildString {
+                    append("子代理已创建并开始执行，任务完成后会通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
+                    when {
+                        readOnly && requestedScope.isNotEmpty() ->
+                            append("该子代理是只读的，writeScope 已忽略。")
+                        readOnly -> Unit
+                        requestedScope.isEmpty() ->
+                            append("未声明 writeScope：本次写入将在首次写入时自动认领，并发改同一文件时后到者会被拒。下次 create 请把要改的文件/目录写进 writeScope。")
+                        else -> append("已独占声明的写范围，其它子代理写到同一路径会被拒。")
+                    }
+                })
             }
         )
     }
@@ -241,6 +292,21 @@ class TaskTool @Inject constructor(
                 put("message", "消息已投递给子代理。运行中的会在下一批工具结果里收到，已完成的会被重新唤醒；可继续用 send 追加。")
             }
         )
+    }
+
+    /**
+     * 解析 writeScope：标准写法是字符串数组；模型偶尔会传逗号分隔的字符串（或单个字符串），
+     * 那时必须照样认出来——默默当成「没声明」就会在并发时静默丢保护。
+     */
+    private fun parseScopeArg(raw: JsonElement?): List<String> {
+        val items = when (raw) {
+            is JsonArray -> raw.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            null -> return emptyList()
+            else -> listOfNotNull((raw as? JsonPrimitive)?.contentOrNull)
+        }
+        return items.flatMap { it.split(',', '\n') }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
     }
 
     /**

@@ -27,6 +27,7 @@ import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.PermissionScope
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
+import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
@@ -63,6 +64,7 @@ import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -110,7 +112,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val keyRotator: ProviderKeyRotator,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val writeLeaseRegistry: WriteLeaseRegistry
 ) : AgentWorkflow {
 
     private companion object {
@@ -118,6 +121,15 @@ class StatefulAgentWorkflow @Inject constructor(
         const val LIVE_TAIL_CHARS = 4_000
         const val PROGRESS_INTERVAL_MS = 250L
         const val USER_REJECTED_CODE = "USER_REJECTED"
+        /** 写范围冲突的错误码：被拒的子代理据此识别「不是偶发错误」，派发方也能从结果里看出原因。 */
+        const val WRITE_LEASE_CONFLICT_CODE = "WRITE_LEASE_CONFLICT"
+
+        /**
+         * 受写范围准入管控的工具。只含「读旧内容 → 改 → 写回」那两个：
+         * 读、搜、跑命令不涉及这种覆盖，不做限制。`Bash` 里的 `>` 重定向与 `sed -i` 能绕过去，
+         * 但工具层拿不到 shell 的实际写入目标，这是本机制已知的盲区，只能靠提示词约束。
+         */
+        val WRITE_LEASE_TOOLS = setOf("editFile", "writeFile")
         const val TITLE_GENERATOR_FILE = "agent/title-generator.md"
         const val TITLE_MAX_CHARS = 50
         const val COMMIT_GENERATOR_FILE = "agent/commit-generator.md"
@@ -516,6 +528,12 @@ class StatefulAgentWorkflow @Inject constructor(
         context: AgentContext,
         tools: List<AgentTool>
     ): Flow<AgentEvent> = channelFlow {
+        // 本次会话运行结束（正常完成 / 取消 / 异常）就把写范围交还回去。
+        // 只挂在成功路径上不行：取消与报错那两条没人释放，文件会被一直占着直到 TTL 过期，
+        // 期间连主代理都改不了它。挂在这里一次覆盖三条路径。
+        coroutineContext[Job]?.invokeOnCompletion {
+            context.sessionId?.let { writeLeaseRegistry.release(it) }
+        }
         var currentContext = context
         var state = AgentSessionState()
         var currentTools = tools
@@ -824,11 +842,22 @@ class StatefulAgentWorkflow @Inject constructor(
                             coroutineScope {
                                 toolCalls.map { toolCall ->
                                     async {
-                                        val tool = toolRegistry.getTool(toolCall.name)
-                                        if (tool is StreamingAgentTool) {
-                                            runToolStream(tool, toolCall, currentContext) { send(it) }
+                                        // 写范围准入：结果按 index 与 toolCalls 对应，所以必须在这里短路，
+                                        // 不能把调用从列表里剔除（剔除会让索引错位）。
+                                        val leaseConflict = writeLeaseConflictOf(toolCall, currentContext)
+                                        if (leaseConflict != null) {
+                                            ToolRunResult(
+                                                ToolResult.Error(leaseConflict, WRITE_LEASE_CONFLICT_CODE)
+                                                    .toTransportString(),
+                                                true
+                                            )
                                         } else {
-                                            runToolSync(tool, toolCall, currentContext)
+                                            val tool = toolRegistry.getTool(toolCall.name)
+                                            if (tool is StreamingAgentTool) {
+                                                runToolStream(tool, toolCall, currentContext) { send(it) }
+                                            } else {
+                                                runToolSync(tool, toolCall, currentContext)
+                                            }
                                         }
                                     }
                                 }.awaitAll()
@@ -924,6 +953,34 @@ class StatefulAgentWorkflow @Inject constructor(
         state.error?.let { send(AgentEvent.Failed(it, state.errorCode)) }
         send(AgentEvent.Completed)
     }
+
+    /**
+     * 写类工具的执行前准入检查（写范围租约）。
+     *
+     * 首次写入即认领该文件，别人已持有同一路径时直接拒绝——而不是让两个代理各自基于自己读到的
+     * 旧内容改同一个文件。拒绝必须带原因与后续动作，否则就是静默失败。
+     *
+     * @return 拒绝原因；无冲突返回 null。
+     */
+    private suspend fun writeLeaseConflictOf(toolCall: ToolCall, context: AgentContext): String? {
+        if (toolCall.name !in WRITE_LEASE_TOOLS) return null
+        val path = (toolCall.arguments["path"] as? JsonPrimitive)?.contentOrNull ?: return null
+        val sessionId = context.sessionId ?: return null
+        val conflict = writeLeaseRegistry.claimForWrite(
+            holderId = sessionId,
+            holderLabel = holderLabelOf(sessionId),
+            path = path,
+            projectRoot = context.projectRoot
+        ) ?: return null
+        return conflict.describeForWrite(path)
+    }
+
+    /** 冲突提示里的人话标识：用会话标题（子代理的标题就是任务描述），拿不到就退到短 id。 */
+    private suspend fun holderLabelOf(sessionId: String): String =
+        runCatching { sessionUseCase.getSessionById(sessionId)?.title }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: "会话 ${sessionId.take(8)}"
 
     private suspend fun runToolSync(tool: AgentTool?, toolCall: ToolCall, context: AgentContext): ToolRunResult {
         val name = toolCall.name

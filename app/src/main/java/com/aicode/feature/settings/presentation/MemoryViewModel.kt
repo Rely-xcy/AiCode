@@ -35,6 +35,15 @@ class MemoryViewModel @Inject constructor(
     private val _memories = MutableStateFlow<List<Memory>>(emptyList())
     val memories: StateFlow<List<Memory>> = _memories.asStateFlow()
 
+    private val _deleteFailed = MutableStateFlow(false)
+
+    /** 删除失败的一次性信号（条目已不存在等）：界面提示一次后调 [clearDeleteFailed]。 */
+    val deleteFailed: StateFlow<Boolean> = _deleteFailed.asStateFlow()
+
+    fun clearDeleteFailed() {
+        _deleteFailed.value = false
+    }
+
     val autoDistillEnabled: StateFlow<Boolean> = memorySettings.autoDistillEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -74,9 +83,11 @@ class MemoryViewModel @Inject constructor(
     fun delete(memory: Memory) {
         viewModelScope.launch {
             val projectRoot = workspaceRepository.currentPath()
-            withContext(Dispatchers.IO) {
+            val deleted = withContext(Dispatchers.IO) {
                 memoryRepository.deleteMemory(memory.name, memory.scope, projectRoot)
             }
+            // 删失败不能静静吞掉：只 refresh 的话条目还在，用户不知道发生了什么
+            if (!deleted) _deleteFailed.value = true
             refresh()
         }
     }

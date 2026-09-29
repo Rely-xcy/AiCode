@@ -169,11 +169,31 @@ class MemoryTool @Inject constructor(
             source = MemorySource.SOURCE_MODEL_TOOL
         )
         return if (success) {
-            ToolResult.Success(JsonPrimitive("已成功保存记忆「$name」到 ${scope.name.lowercase()} 作用域。它将在下一次会话启动时自动注入摘要。当前会话若需立即使用，请通过 read 操作读取。"))
+            FileLogger.i(TAG, "保存记忆成功: $name (${scope.name.lowercase()})")
+            ToolResult.Success(JsonPrimitive(buildString {
+                // 说明文案要写对：写入会通知注入方清缓存，下一轮就会带上它（不是「下次会话」）
+                append("已成功保存记忆「$name」到 ${scope.name.lowercase()} 作用域，下一轮起会出现在你的记忆清单里。")
+                if (scope == MemoryScope.GLOBAL && hasProjectShadow(projectRoot, name)) {
+                    append("注意：当前项目里已有同名记忆，项目级优先——之后 read 到的是项目级那条，")
+                    append("要改它请用 scope=project，或换个名字。")
+                }
+            }))
         } else {
+            FileLogger.w(TAG, "保存记忆失败: $name (${scope.name.lowercase()})")
             ToolResult.Error("保存记忆失败，请查看日志。", "SAVE_FAILED")
         }
     }
+
+    /**
+     * 全局作用域写入时，项目级是否已有同名条目把它遮蔽掉。
+     *
+     * 同名时项目级优先（见 [MemoryRepository.listMemories] 与 [MemoryRepository.loadContent]），
+     * 不告诉模型的话它会以为自己刚写的那条生效了，而 read 回来的是另一条。
+     */
+    private fun hasProjectShadow(projectRoot: String?, name: String): Boolean =
+        !projectRoot.isNullOrBlank() && memoryRepository.listMemories(projectRoot).any {
+            it.scope == MemoryScope.PROJECT && it.name.equals(name, ignoreCase = true)
+        }
 
     private fun handleEdit(args: Map<String, JsonElement>, name: String?, scope: MemoryScope, projectRoot: String?): ToolResult {
         if (name.isNullOrEmpty()) return ToolResult.Error("edit 操作需要 name 参数", "MISSING_NAME")
@@ -186,8 +206,10 @@ class MemoryTool @Inject constructor(
         }
 
         return when (val result = memoryRepository.editMemory(name, edits, scope, projectRoot)) {
-            is MemoryEditResult.Success ->
+            is MemoryEditResult.Success -> {
+                FileLogger.i(TAG, "编辑记忆成功: $name (${scope.name.lowercase()})")
                 ToolResult.Success(JsonPrimitive("已成功编辑记忆「$name」的正文（${scope.name.lowercase()} 作用域）。"))
+            }
             is MemoryEditResult.NotFound ->
                 ToolResult.Error("未找到记忆「${result.name}」，请先通过 save 创建，或确认 name 与作用域是否正确。", "MEMORY_NOT_FOUND")
             is MemoryEditResult.Error ->
@@ -212,6 +234,7 @@ class MemoryTool @Inject constructor(
         
         val success = memoryRepository.deleteMemory(name, scope, projectRoot)
         return if (success) {
+            FileLogger.i(TAG, "删除记忆成功: $name (${scope.name.lowercase()})")
             ToolResult.Success(JsonPrimitive("已成功删除 ${scope.name.lowercase()} 作用域的记忆「$name」。"))
         } else {
             ToolResult.Error("删除失败，记忆「$name」可能不存在于该作用域。", "DELETE_FAILED")

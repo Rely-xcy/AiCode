@@ -986,6 +986,7 @@
     <string name="memory_field_name_locked">名称是记忆的唯一标识，创建后不可修改</string>
     <string name="memory_delete_confirm_title">删除记忆</string>
     <string name="memory_delete_confirm_message">将删除「%1$s」，此操作不可恢复。确定删除？</string>
+    <string name="memory_delete_failed">删除失败，该条目可能已不存在</string>
     <string name="memory_curation_interval">治理周期</string>
     <string name="memory_curation_interval_off">关闭（不自动治理）</string>
     <string name="memory_curation_interval_6h">6 小时</string>
