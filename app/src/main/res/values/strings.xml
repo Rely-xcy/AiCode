@@ -972,7 +972,7 @@
     <string name="memory_empty">还没有记忆</string>
     <string name="memory_empty_hint">对话中让 AI 记住的内容会显示在这里</string>
     <string name="memory_auto_distill">长期记忆自动沉淀</string>
-    <string name="memory_auto_distill_desc">每轮对话结束后归纳关于你的结论并写入记忆（会调用模型，默认关闭）</string>
+    <string name="memory_auto_distill_desc">打开后才会自动写记忆：对话中由模型主动记录、压缩历史前捞取结论、定期归纳去重（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>
     <string name="memory_source_manual">对话中记录</string>
     <string name="memory_detail_content">内容</string>
