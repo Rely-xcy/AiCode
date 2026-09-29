@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import android.app.Activity
+import androidx.activity.ComponentActivity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.animation.core.animateDpAsState
@@ -42,7 +43,9 @@ internal fun rememberSettingsViewModel(): SettingsViewModel? {
     // hiltViewModel 是 @Composable，必须直调（不能塞进 remember）。
     // 关键是把 ViewModelStoreOwner 显式指定为 Activity：默认的 LocalViewModelStoreOwner
     // 在 composable("settings") 里是 nav-entry 级，取到的是另一个实例，拖了页面不刷新。
-    val activity = LocalContext.current.findActivity() ?: return null
+    // 必须转成 ComponentActivity：hiltViewModel 的 viewModelStoreOwner 要 ViewModelStoreOwner，
+    // 而 Activity 基类并不实现它，只有 ComponentActivity 实现。
+    val activity = LocalContext.current.findActivity() as? ComponentActivity ?: return null
     return hiltViewModel<SettingsViewModel>(viewModelStoreOwner = activity)
 }
 
