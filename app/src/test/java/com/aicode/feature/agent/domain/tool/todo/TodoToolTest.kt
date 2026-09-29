@@ -1,10 +1,12 @@
 package com.aicode.feature.agent.domain.tool.todo
 
-import com.aicode.feature.agent.data.local.dao.FakeTodoItemDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.tool.ToolResult
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -297,4 +299,55 @@ class TodoToolTest {
     private companion object {
         const val SESSION = "session-1"
     }
+}
+
+/**
+ * 最小内存实现：[TodoItemDao] 是 Room 接口，单测里不需要真库。
+ * 测试直接读写 [rows]，断言的就是这份内存状态。
+ */
+private class FakeTodoItemDao : TodoItemDao {
+    val rows = mutableListOf<TodoItemEntity>()
+
+    override suspend fun upsert(item: TodoItemEntity) {
+        rows.removeAll { it.id == item.id }
+        rows.add(item)
+    }
+
+    override suspend fun upsertAll(items: List<TodoItemEntity>) {
+        items.forEach { upsert(it) }
+    }
+
+    override fun getBySession(sessionId: String): Flow<List<TodoItemEntity>> =
+        MutableStateFlow(orderedBySession(sessionId))
+
+    override suspend fun getBySessionOnce(sessionId: String): List<TodoItemEntity> = orderedBySession(sessionId)
+
+    override suspend fun getAllOnce(): List<TodoItemEntity> = rows.toList()
+
+    override suspend fun getPageAfter(lastCreatedAt: Long, lastId: String, limit: Int): List<TodoItemEntity> =
+        rows.filter { it.createdAt > lastCreatedAt || (it.createdAt == lastCreatedAt && it.id > lastId) }
+            .sortedWith(compareBy({ it.createdAt }, { it.id }))
+            .take(limit)
+
+    override suspend fun getBySessionPageAfter(
+        sessionId: String,
+        lastCreatedAt: Long,
+        lastId: String,
+        limit: Int
+    ): List<TodoItemEntity> = getPageAfter(lastCreatedAt, lastId, limit).filter { it.sessionId == sessionId }
+
+    override suspend fun delete(id: String) {
+        rows.removeAll { it.id == id }
+    }
+
+    override suspend fun deleteBySession(sessionId: String) {
+        rows.removeAll { it.sessionId == sessionId }
+    }
+
+    override suspend fun getMaxOrder(sessionId: String): Int? =
+        rows.filter { it.sessionId == sessionId }.maxOfOrNull { it.order }
+
+    private fun orderedBySession(sessionId: String): List<TodoItemEntity> = rows
+        .filter { it.sessionId == sessionId }
+        .sortedWith(compareBy({ it.order }, { -it.priority }))
 }

@@ -57,6 +57,9 @@ class MemoryModuleTest {
         oneShot = oneShot
     )
 
+    /** [MemoryExtractor.parseEntries] 是实例方法（不读仓库、不调模型），给个 relaxed mock 即可。 */
+    private fun parser(): MemoryExtractor = MemoryExtractor(mockk(relaxed = true))
+
     @Test
     fun onTurnCompleted_curatesOnceIntervalElapsed() = runTest {
         val h = harness(lastCuratedAt = System.currentTimeMillis() - 25L * 60 * 60 * 1000)
@@ -189,7 +192,7 @@ class MemoryModuleTest {
             ```
         """.trimIndent()
 
-        val entries = MemoryExtractor.parseEntries(raw)
+        val entries = parser().parseEntries(raw)
 
         assertEquals(2, entries.size)
         assertEquals("prefers-brief", entries[0].name)
@@ -211,7 +214,7 @@ class MemoryModuleTest {
             不要铺垫，直接给结论。
         """.trimIndent()
 
-        val entries = MemoryExtractor.parseEntries(raw)
+        val entries = parser().parseEntries(raw)
 
         assertEquals(1, entries.size)
         assertEquals("prefers-brief", entries[0].name)
@@ -229,7 +232,7 @@ class MemoryModuleTest {
             第三行
         """.trimIndent()
 
-        val entries = MemoryExtractor.parseEntries(raw)
+        val entries = parser().parseEntries(raw)
 
         assertEquals(1, entries.size)
         assertEquals("yaml-scalar", entries[0].name)
@@ -241,7 +244,7 @@ class MemoryModuleTest {
     fun parseEntries_fallsBackToJson() {
         val raw = """[{"name":"a","description":"d","content":"c"}]"""
 
-        val entries = MemoryExtractor.parseEntries(raw)
+        val entries = parser().parseEntries(raw)
 
         assertEquals(1, entries.size)
         assertEquals("a", entries[0].name)
