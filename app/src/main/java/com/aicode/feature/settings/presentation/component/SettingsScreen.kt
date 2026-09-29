@@ -339,6 +339,8 @@ fun SettingsScreen(
     // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
+    // 记忆编辑器弹层：null 表示关闭；MemoryEditorTarget(memory = null) 表示从右上角「+」新建
+    var memoryEditorTarget by remember { mutableStateOf<MemoryEditorTarget?>(null) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
@@ -752,6 +754,14 @@ fun SettingsScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
+                        SettingsSection.Memory -> IconButton(onClick = { memoryEditorTarget = MemoryEditorTarget() }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.memory_add),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         SettingsSection.Storage -> {
                             IconButton(onClick = { storageViewModel?.refresh() }) {
                                 Icon(
@@ -947,10 +957,21 @@ fun SettingsScreen(
                         autoDistillEnabled = autoDistill,
                         onToggleAutoDistill = memoryViewModel::setAutoDistillEnabled,
                         onOpenDetail = { detailMemory = it },
+                        onEdit = { memoryEditorTarget = MemoryEditorTarget(it) },
                         onDelete = memoryViewModel::delete
                     )
                     detailMemory?.let { memory ->
                         MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
+                    }
+                    memoryEditorTarget?.let { target ->
+                        MemoryEditorSheet(
+                            memory = target.memory,
+                            onSave = { name, description, content ->
+                                memoryViewModel.save(target.memory, name, description, content)
+                                memoryEditorTarget = null
+                            },
+                            onDismiss = { memoryEditorTarget = null }
+                        )
                     }
                 }
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->

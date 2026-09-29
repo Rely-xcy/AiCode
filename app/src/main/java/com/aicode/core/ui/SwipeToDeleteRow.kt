@@ -1,11 +1,14 @@
 package com.aicode.core.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +46,7 @@ import com.aicode.core.theme.semanticColors
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Trash2
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -52,15 +56,18 @@ import kotlinx.coroutines.launch
  * 手势与动画参数全项目保持一致（露出宽度 -112dp、按钮上限 104dp、回弹弹簧参数），改这里即全局生效。
  *
  * @param onDelete 点按删除按钮后触发（先收回再回调）。是否弹二次确认由调用方决定。
- * @param onClick 表层未滑开时的点击回调；null 表示整行不可点击。
+ * @param onClick 表层未滑开时的点击回调；null 表示不响应点击。
+ * @param onLongClick 表层未滑开时的长按回调；null 表示不响应长按（默认不响应，既有调用点行为不变）。
  * @param deleteEnabled false 时删除按钮可露出但点击无效（如未下载完成的镜像不可删）。
  * @param content 表层行内容；背景由本组件提供，内边距由调用方内容自带（与既有各页用法一致）。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SwipeToDeleteRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     deleteEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
@@ -180,16 +187,12 @@ fun SwipeToDeleteRow(
                     )
                 }
                 .then(
-                    if (onClick != null) {
-                        Modifier.clickable {
-                            if (offsetX.value < -10f) {
-                                coroutineScope.launch {
-                                    offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
-                                }
-                            } else {
-                                onClick()
-                            }
-                        }
+                    if (onClick != null || onLongClick != null) {
+                        Modifier.combinedClickable(
+                            // 已滑开时点击只收回行，不触发 onClick / onLongClick
+                            onClick = { collapseOrRun(offsetX, coroutineScope, onClick) },
+                            onLongClick = { collapseOrRun(offsetX, coroutineScope, onLongClick) }
+                        )
                     } else {
                         Modifier
                     }
@@ -198,5 +201,18 @@ fun SwipeToDeleteRow(
         ) {
             content()
         }
+    }
+}
+
+/** 行已滑开时先弹回，否则执行 [action]；滑开状态下的点击/长按都不该触发业务动作。 */
+private fun collapseOrRun(
+    offsetX: Animatable<Float, AnimationVector1D>,
+    scope: CoroutineScope,
+    action: (() -> Unit)?
+) {
+    if (offsetX.value < -10f) {
+        scope.launch { offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium)) }
+    } else {
+        action?.invoke()
     }
 }

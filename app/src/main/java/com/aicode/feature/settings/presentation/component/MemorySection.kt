@@ -6,8 +6,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,9 +22,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -32,17 +43,22 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
+import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SwipeToDeleteRow
+import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryKind
+import com.aicode.feature.agent.domain.memory.MemoryScope
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Trash2
 
 /**
- * 记忆页：长期记忆自动沉淀开关 + 当前生效的记忆列表（左滑删除）。
+ * 记忆页：长期记忆自动沉淀开关 + 当前生效的记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
  *
- * 全局与项目记忆合并成一份清单、不分栏——用户看到的只是「AI 记住了什么」，
- * 记忆存在哪一侧是实现细节。
+ * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
+ * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  */
 @Composable
 internal fun MemorySection(
@@ -50,8 +66,12 @@ internal fun MemorySection(
     autoDistillEnabled: Boolean,
     onToggleAutoDistill: (Boolean) -> Unit,
     onOpenDetail: (Memory) -> Unit,
+    onEdit: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
 ) {
+    // 长按哪条就为哪条弹操作菜单；null 表示菜单未打开
+    var actionMemory by remember { mutableStateOf<Memory?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -77,12 +97,62 @@ internal fun MemorySection(
         if (memories.isEmpty()) {
             EmptyState()
         } else {
-            SettingsGroup {
-                memories.forEachIndexed { index, memory ->
-                    if (index > 0) SettingsDivider()
-                    MemoryRow(memory = memory, onOpenDetail = { onOpenDetail(memory) }, onDelete = { onDelete(memory) })
-                }
+            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
+            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
+            if (globalMemories.isNotEmpty()) {
+                SettingsGroupHeader(text = stringResource(R.string.memory_group_global))
+                MemoryGroup(
+                    memories = globalMemories,
+                    onOpenDetail = onOpenDetail,
+                    onLongClick = { actionMemory = it },
+                    onDelete = onDelete
+                )
             }
+            if (projectMemories.isNotEmpty()) {
+                SettingsGroupHeader(text = stringResource(R.string.memory_group_project))
+                MemoryGroup(
+                    memories = projectMemories,
+                    onOpenDetail = onOpenDetail,
+                    onLongClick = { actionMemory = it },
+                    onDelete = onDelete
+                )
+            }
+        }
+    }
+
+    actionMemory?.let { memory ->
+        MemoryActionsSheet(
+            memory = memory,
+            onEdit = {
+                actionMemory = null
+                onEdit(memory)
+            },
+            onDelete = {
+                actionMemory = null
+                onDelete(memory)
+            },
+            onDismiss = { actionMemory = null }
+        )
+    }
+}
+
+/** 一栏记忆（全局或项目）：同一个分组里逐行渲染，行间加分隔线。 */
+@Composable
+private fun MemoryGroup(
+    memories: List<Memory>,
+    onOpenDetail: (Memory) -> Unit,
+    onLongClick: (Memory) -> Unit,
+    onDelete: (Memory) -> Unit
+) {
+    SettingsGroup {
+        memories.forEachIndexed { index, memory ->
+            if (index > 0) SettingsDivider()
+            MemoryRow(
+                memory = memory,
+                onOpenDetail = { onOpenDetail(memory) },
+                onLongClick = { onLongClick(memory) },
+                onDelete = { onDelete(memory) }
+            )
         }
     }
 }
@@ -123,16 +193,17 @@ private fun EmptyState() {
     }
 }
 
-/** 单条记忆行：图标 + 名称/描述，点击看详情，左滑删除。 */
+/** 单条记忆行：图标 + 名称/描述，点击看详情，长按弹编辑/删除，左滑删除。 */
 @Composable
 private fun MemoryRow(
     memory: Memory,
     onOpenDetail: () -> Unit,
+    onLongClick: () -> Unit,
     onDelete: () -> Unit
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
 
-    SwipeToDeleteRow(onDelete = onDelete, onClick = onOpenDetail) {
+    SwipeToDeleteRow(onDelete = onDelete, onClick = onOpenDetail, onLongClick = onLongClick) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -160,13 +231,18 @@ private fun MemoryRow(
             Spacer(modifier = Modifier.width(Spacing.md))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = memory.name,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = memory.name,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    MemoryScopePill(scope = memory.scope)
+                }
                 Text(
                     text = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
                     style = MaterialTheme.typography.bodyMedium,
@@ -177,6 +253,31 @@ private fun MemoryRow(
             }
         }
     }
+}
+
+/**
+ * 作用域徽章：全局 / 项目。
+ *
+ * 配色与 MCP 页的 pill 保持一致（项目级用主色，全局用中性色），复用同一个 [McpPill]。
+ */
+@Composable
+private fun MemoryScopePill(scope: MemoryScope) {
+    val isProject = scope == MemoryScope.PROJECT
+    McpPill(
+        text = stringResource(
+            if (isProject) R.string.memory_group_project else R.string.memory_group_global
+        ),
+        textColor = if (isProject) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        backgroundColor = if (isProject) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        }
+    )
 }
 
 /**
@@ -215,6 +316,157 @@ internal fun MemoryDetailSheet(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(Spacing.lg)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 长按记忆弹出的操作菜单：编辑 / 删除。
+ *
+ * 删除沿用列表左滑的同一条回调（是否二次确认由上层决定），编辑进编辑器弹层。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MemoryActionsSheet(
+    memory: Memory,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            SettingsGroupHeader(text = memory.name)
+            SettingsGroup {
+                SettingsRow(
+                    icon = FeatherIcons.Edit2,
+                    title = stringResource(R.string.common_edit),
+                    onClick = onEdit
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = FeatherIcons.Trash2,
+                    title = stringResource(R.string.common_delete),
+                    onClick = onDelete
+                )
+            }
+        }
+    }
+}
+
+/** 记忆编辑器目标：[memory] 为 null 表示新建一条。 */
+internal data class MemoryEditorTarget(val memory: Memory? = null)
+
+/**
+ * 记忆编辑器弹层：名称、描述、正文三段。
+ *
+ * 新建时名称可填；编辑时名称只读——它是记忆的唯一标识（文件名），改了就是另一条记忆。
+ * 注入系统提示词的只有名称 + 描述，正文平时不展示，所以正文放在最后一段。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun MemoryEditorSheet(
+    memory: Memory?,
+    onSave: (name: String, description: String, content: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isNew = memory == null
+    var name by remember(memory) { mutableStateOf(memory?.name.orEmpty()) }
+    var description by remember(memory) { mutableStateOf(memory?.description.orEmpty()) }
+    var content by remember(memory) { mutableStateOf(memory?.content.orEmpty()) }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val flingFix = rememberSheetFlingFix(sheetState)
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentWindowInsets = { WindowInsets(0.dp) },
+        dialogMaxWidth = 600.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = screenHeight * 0.85f)
+                .imePadding()
+                .navigationBarsPadding()
+                .nestedScroll(flingFix)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Text(
+                text = stringResource(if (isNew) R.string.memory_add else R.string.common_edit),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = Spacing.xs)
+            )
+
+            SettingsGroup {
+                Column(modifier = Modifier.padding(Spacing.lg)) {
+                    AppTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        readOnly = !isNew,
+                        label = stringResource(R.string.common_name),
+                        placeholder = stringResource(R.string.memory_field_name_placeholder)
+                    )
+                    if (!isNew) {
+                        Text(
+                            text = stringResource(R.string.memory_field_name_locked),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            modifier = Modifier.padding(top = Spacing.xs, start = Spacing.xs)
+                        )
+                    }
+                }
+                SettingsDivider()
+                Column(modifier = Modifier.padding(Spacing.lg)) {
+                    AppTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = stringResource(R.string.memory_field_description),
+                        placeholder = stringResource(R.string.memory_field_description_placeholder)
+                    )
+                }
+            }
+
+            SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
+            SettingsGroup {
+                Column(modifier = Modifier.padding(Spacing.lg)) {
+                    AppTextField(
+                        value = content,
+                        onValueChange = { content = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 160.dp),
+                        singleLine = false,
+                        label = stringResource(R.string.memory_detail_content)
+                    )
+                }
+            }
+
+            // 保存动作放行内按钮，避免和外壳顶栏动作槽抢位置（与提示词/技能编辑页一致的做法）
+            SettingsGroup {
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.common_save),
+                    enabled = name.isNotBlank(),
+                    onClick = { onSave(name.trim(), description.trim(), content) }
                 )
             }
         }

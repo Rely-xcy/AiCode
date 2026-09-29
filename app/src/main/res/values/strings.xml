@@ -977,6 +977,13 @@
     <string name="memory_source_manual">对话中记录</string>
     <string name="memory_detail_content">内容</string>
     <string name="memory_detail_empty">（暂无正文）</string>
+    <string name="memory_group_global">全局记忆</string>
+    <string name="memory_group_project">项目记忆</string>
+    <string name="memory_add">新增记忆</string>
+    <string name="memory_field_description">描述</string>
+    <string name="memory_field_description_placeholder">一句话摘要，会注入系统提示词</string>
+    <string name="memory_field_name_placeholder">例如：写作偏好</string>
+    <string name="memory_field_name_locked">名称是记忆的唯一标识，创建后不可修改</string>
 
     <!-- Custom Prompts -->
     <string name="prompts_title">提示词</string>

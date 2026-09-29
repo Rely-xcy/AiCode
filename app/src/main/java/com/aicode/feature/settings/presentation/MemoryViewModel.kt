@@ -3,7 +3,9 @@ package com.aicode.feature.settings.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryRepository
+import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -60,6 +62,32 @@ class MemoryViewModel @Inject constructor(
             val projectRoot = workspaceRepository.currentPath()
             withContext(Dispatchers.IO) {
                 memoryRepository.deleteMemory(memory.name, memory.scope, projectRoot)
+            }
+            refresh()
+        }
+    }
+
+    /**
+     * 保存一条记忆。
+     *
+     * [target] 为 null 表示新建：写入全局作用域、类型为手动记录（[MemoryKind.NOTE]）。
+     * 非 null 表示编辑已有条目：沿用它的作用域、类型、来源与创建时间，名称不可改
+     * （名称是记忆的唯一标识，换名就是新建另一条）。
+     */
+    fun save(target: Memory?, name: String, description: String, content: String) {
+        viewModelScope.launch {
+            val projectRoot = workspaceRepository.currentPath()
+            withContext(Dispatchers.IO) {
+                memoryRepository.saveMemory(
+                    name = target?.name ?: name.trim(),
+                    description = description.trim(),
+                    content = content,
+                    scope = target?.scope ?: MemoryScope.GLOBAL,
+                    projectRoot = projectRoot,
+                    kind = target?.kind ?: MemoryKind.NOTE,
+                    source = target?.source.orEmpty(),
+                    createdAt = target?.createdAt ?: 0L
+                )
             }
             refresh()
         }
