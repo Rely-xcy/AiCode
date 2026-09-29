@@ -90,7 +90,7 @@ class MemoryExtractor @Inject constructor(
      * 标签格式容错得多：空行、`---` 分隔、代码块围栏、中英文冒号、行首项目符号都能吃掉，
      * 单条写坏了也只丢那一条。
      */
-    fun parseEntries(raw: String): List<DistilledEntry> {
+    internal fun parseEntries(raw: String): List<DistilledEntry> {
         val entries = mutableListOf<DistilledEntry>()
         var name = ""
         var description = ""
@@ -146,7 +146,7 @@ class MemoryExtractor @Inject constructor(
     }
 
     @Serializable
-    private data class DistilledEntry(
+    internal data class DistilledEntry(
         val name: String,
         val description: String = "",
         val content: String = ""
