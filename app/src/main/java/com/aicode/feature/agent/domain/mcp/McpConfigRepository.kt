@@ -322,14 +322,23 @@ class McpConfigRepository @Inject constructor(
         }
     }
 
-    /** 合并全局与项目配置：全局按序在前，项目项覆盖同名，顺序 = 全局序 + 项目新增项。 */
+    /**
+     * 合并全局与项目配置：项目级同名覆盖全局项；
+     * 顺序 = 未被覆盖的全局项（按全局序）+ 全部项目项（按项目序）。
+     *
+     * 被覆盖的全局项不再占合并列表的槽位。旧实现是「先插全局、再覆盖同名」的 LinkedHashMap，
+     * 被覆盖那一项的槽位会留在全局文件的位置上，于是项目级那一行在列表里的位置由**全局文件**决定：
+     * 拖它只会改写项目数组，合并结果不变，松手就回弹（设置页拖拽排序踩过）。
+     * 改成两块拼接后，每种作用域的行在合并列表里各自连续，同作用域内拖动都能被数组顺序表达。
+     */
     private fun merge(
         global: List<McpServerConfig>,
         project: List<McpServerConfig>
     ): List<McpServerEntry> {
-        val byName = LinkedHashMap<String, McpServerEntry>()
-        global.forEach { byName[it.name] = McpServerEntry(it, McpScope.GLOBAL) }
-        project.forEach { byName[it.name] = McpServerEntry(it, McpScope.PROJECT) }
-        return byName.values.toList()
+        val overridden = project.map { it.name }.toSet()
+        val entries = ArrayList<McpServerEntry>(global.size + project.size)
+        global.forEach { if (it.name !in overridden) entries += McpServerEntry(it, McpScope.GLOBAL) }
+        project.forEach { entries += McpServerEntry(it, McpScope.PROJECT) }
+        return entries
     }
 }

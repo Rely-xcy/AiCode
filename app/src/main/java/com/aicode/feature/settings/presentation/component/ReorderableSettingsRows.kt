@@ -93,7 +93,13 @@ internal fun LazyItemScope.ReorderableCardRow(
     dragLabel: String,
     content: @Composable (dragModifier: Modifier) -> Unit
 ) {
-    ReorderableItem(state = state, key = key) { isDragging ->
+    ReorderableItem(
+        state = state,
+        key = key,
+        // 显式写出库的默认值（3.1.0 的形参默认就是 Modifier.animateItem()）：
+        // 展开/收起时条目淡入淡出 + 位移都由它提供，拖拽中不生效（库只在非拖拽项上贴它）。
+        animateItemModifier = Modifier.animateItem()
+    ) { isDragging ->
         val hapticFeedback = LocalHapticFeedback.current
         val dragScale by animateFloatAsState(
             targetValue = if (isDragging) 0.95f else 1f,

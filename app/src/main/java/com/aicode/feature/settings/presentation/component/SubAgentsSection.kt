@@ -140,7 +140,7 @@ internal fun SubAgentsSection(
         // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
         // 同组内的行不加间距，才能保持「一组连成一块卡片」。
         item(key = SUB_AGENT_HEADER_PROJECT_KEY) {
-            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(bottom = Spacing.sm)) {
                 CollapsibleGroupHeader(
                     text = if (projectName != null) {
                         stringResource(R.string.perm_current_project, projectName)
@@ -155,7 +155,7 @@ internal fun SubAgentsSection(
         if (projectExpanded) {
             if (projectAgents.isEmpty()) {
                 item(key = SUB_AGENT_EMPTY_PROJECT_KEY) {
-                    SettingsGroup {
+                    SettingsGroup(modifier = Modifier.animateItem()) {
                         SubAgentEmptyHint(stringResource(R.string.subagents_no_project))
                     }
                 }
@@ -183,7 +183,7 @@ internal fun SubAgentsSection(
         }
 
         item(key = SUB_AGENT_HEADER_GLOBAL_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
                 CollapsibleGroupHeader(
                     text = stringResource(R.string.perm_global),
                     expanded = globalExpanded,
@@ -194,7 +194,7 @@ internal fun SubAgentsSection(
         if (globalExpanded) {
             if (globalAgents.isEmpty()) {
                 item(key = SUB_AGENT_EMPTY_GLOBAL_KEY) {
-                    SettingsGroup {
+                    SettingsGroup(modifier = Modifier.animateItem()) {
                         SubAgentEmptyHint(stringResource(R.string.subagents_no_global))
                     }
                 }

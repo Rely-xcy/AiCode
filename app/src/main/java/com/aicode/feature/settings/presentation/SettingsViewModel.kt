@@ -99,7 +99,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -590,10 +589,6 @@ class SettingsViewModel @Inject constructor(
     /** 各列表排序落盘的防抖 job，见 [debounceOrderWrite]。 */
     private val orderWriteJobs = mutableMapOf<String, Job>()
 
-    /** 默认模型页四行的顺序（拖拽排过才不是默认序）。 */
-    private val _defaultModelRowOrder = MutableStateFlow(ListOrderStore.DEFAULT_MODEL_ROW_IDS)
-    val defaultModelRowOrder: StateFlow<List<String>> = _defaultModelRowOrder.asStateFlow()
-
     private val _activeProfileId = MutableStateFlow(ContainerProfile.BUILTIN_ID)
     val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
 
@@ -924,17 +919,6 @@ class SettingsViewModel @Inject constructor(
 
             launch {
                 refreshSkills()
-            }
-
-            launch {
-                // 默认模型页四行的自定义顺序：顺序表里可能残留已删掉的行 id，
-                // 已知 id 按表序在前，表里没有的按默认序补在后面。
-                val stored = listOrderStore.orderFlow(ListOrderStore.KEY_DEFAULT_MODEL_ROWS).first()
-                if (stored.isNotEmpty()) {
-                    val known = stored.filter { it in ListOrderStore.DEFAULT_MODEL_ROW_IDS }.distinct()
-                    _defaultModelRowOrder.value =
-                        known + ListOrderStore.DEFAULT_MODEL_ROW_IDS.filterNot { it in known }
-                }
             }
 
             launch {
@@ -2151,19 +2135,6 @@ class SettingsViewModel @Inject constructor(
         }
         debounceOrderWrite(key) {
             listOrderStore.save(key, _subAgents.value.filter { it.scope == scope }.map { it.name })
-        }
-    }
-
-    /** 默认模型页四行的长按拖拽排序（固定四行，顺序只是展示顺序）。 */
-    fun reorderDefaultModelRows(movedId: String, targetId: String) {
-        val current = _defaultModelRowOrder.value
-        val fromIndex = current.indexOf(movedId)
-        val toIndex = current.indexOf(targetId)
-        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
-        val reordered = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
-        _defaultModelRowOrder.value = reordered
-        debounceOrderWrite(ListOrderStore.KEY_DEFAULT_MODEL_ROWS) {
-            listOrderStore.save(ListOrderStore.KEY_DEFAULT_MODEL_ROWS, reordered)
         }
     }
 

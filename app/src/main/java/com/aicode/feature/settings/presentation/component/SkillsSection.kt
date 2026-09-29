@@ -139,7 +139,7 @@ internal fun SkillsSection(
         // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
         // 同组内的行不加间距，才能保持「一组连成一块卡片」。
         item(key = SKILL_HEADER_PROJECT_KEY) {
-            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(bottom = Spacing.sm)) {
                 CollapsibleGroupHeader(
                     text = if (projectName != null) {
                         stringResource(R.string.perm_current_project, projectName)
@@ -154,7 +154,7 @@ internal fun SkillsSection(
         if (projectExpanded) {
             if (projectSkills.isEmpty()) {
                 item(key = SKILL_EMPTY_PROJECT_KEY) {
-                    SettingsGroup {
+                    SettingsGroup(modifier = Modifier.animateItem()) {
                         SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
                     }
                 }
@@ -182,7 +182,7 @@ internal fun SkillsSection(
         }
 
         item(key = SKILL_HEADER_GLOBAL_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
                 CollapsibleGroupHeader(
                     text = stringResource(R.string.perm_global),
                     expanded = globalExpanded,
@@ -193,7 +193,7 @@ internal fun SkillsSection(
         if (globalExpanded) {
             if (globalSkills.isEmpty()) {
                 item(key = SKILL_EMPTY_GLOBAL_KEY) {
-                    SettingsGroup {
+                    SettingsGroup(modifier = Modifier.animateItem()) {
                         SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
                     }
                 }

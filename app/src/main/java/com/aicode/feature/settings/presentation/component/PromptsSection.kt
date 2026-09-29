@@ -122,7 +122,7 @@ internal fun PromptsSection(
         // 各组之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
         // 同组内的行不加间距，才能保持「一组连成一块卡片」。
         item(key = PROMPT_HINT_KEY) {
-            Box(modifier = Modifier.padding(bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(bottom = Spacing.sm)) {
                 Text(
                     text = stringResource(R.string.prompts_hint),
                     style = MaterialTheme.typography.bodyMedium,
@@ -133,12 +133,12 @@ internal fun PromptsSection(
         }
 
         item(key = PROMPT_HEADER_DEFAULT_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
                 SettingsGroupHeader(text = stringResource(R.string.prompts_group_default))
             }
         }
         item(key = PROMPT_DEFAULT_ROW_KEY) {
-            SettingsGroup {
+            SettingsGroup(modifier = Modifier.animateItem()) {
                 PromptRow(
                     title = stringResource(R.string.prompts_default_title),
                     subtitle = stringResource(
@@ -151,13 +151,13 @@ internal fun PromptsSection(
         }
 
         item(key = PROMPT_HEADER_GLOBAL_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
                 SettingsGroupHeader(text = stringResource(R.string.perm_global))
             }
         }
         if (state.globalPrompts.isEmpty()) {
             item(key = PROMPT_EMPTY_GLOBAL_KEY) {
-                SettingsGroup {
+                SettingsGroup(modifier = Modifier.animateItem()) {
                     PromptEmptyHint(stringResource(R.string.prompts_empty))
                 }
             }
@@ -185,13 +185,13 @@ internal fun PromptsSection(
         }
 
         item(key = PROMPT_HEADER_PROJECT_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.sm)) {
+            Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
                 SettingsGroupHeader(text = stringResource(R.string.skills_scope_project))
             }
         }
         if (state.projectPrompts.isEmpty()) {
             item(key = PROMPT_EMPTY_PROJECT_KEY) {
-                SettingsGroup {
+                SettingsGroup(modifier = Modifier.animateItem()) {
                     PromptEmptyHint(
                         stringResource(
                             if (state.hasWorkspace) R.string.prompts_empty
