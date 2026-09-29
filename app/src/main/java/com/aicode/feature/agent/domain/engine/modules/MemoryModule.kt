@@ -197,8 +197,53 @@ class MemoryModule @Inject constructor(
             "tool(${message.toolName}): ${(message.modelResult ?: message.result).take(MAX_TOOL_CHARS)}"
     }
 
-    /** 解析模型输出：容错地取出 JSON 数组段，容忍 ``` 包裹与前后废话。 */
+    /**
+     * 解析模型输出：按 `name:` / `description:` / `content:` 标签逐行读，不要求 JSON。
+     *
+     * 为什么不要求 JSON：模型输出 JSON 的失败率明显更高——漏引号、多逗号、把换行写进字符串、
+     * 前后多一段说明文字，任何一处都会让整个数组解析失败，这一批记忆就白抽了。
+     * 标签格式容错得多：空行、`---` 分隔、代码块围栏、中英文冒号、行首项目符号都能吃掉，
+     * 单条写坏了也只丢那一条。
+     */
     private fun parseEntries(raw: String): List<DistilledEntry> {
+        val entries = mutableListOf<DistilledEntry>()
+        var name = ""
+        var description = ""
+        val content = StringBuilder()
+
+        fun flush() {
+            if (name.isNotBlank() && content.isNotBlank()) {
+                entries.add(DistilledEntry(name.trim(), description.trim(), content.toString().trim()))
+            }
+            name = ""
+            description = ""
+            content.clear()
+        }
+
+        raw.lines().forEach { line ->
+            val cleaned = line.trim().removePrefix("-").removePrefix("*").trim().trim('`').trim()
+            when {
+                cleaned.isEmpty() || cleaned == "---" -> Unit
+
+                NAME_LABEL.matches(cleaned) -> {
+                    flush()
+                    name = NAME_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+                }
+
+                DESCRIPTION_LABEL.matches(cleaned) ->
+                    description = DESCRIPTION_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+
+                CONTENT_LABEL.matches(cleaned) ->
+                    content.appendLine(CONTENT_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty())
+
+                // 多行 content：从属于上一条 name
+                name.isNotBlank() -> content.appendLine(cleaned)
+            }
+        }
+        flush()
+        if (entries.isNotEmpty()) return entries.take(MAX_ENTRIES_PER_TURN)
+
+        // 模型万一还是吐了 JSON：按旧方式再试一次，不白丢这一批
         val start = raw.indexOf('[')
         val end = raw.lastIndexOf(']')
         if (start < 0 || end <= start) return emptyList()
@@ -208,9 +253,14 @@ class MemoryModule @Inject constructor(
                 .filter { it.name.isNotBlank() && it.content.isNotBlank() }
                 .take(MAX_ENTRIES_PER_TURN)
         }.onFailure {
-            FileLogger.w(TAG, "沉淀结果解析失败，已跳过本轮", it)
+            FileLogger.w(TAG, "标签格式没解析出条目，JSON 兜底也失败，本轮跳过", it)
         }.getOrDefault(emptyList())
     }
+
+    /** 标签格式的三个字段；中英文冒号都认，大小写不敏感。 */
+    private val NAME_LABEL = Regex("^name\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+    private val DESCRIPTION_LABEL = Regex("^description\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+    private val CONTENT_LABEL = Regex("^content\\s*[:：]\\s*(.*)$", RegexOption.IGNORE_CASE)
 
     private fun trimIfNeeded() {
         if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
