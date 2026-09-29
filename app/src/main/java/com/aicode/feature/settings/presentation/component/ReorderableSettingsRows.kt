@@ -22,7 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.lifecycle.ViewModelProvider
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.settings.presentation.SettingsViewModel
@@ -39,11 +39,11 @@ import sh.calvin.reorderable.ReorderableLazyListState
  */
 @Composable
 internal fun rememberSettingsViewModel(): SettingsViewModel? {
-    val context = LocalContext.current
-    return remember(context) {
-        val activity = context.findActivity() ?: return@remember null
-        ViewModelProvider(activity)[SettingsViewModel::class.java]
-    }
+    // hiltViewModel 是 @Composable，必须直调（不能塞进 remember）。
+    // 关键是把 ViewModelStoreOwner 显式指定为 Activity：默认的 LocalViewModelStoreOwner
+    // 在 composable("settings") 里是 nav-entry 级，取到的是另一个实例，拖了页面不刷新。
+    val activity = LocalContext.current.findActivity() ?: return null
+    return hiltViewModel<SettingsViewModel>(viewModelStoreOwner = activity)
 }
 
 private fun Context.findActivity(): Activity? {
