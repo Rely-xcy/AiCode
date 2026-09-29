@@ -128,10 +128,18 @@ class CompactionModule @Inject constructor(
                     },
                     onEvent = call.onEvent
                 )
-                call.onEvent(AgentEvent.CompactionFinished)
                 if (compactedMessages != null) {
                     result = compactedMessages
                     compacted = true
+                    // 只有真的产出结果才报完成：失败时 compact() 已发过 CompactionFailed
+                    call.onEvent(AgentEvent.CompactionFinished)
+                } else {
+                    // 硬压缩没产出结果（摘要模型报错、锚点定位不到、裁剪后 head 为空）时不能就此罢手：
+                    // 走到这里说明上下文已在硬线以上，而软精简在 else if 分支里永远轮不到，
+                    // 不补这一步本轮就只剩兜底硬截（直接砍消息），体验与信息损失都差得多。
+                    FileLogger.w(TAG, "硬压缩未产出结果，退化为软精简")
+                    val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
+                    if (trimmed !== result) result = trimmed
                 }
             }
         } else if (reachedSoft) {
