@@ -22,17 +22,21 @@ private val Context.memoryDataStore by preferencesDataStore(name = "memory_prefs
 /**
  * 记忆模块自己的开关（每个引擎模块一套开关，互不影响）。
  *
- * 目前两项：长期记忆自动沉淀、治理周期。
- * **默认关**是刻意的——自动沉淀会调模型、写文件，用户必须自己打开才知道它在工作，
+ * 目前两项，彼此独立：
+ * 1. 主动记忆：让模型在对话中主动调 memory 工具记下稳定结论，以及「声称记住却没调工具」时的兜底提醒；
+ * 2. 治理周期：周期为 0 即关闭治理，与主动记忆开关无关（主动记忆关着也能按周期治理）。
+ * **默认关**是刻意的——主动记忆会调模型、写文件，用户必须自己打开才知道它在工作，
  * 而不是装完就在后台默默记东西（这正是上一版画像被否掉的原因）。
+ * 压缩历史前的抽取不受这里任何开关控制（属上下文管理，见 CompactionModule）。
  */
 @Singleton
 class MemorySettingsRepository @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
 
-    val autoDistillEnabledFlow: Flow<Boolean> = context.memoryDataStore.data
-        .map { it[AUTO_DISTILL_ENABLED_KEY] ?: false }
+    val activeMemoryEnabledFlow: Flow<Boolean> = context.memoryDataStore.data
+        // 迁移：新键还没写过时回落到旧键，老用户已经打开的设置不会丢
+        .map { it[ACTIVE_MEMORY_ENABLED_KEY] ?: it[LEGACY_AUTO_DISTILL_ENABLED_KEY] ?: false }
 
     /**
      * 同步快照：系统提示词片段是同步拼接的（读不了 DataStore），
@@ -40,27 +44,28 @@ class MemorySettingsRepository @Inject constructor(
      * 由下面的收集器持续刷新，进程启动后很快就有值。
      */
     @Volatile
-    private var autoDistillEnabledSnapshot: Boolean = false
+    private var activeMemoryEnabledSnapshot: Boolean = false
 
     // 声明在 init 之前：Kotlin 按声明顺序初始化，写在后面 init 里会报「必须初始化」
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         scope.launch {
-            autoDistillEnabledFlow.collect { autoDistillEnabledSnapshot = it }
+            activeMemoryEnabledFlow.collect { activeMemoryEnabledSnapshot = it }
         }
     }
 
-    fun autoDistillEnabledSync(): Boolean = autoDistillEnabledSnapshot
+    fun activeMemoryEnabledSync(): Boolean = activeMemoryEnabledSnapshot
 
-    suspend fun autoDistillEnabled(): Boolean = autoDistillEnabledFlow.first()
+    suspend fun activeMemoryEnabled(): Boolean = activeMemoryEnabledFlow.first()
 
-    suspend fun setAutoDistillEnabled(enabled: Boolean) {
-        context.memoryDataStore.edit { it[AUTO_DISTILL_ENABLED_KEY] = enabled }
+    suspend fun setActiveMemoryEnabled(enabled: Boolean) {
+        context.memoryDataStore.edit { it[ACTIVE_MEMORY_ENABLED_KEY] = enabled }
     }
 
     /**
      * 治理周期（小时）：距上次治理超过这个时长，就在下一轮结束后跑一次；0 表示关闭治理。
+     * 治理只看这一个值——主动记忆开关与它无关，关掉主动记忆也照常按周期治理。
      *
      * 不再按「每 N 轮」触发——开发过程中大多是写新功能或修 bug，很少会冒出值得沉淀的稳定偏好，
      * 每 5 轮跑一次模型既费钱又依赖模型能力。改成按时间低频治理，把「总结 / 去重 / 清理」一次做完。
@@ -87,7 +92,10 @@ class MemorySettingsRepository @Inject constructor(
     }
 
     companion object {
-        private val AUTO_DISTILL_ENABLED_KEY = booleanPreferencesKey("auto_distill_enabled")
+        private val ACTIVE_MEMORY_ENABLED_KEY = booleanPreferencesKey("active_memory_enabled")
+
+        /** 迁移前的旧键：语义是「自动沉淀」（主动记忆与治理共用一个开关），只在新键缺省时读一次。 */
+        private val LEGACY_AUTO_DISTILL_ENABLED_KEY = booleanPreferencesKey("auto_distill_enabled")
         private val CURATION_INTERVAL_HOURS_KEY = intPreferencesKey("curation_interval_hours")
         private val LAST_CURATED_AT_KEY = longPreferencesKey("last_curated_at")
 

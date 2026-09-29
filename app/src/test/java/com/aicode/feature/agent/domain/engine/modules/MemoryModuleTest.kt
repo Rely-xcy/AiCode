@@ -21,7 +21,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 记忆模块的调度：开关、子代理、**按时间触发治理**（不再按轮）。
+ * 记忆模块的调度：子代理、**按时间触发治理**（不再按轮，且只由治理周期决定）。
  *
  * 治理本身（本地规则 + 模型判定）在 [MemoryCurator]，这里只验证「什么时候叫它」。
  */
@@ -36,14 +36,13 @@ class MemoryModuleTest {
     )
 
     private fun harness(
-        settingsEnabled: Boolean = true,
         lastCuratedAt: Long = 0L,
         intervalHours: Int = 24
     ): Harness {
         val repository = mockk<MemoryRepository>(relaxed = true)
         val curator = mockk<MemoryCurator>(relaxed = true)
         val settings = mockk<MemorySettingsRepository>()
-        coEvery { settings.autoDistillEnabled() } returns settingsEnabled
+        // 刻意不 stub activeMemoryEnabled()：治理不该读它，真读了这里会报没答案
         coEvery { settings.curationIntervalHours() } returns intervalHours
         coEvery { settings.lastCuratedAt() } returns lastCuratedAt
         // 治理跑完一定会写时间戳（「看过就记」），严格 mock 不给答案会抛 MockKException，
@@ -105,12 +104,14 @@ class MemoryModuleTest {
     }
 
     @Test
-    fun onTurnCompleted_doesNothingWhenSwitchOff() = runTest {
-        val h = harness(settingsEnabled = false, lastCuratedAt = 0L)
+    fun onTurnCompleted_ignoresActiveMemorySwitch() = runTest {
+        // 治理只由周期决定：主动记忆关着也照跑，且不应该去读那个开关
+        val h = harness(lastCuratedAt = 0L)
 
         h.module.onTurnCompleted(ctx { _, _ -> "[]" })
 
-        coVerify(exactly = 0) { h.curator.curate(any(), any()) }
+        coVerify(exactly = 1) { h.curator.curate(any(), any()) }
+        coVerify(exactly = 0) { h.settings.activeMemoryEnabled() }
     }
 
     @Test

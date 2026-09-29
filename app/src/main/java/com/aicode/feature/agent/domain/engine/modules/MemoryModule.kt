@@ -26,8 +26,9 @@ import javax.inject.Singleton
  *
  * 两件事：
  * 1. 注入——把记忆清单（名称 + 描述）拼进系统提示词，详情仍由模型调 `memory(action=read)` 自取；
- * 2. 沉淀——只在开关打开时自动写记忆：模型对话中主动调 memory 工具记录、按治理周期归纳去重；
- *    开关关着时这两条都不写。压缩历史前的抽取不受此开关控制（属上下文管理，见 CompactionModule）。
+ * 2. 沉淀——两条路各管各的：模型对话中主动调 memory 工具记录（受「主动记忆」开关控制，
+ *    开关关着时注入里没有这条规则）；按治理周期归纳去重（只看周期，周期为 0 才不跑）。
+ *    压缩历史前的抽取不受任何开关控制（属上下文管理，见 CompactionModule）。
  *
  * 缓存策略沿用迁移前的实现：按 (sessionId, projectRoot) 会话级缓存，同一会话内只读一次盘，
  * 保持 system prompt 稳定以命中 KV 缓存；空结果用 "" 占位以区分「未缓存」。
@@ -53,7 +54,7 @@ class MemoryModule @Inject constructor(
     private data class CacheKey(
         val sessionId: String?,
         val projectRoot: String,
-        val autoSave: Boolean,
+        val activeMemory: Boolean,
         val queryHash: Int
     )
 
@@ -80,16 +81,16 @@ class MemoryModule @Inject constructor(
     }
 
     override fun promptFragment(ctx: EngineContext): String? {
-        val autoSave = memorySettings.autoDistillEnabledSync()
+        val activeMemory = memorySettings.activeMemoryEnabledSync()
         // 开关与话题都进缓存 key：切换开关、换话题后注入内容都要跟着变
-        val key = CacheKey(ctx.sessionId, ctx.projectRoot, autoSave, queryOf(ctx).hashCode())
+        val key = CacheKey(ctx.sessionId, ctx.projectRoot, activeMemory, queryOf(ctx).hashCode())
         val cached = cachedByKey[key]
         if (cached != null) return cached.ifEmpty { null }
 
         // 清单为空时也要可能返回规则本身（新用户没有任何记忆时，主动记忆规则必须照样注入）
         val content = listOfNotNull(
             // 子代理不拿主动记忆规则：写用户画像是主代理的事，子代理只管干活
-            AUTO_SAVE_RULE.takeIf { autoSave && !ctx.isSubAgent },
+            ACTIVE_MEMORY_RULE.takeIf { activeMemory && !ctx.isSubAgent },
             buildMemoryList(ctx)
         ).joinToString("\n\n")
 
@@ -179,6 +180,8 @@ class MemoryModule @Inject constructor(
     /**
      * 一轮结束后：到点就做一次记忆治理。
      *
+     * 只看治理周期：周期 <= 0 就是关闭治理，与主动记忆开关无关（那个开关只管对话中主动记）。
+     *
      * 不再「每 N 轮归约」——开发过程中大多是写新功能或修 bug，很少会冒出值得沉淀的稳定偏好，
      * 每几轮跑一次模型既费钱又依赖模型能力（模型不够聪明就不会按格式输出）。
      * 改为：日常靠主模型用 memory 工具主动记（用户可见），沉淀靠低频治理。
@@ -186,7 +189,6 @@ class MemoryModule @Inject constructor(
     override suspend fun onTurnCompleted(ctx: EngineContext) {
         if (ctx.isSubAgent) return
         if (ctx.history.isEmpty()) return
-        if (!memorySettings.autoDistillEnabled()) return
 
         val intervalHours = memorySettings.curationIntervalHours()
         // 周期 <= 0 是设置页里的「关闭治理」：直接返回，不参与下面的间隔比较
@@ -240,11 +242,11 @@ class MemoryModule @Inject constructor(
         const val CURATOR_PROMPT_FILE = "agent/memory-curator.md"
 
         /**
-         * 主动记忆规则（A 路）：开关打开时注入，让主模型在对话中自己把稳定结论存下来。
+         * 主动记忆规则（A 路）：「主动记忆」开关打开时注入，让主模型在对话中自己把稳定结论存下来。
          * 判据是语义的（「未来会话里知道这条会不会让我做法不同」），不是关键词清单：
          * 用户几乎不会明说「记住这个」，偏好大多是隐含的。
          */
-        val AUTO_SAVE_RULE = """
+        val ACTIVE_MEMORY_RULE = """
             长期记忆（开关已打开，你需要主动维护，用户能在设置里的记忆页看到）：
             每轮回复收尾前，先判断这一轮是否出现了关于用户的稳定结论——
             偏好与表达习惯、工作方式、对你做法的纠正、环境或工具限制（设备/网络/权限/跑不起来的东西）、

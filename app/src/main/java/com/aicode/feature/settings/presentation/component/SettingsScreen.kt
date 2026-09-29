@@ -976,7 +976,7 @@ fun SettingsScreen(
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
-                    val autoDistill by memoryViewModel.autoDistillEnabled.collectAsStateWithLifecycle()
+                    val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
                     val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
                     val deleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
                     // 删除失败（条目已不存在等）给一次提示：否则条目还在、用户不知道发生了什么
@@ -993,8 +993,8 @@ fun SettingsScreen(
                     var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
-                        autoDistillEnabled = autoDistill,
-                        onToggleAutoDistill = memoryViewModel::setAutoDistillEnabled,
+                        activeMemoryEnabled = activeMemory,
+                        onToggleActiveMemory = memoryViewModel::setActiveMemoryEnabled,
                         curationIntervalHours = curationInterval,
                         onSelectCurationInterval = memoryViewModel::setCurationIntervalHours,
                         onOpenDetail = { detailMemory = it },

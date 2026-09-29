@@ -36,7 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -67,7 +66,7 @@ import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
 
 /**
- * 记忆页：长期记忆自动沉淀开关 + 当前生效的记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
+ * 记忆页：主动记忆开关 + 治理周期（周期归零即关闭）+ 当前生效的记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
  *
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
@@ -75,8 +74,8 @@ import compose.icons.feathericons.Trash2
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
-    autoDistillEnabled: Boolean,
-    onToggleAutoDistill: (Boolean) -> Unit,
+    activeMemoryEnabled: Boolean,
+    onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
     onSelectCurationInterval: (Int) -> Unit,
     onOpenDetail: (Memory) -> Unit,
@@ -99,31 +98,34 @@ internal fun MemorySection(
         SettingsGroup {
             SettingsRow(
                 icon = null,
-                title = stringResource(R.string.memory_auto_distill),
-                subtitle = stringResource(R.string.memory_auto_distill_desc),
+                title = stringResource(R.string.memory_active_memory),
+                subtitle = stringResource(R.string.memory_active_memory_desc),
                 trailing = {
                     AppSwitch(
-                        checked = autoDistillEnabled,
-                        onCheckedChange = onToggleAutoDistill
+                        checked = activeMemoryEnabled,
+                        onCheckedChange = onToggleActiveMemory
                     )
                 }
             )
             SettingsDivider()
             // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
             // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
+            // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.semanticColors.cardSurface)
                     .padding(horizontal = Spacing.lg, vertical = 12.dp)
-                    // 自动沉淀关了就没什么可治理的：整块置灰、不响应点击。
-                    // 否则开关明明是关的，周期却还写着「1 天」，看着像还在按周期跑。
-                    .alpha(if (autoDistillEnabled) 1f else 0.45f)
             ) {
                 Text(
                     text = stringResource(R.string.memory_curation_interval),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = stringResource(R.string.memory_curation_interval_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(Spacing.sm))
                 SegmentedTabs(
@@ -135,7 +137,6 @@ internal fun MemorySection(
                         stringResource(R.string.memory_curation_interval_custom)
                     ),
                     onSelect = { index ->
-                        if (!autoDistillEnabled) return@SegmentedTabs
                         when (index) {
                             0 -> onSelectCurationInterval(0)
                             1 -> onSelectCurationInterval(24)
@@ -146,7 +147,7 @@ internal fun MemorySection(
                 )
                 // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
                 val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
-                if (autoDistillEnabled && isCustom) {
+                if (isCustom) {
                     Text(
                         text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
                         style = MaterialTheme.typography.bodyMedium,

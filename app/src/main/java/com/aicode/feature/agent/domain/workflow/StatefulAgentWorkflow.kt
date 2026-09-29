@@ -542,7 +542,7 @@ class StatefulAgentWorkflow @Inject constructor(
         val modeReminder = takeModeReminderIfChanged(currentContext.sessionId, currentContext.mode)
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，开关关着时规则都没注入，不必兜。
         val memoryGuardEnabled = currentContext.agentDefinition == null &&
-            runCatching { memorySettingsRepository.autoDistillEnabled() }.getOrDefault(false)
+            runCatching { memorySettingsRepository.activeMemoryEnabled() }.getOrDefault(false)
         actionQueue.addLast(
             AgentAction.InitRequest(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(

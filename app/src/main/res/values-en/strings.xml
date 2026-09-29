@@ -971,8 +971,8 @@
     <!-- Memory Settings -->
     <string name="memory_empty">No memories yet</string>
     <string name="memory_empty_hint">Whatever you ask the assistant to remember shows up here</string>
-    <string name="memory_auto_distill">Auto-save long-term memory</string>
-    <string name="memory_auto_distill_desc">Off means nothing is written automatically. When on: the model records during chat and memory is curated periodically (uses the model)</string>
+    <string name="memory_active_memory">Active memory</string>
+    <string name="memory_active_memory_desc">When on, the model records durable conclusions during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
     <string name="memory_source_auto">Auto-saved</string>
     <string name="memory_source_pre_fold">Salvaged before compaction</string>
     <string name="memory_source_manual">Saved during chat</string>
@@ -992,6 +992,7 @@
     <string name="memory_delete_confirm_message">This will delete \"%1$s\". This action cannot be undone. Delete?</string>
     <string name="memory_delete_failed">Delete failed; the entry may no longer exist</string>
     <string name="memory_curation_interval">Curation interval</string>
+    <string name="memory_curation_interval_desc">Zero turns curation off; independent of the active memory switch</string>
     <string name="memory_curation_interval_off">Off (no auto curation)</string>
     <string name="memory_curation_interval_off_short">Off</string>
     <string name="memory_curation_interval_custom">Custom</string>
