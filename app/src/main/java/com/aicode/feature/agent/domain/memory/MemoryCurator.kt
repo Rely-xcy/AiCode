@@ -90,8 +90,11 @@ class MemoryCurator @Inject constructor(
         mergeGroups.forEach { (keepName, otherNames) ->
             if (merge(keepName, otherNames, projectRoot)) merged++
         }
+        // 归档要按名字找回 Memory 对象：archive() 需要真实文件路径
+        val byName = memories.associateBy { it.name }
         toArchive.forEach { name ->
-            if (archive(name, projectRoot)) archived++
+            val memory = byName[name] ?: return@forEach
+            if (archive(memory, projectRoot)) archived++
         }
 
         if (archived > 0 || merged > 0) {
