@@ -972,7 +972,7 @@
     <string name="memory_empty">No memories yet</string>
     <string name="memory_empty_hint">Whatever you ask the assistant to remember shows up here</string>
     <string name="memory_auto_distill">Auto-save long-term memory</string>
-    <string name="memory_auto_distill_desc">Off means nothing is written automatically. When on: the model records during chat, conclusions are salvaged before history compaction, and memory is curated periodically (uses the model)</string>
+    <string name="memory_auto_distill_desc">Off means nothing is written automatically. When on: the model records during chat and memory is curated periodically (uses the model)</string>
     <string name="memory_source_auto">Auto-saved</string>
     <string name="memory_source_manual">Saved during chat</string>
     <string name="memory_detail_content">Content</string>

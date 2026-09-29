@@ -13,7 +13,6 @@ import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.workflow.TokenEstimator
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
-import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.settings.domain.model.ProviderType
 import dagger.Lazy
@@ -46,8 +45,7 @@ class CompactionModule @Inject constructor(
     /** 同样用 [Lazy]：解析抽取提示词要经 SystemPromptProvider，它又依赖引擎。 */
     private val systemPromptProvider: Lazy<SystemPromptProvider>,
     private val modelMetadataService: ModelMetadataService,
-    private val generalSettingsRepository: GeneralSettingsRepository,
-    private val memorySettings: MemorySettingsRepository
+    private val generalSettingsRepository: GeneralSettingsRepository
 ) : EngineModule {
 
     override val id = MODULE_ID
@@ -111,26 +109,23 @@ class CompactionModule @Inject constructor(
                     summaryWindowTokens = resolveContextTokens(summaryProvider),
                     // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
                     // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
-                    // 但「长期记忆自动沉淀」关着时一条都不写——该开关的语义是「不在后台自动记东西」，
-                    // 压缩触不触发不该绕过它，否则用户关了开关、记忆仍在惄惄地变。
+                    // 注意：这一步**不受**「长期记忆自动沉淀」开关控制（用户 2026-09-30 明确要求保持独立）——
+                    // 那个开关管的是「对话中主动记 + 定期治理」，压缩抽取属于上下文管理的一环。
                     onBeforeFold = { folded ->
-                        val autoDistill = runCatching { memorySettings.autoDistillEnabled() }.getOrDefault(false)
-                        if (autoDistill) {
-                            val written = memoryExtractor.extract(
-                                projectRoot = ctx.projectRoot,
-                                history = folded,
-                                source = MemoryExtractor.SOURCE_PRE_FOLD,
-                                complete = { userPrompt ->
-                                    summaryProvider.complete(
-                                        systemPrompt = systemPromptProvider.get().resolvePrompt(MemoryExtractor.PROMPT_FILE),
-                                        messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
-                                        tools = emptyList()
-                                    ).content
-                                }
-                            )
-                            if (written > 0) {
-                                FileLogger.i(TAG, "折叠前从被压缩历史里捞出 $written 条长期记忆")
+                        val written = memoryExtractor.extract(
+                            projectRoot = ctx.projectRoot,
+                            history = folded,
+                            source = MemoryExtractor.SOURCE_PRE_FOLD,
+                            complete = { userPrompt ->
+                                summaryProvider.complete(
+                                    systemPrompt = systemPromptProvider.get().resolvePrompt(MemoryExtractor.PROMPT_FILE),
+                                    messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
+                                    tools = emptyList()
+                                ).content
                             }
+                        )
+                        if (written > 0) {
+                            FileLogger.i(TAG, "折叠前从被压缩历史里捞出 $written 条长期记忆")
                         }
                     },
                     onEvent = call.onEvent
