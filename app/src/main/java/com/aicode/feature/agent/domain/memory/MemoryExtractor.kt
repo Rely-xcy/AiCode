@@ -95,6 +95,10 @@ class MemoryExtractor @Inject constructor(
         var name = ""
         var description = ""
         val content = StringBuilder()
+        // 块起点判定：正文里出现 "name: xxx" 不能当成新条目的开头
+        var previousWasBlank = true
+        // 标签写了但值在下一行（提示词允许 name:/description:/content: 单独占一行）
+        var pendingLabel: String? = null
 
         fun flush() {
             if (name.isNotBlank() && content.isNotBlank()) {
@@ -103,27 +107,60 @@ class MemoryExtractor @Inject constructor(
             name = ""
             description = ""
             content.clear()
+            pendingLabel = null
         }
 
         raw.lines().forEach { line ->
             val cleaned = line.trim().removePrefix("-").removePrefix("*").trim().trim('`').trim()
-            when {
-                cleaned.isEmpty() || cleaned == "---" -> Unit
 
-                NAME_LABEL.matches(cleaned) -> {
-                    flush()
-                    name = NAME_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+            // 「值写到下一行」：上一行是裸标签，这一行就是它的值
+            val pending = pendingLabel
+            if (pending != null && cleaned.isNotEmpty() && cleaned != "---") {
+                when (pending) {
+                    "name" -> name = cleaned
+                    "description" -> description = cleaned
+                    else -> content.appendLine(cleaned)
+                }
+                pendingLabel = null
+                previousWasBlank = false
+                return@forEach
+            }
+
+            when {
+                cleaned.isEmpty() || cleaned == "---" -> {
+                    previousWasBlank = true
+                    pendingLabel = null
+                    return@forEach
                 }
 
-                DESCRIPTION_LABEL.matches(cleaned) ->
-                    description = DESCRIPTION_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+                NAME_LABEL.matches(cleaned) -> {
+                    val value = NAME_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+                    if (name.isNotBlank() && content.isNotBlank() && !previousWasBlank) {
+                        // 已在一个条目里、上一行又不是空行 → 这是正文里的字面 "name:"，不是新条目
+                        content.appendLine(cleaned)
+                    } else if (value.isBlank()) {
+                        flush()
+                        pendingLabel = "name"
+                    } else {
+                        flush()
+                        name = value
+                    }
+                }
 
-                CONTENT_LABEL.matches(cleaned) ->
-                    content.appendLine(CONTENT_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty())
+                DESCRIPTION_LABEL.matches(cleaned) -> {
+                    val value = DESCRIPTION_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+                    if (value.isBlank()) pendingLabel = "description" else description = value
+                }
+
+                CONTENT_LABEL.matches(cleaned) -> {
+                    val value = CONTENT_LABEL.matchEntire(cleaned)?.groupValues?.get(1).orEmpty()
+                    if (value.isBlank()) pendingLabel = "content" else content.appendLine(value)
+                }
 
                 // 多行 content：从属于上一条 name
                 name.isNotBlank() -> content.appendLine(cleaned)
             }
+            previousWasBlank = false
         }
         flush()
 
@@ -152,9 +189,9 @@ class MemoryExtractor @Inject constructor(
         val content: String = ""
     )
 
-    /** 标签格式的三个字段；中英文冒号都认，大小写不敏感。 */
-    private val NAME_LABEL = Regex("^name\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
-    private val DESCRIPTION_LABEL = Regex("^description\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+    /** 标签格式的三个字段；中英文冒号都认，大小写不敏感。值允许为空（写在下一行）。 */
+    private val NAME_LABEL = Regex("^name\\s*[:：]\\s*(.*)$", RegexOption.IGNORE_CASE)
+    private val DESCRIPTION_LABEL = Regex("^description\\s*[:：]\\s*(.*)$", RegexOption.IGNORE_CASE)
     private val CONTENT_LABEL = Regex("^content\\s*[:：]\\s*(.*)$", RegexOption.IGNORE_CASE)
 
     companion object {

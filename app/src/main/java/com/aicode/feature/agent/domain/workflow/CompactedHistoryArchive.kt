@@ -89,8 +89,11 @@ class CompactedHistoryArchive @Inject constructor(
             }
         }
 
-        is AgentMessage.ToolResultMessage -> "[${message.toolName}]\n${message.modelResult ?: message.result}"
+        is AgentMessage.ToolResultMessage -> "[${message.toolName}]\n${message.result}"
     }
+
+    // 归档存的是「原文」：modelResult 是软精简后的喂模型投影（中间会被挖掉），
+    // 拿它存档等于把「需要时能读回原文」这个唯一退路也一起压掉了。
 
     private fun clip(text: String): String {
         if (text.length <= MAX_FIELD_CHARS) return text

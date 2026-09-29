@@ -136,8 +136,16 @@ interface MemorySource {
             if (!file.isFile) return null
             return try {
                 val dir = File(root, SUPERSEDED_DIR).apply { mkdirs() }
-                val target = File(dir, "${file.nameWithoutExtension}-${System.currentTimeMillis() / 1000}.md")
-                file.copyTo(target, overwrite = true)
+                // 秒级时间戳会在同一秒内碰撞（同一轮里模型写两条同名记忆就会发生），
+                // 配合 overwrite = true 会把先归档的那份直接顶掉。改毫秒 + 避让序号。
+                val base = "${file.nameWithoutExtension}-${System.currentTimeMillis()}"
+                var target = File(dir, "$base.md")
+                var seq = 1
+                while (target.exists()) {
+                    target = File(dir, "$base-$seq.md")
+                    seq++
+                }
+                file.copyTo(target, overwrite = false)
                 pruneSuperseded(dir)
                 target
             } catch (e: Exception) {

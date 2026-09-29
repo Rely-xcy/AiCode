@@ -190,6 +190,44 @@ class MemoryModuleTest {
     }
 
     @Test
+    fun parseEntries_readsValueWrittenOnNextLine() {
+        // 提示词允许标签占一行、值写到下一行
+        val raw = """
+            name:
+            prefers-brief
+            description:
+            偏好简短回答
+            content:
+            不要铺垫，直接给结论。
+        """.trimIndent()
+
+        val entries = MemoryExtractor.parseEntries(raw)
+
+        assertEquals(1, entries.size)
+        assertEquals("prefers-brief", entries[0].name)
+        assertEquals("偏好简短回答", entries[0].description)
+        assertTrue(entries[0].content.contains("不要铺垫"))
+    }
+
+    @Test
+    fun parseEntries_keepsLiteralLabelInsideContent() {
+        // 正文里单独一行 "name: xxx" 不是新条目，也不能把上一条正文截断
+        val raw = """
+            name: yaml-scalar
+            content: 第一行
+            name: 这是正文里的一行，不是新条目
+            第三行
+        """.trimIndent()
+
+        val entries = MemoryExtractor.parseEntries(raw)
+
+        assertEquals(1, entries.size)
+        assertEquals("yaml-scalar", entries[0].name)
+        assertTrue(entries[0].content.contains("不是新条目"))
+        assertTrue(entries[0].content.contains("第三行"))
+    }
+
+    @Test
     fun parseEntries_fallsBackToJson() {
         val raw = """[{"name":"a","description":"d","content":"c"}]"""
 

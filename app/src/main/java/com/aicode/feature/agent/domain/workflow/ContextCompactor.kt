@@ -168,7 +168,14 @@ class ContextCompactor @Inject constructor(
         }
 
         // 压缩请求：head 原始消息数组 + 末尾一条压缩指令（Codex 式），tools 不发送。
-        val summaryRequestMessages = headForSummary.trimLeadingForCompaction() + listOf(
+        // 裁掉开头的孤立 tool 结果后可能什么都不剩：这时只剩一条压缩指令，
+        // 调模型也只会得到一段没用的摘要，白花钱
+        val trimmedHead = headForSummary.trimLeadingForCompaction()
+        if (trimmedHead.isEmpty()) {
+            FileLogger.i(TAG, "裁剪孤立 tool 结果后 head 为空，跳过压缩")
+            return null
+        }
+        val summaryRequestMessages = trimmedHead + listOf(
             AgentMessage.UserMessage(content = buildSummaryInstruction(previousSummary))
         )
 
@@ -256,8 +263,9 @@ class ContextCompactor @Inject constructor(
                     onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
                     return null
                 }
-                agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs)
-
+                // 先插 marker + 摘要，最后才标记 head。
+                // 反过来的话（先标记、后插入）插入失败会让 head 已被标成「已压缩」却没有摘要顶上，
+                // 那段历史就永久离开了上下文——这是真丢数据。插入失败直接放弃本次压缩，重复好过丢失。
                 // 摘要放在 tail 之前：回放/UI 顺序 = 摘要 → tail。
                 // 接手摘要作为背景，最后一条仍是用户请求 / tool 结果，模型才会继续干活；
                 // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下。
@@ -284,8 +292,13 @@ class ContextCompactor @Inject constructor(
                     )
                 )
                 FileLogger.i(TAG, "已持久化压缩结果到数据库，会话 $sessionId")
+
+                // 标记放在插入之后：标记失败只是让 head 下一轮再回放一次（重复），不会丢
+                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, anchorTs) }
+                    .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
             } catch (e: Exception) {
-                FileLogger.e(TAG, "持久化压缩结果失败", e)
+                FileLogger.e(TAG, "持久化压缩结果失败，放弃本次压缩（不标记 head）", e)
+                return null
             }
         }
 
