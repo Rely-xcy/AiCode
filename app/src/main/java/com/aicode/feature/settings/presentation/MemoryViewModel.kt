@@ -95,11 +95,11 @@ class MemoryViewModel @Inject constructor(
     /**
      * 保存一条记忆。
      *
-     * [target] 为 null 表示新建：写入全局作用域、类型为手动记录（[MemoryKind.NOTE]）。
+     * [target] 为 null 表示新建：作用域用调用方选的 [scope]（全局或项目），类型为手动记录（[MemoryKind.NOTE]）。
      * 非 null 表示编辑已有条目：沿用它的作用域、类型、来源与创建时间，名称不可改
      * （名称是记忆的唯一标识，换名就是新建另一条）。
      */
-    fun save(target: Memory?, name: String, description: String, content: String) {
+    fun save(target: Memory?, name: String, description: String, content: String, scope: MemoryScope) {
         viewModelScope.launch {
             val projectRoot = workspaceRepository.currentPath()
             withContext(Dispatchers.IO) {
@@ -107,7 +107,7 @@ class MemoryViewModel @Inject constructor(
                     name = target?.name ?: name.trim(),
                     description = description.trim(),
                     content = content,
-                    scope = target?.scope ?: MemoryScope.GLOBAL,
+                    scope = target?.scope ?: scope,
                     projectRoot = projectRoot,
                     kind = target?.kind ?: MemoryKind.NOTE,
                     source = target?.source.orEmpty(),

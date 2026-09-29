@@ -1007,8 +1007,8 @@ fun SettingsScreen(
                     memoryEditorTarget?.let { target ->
                         MemoryEditorSheet(
                             memory = target.memory,
-                            onSave = { name, description, content ->
-                                memoryViewModel.save(target.memory, name, description, content)
+                            onSave = { name, description, content, scope ->
+                                memoryViewModel.save(target.memory, name, description, content, scope)
                                 memoryEditorTarget = null
                             },
                             onDismiss = { memoryEditorTarget = null }

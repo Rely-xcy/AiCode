@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -539,13 +540,15 @@ internal data class MemoryEditorTarget(val memory: Memory? = null)
 @Composable
 internal fun MemoryEditorSheet(
     memory: Memory?,
-    onSave: (name: String, description: String, content: String) -> Unit,
+    onSave: (name: String, description: String, content: String, scope: MemoryScope) -> Unit,
     onDismiss: () -> Unit
 ) {
     val isNew = memory == null
     var name by remember(memory) { mutableStateOf(memory?.name.orEmpty()) }
     var description by remember(memory) { mutableStateOf(memory?.description.orEmpty()) }
     var content by remember(memory) { mutableStateOf(memory?.content.orEmpty()) }
+    // 新建时可选作用域；编辑时沿用原作用域（作用域决定文件落在哪，改了等于搬家，不在编辑里做）
+    var scope by remember(memory) { mutableStateOf(memory?.scope ?: MemoryScope.GLOBAL) }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val flingFix = rememberSheetFlingFix(sheetState)
@@ -596,6 +599,31 @@ internal fun MemoryEditorSheet(
                         )
                     }
                 }
+                if (isNew) {
+                    SettingsDivider()
+                    // 作用域：与「新建子代理/提示词」页同一种胶囊控件，保持全 App 一致
+                    Row(
+                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.memory_field_scope),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FilterChip(
+                            selected = scope == MemoryScope.GLOBAL,
+                            onClick = { scope = MemoryScope.GLOBAL },
+                            label = { Text(stringResource(R.string.memory_scope_global)) }
+                        )
+                        FilterChip(
+                            selected = scope == MemoryScope.PROJECT,
+                            onClick = { scope = MemoryScope.PROJECT },
+                            label = { Text(stringResource(R.string.memory_scope_project)) }
+                        )
+                    }
+                }
                 SettingsDivider()
                 Column(modifier = Modifier.padding(Spacing.lg)) {
                     AppTextField(
@@ -628,7 +656,7 @@ internal fun MemoryEditorSheet(
                     icon = null,
                     title = stringResource(R.string.common_save),
                     enabled = name.isNotBlank(),
-                    onClick = { onSave(name.trim(), description.trim(), content) }
+                    onClick = { onSave(name.trim(), description.trim(), content, scope) }
                 )
             }
         }
