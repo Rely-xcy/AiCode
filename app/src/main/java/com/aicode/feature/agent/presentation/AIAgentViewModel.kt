@@ -1485,8 +1485,10 @@ class AIAgentViewModel @Inject constructor(
             val history = messagePersistenceUseCase.buildHistory(sessionId, SessionUseCase.PENDING_TOOL_MARKER)
             val isFirst = history.isEmpty()
 
-            if (!isAutoTrigger) {
-                val userMsgId = UUID.randomUUID().toString()
+            // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
+            // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
+            val userMsgId = if (isAutoTrigger) null else UUID.randomUUID().toString()
+            if (userMsgId != null) {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
                 if (isFirst && !skipTitleUpdate) {
@@ -1515,6 +1517,7 @@ class AIAgentViewModel @Inject constructor(
                 history = history,
                 inputImages = inputImages,
                 sessionId = sessionId,
+                userMessageId = userMsgId,
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,

@@ -126,6 +126,15 @@ class MessagePersistenceUseCase @Inject constructor(
         agentMessageDao.updateMessageContent(messageId, sanitizeContent(newContent))
     }
 
+    /**
+     * 把本轮的模式提醒写到该用户行上。提醒只在模式变化时注入一次，故一条消息最多写一次；
+     * content 保持用户原话，界面与回放都不认它，只在组装请求时拼回模型侧文本。
+     * 按快照上限截断：提醒文本来自可被用户自定义覆盖的 prompts 文件，不能任由它撑大单行。
+     */
+    suspend fun attachModelReminder(messageId: String, reminder: String) {
+        agentMessageDao.updateModelReminder(messageId, capBytes(reminder, MAX_SNAPSHOT_BYTES))
+    }
+
     companion object {
         /**
          * 单条消息各文本字段的持久化上限（UTF-8 字节数）。远小于 SQLite CursorWindow 单窗口约 2MB
@@ -281,7 +290,8 @@ class MessagePersistenceUseCase @Inject constructor(
                         AgentMessage.UserMessage(
                             id = e.id,
                             content = finalContent,
-                            images = images
+                            images = images,
+                            modelReminder = e.modelReminder
                         )
                     )
                 }

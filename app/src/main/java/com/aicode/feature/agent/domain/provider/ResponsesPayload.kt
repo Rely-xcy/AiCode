@@ -5,6 +5,7 @@ import com.aicode.feature.agent.data.remote.openai.ResponsesPart
 import com.aicode.feature.agent.data.remote.openai.ResponsesToolDefinition
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
@@ -180,10 +181,12 @@ internal fun decodeResponsesEncryptedReasoning(thinkingBlocksJson: String?): Map
 
 /** 用户消息内容：纯文本直接给字符串，带图时拆成 input_text / input_image part 列表。 */
 private fun AgentMessage.UserMessage.toResponsesContent(): Any {
-    if (images.isEmpty()) return content
+    // 正文 + 模式提醒（模型可见的那份）；界面/落库只看 content。
+    val text = modelFacingContent
+    if (images.isEmpty()) return text
     val parts = mutableListOf<Map<String, Any>>()
-    if (content.isNotBlank()) {
-        parts.add(mapOf("type" to ResponsesPart.INPUT_TEXT, "text" to content))
+    if (text.isNotBlank()) {
+        parts.add(mapOf("type" to ResponsesPart.INPUT_TEXT, "text" to text))
     }
     images.forEach { parts.add(it.toResponsesImagePart()) }
     return parts

@@ -10,6 +10,7 @@ import com.aicode.feature.agent.data.remote.anthropic.AnthropicToolDefinition
 import com.aicode.core.util.AILogger
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.tool.effectiveArguments
@@ -628,11 +629,13 @@ class AnthropicAdapter @Inject constructor(
     }
 
     private fun AgentMessage.UserMessage.toAnthropicUserContent(): Any {
-        if (images.isEmpty()) return content
+        // 正文 + 模式提醒（模型可见的那份）；界面/落库只看 content。
+        val text = modelFacingContent
+        if (images.isEmpty()) return text
 
         val blocks = mutableListOf<AnthropicContentBlock>()
-        if (content.isNotBlank()) {
-            blocks.add(AnthropicContentBlock(type = "text", text = content))
+        if (text.isNotBlank()) {
+            blocks.add(AnthropicContentBlock(type = "text", text = text))
         }
         images.forEach { image ->
             blocks.add(image.toAnthropicImageBlock())

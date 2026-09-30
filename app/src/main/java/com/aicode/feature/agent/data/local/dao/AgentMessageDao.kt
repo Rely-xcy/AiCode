@@ -48,6 +48,10 @@ interface AgentMessageDao {
     @Query("UPDATE agent_messages SET content = :content WHERE id = :id")
     suspend fun updateMessageContent(id: String, content: String)
 
+    /** 写入模型侧模式提醒（仅用户行）：content 保持用户原话，提醒不进正文。 */
+    @Query("UPDATE agent_messages SET modelReminder = :reminder WHERE id = :id")
+    suspend fun updateModelReminder(id: String, reminder: String)
+
     @Query("DELETE FROM agent_messages WHERE id = :id")
     suspend fun deleteMessageById(id: String)
 

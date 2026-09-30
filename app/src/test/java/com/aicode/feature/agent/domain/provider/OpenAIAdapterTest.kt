@@ -344,6 +344,24 @@ class OpenAIAdapterTest {
         assertEquals("c1", msgs[assistantIdx + 1].tool_call_id)
     }
 
+    @Test
+    fun complete_modeReminder_goesIntoRequestBodyOnly() = runTest {
+        val api = api()
+        val reqSlot = slot<ChatCompletionRequest>()
+        coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
+
+        val message = AgentMessage.UserMessage(content = "把提醒挪走", modelReminder = "【模式提醒】AUTO 模式正文")
+        adapter(api).complete("", listOf(message))
+
+        // 模型侧文本 = 正文 + 提醒
+        assertEquals(
+            "把提醒挪走\n\n【模式提醒】AUTO 模式正文",
+            reqSlot.captured.messages.first { it.role == "user" }.content
+        )
+        // 落库/界面那份不动
+        assertEquals("把提醒挪走", message.content)
+    }
+
     // ── Responses API ─────────────────────────────────────────────────
 
     @Test

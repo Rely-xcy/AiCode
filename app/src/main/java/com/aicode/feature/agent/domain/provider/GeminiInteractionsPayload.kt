@@ -4,6 +4,7 @@ import com.aicode.feature.agent.data.remote.gemini.InteractionContent
 import com.aicode.feature.agent.data.remote.gemini.InteractionStep
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.tool.effectiveArguments
@@ -129,10 +130,12 @@ private fun AgentMessage.AssistantMessage.toModelSteps(keptCalls: List<ToolCall>
 /** 用户消息内容：正文 + 图片各成一个 content block。 */
 private fun AgentMessage.UserMessage.toInteractionContent(): List<Map<String, Any>> {
     val blocks = mutableListOf<Map<String, Any>>()
-    if (content.isNotBlank()) blocks.add(textContent(content))
+    // 正文 + 模式提醒（模型可见的那份）；界面/落库只看 content。
+    val text = modelFacingContent
+    if (text.isNotBlank()) blocks.add(textContent(text))
     images.forEach { blocks.add(it.toImageContent()) }
     // 空数组会被服务端拒，退化成一个（可能为空的）文本块。
-    return blocks.ifEmpty { listOf(textContent(content)) }
+    return blocks.ifEmpty { listOf(textContent(text)) }
 }
 
 /**

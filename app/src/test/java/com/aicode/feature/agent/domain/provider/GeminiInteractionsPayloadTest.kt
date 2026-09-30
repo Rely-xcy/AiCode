@@ -76,6 +76,16 @@ class GeminiInteractionsPayloadTest {
     }
 
     @Test
+    fun user_message_text_carries_mode_reminder() {
+        val message = AgentMessage.UserMessage(content = "把提醒挪走", modelReminder = "【模式提醒】AUTO 模式正文")
+        val content = steps(listOf(message))[0].getAsJsonArray("content")
+
+        assertEquals("把提醒挪走\n\n【模式提醒】AUTO 模式正文", content[0].asJsonObject.get("text").asString)
+        // 落库/界面那份不动
+        assertEquals("把提醒挪走", message.content)
+    }
+
+    @Test
     fun user_images_become_image_content_blocks() {
         val message = AgentMessage.UserMessage(
             content = "看图",

@@ -10,7 +10,13 @@ sealed class AgentMessage {
     data class UserMessage(
         val id: String = "",
         val content: String,
-        val images: List<AgentImage> = emptyList()
+        val images: List<AgentImage> = emptyList(),
+        /**
+         * 模式变化时注入的模式提醒。**不拼进 [content]**：界面渲染、落库、编辑都只认 content（用户原话），
+         * 提醒只在组装请求时由 [modelFacingContent] 拼回模型侧文本。与 [ToolCall.modelArguments] 同一套对称。
+         * null 表示这条消息没有提醒（绝大多数消息如此）。
+         */
+        val modelReminder: String? = null
     ) : AgentMessage()
 
     @Serializable
@@ -59,6 +65,19 @@ val AgentMessage.id: String
         is AgentMessage.ToolResultMessage -> id
     }
 
+/**
+ * 喂模型的用户消息文本：提醒（[AgentMessage.UserMessage.modelReminder]）在末尾拼回。
+ * 所有 provider 的请求组装与 [com.aicode.feature.agent.domain.workflow.TokenEstimator] 都必须走本入口，
+ * 否则界面干净了、模型却收不到提醒（估算也会与实际请求不一致）。
+ * 与工具参数的 `effectiveArguments`（见 `domain/tool/AgentTool.kt`）对称：取「模型可见的那份」只此一处。
+ */
+val AgentMessage.UserMessage.modelFacingContent: String
+    get() {
+        val reminder = modelReminder
+        if (reminder.isNullOrBlank()) return content
+        return if (content.isBlank()) reminder else "$content\n\n$reminder"
+    }
+
 data class AgentContext(
     val currentFile: String?,
     val selectedCode: String?,
@@ -68,6 +87,12 @@ data class AgentContext(
     val inputImages: List<AgentImage> = emptyList(),
     /** 当前会话 id：用于把本轮所有 AI 请求/响应落到该会话的日志文件（[com.aicode.core.util.AILogger]）。 */
     val sessionId: String? = null,
+    /**
+     * 本轮用户消息在库里的行 id。workflow 把模式提醒写回这一行的 modelReminder 列，
+     * content 仍只存用户原话。null 表示本轮没有对应的用户行（自动触发的 /init、/skill 轮次），
+     * 此时提醒只在本轮请求里生效。
+     */
+    val userMessageId: String? = null,
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）：退出 PLAN 时恢复到它，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,

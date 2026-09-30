@@ -250,4 +250,19 @@ class AnthropicAdapterTest {
         val blocks = user.content as List<AnthropicContentBlock>
         assertEquals("ephemeral", blocks.last().cache_control?.get("type"))
     }
+
+    @Test
+    fun user_message_text_carries_mode_reminder() = runTest {
+        val api = FakeApi(response())
+        val message = AgentMessage.UserMessage(content = "把提醒挪走", modelReminder = "【模式提醒】AUTO 模式正文")
+        adapter(api).complete("sys", listOf(message))
+
+        val user: AnthropicMessage = api.lastRequest!!.messages.last { it.role == "user" }
+        @Suppress("UNCHECKED_CAST")
+        val blocks = user.content as List<AnthropicContentBlock>
+        val text = blocks.filter { it.type == "text" }.mapNotNull { it.text }.joinToString("")
+        assertEquals("把提醒挪走\n\n【模式提醒】AUTO 模式正文", text)
+        // 落库/界面那份不动
+        assertEquals("把提醒挪走", message.content)
+    }
 }

@@ -299,6 +299,11 @@ internal fun AgentMessageItem(
             .padding(bottom = if (isChunkFooter) Spacing.sm else 0.dp),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs)
     ) {
+        // 历史数据兼容：早期版本把模式提醒拼进了用户正文，这里折叠成灰色提示条，不混进气泡。
+        val legacyModeReminder = message.legacyModeReminder
+        if (legacyModeReminder != null && isChunkHeader) {
+            LegacyModeReminderBar(legacyModeReminder)
+        }
         if (hasReasoning && isChunkHeader && reasoningVisible) {
             // 思考默认收起：折叠行只占一行（显示思考的第一行），要看全文手动点开
             ReasoningBubble(text = message.reasoning.orEmpty(), cache = markdownCache)
@@ -614,6 +619,41 @@ private fun BackgroundNotificationBar(message: AgentUIMessage) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * 历史数据兼容条：早期版本把模式提醒拼进了用户消息正文，落库后成了正文的一部分。
+ * 这里把它从气泡里折出来，渲染成与系统通知同类的一条灰色提示条（点击展开全文）。
+ * 新数据不再产生这种正文——提醒走用户消息的 modelReminder 字段，界面不显示。
+ */
+@Composable
+private fun LegacyModeReminderBar(text: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)) {
+        ChatHairline()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = ChatStyle.toolRowMinHeight)
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+            )
+            Text(
+                text = text,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
                 overflow = TextOverflow.Ellipsis
             )
         }

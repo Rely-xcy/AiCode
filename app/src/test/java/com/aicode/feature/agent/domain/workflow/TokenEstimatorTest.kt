@@ -41,4 +41,15 @@ class TokenEstimatorTest {
         assertTrue(TokenEstimator.estimateMessage(full) < TokenEstimator.estimateMessage(projected))
         assertTrue(TokenEstimator.estimateMessage(full) < 100)
     }
+
+    @Test
+    fun `用户消息按实际喂模型的文本估算（含模式提醒）`() {
+        val reminder = "【模式提醒】" + "自动模式正文".repeat(40)
+        val bare = AgentMessage.UserMessage(content = "继续")
+        val injected = bare.copy(modelReminder = reminder)
+
+        // 估算走 modelFacingContent；拿 content 估算会漏掉提醒，压缩触发时机随之偏晚
+        assertEquals(TokenEstimator.estimateText("继续\n\n$reminder"), TokenEstimator.estimateMessage(injected))
+        assertTrue(TokenEstimator.estimateMessage(injected) > TokenEstimator.estimateMessage(bare))
+    }
 }

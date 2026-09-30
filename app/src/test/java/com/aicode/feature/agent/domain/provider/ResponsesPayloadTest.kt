@@ -368,4 +368,19 @@ class ResponsesPayloadTest {
         assertEquals(1, items.size)
         assertEquals("assistant", items[0]["role"])
     }
+
+    @Test
+    fun user_message_text_carries_mode_reminder() {
+        val message = AgentMessage.UserMessage(
+            id = "u1",
+            content = "把提醒挪走",
+            modelReminder = "【模式提醒】AUTO 模式正文"
+        )
+        val items = buildResponsesInput(systemPrompt = "", systemRole = "system", messages = listOf(message))
+
+        assertEquals(1, items.size)
+        assertEquals("把提醒挪走\n\n【模式提醒】AUTO 模式正文", items[0]["content"])
+        // 落库/界面那份不动
+        assertEquals("把提醒挪走", message.content)
+    }
 }

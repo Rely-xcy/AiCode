@@ -45,6 +45,7 @@ import com.aicode.feature.agent.domain.tool.ToolStreamEvent
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.aicode.feature.agent.domain.tool.toTransportString
 import com.aicode.feature.agent.presentation.AgentAttachment
+import com.aicode.feature.agent.presentation.MODE_REMINDER_PREFIX
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -540,14 +541,24 @@ class StatefulAgentWorkflow @Inject constructor(
         val actionQueue = ArrayDeque<AgentAction>()
         // 模式提醒仅在模式变化时随最新用户消息注入一次（不进 system，避免切换时 system 前缀变化打断缓存）。
         val modeReminder = takeModeReminderIfChanged(currentContext.sessionId, currentContext.mode)
+        // 提醒是「模型可见的那份」，不拼进正文：content 只留用户原话（界面/落库/回放都只认它），
+        // 提醒落 modelReminder 列，组装请求时再拼回（见 AgentMessage.UserMessage.modelFacingContent）。
+        // 落库后下一轮重建历史时这条的模型侧文本与上一轮一致，不会在该位置打断前缀缓存。
+        // 自动触发轮次（/init、/skill 等）没有对应的用户行，提醒只在本轮请求里生效。
+        val reminderRowId = currentContext.userMessageId
+        if (modeReminder != null && reminderRowId != null) {
+            runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, modeReminder) }
+                .onFailure { FileLogger.w(TAG, "写入模式提醒失败，本轮提醒只在内存态生效", it) }
+        }
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，开关关着时规则都没注入，不必兜。
         val memoryGuardEnabled = currentContext.agentDefinition == null &&
             runCatching { memorySettingsRepository.activeMemoryEnabled() }.getOrDefault(false)
         actionQueue.addLast(
             AgentAction.InitRequest(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(
-                    content = if (modeReminder == null) userRequest else "$userRequest\n\n$modeReminder",
-                    images = currentContext.inputImages
+                    content = userRequest,
+                    images = currentContext.inputImages,
+                    modelReminder = modeReminder
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
             )
@@ -1294,17 +1305,18 @@ class StatefulAgentWorkflow @Inject constructor(
     /**
      * 当前模式提醒：随最新用户消息注入（借鉴 opencode SessionReminders 的思路）。
      * 模式提示词不进 system——一旦切换就要重建 system、打断前缀缓存；
-     * 改为消息级提醒：每次用户请求拼在最新用户消息末尾，位置在消息流尾部，前缀保持稳定。
+     * 改为消息级提醒：只写进该条用户消息的 modelReminder 字段（不碰 content），
+     * 组装请求时拼回文本，位置在消息流尾部，前缀保持稳定。
      */
     private fun buildModeReminder(mode: AgentMode): String? = when (mode) {
         AgentMode.PLAN -> promptProvider.resolvePrompt(MODE_REMINDER_PLAN_FILE)
             .replace(LEADING_COMMENT, "")
             .trim()
-            .let { "【模式提醒】$it" }
+            .let { "$MODE_REMINDER_PREFIX$it" }
         AgentMode.AUTO -> promptProvider.resolvePrompt(MODE_REMINDER_AUTO_FILE)
             .replace(LEADING_COMMENT, "")
             .trim()
-            .let { "【模式提醒】$it" }
+            .let { "$MODE_REMINDER_PREFIX$it" }
         AgentMode.BUILD -> null
     }
 

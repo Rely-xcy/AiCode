@@ -129,7 +129,10 @@ data class AgentUIMessage(
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,
     // 仅 ASSISTANT 消息：本次调用输入中命中服务端缓存的 token 数，气泡下方据此算缓存命中率。
-    val cachedInputTokens: Int = 0
+    val cachedInputTokens: Int = 0,
+    // 历史数据：早期版本把模式提醒拼进了用户消息正文，这里承载按前缀折出来的提醒文本，
+    // 由 UI 渲染为灰色提示条（气泡只显示剩余的用户原话）。新数据不再产生，见 [MODE_REMINDER_PREFIX]。
+    val legacyModeReminder: String? = null
 )
 
 @Immutable
@@ -153,6 +156,25 @@ enum class MessageRole {
  * 也是 UI 层识别此类消息（不渲染为普通用户气泡）的依据。改这里需同步两边。
  */
 const val BACKGROUND_NOTIFICATION_PREFIX = "[系统通知 - 非用户输入]"
+
+/**
+ * 模式提醒的固定前缀。一边是 [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow] 生成提醒时的
+ * 起首文本（提醒存进用户消息的 `modelReminder` 字段，不进 content），一边是 UI 识别
+ * 「历史数据里被拼进正文的提醒」并折成提示条的依据（[splitLegacyModeReminder]）。改这里需同步两边。
+ */
+const val MODE_REMINDER_PREFIX = "【模式提醒】"
+
+/**
+ * 历史数据兼容：早期版本把模式提醒拼在用户消息正文末尾落库，正文里因此多出一整段提醒。
+ * 按固定前缀切成「用户原话 → 提醒」；正文里没有该前缀时返回 null（绝大多数消息走这里）。
+ * 只服务于界面渲染，不动库、不改写 content；新数据不再产生这种正文。
+ */
+fun splitLegacyModeReminder(content: String): Pair<String, String>? {
+    // 取最后一次出现：提醒只会被拼在末尾，用户自己写出同样字样时不至于把中段当成分界点。
+    val start = content.lastIndexOf(MODE_REMINDER_PREFIX)
+    if (start < 0) return null
+    return content.substring(0, start).trimEnd() to content.substring(start)
+}
 
 /**
  * 上下文压缩失败记录的 TOOL 消息 toolName。既是落库时的标记，也是 UI 识别失败卡片的依据；

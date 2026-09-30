@@ -4,6 +4,7 @@ import com.aicode.core.util.AILogger
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.tool.effectiveArguments
@@ -690,8 +691,10 @@ class GeminiAdapter @Inject constructor(
             when (message) {
                 is AgentMessage.UserMessage -> {
                     val parts = mutableListOf<Map<String, Any>>()
-                    if (message.content.isNotBlank()) {
-                        parts.add(mapOf("text" to message.content))
+                    // 正文 + 模式提醒（模型可见的那份）；界面/落库只看 content。
+                    val text = message.modelFacingContent
+                    if (text.isNotBlank()) {
+                        parts.add(mapOf("text" to text))
                     }
                     message.images.forEach { image ->
                         parts.add(image.toGeminiInlineDataPart())

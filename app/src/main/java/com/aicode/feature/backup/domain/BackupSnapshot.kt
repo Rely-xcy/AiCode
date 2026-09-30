@@ -224,7 +224,9 @@ data class AgentMessageDto(
     val isContextSummary: Boolean = false,
     val isCompactionMarker: Boolean = false,
     /** Anthropic thinking / redacted_thinking 内容块的原样快照（JSON 数组文本）。 */
-    val thinkingBlocksJson: String? = null
+    val thinkingBlocksJson: String? = null,
+    /** 仅 USER 行：模式变化时注入的模式提醒（模型可见的那份），content 只存用户原话。 */
+    val modelReminder: String? = null
 )
 
 @Serializable

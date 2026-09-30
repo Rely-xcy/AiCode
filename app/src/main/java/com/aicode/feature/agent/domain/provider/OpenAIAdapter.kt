@@ -9,6 +9,7 @@ import com.aicode.feature.agent.data.remote.openai.ChatCompletionRequest
 import com.aicode.feature.agent.data.remote.openai.OpenAIChatMessage
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.tool.effectiveArguments
@@ -684,11 +685,13 @@ class OpenAIAdapter @Inject constructor(
     }
 
     private fun AgentMessage.UserMessage.toOpenAIUserContent(): Any {
-        if (images.isEmpty()) return content
+        // 正文 + 模式提醒（模型可见的那份）；界面/落库只看 content。
+        val text = modelFacingContent
+        if (images.isEmpty()) return text
 
         val parts = mutableListOf<Map<String, Any>>()
-        if (content.isNotBlank()) {
-            parts.add(mapOf("type" to "text", "text" to content))
+        if (text.isNotBlank()) {
+            parts.add(mapOf("type" to "text", "text" to text))
         }
         images.forEach { image ->
             parts.add(image.toOpenAIImagePart())

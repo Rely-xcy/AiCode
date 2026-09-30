@@ -93,6 +93,20 @@ class GeminiAdapterTest {
         request?.get("generationConfig") as? Map<*, *> ?: emptyMap<Any, Any>()
 
     @Test
+    fun user_message_text_carries_mode_reminder() = runTest {
+        val api = FakeApi(textResponse())
+        val message = AgentMessage.UserMessage(content = "把提醒挪走", modelReminder = "【模式提醒】AUTO 模式正文")
+        adapter(api).complete("sys", listOf(message))
+
+        val userContent = contents(api.lastRequest).first { it["role"] == "user" }
+        @Suppress("UNCHECKED_CAST")
+        val parts = userContent["parts"] as List<Map<*, *>>
+        assertEquals("把提醒挪走\n\n【模式提醒】AUTO 模式正文", parts.first()["text"])
+        // 落库/界面那份不动
+        assertEquals("把提醒挪走", message.content)
+    }
+
+    @Test
     fun max_output_tokens_and_thinking_config_coexist_in_generation_config() = runTest {
         val api = FakeApi(textResponse())
         // 两者曾各自覆盖式写 generationConfig，只会剩下后写的那个。
