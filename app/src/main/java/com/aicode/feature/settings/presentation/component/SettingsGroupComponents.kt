@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
@@ -132,6 +133,8 @@ internal fun SettingsGroup(
  * @param icon 左侧图标，null 则标题与无图标行对齐。
  * @param trailing 右侧尾随内容（如 [com.aicode.core.ui.AppSwitch]、chevron）。
  * @param onClick null 表示无点击行为（如开关行）；非 null 时行尾自动显示右箭头。
+ * @param subtitleMaxLines 副标题行数上限。默认不限（副标题本来该有多长就多长）；
+ *   取值同时很长时传 1，副标题不再换行，否则换行后的第二行会与右侧取值视觉上连成一句。
  */
 @Composable
 internal fun SettingsRow(
@@ -140,6 +143,7 @@ internal fun SettingsRow(
     onClick: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
     subtitle: String? = null,
+    subtitleMaxLines: Int = Int.MAX_VALUE,
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -171,7 +175,9 @@ internal fun SettingsRow(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = subtitleMaxLines,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

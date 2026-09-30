@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -262,6 +263,9 @@ internal fun SubAgentEditorScreen(
                 SettingsRow(
                     title = stringResource(R.string.subagent_editor_tools_allow),
                     subtitle = stringResource(R.string.subagent_editor_tools_allow_hint),
+                    // 副标题与取值都长：副标题只给一行、取值限宽，否则取值会先占满自己的宽度，
+                    // 把副标题挤成两行，第二行（“（不含 task）”）紧贴着取值显示，看着像被挤进去了
+                    subtitleMaxLines = 1,
                     onClick = { showAllowSheet = true },
                     trailing = {
                         ValueText(
@@ -269,7 +273,8 @@ internal fun SubAgentEditorScreen(
                                 stringResource(R.string.subagent_all_tools)
                             } else {
                                 stringResource(R.string.subagent_editor_selected_count, allowTools.size)
-                            }
+                            },
+                            modifier = Modifier.widthIn(max = ToolValueMaxWidth)
                         )
                     }
                 )
@@ -277,6 +282,7 @@ internal fun SubAgentEditorScreen(
                 SettingsRow(
                     title = stringResource(R.string.subagent_editor_tools_deny),
                     subtitle = stringResource(R.string.subagent_editor_tools_deny_hint),
+                    subtitleMaxLines = 1,
                     onClick = { showDenySheet = true },
                     trailing = {
                         ValueText(
@@ -284,7 +290,8 @@ internal fun SubAgentEditorScreen(
                                 stringResource(R.string.subagent_editor_none)
                             } else {
                                 stringResource(R.string.subagent_editor_selected_count, denyTools.size)
-                            }
+                            },
+                            modifier = Modifier.widthIn(max = ToolValueMaxWidth)
                         )
                     }
                 )
@@ -595,8 +602,14 @@ private fun PickerRow(
     }
 }
 
+/**
+ * 右侧取值：右对齐单行。
+ *
+ * [modifier] 用来给取值限宽（见 [ToolValueMaxWidth]）：取值不限宽时会先按自身宽度占满行，
+ * 把左侧标题/副标题压得很窄，副标题换行后与取值在视觉上连成一句。
+ */
 @Composable
-private fun ValueText(text: String) {
+private fun ValueText(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
@@ -604,9 +617,12 @@ private fun ValueText(text: String) {
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.End,
-        modifier = Modifier.padding(start = Spacing.sm)
+        modifier = modifier.padding(start = Spacing.sm)
     )
 }
+
+/** 工具白/黑名单行取值的宽度上限：给左侧标题与副标题留出足够宽度，副标题才能稳定只占一行。 */
+private val ToolValueMaxWidth = 180.dp
 
 private fun AgentSaveError.messageRes(): Int = when (this) {
     AgentSaveError.INVALID_NAME -> R.string.subagent_editor_error_invalid_name

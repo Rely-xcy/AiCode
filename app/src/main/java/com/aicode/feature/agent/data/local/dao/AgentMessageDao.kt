@@ -25,6 +25,22 @@ interface AgentMessageDao {
     @Query("SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessagesBySessionOnce(sessionId: String): List<AgentMessageEntity>
 
+    /**
+     * 指定会话的短期上下文统计：仍在上下文里的消息条数，以及已折叠（接手摘要）的次数。
+     *
+     * 回放上下文时会滤掉 isCompacted 的行，所以「未压缩行数」就是这轮请求实际要带的短期上下文规模；
+     * 每次折叠恰好写入一条 isContextSummary 行，行数即折叠次数。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) AS retainedMessages,
+               IFNULL(SUM(CASE WHEN isContextSummary = 1 THEN 1 ELSE 0 END), 0) AS foldCount
+        FROM agent_messages
+        WHERE sessionId = :sessionId AND isCompacted = 0
+        """
+    )
+    suspend fun sessionContextStats(sessionId: String): SessionContextStats
+
     @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId")
     suspend fun deleteBySession(sessionId: String)
 
@@ -154,6 +170,12 @@ data class ChatSearchMatch(
     val role: String,
     val content: String,
     val timestamp: Long
+)
+
+/** 单个会话的短期上下文统计（[AgentMessageDao.sessionContextStats] 的投影）。 */
+data class SessionContextStats(
+    val retainedMessages: Int,
+    val foldCount: Int
 )
 
 /** 单个会话的消息占用估算（[AgentMessageDao.sessionStorageUsage] 的投影）。 */

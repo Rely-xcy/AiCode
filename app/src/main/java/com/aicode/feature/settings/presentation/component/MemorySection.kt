@@ -1,19 +1,14 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,8 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -52,7 +44,6 @@ import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
-import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
@@ -60,20 +51,26 @@ import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
 
 /**
- * 记忆页：主动记忆开关 + 治理周期（周期归零即关闭）+ 当前生效的记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
+ * 记忆页（长期记忆）：顶部一张只读的「本次会话（短期）」卡片，下面才是主动记忆开关 +
+ * 治理周期（周期归零即关闭）+ 当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
+ *
+ * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
+ * 混成一张清单会让人以为上下文也会被存下来。
  *
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
+ *
+ * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
  */
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
+    shortTerm: SessionShortTermState?,
     activeMemoryEnabled: Boolean,
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
@@ -95,7 +92,66 @@ internal fun MemorySection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
+        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
+        if (shortTerm != null) {
+            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+            SettingsGroup {
+                SettingsRow(
+                    icon = null,
+                    title = shortTerm.title,
+                    subtitle = stringResource(R.string.memory_session_card_desc)
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_session_context_label),
+                    trailing = {
+                        SessionValueText(
+                            stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
+                        )
+                    }
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_session_fold_label),
+                    trailing = {
+                        SessionValueText(
+                            if (shortTerm.foldCount == 0) {
+                                stringResource(R.string.memory_session_no_fold)
+                            } else {
+                                stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
+                            }
+                        )
+                    }
+                )
+                // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
+                if (shortTerm.lastInputTokens > 0) {
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = null,
+                        title = stringResource(R.string.memory_session_input_label),
+                        trailing = {
+                            SessionValueText(
+                                stringResource(R.string.memory_session_input_value, shortTerm.lastInputTokens)
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
         SettingsGroup {
+            // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
+            Text(
+                text = stringResource(R.string.memory_long_term_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.semanticColors.subtleText,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
+            )
+            SettingsDivider()
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.memory_active_memory),
@@ -209,6 +265,20 @@ internal fun MemorySection(
             onDismiss = { showCustomIntervalDialog = false }
         )
     }
+}
+
+/** 短期卡片右侧取值：右对齐单行，配色与设置页其它取值行一致。 */
+@Composable
+private fun SessionValueText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.semanticColors.subtleText,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.End,
+        modifier = Modifier.padding(start = Spacing.sm)
+    )
 }
 
 /** 一栏记忆（全局或项目）：同一个分组里逐行渲染，行间加分隔线。 */
@@ -535,138 +605,3 @@ private fun CustomCurationIntervalDialog(
     )
 }
 
-/** 记忆编辑器目标：[memory] 为 null 表示新建一条。 */
-internal data class MemoryEditorTarget(val memory: Memory? = null)
-
-/**
- * 记忆编辑器弹层：名称、描述、正文三段。
- *
- * 新建时名称可填；编辑时名称只读——它是记忆的唯一标识（文件名），改了就是另一条记忆。
- * 注入系统提示词的只有名称 + 描述，正文平时不展示，所以正文放在最后一段。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun MemoryEditorSheet(
-    memory: Memory?,
-    onSave: (name: String, description: String, content: String, scope: MemoryScope) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val isNew = memory == null
-    var name by remember(memory) { mutableStateOf(memory?.name.orEmpty()) }
-    var description by remember(memory) { mutableStateOf(memory?.description.orEmpty()) }
-    var content by remember(memory) { mutableStateOf(memory?.content.orEmpty()) }
-    // 新建时可选作用域；编辑时沿用原作用域（作用域决定文件落在哪，改了等于搬家，不在编辑里做）
-    var scope by remember(memory) { mutableStateOf(memory?.scope ?: MemoryScope.GLOBAL) }
-
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val flingFix = rememberSheetFlingFix(sheetState)
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentWindowInsets = { WindowInsets(0.dp) },
-        dialogMaxWidth = 600.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = screenHeight * 0.85f)
-                .imePadding()
-                .navigationBarsPadding()
-                .nestedScroll(flingFix)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            Text(
-                text = stringResource(if (isNew) R.string.memory_add else R.string.common_edit),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = Spacing.xs)
-            )
-
-            SettingsGroup {
-                Column(modifier = Modifier.padding(Spacing.lg)) {
-                    AppTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        readOnly = !isNew,
-                        label = stringResource(R.string.common_name),
-                        placeholder = stringResource(R.string.memory_field_name_placeholder)
-                    )
-                    if (!isNew) {
-                        Text(
-                            text = stringResource(R.string.memory_field_name_locked),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(top = Spacing.xs, start = Spacing.xs)
-                        )
-                    }
-                }
-                if (isNew) {
-                    SettingsDivider()
-                    // 作用域：与「新建子代理/提示词」页同一种胶囊控件，保持全 App 一致
-                    Row(
-                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.memory_field_scope),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        FilterChip(
-                            selected = scope == MemoryScope.GLOBAL,
-                            onClick = { scope = MemoryScope.GLOBAL },
-                            label = { Text(stringResource(R.string.memory_scope_global)) }
-                        )
-                        FilterChip(
-                            selected = scope == MemoryScope.PROJECT,
-                            onClick = { scope = MemoryScope.PROJECT },
-                            label = { Text(stringResource(R.string.memory_scope_project)) }
-                        )
-                    }
-                }
-                SettingsDivider()
-                Column(modifier = Modifier.padding(Spacing.lg)) {
-                    AppTextField(
-                        value = description,
-                        onValueChange = { description = it },
-                        label = stringResource(R.string.memory_field_description),
-                        placeholder = stringResource(R.string.memory_field_description_placeholder)
-                    )
-                }
-            }
-
-            SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
-            SettingsGroup {
-                Column(modifier = Modifier.padding(Spacing.lg)) {
-                    AppTextField(
-                        value = content,
-                        onValueChange = { content = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 160.dp),
-                        singleLine = false,
-                        label = stringResource(R.string.memory_detail_content)
-                    )
-                }
-            }
-
-            // 保存动作放行内按钮，避免和外壳顶栏动作槽抢位置（与提示词/技能编辑页一致的做法）
-            SettingsGroup {
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.common_save),
-                    enabled = name.isNotBlank(),
-                    onClick = { onSave(name.trim(), description.trim(), content, scope) }
-                )
-            }
-        }
-    }
-}
