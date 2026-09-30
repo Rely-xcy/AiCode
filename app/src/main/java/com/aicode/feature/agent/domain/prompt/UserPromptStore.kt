@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.prompt
 
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.YamlScalar
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import org.yaml.snakeyaml.Yaml
@@ -109,7 +110,7 @@ class UserPromptStore @Inject constructor(
     private fun format(prompt: UserPrompt): String {
         // 只在不启用时写 enabled 字段：默认值不落盘，既有文件保持字节不变
         val enabledLine = if (prompt.enabled) "" else "enabled: false\n"
-        return "---\nname: ${yamlScalar(prompt.name)}\nposition: ${prompt.position.toStorage()}\n$enabledLine---\n${prompt.content}"
+        return "---\nname: ${YamlScalar.quote(prompt.name)}\nposition: ${prompt.position.toStorage()}\n$enabledLine---\n${prompt.content}"
     }
 
     private fun splitFrontmatter(text: String): Pair<Map<String, Any>, String> {
@@ -131,18 +132,6 @@ class UserPromptStore @Inject constructor(
     /** 只保留文件名安全字符，防止 id 里出现路径分隔符等。 */
     private fun sanitizeId(id: String): String =
         id.trim().replace(Regex("[^A-Za-z0-9._-]"), "-").take(64).ifBlank { "prompt" }
-
-    private fun yamlScalar(value: String): String {
-        val needsQuote = value.contains(':') || value.contains('#') ||
-            value.contains('"') || value.contains('\'') ||
-            value.startsWith('-') || value.startsWith(' ') || value.endsWith(' ') ||
-            value.contains('\n') || value.isBlank()
-        return if (needsQuote) {
-            "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-        } else {
-            value
-        }
-    }
 
     private companion object {
         const val TAG = "UserPromptStore"

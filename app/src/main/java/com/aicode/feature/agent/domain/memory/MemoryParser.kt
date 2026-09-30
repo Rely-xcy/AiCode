@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.memory
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.YamlScalar
 import org.yaml.snakeyaml.Yaml
 import java.io.File
 
@@ -61,47 +62,15 @@ object MemoryParser {
         hitCount: Int = 0,
         lastHitAt: Long = 0L
     ): String {
-        val safeName = yamlScalar(name)
-        val safeDesc = yamlScalar(description)
+        val safeName = YamlScalar.quote(name)
+        val safeDesc = YamlScalar.quote(description)
         val kindLine = if (kind == MemoryKind.PROFILE) "kind: profile\n" else ""
-        val sourceLine = if (source.isNotBlank()) "source: ${yamlScalar(source)}\n" else ""
+        val sourceLine = if (source.isNotBlank()) "source: ${YamlScalar.quote(source)}\n" else ""
         val createdLine = if (createdAt > 0) "created_at: $createdAt\n" else ""
         val hitCountLine = if (hitCount > 0) "hit_count: $hitCount\n" else ""
         val lastHitLine = if (lastHitAt > 0) "last_hit_at: $lastHitAt\n" else ""
         return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine$sourceLine$createdLine$hitCountLine$lastHitLine---\n$content"
     }
-
-    /**
-     * 把任意字符串转成安全的 YAML 标量。
-     *
-     * **白名单**策略：只有字母数字、空格、`_ - . /` 与非 ASCII（中日韩等）才裸写，
-     * 其余一律双引号并转义。之前是黑名单（只拦 `:` `#` 与引号），漏了 `*` `!` `%` `@`
-     * 反引号 `>` `|` `?` `,` 与真实 TAB——一旦命中 YAML 解析直接抛异常，而异常被吞成
-     * 「frontmatter 全空」，整条记忆的描述/类型/来源/时间会一起消失。
-     */
-    private fun yamlScalar(value: String): String {
-        val bare = value.isNotBlank() &&
-            !value.startsWith(" ") && !value.endsWith(" ") &&
-            BARE_SCALAR.matches(value)
-        if (bare) return value
-
-        val escaped = buildString {
-            value.forEach { c ->
-                when (c) {
-                    '\\' -> append("\\\\")
-                    '"' -> append("\\\"")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    '\t' -> append("\\t")
-                    else -> if (c.code < 0x20) append("\\x%02x".format(c.code)) else append(c)
-                }
-            }
-        }
-        return "\"$escaped\""
-    }
-
-    /** 允许裸写的字符集：ASCII 字母数字 + 常见安全符号 + 非 ASCII（中文等）。 */
-    private val BARE_SCALAR = Regex("^[A-Za-z0-9 _\\-./\\u0080-\\uFFFF]+$")
 
     private fun splitAndParseFrontmatter(text: String): Pair<Map<String, Any>, String> {
         val normalized = text.replace("\r\n", "\n")
