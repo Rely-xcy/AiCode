@@ -364,13 +364,18 @@ private fun memorySourceText(memory: Memory): String = when (memory.source) {
     )
 }
 
-/** 来源徐章：与作用域徐章同款 McpPill，靠文案区分。 */
+/** 来源徐章：配色与作用域徐章同一套规则（主色=自动沉淀、次色=压缩前抽取），靠文案区分。 */
 @Composable
 private fun MemorySourcePill(memory: Memory) {
+    val accent = if (memory.source == MemoryExtractor.SOURCE_PRE_FOLD) {
+        MaterialTheme.colorScheme.tertiary
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
     McpPill(
         text = memorySourceText(memory),
-        textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        textColor = accent,
+        backgroundColor = accent.copy(alpha = 0.12f)
     )
 }
 
