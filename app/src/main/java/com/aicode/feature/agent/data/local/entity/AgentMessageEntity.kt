@@ -8,6 +8,7 @@ import com.aicode.feature.agent.presentation.BACKGROUND_NOTIFICATION_PREFIX
 import com.aicode.feature.agent.presentation.COMPACTION_FAILURE_TOOL_NAME
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.AgentUIMessage
+import com.aicode.feature.agent.presentation.splitLegacyModeReminder
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
@@ -50,14 +51,19 @@ data class AgentMessageEntity(
     // 位置在末尾：备份 DTO 映射按位置参数，插到中间会错位。
     val thinkingBlocksJson: String? = null,
     // 仅 ASSISTANT 行：本轮输入中命中服务端缓存的 token 数，UI 据此显示缓存命中率。同样只能追加在末尾。
-    val cachedInputTokens: Int = 0
+    val cachedInputTokens: Int = 0,
+    // 仅 USER 行：模式变化时注入的模式提醒（模型可见的那份）。content 只存用户原话，
+    // 组装请求时把它拼回该条消息的文本；界面与回放只认 content。无提醒时为 null。同样只能追加在末尾。
+    val modelReminder: String? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)
+        // 历史数据兼容：早期版本把模式提醒拼进了用户正文，这里按前缀折出提示条，气泡只留用户原话。
+        val legacyReminder = if (roleEnum == MessageRole.USER) splitLegacyModeReminder(content) else null
         return AgentUIMessage(
             id = id,
             role = roleEnum,
-            content = content,
+            content = legacyReminder?.first ?: content,
             timestamp = timestamp,
             toolName = toolName,
             toolArgs = toolArgs,
@@ -71,7 +77,8 @@ data class AgentMessageEntity(
                 content.startsWith(BACKGROUND_NOTIFICATION_PREFIX),
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            cachedInputTokens = cachedInputTokens
+            cachedInputTokens = cachedInputTokens,
+            legacyModeReminder = legacyReminder?.second
         )
     }
 
