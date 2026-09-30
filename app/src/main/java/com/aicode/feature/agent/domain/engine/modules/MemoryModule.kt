@@ -123,8 +123,11 @@ class MemoryModule @Inject constructor(
         val projectMemories = listed.filter { it.scope == MemoryScope.PROJECT }
 
         val content = buildString {
-            // 立规矩：没有这句，模型倾向把召回的记忆全部塞进答案
-            append("只使用与当前问题真正相关的记忆；无关的直接忽略，不必为了显得连贯而硬提。\n\n")
+            // 立规矩：没有这句，模型倾向把召回的记忆全部塞进答案。
+            // 第二句管记忆过期：记忆是过去会话的结论，本次会话里用户刚说话可能已经推翻它，
+            // 不写明新旧优先级，模型会照旧结论行事，且不会去更新那条记忆。
+            append("只使用与当前问题真正相关的记忆；无关的直接忽略，不必为了显得连贯而硬提。\n")
+            append("记忆是历史结论、可能已过期：本次会话里用户明确说过的事实与记忆冲突时，以会话内最新的为准，并更新那条记忆（memory(action=edit)）。\n\n")
             if (globalMemories.isNotEmpty()) {
                 append("全局记忆 (跨项目个人偏好，需要详情时用 memory(action=read, name=xxx, scope=global))：\n")
                 globalMemories.forEach { append("- ${it.name}: ${it.description.ifBlank { "无" }}\n") }
