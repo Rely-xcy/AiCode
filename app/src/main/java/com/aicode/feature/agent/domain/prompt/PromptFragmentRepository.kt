@@ -11,8 +11,9 @@ import javax.inject.Singleton
 /**
  * 内置静态片段（`assets/prompts/<NN>-<名称>.md`）的读取与「覆盖」管理。
  *
- * 机制说明：内置编号即身份。用户在 App 里改某个片段，落盘为 `prompts.custom/<NN>-<名称>.md`，
- * 与手工放文件完全等价（见 [PromptFragmentResolver]）——所以 App 里改与直接改文件不会打架。
+ * 机制说明：内置编号即身份。用户在 App 里改某个片段，落盘为 `prompts.custom/` 下的覆盖副本
+ * （文件名沿用内置文件名，如 `00-identity.md`），与手工放文件完全等价（见 [PromptFragmentResolver]）
+ * ——所以 App 里改与直接改文件不会打架。
  *
  * 内置片段清单不硬编码，直接列 `assets/prompts` 顶层带编号的 md，App 升级新增片段自动出现。
  */
@@ -56,9 +57,12 @@ class PromptFragmentRepository @Inject constructor(
             val title = (override?.nameWithoutExtension ?: builtinName?.removeSuffix(".md"))
                 ?.substringAfter('-', missingDelimiterValue = "")
                 ?: return@mapNotNull null
-            val content = override?.let { readText(it) }
-                ?: builtinName?.let { readAsset(it) }
-                ?: return@mapNotNull null
+            val effective = PromptFragmentResolver.effectiveContent(override, builtinName?.let { readAsset(it) })
+            // 副本在却读不出来时已回落内置，但必须留下痕迹：静默回落等于「改了没反应」
+            effective.fallbackCause?.let {
+                FileLogger.w(TAG, "覆盖副本读不出来，已回落内置: ${override?.name}", it)
+            }
+            val content = effective.content ?: return@mapNotNull null
             Fragment(
                 number = number,
                 title = title,
@@ -69,15 +73,28 @@ class PromptFragmentRepository @Inject constructor(
         }
     }
 
-    /** 只读内置片段（用户可改的那个固定项，默认 00）的生效正文；不存在返回 null。 */
-    fun fragment(number: Int): Fragment? = listFragments().firstOrNull { it.number == number }
-
-    /** 写覆盖：同名编号的旧覆盖文件先清掉（编号即身份，同编号只保留一个）。 */
+    /**
+     * 写覆盖副本。
+     *
+     * 文件名由 [overrideFileName] 决定：内置片段沿用内置文件名，自定义新增片段沿用已有的覆盖文件名。
+     *
+     * 顺序是先原子写新文件、再清掉同编号的旧文件：反过来的话，写失败会把用户原有的覆盖一起弄丢。
+     * 内容超过 [PromptFragmentResolver.MAX_FRAGMENT_CHARS] 直接拒绝——静默截断会写出半截提示词，
+     * 比报错难查得多。
+     */
     fun saveOverride(number: Int, title: String, content: String): Boolean {
+        if (content.length > PromptFragmentResolver.MAX_FRAGMENT_CHARS) {
+            FileLogger.e(
+                TAG,
+                "覆盖内容超长已拒绝: $number 共 ${content.length} 字符，上限 ${PromptFragmentResolver.MAX_FRAGMENT_CHARS}"
+            )
+            return false
+        }
         return try {
             if (!customDir.exists()) customDir.mkdirs()
-            deleteOverridesFor(number)
-            File(customDir, "%02d-%s.md".format(number, sanitizeTitle(title))).writeText(content)
+            val target = File(customDir, overrideFileName(number, title))
+            writeAtomically(target, content)
+            deleteOverridesFor(number, except = target)
             true
         } catch (e: Exception) {
             FileLogger.e(TAG, "写提示词覆盖失败: $number", e)
@@ -135,26 +152,65 @@ class PromptFragmentRepository @Inject constructor(
 
     private fun readAsset(name: String): String? = runCatching {
         context.assets.open("$ASSET_DIR/$name").bufferedReader().use { it.readText() }
-    }.getOrNull()
+    }.getOrElse {
+        // 内置文件读不出来时该片段会从清单里消失，不能静默
+        FileLogger.w(TAG, "读内置片段失败: $name", it)
+        null
+    }
 
-    private fun readText(file: File): String? = runCatching { file.readText() }.getOrNull()
-
-    private fun deleteOverridesFor(number: Int): Boolean {
+    /** 删除某编号的覆盖副本，[except] 为本次刚写下的那个文件（不删它）。 */
+    private fun deleteOverridesFor(number: Int, except: File? = null): Boolean {
         val files = customDir.listFiles { file ->
             file.isFile && PromptFragmentResolver.parseNumber(file.name) == number
         } ?: return false
         var deleted = false
-        files.forEach { deleted = it.delete() || deleted }
+        files.forEach { file ->
+            if (file.absolutePath != except?.absolutePath) deleted = file.delete() || deleted
+        }
         return deleted
     }
 
-    private fun sanitizeTitle(title: String): String =
-        title.trim().replace(Regex("[^A-Za-z0-9._\\u4e00-\\u9fa5-]"), "-").take(40).ifBlank { "fragment" }
+    /**
+     * 原子写：先写临时文件再 rename 覆盖。
+     *
+     * 直接 writeText 写到一半被打断（进程被杀、磁盘满）会留下半截片段，而片段会被整段拼进系统提示词，
+     * 半截规则比旧内容更糟。rename 在同一文件系统内是原子的：要么全新、要么全旧。
+     */
+    private fun writeAtomically(file: File, text: String) {
+        val tmp = File(customDir, "${file.name}.${System.nanoTime()}.tmp")
+        try {
+            tmp.writeText(text)
+            // 少数文件系统上 rename 覆盖会失败：退回直接写，至少不把内容丢掉
+            if (!tmp.renameTo(file)) file.writeText(text)
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
+    }
 
-    private companion object {
-        const val TAG = "PromptFragmentRepository"
-        const val ASSET_DIR = "prompts"
-        const val CUSTOM_DIR = "prompts.custom"
-        const val HELP_READ_MARKER = ".help-read"
+    /**
+     * 覆盖副本的文件名，按优先级：
+     * 1. 内置文件名 —— 编号即身份，名字能一眼对上是哪个内置片段；
+     * 2. 该编号已有的覆盖文件名 —— 用户自己起的名字（如 `25-额外要求.md`）不该被改写，
+     *    否则保存会另起一个文件、旧文件还在，两个同编号文件互相盖，看起来就是「改了没生效」；
+     * 3. `<NN>-<标题>.md` —— 兜底。
+     *
+     * 第 2 步取字典序首个，与 [PromptFragmentResolver.numberedFragments] 实际生效的那个保持一致。
+     */
+    private fun overrideFileName(number: Int, title: String): String {
+        builtinFiles()[number]?.let { return it }
+        customDir.listFiles { file ->
+            file.isFile && PromptFragmentResolver.parseNumber(file.name) == number
+        }?.minByOrNull { it.name }?.let { return it.name }
+        return "%02d-%s.md".format(number, sanitizeTitle(title))
+    }
+
+    private fun sanitizeTitle(title: String): String =
+        title.trim().replace(Regex("[^A-Za-z0-9._\u4e00-\u9fa5-]"), "-").take(40).ifBlank { "fragment" }
+
+    companion object {
+        private const val TAG = "PromptFragmentRepository"
+        private const val ASSET_DIR = "prompts"
+        private const val CUSTOM_DIR = "prompts.custom"
+        private const val HELP_READ_MARKER = ".help-read"
     }
 }

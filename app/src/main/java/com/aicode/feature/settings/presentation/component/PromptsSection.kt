@@ -16,10 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
@@ -51,14 +54,14 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 /**
  * 编辑目标：区分三种入口。
  *
- * - [isDefaultFragment] = true：编辑固定的内置片段（00），只有正文可改
+ * - [fragmentNumber] 非 null：编辑内置静态片段（「高级设置」里任意一条，或首页的 00）
  * - [prompt] = null：新建用户提示词
  * - 其余：编辑已有用户提示词
  */
 internal data class PromptEditTarget(
     val prompt: UserPrompt? = null,
     val scope: UserPromptScope = UserPromptScope.GLOBAL,
-    val isDefaultFragment: Boolean = false
+    val fragmentNumber: Int? = null
 )
 
 /**
@@ -86,7 +89,7 @@ private fun promptItemKey(scope: UserPromptScope, id: String): String =
 internal fun PromptsSection(
     state: PromptsUiState,
     onMarkHelpRead: () -> Unit,
-    onOpenDefaultFragment: () -> Unit,
+    onOpenFragment: (PromptFragmentRepository.Fragment) -> Unit,
     onOpenPrompt: (UserPrompt, UserPromptScope) -> Unit,
     onDeletePrompt: (UserPrompt, UserPromptScope) -> Unit
 ) {
@@ -137,16 +140,21 @@ internal fun PromptsSection(
                 SettingsGroupHeader(text = stringResource(R.string.prompts_group_default))
             }
         }
-        item(key = PROMPT_DEFAULT_ROW_KEY) {
-            SettingsGroup(modifier = Modifier.animateItem()) {
-                PromptRow(
-                    title = stringResource(R.string.prompts_default_title),
-                    subtitle = stringResource(
-                        if (state.defaultFragmentOverridden) R.string.prompts_state_overridden
-                        else R.string.prompts_state_builtin
-                    ),
-                    onClick = onOpenDefaultFragment
-                )
+        // 固定行与「高级设置」的清单走同一个入口：都是打开片段编辑页，不再分两套。
+        // 片段读不出来（内置资源缺失）时不展示这行，避免点进去是个空编辑器。
+        state.defaultFragment?.let { fragment ->
+            item(key = PROMPT_DEFAULT_ROW_KEY) {
+                SettingsGroup(modifier = Modifier.animateItem()) {
+                    PromptRow(
+                        title = stringResource(R.string.prompts_default_title),
+                        subtitle = stringResource(
+                            if (fragment.isOverridden) R.string.prompts_state_overridden
+                            else R.string.prompts_state_builtin
+                        ),
+                        onClick = { onOpenFragment(fragment) },
+                        trailing = { PromptStateBadge(overridden = fragment.isOverridden) }
+                    )
+                }
             }
         }
 
@@ -271,15 +279,17 @@ internal fun PromptsAddSheet(
 }
 
 /**
- * 高级设置：官方文档要点摘要 + 「完全禁用内置提示词」开关。
+ * 高级设置：官方文档要点摘要 + 「完全禁用内置提示词」开关 + 内置片段清单。
  *
+ * 清单里每一条都可点开编辑，改动落盘为 `prompts.custom/` 下的覆盖副本，App 自带文件永不被改。
  * 摘要是内置文本（不联网），官方文档更新后需随 App 发版更新。
  */
 @Composable
 internal fun PromptsAdvancedSection(
     builtinDisabled: Boolean,
     fragments: List<PromptFragmentRepository.Fragment>,
-    onToggleBuiltinDisabled: (Boolean) -> Unit
+    onToggleBuiltinDisabled: (Boolean) -> Unit,
+    onOpenFragment: (PromptFragmentRepository.Fragment) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -311,8 +321,14 @@ internal fun PromptsAdvancedSection(
             )
         }
 
-        // 内置片段清单：只读展示。用户可改的只有固定的 00（在上一页），其余放这里供查阅。
+        // 内置片段清单：每一条都可编辑。用户可改的不再只有固定的 00，而是全部片段。
         SettingsGroupHeader(text = stringResource(R.string.prompts_builtin_list_title))
+        Text(
+            text = stringResource(R.string.prompts_builtin_list_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+        )
         SettingsGroup {
             fragments.forEachIndexed { index, fragment ->
                 if (index > 0) SettingsDivider()
@@ -320,12 +336,45 @@ internal fun PromptsAdvancedSection(
                     icon = null,
                     title = "%02d · %s".format(fragment.number, fragment.title),
                     subtitle = stringResource(
-                        if (fragment.isOverridden) R.string.prompts_state_overridden
-                        else R.string.prompts_state_builtin
-                    )
+                        if (fragment.isOverridden) R.string.prompts_fragment_from_override
+                        else R.string.prompts_fragment_from_builtin
+                    ),
+                    onClick = { onOpenFragment(fragment) },
+                    trailing = { PromptStateBadge(overridden = fragment.isOverridden) }
                 )
             }
         }
+    }
+}
+
+/**
+ * 片段状态徽章：一眼看出这段内容是不是 App 自带的。
+ *
+ * 用颜色 + 文字双重区分（不靠颜色单独承载信息），色值取自语义色板，不硬编码。
+ */
+@Composable
+internal fun PromptStateBadge(overridden: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(Radius.pill),
+        color = if (overridden) {
+            MaterialTheme.semanticColors.warningContainer
+        } else {
+            MaterialTheme.semanticColors.mutedSurface
+        }
+    ) {
+        Text(
+            text = stringResource(
+                if (overridden) R.string.prompts_badge_overridden else R.string.prompts_badge_builtin
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (overridden) {
+                MaterialTheme.semanticColors.onWarningContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp)
+        )
     }
 }
 
@@ -382,13 +431,14 @@ private fun PromptsHelpGate(onConfirm: () -> Unit) {
     }
 }
 
-/** 单条用户提示词行：名称 + 注入位置，点击编辑，左滑删除。 */
+/** 单条提示词行：名称 + 注入位置，点击编辑，左滑删除。 */
 @Composable
 private fun PromptRow(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
     onDelete: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
     dragModifier: Modifier = Modifier
 ) {
     val row: @Composable () -> Unit = {
@@ -417,6 +467,7 @@ private fun PromptRow(
                 )
             }
             Spacer(modifier = Modifier.width(Spacing.sm))
+            trailing?.invoke()
             Icon(
                 imageVector = FeatherIcons.ChevronRight,
                 contentDescription = null,

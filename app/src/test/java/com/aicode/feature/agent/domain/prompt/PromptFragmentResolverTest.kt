@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.prompt
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -93,5 +94,56 @@ class PromptFragmentResolverTest {
         assertEquals(custom5, merged[1].second)
         assertEquals(custom50, merged[3].second)
         assertEquals(custom80, merged[4].second)
+    }
+
+    @Test
+    fun effectiveContent_有覆盖_用覆盖正文() {
+        val override = File(dir, "00-identity.md").apply { writeText("我的身份") }
+
+        val result = PromptFragmentResolver.effectiveContent(override, "App 自带身份")
+
+        assertEquals("我的身份", result.content)
+        assertNull("正常读用覆盖不算回落", result.fallbackCause)
+    }
+
+    @Test
+    fun effectiveContent_无覆盖_回落内置且不算异常() {
+        val result = PromptFragmentResolver.effectiveContent(null, "App 自带身份")
+
+        assertEquals("App 自带身份", result.content)
+        assertNull("没放副本是正常情况，不该当异常报", result.fallbackCause)
+        assertEquals(PromptFragmentResolver.OverrideRead.Absent, PromptFragmentResolver.readOverride(null))
+    }
+
+    @Test
+    fun effectiveContent_副本损坏_回落内置并带回落原因() {
+        // 目录占了副本路径：路径存在但不是普通文件，读不出来。
+        // 这是可稳定复现的「损坏」形态（普通文件的读异常走的是同一个 catch 分支）。
+        val override = File(dir, "00-identity.md").apply { mkdirs() }
+
+        val result = PromptFragmentResolver.effectiveContent(override, "App 自带身份")
+
+        assertEquals("受损副本不能让片段变空，必须回落内置", "App 自带身份", result.content)
+        assertNotNull("覆盖读不出来必须带回落原因，调用方据此记日志", result.fallbackCause)
+        assertTrue(PromptFragmentResolver.readOverride(override) is PromptFragmentResolver.OverrideRead.Unreadable)
+    }
+
+    @Test
+    fun effectiveContent_副本与内置都拿不到_返回null() {
+        val result = PromptFragmentResolver.effectiveContent(File(dir, "missing.md"), null)
+
+        assertNull(result.content)
+        assertNull(result.fallbackCause)
+    }
+
+    @Test
+    fun readOverride_空副本_视为有意清空而非损坏() {
+        // 清空是文档写明的「关掉这个片段」方式（如 agent/subagent-rules.md），不能当损坏回落内置
+        val override = File(dir, "50-safety.md").apply { writeText("") }
+
+        val result = PromptFragmentResolver.effectiveContent(override, "App 自带安全规则")
+
+        assertEquals("", result.content)
+        assertNull(result.fallbackCause)
     }
 }

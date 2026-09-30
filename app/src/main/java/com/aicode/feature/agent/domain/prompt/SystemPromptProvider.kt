@@ -53,8 +53,13 @@ class SystemPromptProvider @Inject constructor(
                 val pieces = merged.mapNotNull { (number, override) ->
                     // 内置数字走 resolvePrompt（内部按数字身份查覆盖）；新增片段直接读自定义文件。
                     val raw = BASE_FRAGMENTS[number]?.let { resolvePrompt(it) }
-                        ?: readFileOrNull(override)
+                        ?: override?.let { readOverrideOrNull(it, it.name) }
                     raw?.replace(LEADING_COMMENT, "")?.trim()?.takeIf { it.isNotEmpty() }
+                }
+                // 所有片段都空会让系统提示词整体变空。空片段本身合法（用户有意清空某个片段），
+                // 但「全空」几乎必然是出错了，留一条日志，别让这种失效无声无息。
+                if (pieces.isEmpty() && merged.isNotEmpty()) {
+                    FileLogger.w(TAG, "静态基线片段全部为空，系统提示词将不包含内置基线（共 ${merged.size} 个片段）")
                 }
                 pieces.joinToString("\n\n").also { cached = it }
             }
@@ -328,7 +333,12 @@ class SystemPromptProvider @Inject constructor(
             return ""
         }
         val content = fragments
-            .mapNotNull { readFileOrNull(it.second)?.replace(LEADING_COMMENT, "")?.trim()?.takeIf { it.isNotEmpty() } }
+            .mapNotNull { (_, file) ->
+                readOverrideOrNull(file, file.name)
+                    ?.replace(LEADING_COMMENT, "")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
             .joinToString("\n\n")
         return renderVariables(
             content,
@@ -437,18 +447,37 @@ class SystemPromptProvider @Inject constructor(
     /**
      * 按优先级解析单个提示词片段：
      * - 名字是顶层 `<NN>-*.md`：先按数字身份在 `prompts.custom/` 顶层找覆盖（尾部名称可自由改），
+     *   没按编号命中才看同目录下的精确同名文件（1.12.0 之前的老写法）；
      * - 其余名字（含 `agent/` 子目录）：按精确同名在 `prompts.custom/<name>` 找覆盖；
      * 再落到 `prompts/<name>`（本地默认副本），最后 assets（内置兜底）。
      *
      * 本地副本由 [ContainerInstaller.extractPrompts] 在启动时全量释放，App 升级后随之更新。
      */
     fun resolvePrompt(name: String): String {
-        PromptFragmentResolver.parseNumber(name)
-            ?.let { number -> readFileOrNull(customFragmentsByNumber[number])?.let { return it } }
-        readFileOrNull(File(customDir, name))?.let { return it }
+        val override = PromptFragmentResolver.parseNumber(name)
+            ?.let { customFragmentsByNumber[it] }
+            ?: File(customDir, name)
+        readOverrideOrNull(override, name)?.let { return it }
         readFileOrNull(File(File(containerInstaller.aicodeDir, "prompts"), name))?.let { return it }
         return context.assets.open("prompts/$name").bufferedReader().use { it.readText() }
     }
+
+    /**
+     * 读 `prompts.custom/` 下的覆盖副本，判定规则与设置页共用 [PromptFragmentResolver.readOverride]：
+     * 副本不可用时返回 null，交给调用方继续往下找内置版本，同时在这里留下日志。
+     *
+     * 两处各写一套判定会漂移：设置页拿内置内容给用户看、运行时却用了坏副本，
+     * 用户看到的就不是实际生效的东西。
+     */
+    private fun readOverrideOrNull(file: File?, name: String): String? =
+        when (val read = PromptFragmentResolver.readOverride(file)) {
+            is PromptFragmentResolver.OverrideRead.Present -> read.content
+            PromptFragmentResolver.OverrideRead.Absent -> null
+            is PromptFragmentResolver.OverrideRead.Unreadable -> {
+                FileLogger.w(TAG, "覆盖副本不可用，已回落内置: $name", read.cause)
+                null
+            }
+        }
 
     private fun readFileOrNull(file: File?): String? {
         if (file == null || !file.isFile) return null

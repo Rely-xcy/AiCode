@@ -3,16 +3,19 @@ package com.aicode.feature.settings.presentation.component
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,12 +23,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.feature.agent.domain.prompt.PromptFragmentResolver
 import com.aicode.feature.agent.domain.prompt.UserPromptPosition
 import com.aicode.feature.agent.domain.prompt.UserPromptScope
 
@@ -170,18 +175,31 @@ internal fun PromptEditorSection(
 }
 
 /**
- * 固定内置片段（默认 00 身份/总纲）的编辑页：只能改正文，可恢复内置默认。
+ * 内置片段的编辑页：只能改正文，可恢复 App 自带内容。
  *
- * 修改落盘为 prompts.custom 下的覆盖文件，与手工放文件等价——内置文件本身永不被改。
+ * 修改落盘为 `prompts.custom/` 下的覆盖副本，与手工放文件等价——内置文件本身永不被改。
+ * 超长不静默截断：超限时输入框标错、保存按钮置灰，由用户自己删减。
+ *
+ * @param number 片段编号（展示用，与文件名一致）
+ * @param title 片段名称
+ * @param overridden 当前生效内容是覆盖副本还是 App 自带内容
+ * @param onDirtyChange 未保存状态上报，供外层在返回时拦一下
  */
 @Composable
 internal fun FragmentEditorSection(
+    number: Int,
+    title: String,
     initialContent: String,
     overridden: Boolean,
     onSave: (String) -> Unit,
-    onReset: () -> Unit
+    onRestoreBuiltin: () -> Unit,
+    onDirtyChange: (Boolean) -> Unit
 ) {
     var content by remember { mutableStateOf(initialContent) }
+    val dirty = content != initialContent
+    val tooLong = content.length > PromptFragmentResolver.MAX_FRAGMENT_CHARS
+
+    LaunchedEffect(dirty) { onDirtyChange(dirty) }
 
     Column(
         modifier = Modifier
@@ -191,7 +209,34 @@ internal fun FragmentEditorSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        SettingsGroupHeader(text = stringResource(R.string.prompts_default_title))
+        // 抬头把「这是哪个片段」和「内容是谁的」一次说清：
+        // 覆盖态不能只靠正文判断，用户改完很容易忘了自己动过。
+        SettingsGroup {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "%02d · %s".format(number, title),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(
+                            if (overridden) R.string.prompts_fragment_from_override
+                            else R.string.prompts_fragment_from_builtin
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                PromptStateBadge(overridden = overridden)
+            }
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.prompts_field_content))
         SettingsGroup {
             Column(modifier = Modifier.padding(Spacing.lg)) {
                 AppTextField(
@@ -200,6 +245,20 @@ internal fun FragmentEditorSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 240.dp),
+                    isError = tooLong,
+                    supportingText = if (tooLong) {
+                        {
+                            Text(
+                                stringResource(
+                                    R.string.prompts_fragment_too_long,
+                                    content.length,
+                                    PromptFragmentResolver.MAX_FRAGMENT_CHARS
+                                )
+                            )
+                        }
+                    } else {
+                        null
+                    },
                     singleLine = false,
                     label = stringResource(R.string.prompts_field_content)
                 )
@@ -210,8 +269,11 @@ internal fun FragmentEditorSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.prompts_action_save),
-                enabled = content.isNotBlank(),
-                onClick = { onSave(content) }
+                enabled = content.isNotBlank() && !tooLong,
+                onClick = {
+                    onSave(content)
+                    onDirtyChange(false)
+                }
             )
             if (overridden) {
                 SettingsDivider()
@@ -219,7 +281,10 @@ internal fun FragmentEditorSection(
                     icon = null,
                     title = stringResource(R.string.prompts_action_reset),
                     subtitle = stringResource(R.string.prompts_action_reset_hint),
-                    onClick = onReset
+                    onClick = {
+                        onRestoreBuiltin()
+                        onDirtyChange(false)
+                    }
                 )
             }
         }
