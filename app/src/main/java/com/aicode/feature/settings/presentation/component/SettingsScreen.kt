@@ -150,6 +150,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Mcp(R.string.settings_mcp),
     Skills(R.string.settings_skills),
     Memory(R.string.settings_memory),
+    MemoryEditor(R.string.settings_memory),
     Prompts(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
     PromptsAdvanced(R.string.prompts_advanced),
@@ -192,6 +193,7 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
+    SettingsSection.MemoryEditor,
     SettingsSection.Log -> 2
     else -> 1
 }
@@ -341,12 +343,16 @@ fun SettingsScreen(
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
 
-    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
+    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
+    // 片段编辑页的未保存状态：由编辑页上报，返回时先确认再走，避免改了一半被丢掉
+    var fragmentEditorDirty by remember { mutableStateOf(false) }
+    var showFragmentDiscardDialog by remember { mutableStateOf(false) }
     // 待确认删除的提示词：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
     var promptToDelete by remember { mutableStateOf<PromptDeleteTarget?>(null) }
-    // 记忆编辑器弹层：null 表示关闭；MemoryEditorTarget(memory = null) 表示从右上角「+」新建
+    // 记忆编辑目标：null 表示编辑器未打开；MemoryEditorTarget(memory = null) 表示从右上角「+」新建。
+    // 编辑器是整屏分区（SettingsSection.MemoryEditor），不再是底部弹层。
     var memoryEditorTarget by remember { mutableStateOf<MemoryEditorTarget?>(null) }
     // 待确认删除的记忆：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
     var memoryToDelete by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
@@ -403,13 +409,49 @@ fun SettingsScreen(
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
+        SettingsSection.MemoryEditor -> SettingsSection.Memory
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
     }
 
     // 有上一层时系统返回键先回上一层；没有则交还给上层导航。
+    // 片段编辑页有未保存改动时先拦下来确认：直接走会把刚写的内容丢掉。
+    // 编辑页只从「提示词」页进，所以待确认的返回目标恒为它。
+    val leaveCurrentSection: (SettingsSection) -> Unit = { target ->
+        if (section == SettingsSection.PromptEditor && fragmentEditorDirty) {
+            showFragmentDiscardDialog = true
+        } else {
+            section = target
+        }
+    }
+
+    // 离开片段编辑页后清掉脏标记：脏标记是页面级状态，留着会误拦下一次进入的其它页面
+    LaunchedEffect(section) {
+        if (section != SettingsSection.PromptEditor) fragmentEditorDirty = false
+    }
+
+    if (showFragmentDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showFragmentDiscardDialog = false },
+            title = { Text(stringResource(R.string.editor_unsaved_title)) },
+            text = { Text(stringResource(R.string.prompts_unsaved_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFragmentDiscardDialog = false
+                    fragmentEditorDirty = false
+                    section = SettingsSection.Prompts
+                }) { Text(stringResource(R.string.prompts_discard)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFragmentDiscardDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
     BackHandler(enabled = parentSection != null) {
-        parentSection?.let { section = it }
+        parentSection?.let(leaveCurrentSection)
     }
 
     // settingsViewModel 为 Activity 级共享实例，每次进入设置页重新扫描技能，反映磁盘增删改。
@@ -580,6 +622,26 @@ fun SettingsScreen(
                 }
             )
 
+            // 记忆新建/编辑页：与子代理编辑页一样自带顶栏，占满整屏（大屏占右栏）。
+            // 点右上角「+」或长按列表行会先设好 memoryEditorTarget 再切到本分区。
+            current == SettingsSection.MemoryEditor -> {
+                // 与记忆页共用同一个 VM（同一 ViewModelStoreOwner）：保存与刷新都走它
+                val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                MemoryEditorScreen(
+                    memory = memoryEditorTarget?.memory,
+                    onSave = { name, description, content, scope ->
+                        memoryViewModel.save(memoryEditorTarget?.memory, name, description, content, scope)
+                        memoryEditorTarget = null
+                        section = SettingsSection.Memory
+                    },
+                    onNavigateBack = {
+                        memoryEditorTarget = null
+                        section = SettingsSection.Memory
+                    }
+                )
+            }
+
             current == SettingsSection.RemoteServers ->
                 com.aicode.feature.workspace.presentation.remote.RemoteServerScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
@@ -617,7 +679,7 @@ fun SettingsScreen(
                     if (!expanded || parentSection != null) {
                         IconButton(onClick = {
                             val parent = parentSection
-                            if (parent != null) section = parent else onNavigateBack()
+                            if (parent != null) leaveCurrentSection(parent) else onNavigateBack()
                         }) {
                             Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
                         }
@@ -763,7 +825,10 @@ fun SettingsScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
-                        SettingsSection.Memory -> IconButton(onClick = { memoryEditorTarget = MemoryEditorTarget() }) {
+                        SettingsSection.Memory -> IconButton(onClick = {
+                            memoryEditorTarget = MemoryEditorTarget()
+                            section = SettingsSection.MemoryEditor
+                        }) {
                             Icon(
                                 FeatherIcons.Plus,
                                 contentDescription = stringResource(R.string.memory_add),
@@ -875,11 +940,24 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
                     LaunchedEffect(Unit) { promptsViewModel.refresh() }
+                    // 写覆盖副本失败：提示一次。失败时用户已经退回本页，所以就在这里等这个信号。
+                    val fragmentSaveFailed by promptsViewModel.fragmentSaveFailed.collectAsStateWithLifecycle()
+                    val promptsToastContext = LocalContext.current
+                    LaunchedEffect(fragmentSaveFailed) {
+                        if (fragmentSaveFailed) {
+                            Toast.makeText(
+                                promptsToastContext,
+                                promptsToastContext.getString(R.string.prompts_save_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            promptsViewModel.clearFragmentSaveFailed()
+                        }
+                    }
                     PromptsSection(
                         state = promptsState,
                         onMarkHelpRead = promptsViewModel::markHelpRead,
-                        onOpenDefaultFragment = {
-                            promptEditTarget = PromptEditTarget(isDefaultFragment = true)
+                        onOpenFragment = { fragment ->
+                            promptEditTarget = PromptEditTarget(fragmentNumber = fragment.number)
                             section = SettingsSection.PromptEditor
                         },
                         onOpenPrompt = { prompt, scope ->
@@ -931,18 +1009,24 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
                     val target = promptEditTarget
-                    if (target?.isDefaultFragment == true) {
+                    val fragment = target?.fragmentNumber?.let { number ->
+                        promptsState.fragments.firstOrNull { it.number == number }
+                    }
+                    if (fragment != null) {
                         FragmentEditorSection(
-                            initialContent = promptsState.defaultFragmentContent.orEmpty(),
-                            overridden = promptsState.defaultFragmentOverridden,
-                            onSave = {
-                                promptsViewModel.saveDefaultFragment(it)
+                            number = fragment.number,
+                            title = fragment.title,
+                            initialContent = fragment.content,
+                            overridden = fragment.isOverridden,
+                            onSave = { content ->
+                                promptsViewModel.saveFragment(fragment.number, fragment.title, content)
                                 section = SettingsSection.Prompts
                             },
-                            onReset = {
-                                promptsViewModel.resetDefaultFragment()
+                            onRestoreBuiltin = {
+                                promptsViewModel.restoreBuiltin(fragment.number)
                                 section = SettingsSection.Prompts
-                            }
+                            },
+                            onDirtyChange = { fragmentEditorDirty = it }
                         )
                     } else {
                         PromptEditorSection(
@@ -967,7 +1051,11 @@ fun SettingsScreen(
                     PromptsAdvancedSection(
                         builtinDisabled = promptsState.builtinDisabled,
                         fragments = promptsState.fragments,
-                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled
+                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled,
+                        onOpenFragment = { fragment ->
+                            promptEditTarget = PromptEditTarget(fragmentNumber = fragment.number)
+                            section = SettingsSection.PromptEditor
+                        }
                     )
                 }
                 SettingsSection.PromptsHelp -> PromptsHelpSection()
@@ -976,6 +1064,7 @@ fun SettingsScreen(
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
+                    val shortTerm by memoryViewModel.shortTermSession.collectAsStateWithLifecycle()
                     val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
                     val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
                     val deleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
@@ -993,26 +1082,20 @@ fun SettingsScreen(
                     var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
+                        shortTerm = shortTerm,
                         activeMemoryEnabled = activeMemory,
                         onToggleActiveMemory = memoryViewModel::setActiveMemoryEnabled,
                         curationIntervalHours = curationInterval,
                         onSelectCurationInterval = memoryViewModel::setCurationIntervalHours,
                         onOpenDetail = { detailMemory = it },
-                        onEdit = { memoryEditorTarget = MemoryEditorTarget(it) },
+                        onEdit = {
+                            memoryEditorTarget = MemoryEditorTarget(it)
+                            section = SettingsSection.MemoryEditor
+                        },
                         onDelete = { memoryToDelete = it }
                     )
                     detailMemory?.let { memory ->
                         MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
-                    }
-                    memoryEditorTarget?.let { target ->
-                        MemoryEditorSheet(
-                            memory = target.memory,
-                            onSave = { name, description, content, scope ->
-                                memoryViewModel.save(target.memory, name, description, content, scope)
-                                memoryEditorTarget = null
-                            },
-                            onDismiss = { memoryEditorTarget = null }
-                        )
                     }
                     // 删除记忆二次确认：确认按钮里才真正删；显示名用列表行同一个字段（memory.name）
                     memoryToDelete?.let { memory ->

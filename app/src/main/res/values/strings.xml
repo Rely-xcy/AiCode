@@ -36,9 +36,9 @@
     <string name="settings_enter_to_send">回车键发送消息</string>
     <string name="settings_enter_to_send_desc">关闭后回车换行，需点发送按钮发送</string>
     <string name="settings_compaction_threshold">自动压缩阈值</string>
-    <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，折叠早期对话为接手摘要</string>
+    <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，把早期对话折叠成接手摘要（短期记忆，仅本次会话）</string>
     <string name="settings_soft_compaction_threshold">软精简阈值</string>
-    <string name="settings_soft_compaction_threshold_desc">达到该比例先精简历史里的超长工具输出，不调用模型</string>
+    <string name="settings_soft_compaction_threshold_desc">达到该比例先精简历史里的超长工具输出，不调用模型（短期记忆，仅本次会话）</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">填 1-100 的整数百分比</string>
     <string name="settings_general_tools">工具</string>
@@ -52,7 +52,7 @@
     <string name="settings_image_gen_model">生图模型</string>
     <string name="settings_mcp">MCP 服务器</string>
     <string name="settings_skills">技能</string>
-    <string name="settings_memory">记忆</string>
+    <string name="settings_memory">长期记忆</string>
     <string name="settings_container">容器与镜像</string>
     <string name="settings_log_no_files">还没有日志文件</string>
     <string name="settings_log_read_failed">读取日志失败：%1$s</string>
@@ -969,10 +969,10 @@
     <string name="mcp_details">详情</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">还没有记忆</string>
-    <string name="memory_empty_hint">对话中让 AI 记住的内容会显示在这里</string>
+    <string name="memory_empty">还没有长期记忆</string>
+    <string name="memory_empty_hint">对话中让 AI 记住的长期内容会显示在这里</string>
     <string name="memory_active_memory">主动记忆</string>
-    <string name="memory_active_memory_desc">打开后模型会在对话中主动记录稳定结论；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
+    <string name="memory_active_memory_desc">打开后模型会在对话中主动沉淀长期记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>
     <string name="memory_source_pre_fold">压缩前抽取</string>
     <string name="memory_source_manual">对话中记录</string>
@@ -981,6 +981,22 @@
     <string name="memory_group_global">全局记忆</string>
     <string name="memory_group_project">项目记忆</string>
     <string name="memory_add">新增记忆</string>
+    <string name="memory_long_term_header">长期记忆（跨会话）</string>
+    <string name="memory_long_term_desc">跨会话生效：每条记忆的名称与描述都会注入后续对话的系统提示词。</string>
+    <string name="memory_session_card_title">本次会话（短期）</string>
+    <string name="memory_session_card_desc">只读。短期上下文随会话结束消失，不写盘、不跨会话；此处按最近更新的会话展示。</string>
+    <string name="memory_session_context_label">短期上下文</string>
+    <string name="memory_session_context_value">%1$d 条消息</string>
+    <string name="memory_session_fold_label">摘要折叠</string>
+    <string name="memory_session_fold_value">%1$d 次</string>
+    <string name="memory_session_no_fold">尚未折叠</string>
+    <string name="memory_session_input_label">上次请求输入</string>
+    <string name="memory_session_input_value">%1$d tokens</string>
+    <string name="memory_editor_basic">基本信息</string>
+    <string name="memory_editor_scope_locked">作用域决定记忆文件落在哪，创建后不可修改</string>
+    <string name="memory_editor_discard_title">有未保存的修改</string>
+    <string name="memory_editor_discard_message">返回将丢失当前编辑内容。</string>
+    <string name="memory_editor_discard_confirm">放弃修改</string>
     <string name="memory_field_description">描述</string>
     <string name="memory_field_description_placeholder">一句话摘要，会注入系统提示词</string>
     <string name="memory_field_name_placeholder">例如：写作偏好</string>
@@ -988,7 +1004,7 @@
     <string name="memory_scope_global">全局</string>
     <string name="memory_scope_project">项目</string>
     <string name="memory_field_name_locked">名称是记忆的唯一标识，创建后不可修改</string>
-    <string name="memory_delete_confirm_title">删除记忆</string>
+    <string name="memory_delete_confirm_title">删除长期记忆</string>
     <string name="memory_delete_confirm_message">将删除「%1$s」，此操作不可恢复。确定删除？</string>
     <string name="memory_delete_failed">删除失败，该条目可能已不存在</string>
     <string name="memory_curation_interval">治理周期</string>
@@ -1044,21 +1060,30 @@
     <string name="prompts_action_save">保存</string>
     <string name="prompts_action_reset">恢复内置默认</string>
     <string name="prompts_action_reset_hint">删掉你的修改，回到 App 自带内容</string>
-    <string name="prompts_fragment_hint">你的修改会存为覆盖文件，App 自带文件永不被改；升级 App 后新内置内容仍可整体对比。</string>
+    <string name="prompts_fragment_hint">你的修改会存为覆盖副本，App 自带文件永不被改，随时可恢复内置；重启 App 后生效。升级 App 后新内置内容仍可整体对比。</string>
+    <string name="prompts_badge_overridden">已覆盖</string>
+    <string name="prompts_badge_builtin">内置</string>
+    <string name="prompts_fragment_from_override">内容来自你的覆盖副本（prompts.custom/）</string>
+    <string name="prompts_fragment_from_builtin">App 自带内容，未修改</string>
+    <string name="prompts_builtin_list_hint">点任意片段即可编辑；改动存为覆盖副本，App 自带文件不动，随时可恢复内置。</string>
+    <string name="prompts_fragment_too_long">内容过长：当前 %1$d 字符，上限 %2$d 字符，请删减后再保存</string>
+    <string name="prompts_unsaved_message">片段内容已修改但未保存，返回将丢弃这些改动。确定放弃？</string>
+    <string name="prompts_discard">放弃修改</string>
+    <string name="prompts_save_failed">保存失败：覆盖副本未写入，请检查磁盘空间或查看日志</string>
     <string name="prompts_add_sheet_title">提示词</string>
     <string name="prompts_add_prompt">添加提示词</string>
     <string name="prompts_add_prompt_hint">新建一条你自己的提示词</string>
     <string name="prompts_advanced">高级设置</string>
-    <string name="prompts_advanced_hint">内置片段说明与开关</string>
+    <string name="prompts_advanced_hint">内置片段清单与开关</string>
     <string name="prompts_help">帮助</string>
     <string name="prompts_help_hint">怎么用、什么时候生效</string>
     <string name="prompts_advanced_doc_title">说明（官方文档要点）</string>
-    <string name="prompts_advanced_doc_body">提示词分两段：静态基线（内置片段，按编号 00/10/15/20/30/40/50/60/70 顺序拼接）与动态段（技能、子代理、记忆、项目规则、工作区、时间）。\n\n覆盖：prompts.custom/ 下放同编号文件即覆盖对应内置片段，App 里的改动与手工放文件等价。\n\n新增：同目录下用没被占用的编号即可插入自己的片段，按编号排序。\n\n禁用：放 .no-builtin 标记可完全禁用内置提示词，此时系统提示词只由你的片段组成，动态内容需用 {{AICODE_*}} 变量按需取回。\n\n用户提示词：在「提示词」页添加，可选插在所有提示词之前或系统提示词之后，不参与编号排序。</string>
+    <string name="prompts_advanced_doc_body">提示词分两段：静态基线（内置片段，按编号 00/10/15/20/30/40/50/60/70 顺序拼接）与动态段（技能、子代理、记忆、项目规则、工作区、时间）。\n\n覆盖：在下方清单里点任意片段即可编辑，改动存为 prompts.custom/ 下的同编号文件；手工放同编号文件完全等价，改完重启 App 生效。\n\n新增：同目录下用没被占用的编号即可插入自己的片段，按编号排序。\n\n禁用：放 .no-builtin 标记可完全禁用内置提示词，此时系统提示词只由你的片段组成，动态内容需用 {{AICODE_*}} 变量按需取回。\n\n用户提示词：在「提示词」页添加，可选插在所有提示词之前或系统提示词之后，不参与编号排序。</string>
     <string name="prompts_advanced_switch_title">内置提示词</string>
     <string name="prompts_builtin_list_title">内置片段</string>
     <string name="prompts_disable_builtin">完全禁用内置提示词</string>
     <string name="prompts_disable_builtin_hint">只保留你自己的片段；需要自己补全全部规则，谨慎开启</string>
-    <string name="prompts_help_body">1. 「全局默认提示词（00）」是身份与总纲，可改；改动存为覆盖文件，随时能恢复内置默认。\n\n2. 右上角「+」添加自己的提示词：填名称、选作用域（全局/项目）、选注入位置、写内容。\n\n3. 注入位置：「最前」在所有内置提示词之前（适合总纲）；「最后」在系统提示词末尾，最后被读到；「关闭」只保留不注入。\n\n4. 保存后立即生效：下一轮对话（或新会话）就带上。\n\n5. 提示词越长越占上下文，建议只写真正需要的规则。</string>
+    <string name="prompts_help_body">1. 内置片段（含「全局默认提示词（00）」）都可改：在「高级设置 → 内置片段」里点任意一条即可编辑，改动存为覆盖副本，随时能恢复内置默认。\n\n2. 右上角「+」添加自己的提示词：填名称、选作用域（全局/项目）、选注入位置、写内容。\n\n3. 注入位置：「最前」在所有内置提示词之前（适合总纲）；「最后」在系统提示词末尾，最后被读到；「关闭」只保留不注入。\n\n4. 自己添加的提示词保存后立即生效；内置片段的改动需重启 App（提示词在进程启动时加载并缓存）。\n\n5. 提示词越长越占上下文，建议只写真正需要的规则。</string>
     <string name="prompts_help_gate_title">使用前请先阅读</string>
     <string name="prompts_help_gate_confirm">我已阅读，开始使用</string>
 
@@ -1162,8 +1187,8 @@
     <string name="subagent_inject_main_rules_hint">与「子代理基线」二选一即可；两个都开会重复注入规则、多占上下文</string>
     <string name="subagent_inject_skills">技能清单</string>
     <string name="subagent_inject_skills_hint">允许它加载并执行项目技能</string>
-    <string name="subagent_inject_memory">记忆摘要</string>
-    <string name="subagent_inject_memory_hint">注入全局与项目长期记忆</string>
+    <string name="subagent_inject_memory">长期记忆</string>
+    <string name="subagent_inject_memory_hint">注入全局与项目长期记忆（跨会话）</string>
     <string name="subagent_inject_project_rules">项目规则</string>
     <string name="subagent_inject_project_rules_hint">注入 AGENTS.md 或 CLAUDE.md</string>
 
