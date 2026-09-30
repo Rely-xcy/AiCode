@@ -50,8 +50,12 @@ object MigrationLoader {
             val versionStr = fileName.substringBefore('_')
             val version = versionStr.toIntOrNull() ?: continue
             
+            // 读失败就等于这条迁移不生效，但 Room 照样把版本号升上去（表结构没建）。
+            // 静默 continue 会把根因（assets 里缺文件 / 打包问题）吞掉，至少留一条 error 日志。
             val sqlContent = runCatching {
                 assetManager.open("$migrationsDir/$fileName").bufferedReader().use { it.readText() }
+            }.onFailure {
+                FileLogger.e("MigrationLoader", "读取迁移脚本失败，已跳过: $fileName", it)
             }.getOrNull() ?: continue
             
             val statements = SqlScriptSplitter.split(sqlContent)

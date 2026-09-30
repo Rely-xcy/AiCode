@@ -101,4 +101,15 @@ class MemoryMetadataTest {
         val root = tempRoot()
         assertNull(MemorySource.archiveBeforeOverwrite(root, MemorySource.resolveMemoryFile(root, "missing")))
     }
+
+    @Test
+    fun `记忆名里的点号与分隔符不会越出记忆目录`() {
+        // sanitizeName 是白名单（字母/数字/-/_）：点号与分隔符都被替换掉，`..` 构造不出来，
+        // 拼出的永远是 root 下的单个文件名元素。若将来放宽白名单，这条断言会先红。
+        val root = tempRoot()
+        val file = MemorySource.resolveMemoryFile(root, "../../etc/passwd")
+
+        assertEquals("etc-passwd.md", file.name)
+        assertEquals(root.canonicalPath, file.parentFile?.canonicalPath)
+    }
 }

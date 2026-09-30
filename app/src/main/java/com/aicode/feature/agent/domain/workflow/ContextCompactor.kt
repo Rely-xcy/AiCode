@@ -274,6 +274,8 @@ class ContextCompactor @Inject constructor(
         )
 
         if (sessionId != null) {
+            // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
+            var markerPersisted = false
             try {
                 val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
                 // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
@@ -307,6 +309,7 @@ class ContextCompactor @Inject constructor(
                         isCompactionMarker = true
                     )
                 )
+                markerPersisted = true
                 agentMessageDao.insert(
                     AgentMessageEntity(
                         id = compactedId,
@@ -326,6 +329,13 @@ class ContextCompactor @Inject constructor(
                 runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs) }
                     .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
             } catch (e: Exception) {
+                // 摘要没插进去 = 本次压缩作废（head 也不标记），那先落库的 marker 必须一并删掉：
+                // 回放时它是一条孤立的用户消息「What did we do so far?」——历史没被折叠，
+                // 模型却会以为用户刚问过这句；removeCompactionPairs 只成对清理，认不出这种孤儿。
+                if (markerPersisted) {
+                    runCatching { agentMessageDao.deleteMessageById(markerId) }
+                        .onFailure { FileLogger.w(TAG, "回滚压缩 marker 失败，回放会多出一条孤立 marker", it) }
+                }
                 FileLogger.e(TAG, "持久化压缩结果失败，放弃本次压缩（不标记 head）", e)
                 return null
             }

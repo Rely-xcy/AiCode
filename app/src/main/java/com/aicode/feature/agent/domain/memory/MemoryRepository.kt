@@ -18,7 +18,7 @@ class MemoryRepository @Inject constructor(
     private val projectAicodeRoot: ProjectAicodeRoot
 ) {
     private companion object {
-        /** 命中记账的去重表上限，超了直接清空（统计精度不如内存稳定重要）。 */
+        /** 命中记账的去重表上限；超限时淘汰最旧的一条（表本身保持有界，不整表清空）。 */
         const val HIT_CACHE_LIMIT = 500
         const val TAG = "MemoryRepository"
     }
@@ -60,8 +60,31 @@ class MemoryRepository @Inject constructor(
         return if (kind == null) deduped else deduped.filter { it.kind == kind }
     }
 
-    /** 本会话已记过账的记忆（session:name），避免同一会话反复写盘。 */
-    private val recordedHits = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /**
+     * 本会话已记过账的记忆（session:name），避免同一会话反复写盘。
+     *
+     * 用 LinkedHashSet 保插入序：表满时淘汰**最旧**的一条。原来超限就整表 clear，
+     * 会把刚加进去的当前 key 一起丢掉，同一会话里紧接着再记同一条又算首次命中，
+     * hitCount 虚高——而 hitCount 是 [MemoryRanker] 判降权、[MemoryCurator] 判退场的输入。
+     */
+    private val recordedHits: MutableSet<String> =
+        java.util.Collections.synchronizedSet(java.util.LinkedHashSet<String>())
+
+    /**
+     * 记一次去重命中，true 表示本会话首次。判重、插入、淘汰在同一把锁里完成：
+     * 分成几步的话，并发下刚 add 的 key 可能已被别的线程淘汰，同一条被重复记账。
+     */
+    private fun markRecorded(key: String): Boolean = synchronized(recordedHits) {
+        if (!recordedHits.add(key)) return@synchronized false
+        if (recordedHits.size > HIT_CACHE_LIMIT) {
+            val oldest = recordedHits.iterator()
+            if (oldest.hasNext()) {
+                oldest.next()
+                oldest.remove()
+            }
+        }
+        true
+    }
 
     /**
      * 记录一次「被用上」：注入进上下文，或模型主动读。
@@ -77,8 +100,7 @@ class MemoryRepository @Inject constructor(
         memories.forEach { memory ->
             val file = memory.file ?: return@forEach
             val key = "${sessionId.orEmpty()}:${memory.name}"
-            if (!recordedHits.add(key)) return@forEach
-            if (recordedHits.size > HIT_CACHE_LIMIT) recordedHits.clear()
+            if (!markRecorded(key)) return@forEach
             runCatching {
                 MemorySource.withFileLock(file) {
                     val parsed = MemoryParser.parse(file, memory.scope)

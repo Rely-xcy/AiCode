@@ -344,7 +344,8 @@ class SystemPromptProvider @Inject constructor(
     /**
      * 按子代理定义组装提示词：先注入 [AgentDefinition.inject] 列出的片段，再接固定纪律段，
      * 最后接 agent 自己的提示词（任务相关指令放最后，紧邻对话，位置更有效）。
-     * 不注入可用子代理清单（子代理不能嵌套派发）。定义正文里的 `{{AICODE_*}}` 变量同样会展开。
+     * 不注入可用子代理清单（子代理不能嵌套派发）。定义正文里的 `{{AICODE_*}}` 变量同样会展开，
+     * 且展开过的片段不再按 [AgentDefinition.inject] 追加一次（与主代理 build() 同款守卫）。
      */
     private fun buildForSubAgent(
         definition: AgentDefinition,
@@ -365,9 +366,13 @@ class SystemPromptProvider @Inject constructor(
             append("\n\n")
         }
 
+        // 守卫判据是**展开前**的正文：正文里自己写了哪个占位符，就说明注入点由作者指定，
+        // 下方不再按 inject 追加同一段内容。判据必须取 rawPrompt——展开后的文本里占位符已消失，
+        // 用它判会永远为真。（主代理 build() 用 rawStatic 判的是同一件事。）
+        val rawPrompt = definition.prompt
         append(
             renderVariables(
-                definition.prompt,
+                rawPrompt,
                 activeSkillsSource.build(agentContext),
                 engineFragmentSource.build(agentContext),
                 subAgentListSource.build(agentContext),
@@ -377,27 +382,31 @@ class SystemPromptProvider @Inject constructor(
             )
         )
 
-        if (InjectPart.SKILLS in definition.inject) {
+        if (InjectPart.SKILLS in definition.inject && SKILLS_VAR !in rawPrompt) {
             activeSkillsSource.build(agentContext)?.let {
                 append("\n\n")
                 append(it)
             }
         }
-        if (InjectPart.MEMORY in definition.inject) {
+        if (InjectPart.MEMORY in definition.inject && MEMORY_VAR !in rawPrompt) {
             engineFragmentSource.build(agentContext)?.let {
                 append("\n\n")
                 append(it)
             }
         }
-        if (InjectPart.PROJECT_RULES in definition.inject) {
+        if (InjectPart.PROJECT_RULES in definition.inject && PROJECT_RULES_VAR !in rawPrompt) {
             projectRuleSource.build(agentContext)?.let {
                 append("\n\n")
                 append(it)
             }
         }
 
-        append("\n\n")
-        append(workspaceSource.build(agentContext))
+        // 工作区上下文与主代理同款守卫：正文里写了 {{AICODE_WORKSPACE}} 就已在正文位置展开过，
+        // 这里再无条件追加一遍是逐字重复（WorkspaceSource.build 只依赖 projectRoot，内容完全一致）。
+        if (WORKSPACE_VAR !in rawPrompt) {
+            append("\n\n")
+            append(workspaceSource.build(agentContext))
+        }
         append("\n\n")
         append(currentTimeSource.build(agentContext))
     }

@@ -155,8 +155,11 @@ interface MemorySource {
         }
 
         /**
-         * 解析 memory 名对应的磁盘文件，并校验解析后的 canonical 路径仍落在 [root] 之内，
-         * 杜绝 sanitize 漏网导致的越界写入。
+         * 解析 memory 名对应的磁盘文件。
+         *
+         * 越界防护由 [sanitizeName] 的白名单提供：结果只含 Unicode 字母/数字/`-`/`_`，
+         * 既没有路径分隔符也没有 `.`，所以这里拼出的永远是 [root] 下的单个文件名元素，
+         * `..`、绝对路径、子目录都构造不出来。若将来放宽那个白名单，这里必须补 canonical 路径校验。
          */
         fun resolveMemoryFile(root: File, name: String): File {
             val safe = sanitizeName(name)
