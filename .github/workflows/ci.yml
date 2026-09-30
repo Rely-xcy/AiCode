@@ -83,3 +83,12 @@ jobs:
           path: app/schemas
           if-no-files-found: warn
           retention-days: 14
+
+      # 诊断：app/schemas 里只有历史版本、缺当前版本时，用它定位 KSP 到底把文件写到哪了。
+      - name: Locate generated Room schemas
+        if: always()
+        run: |
+          echo "--- app/schemas ---"
+          ls -la app/schemas/*/ || true
+          echo "--- 全仓库找当前版本 schema ---"
+          find . -name "*.json" -path "*schemas*" -not -path "./.git/*" || true
