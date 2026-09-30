@@ -1249,6 +1249,7 @@ fun SettingsScreen(
                 SettingsSection.SkillEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SubAgentEditor -> {} // 已在上方 early return 处理
                 SettingsSection.RemoteServers -> {} // 已在上方 early return 处理
+                SettingsSection.MemoryEditor -> {} // 已在上方 early return 处理
                 SettingsSection.About -> AboutSection(
                     updateCheckEnabled = updateCheckEnabled,
                     updateCheckChannel = updateCheckChannel,
