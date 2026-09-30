@@ -987,8 +987,8 @@
     <string name="memory_session_card_desc">只读。短期上下文随会话结束消失，不写盘、不跨会话；此处按最近更新的会话展示。</string>
     <string name="memory_session_context_label">短期上下文</string>
     <string name="memory_session_context_value">%1$d 条消息</string>
-    <string name="memory_session_fold_label">摘要折叠</string>
-    <string name="memory_session_fold_value">%1$d 次</string>
+    <string name="memory_session_fold_label">当前接手摘要</string>
+    <string name="memory_session_fold_value">%1$d 份</string>
     <string name="memory_session_no_fold">尚未折叠</string>
     <string name="memory_session_input_label">上次请求输入</string>
     <string name="memory_session_input_value">%1$d tokens</string>

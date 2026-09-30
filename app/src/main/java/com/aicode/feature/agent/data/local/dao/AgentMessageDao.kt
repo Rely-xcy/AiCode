@@ -26,10 +26,11 @@ interface AgentMessageDao {
     suspend fun getMessagesBySessionOnce(sessionId: String): List<AgentMessageEntity>
 
     /**
-     * 指定会话的短期上下文统计：仍在上下文里的消息条数，以及已折叠（接手摘要）的次数。
+     * 指定会话的短期上下文统计：仍在上下文里的消息条数，以及仍在上下文里的接手摘要份数。
      *
      * 回放上下文时会滤掉 isCompacted 的行，所以「未压缩行数」就是这轮请求实际要带的短期上下文规模；
-     * 每次折叠恰好写入一条 isContextSummary 行，行数即折叠次数。
+     * 每次折叠写入一条 isContextSummary 行，但旧摘要会被下一次折叠回收（标 isCompacted），
+     * 所以 foldCount 是「当前生效的摘要份数」，不是累计折叠次数。
      */
     @Query(
         """
@@ -47,9 +48,38 @@ interface AgentMessageDao {
     @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp")
     suspend fun deleteMessagesBeforeTimestamp(sessionId: String, cutoffTimestamp: Long)
 
-    /** 将指定会话中 cutoff 时间戳之前的所有消息标记为已压缩（isCompacted=1），不再参与上下文回放和 UI 展示。 */
+    /** 将指定会话中 cutoff 时间戳之前的所有消息标记为已压缩（isCompacted=1），不再参与上下文回放。聊天页消息流不过滤 isCompacted，历史原文仍照常展示。 */
     @Query("UPDATE agent_messages SET isCompacted = 1 WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp")
     suspend fun markMessagesCompactedBeforeTimestamp(sessionId: String, cutoffTimestamp: Long)
+
+    /**
+     * 把指定会话里除本次新插入的 marker（[keepMarkerId]）与摘要（[keepSummaryId]）之外的 compaction 行全部标为已压缩。
+     *
+     * 为什么要显式回收：只靠 [markMessagesCompactedBeforeTimestamp] 的「时间戳早于新 marker」判据，
+     * 在保留区起点没有前移时（两次折叠之间新增量小于预算富余）标不到旧摘要，上下文里会留下两份
+     * 重复且过时的接手说明。旧摘要内容已被新摘要吸收（新摘要是拿旧摘要当 previous-summary 更新出来的），
+     * 标掉不丢信息。
+     *
+     * 判据只用两个标志位：1.12 之前的 legacy 摘要行已由迁移 `17_add_context_summary_flag.sql`
+     * 标成 isContextSummary=1，所以这里不做文本前缀匹配——那只会多出一个「恰以 legacy 前缀开头的
+     * 普通 assistant 行被误标」的面。
+     *
+     * 用两个标量 id 而不是 `id NOT IN (:keepIds)`：仓库里没有集合参数展开的先例，且空列表会生成
+     * `NOT IN ()` 让约束失效。返回被回收的行数。
+     */
+    @Query(
+        """
+        UPDATE agent_messages SET isCompacted = 1
+        WHERE sessionId = :sessionId
+          AND id != :keepMarkerId AND id != :keepSummaryId
+          AND (isContextSummary = 1 OR isCompactionMarker = 1)
+        """
+    )
+    suspend fun markSupersededCompactionRows(
+        sessionId: String,
+        keepMarkerId: String,
+        keepSummaryId: String
+    ): Int
 
     @Query("DELETE FROM agent_messages")
     suspend fun deleteAllMessages()

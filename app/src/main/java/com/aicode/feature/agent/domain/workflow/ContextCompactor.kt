@@ -328,6 +328,24 @@ class ContextCompactor @Inject constructor(
                 // 而回放时会滤掉 isCompacted 的行——摘要就只在内存态活一轮，下一个用户轮次直接消失。
                 runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs) }
                     .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
+
+                // 旧摘要显式回收：上面的时间戳标记在保留区起点没有前移时（两次折叠之间新增量小于预算富余）
+                // 标不到旧 marker / 旧摘要，上下文里会留下两份重复且过时的接手说明。旧摘要内容已被新摘要
+                // 吸收，直接标掉不丢信息。两个 keep id 都非空才执行——空 id 会让排除条件失效，
+                // 把刚插入的摘要一起标掉。
+                if (markerId.isNotBlank() && compactedId.isNotBlank()) {
+                    runCatching {
+                        agentMessageDao.markSupersededCompactionRows(
+                            sessionId = sessionId,
+                            keepMarkerId = markerId,
+                            keepSummaryId = compactedId
+                        )
+                    }
+                        .onSuccess { FileLogger.i(TAG, "已回收 $it 行旧摘要") }
+                        .onFailure { FileLogger.w(TAG, "回收旧摘要失败，上下文里可能残留重复的接手摘要", it) }
+                } else {
+                    FileLogger.w(TAG, "压缩结果 id 缺失，跳过旧摘要回收（宁可留重复，不能标掉刚插的摘要）")
+                }
             } catch (e: Exception) {
                 // 摘要没插进去 = 本次压缩作废（head 也不标记），那先落库的 marker 必须一并删掉：
                 // 回放时它是一条孤立的用户消息「What did we do so far?」——历史没被折叠，

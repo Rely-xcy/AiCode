@@ -256,9 +256,26 @@ class MessagePersistenceUseCase @Inject constructor(
         }
         val validIds = declaredIds intersect resultIds
 
+        // 读侧去重：模型可见的历史里只留最新的一对（marker + 接手摘要）。
+        // 旧摘要的行不会立刻从库里消失——下一次折叠才把它们标 isCompacted，在那之前多份摘要
+        // 会一起进上下文（内容重复且过时）。这里只跳过更早的那些行：库不动、isCompacted 不碰、
+        // 聊天页不受影响（UI 走 paged 查询）。
+        // 判据用「最后出现的一条摘要 + 紧贴它前面的那条 marker」，不比较时间戳：连续折叠产生的
+        // 残留对时间戳会完全相同（同一保留区起点），按 ts 比不出先后。配对 marker 取不到时
+        // （那行已被标掉或缺失），下面的合成逻辑会给摘要补一条无 id 的 marker。
+        val keptSummaryIndex = entities.indexOfLast { it.isContextSummary }
+        val keptSummary = entities.getOrNull(keptSummaryIndex)
+        val keptMarker = keptSummary
+            ?.let { entities.getOrNull(keptSummaryIndex - 1) }
+            ?.takeIf { it.isCompactionMarker }
+
         // 第二遍：构建消息，过滤掉无法配对的工具调用 / 工具结果。
         val result = mutableListOf<AgentMessage>()
         for (e in entities) {
+            if (keptSummary != null) {
+                if (e.isContextSummary && e.id != keptSummary.id) continue
+                if (e.isCompactionMarker && e.id != keptMarker?.id) continue
+            }
             when (MessageRole.valueOf(e.role)) {
                 MessageRole.USER -> {
                     val rawContent = if (e.isCompactionMarker) CONTEXT_COMPACTION_MARKER else e.content

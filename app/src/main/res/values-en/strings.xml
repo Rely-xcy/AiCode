@@ -987,8 +987,8 @@
     <string name="memory_session_card_desc">Read-only. Short-term context disappears when the session ends; it is never written to disk or carried over. Shown for the most recently updated session.</string>
     <string name="memory_session_context_label">Short-term context</string>
     <string name="memory_session_context_value">%1$d messages</string>
-    <string name="memory_session_fold_label">Summarized folds</string>
-    <string name="memory_session_fold_value">%1$d times</string>
+    <string name="memory_session_fold_label">Handoff summaries</string>
+    <string name="memory_session_fold_value">%1$d summaries</string>
     <string name="memory_session_no_fold">Not yet folded</string>
     <string name="memory_session_input_label">Last request input</string>
     <string name="memory_session_input_value">%1$d tokens</string>
