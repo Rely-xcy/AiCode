@@ -71,3 +71,15 @@ jobs:
       # 跑全 flavor 6 变体是重复编译，无额外覆盖。
       - name: Run unit tests
         run: ./gradlew :app:testUniversalDebugUnitTest
+
+      # Room 的 schema 导出（app/schemas/<Version>.json）由 KSP 在构建时生成，是 MigrationTest
+      # 的输入。没有 JDK 的开发环境（例如容器里的 agent）生成不了它，只能从构建产物里取。
+      # always()：即使上面的构建/测试失败也要传，缺 schema 正是测试红的原因之一。
+      - name: Upload generated Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas
+          path: app/schemas
+          if-no-files-found: warn
+          retention-days: 14
