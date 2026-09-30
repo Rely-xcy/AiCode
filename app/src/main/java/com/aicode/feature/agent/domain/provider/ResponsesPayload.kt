@@ -6,6 +6,7 @@ import com.aicode.feature.agent.data.remote.openai.ResponsesToolDefinition
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.AgentTool
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonParser
 import kotlinx.serialization.json.Json
@@ -126,7 +127,7 @@ internal fun buildResponsesInput(
                             "type" to ResponsesItem.FUNCTION_CALL,
                             "call_id" to call.id,
                             "name" to call.name,
-                            "arguments" to JsonObject(call.arguments).toString()
+                            "arguments" to JsonObject(call.effectiveArguments).toString()
                         )
                     )
                 }

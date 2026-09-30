@@ -12,6 +12,7 @@ import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.defaultProviderApiPath
@@ -496,7 +497,7 @@ class AnthropicAdapter @Inject constructor(
 
                     for (toolCall in message.toolCalls) {
                          @Suppress("UNCHECKED_CAST")
-                         val inputMap = jsonElementToMap(JsonObject(toolCall.arguments)) as Map<String, Any>
+                         val inputMap = jsonElementToMap(JsonObject(toolCall.effectiveArguments)) as Map<String, Any>
 
                          contentBlocks.add(
                             AnthropicContentBlock(

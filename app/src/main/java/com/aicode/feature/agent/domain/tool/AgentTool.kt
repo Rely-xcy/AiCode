@@ -153,8 +153,19 @@ abstract class AgentTool {
 data class ToolCall(
     val id: String,
     val name: String,
-    val arguments: Map<String, JsonElement>
+    val arguments: Map<String, JsonElement>,
+    /**
+     * 软精简后的参数投影，只用于发给模型的请求；[arguments] 始终是原文（UI/落库/执行都用它）。
+     *
+     * 与工具结果的 modelResult 对称：toolCalls 是 JSON 文本列，旧数据没有本字段，
+     * 因此必须可空 + 有默认值，反序列化才能回落（不需要 DB 迁移）。
+     */
+    val modelArguments: Map<String, JsonElement>? = null
 )
+
+/** 喂模型用的参数：有精简副本就用副本，否则用原文。 */
+val ToolCall.effectiveArguments: Map<String, JsonElement>
+    get() = modelArguments ?: arguments
 
 /**
  * 可流式执行的工具：在最终结果产生之前，逐步 emit 过程输出（如命令的逐行 stdout），

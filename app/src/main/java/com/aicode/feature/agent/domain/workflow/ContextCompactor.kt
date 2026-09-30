@@ -60,7 +60,7 @@ class ContextCompactor @Inject constructor(
      *
      * 四个要点：
      * 1. 只改喂模型的那一份，不动落库/UI 的内容：工具输出改 `modelResult`（`result` 保持完整），
-     *    工具参数按字段重建（返回新消息对象，原列表里的对象不动）；
+     *    工具参数改 `modelArguments`（`arguments` 保持完整），两者都是 copy() 出新对象，原对象不动；
      * 2. 先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
      * 3. 按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
      * 4. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
@@ -77,8 +77,9 @@ class ContextCompactor @Inject constructor(
 
         // 工具参数投影：write/edit 把整个文件塞进 arguments，而这段正文对模型是纯冗余——
         // 文件已经在磁盘上，需要时 read 回来即可，但每一轮请求都要原样再发一遍。
-        // 这就是工具结果那层 modelResult 的对称做法，只是参数没有独立字段，
-        // 所以用 copy() 造一份新对象喂模型，原对象（UI/落库）不受影响。
+        // 这就是工具结果那层 modelResult 的对称做法：精简结果写进 modelArguments，
+        // arguments 一字不动，所以 UI / 落库 / 真正执行拿到的永远是原文。
+        // 幂等靠「永远以 arguments 为输入」：重复精简只会算出同一份副本，不会越削越短。
         val argCandidates = messages.indices
             .filter {
                 val message = messages[it]
@@ -390,6 +391,9 @@ class ContextCompactor @Inject constructor(
      * 工具参数按字段重建：把「能重新读回来」的大块正文换成一句说明，其它超长值头尾截断，
      * 小字段（路径、命令开头这类定位信息）原样保留。
      *
+     * 结果写进 `modelArguments`，`arguments` 保持原文——执行、UI、落库都读 arguments。
+     * 每次都以 `arguments`（原文）为输入重算，所以重复精简是幂等的（不会拿上一次的副本再削）。
+     *
      * 为什么不做头尾截断：截出来的是一段**残缺代码**，模型容易把它当成「文件当时就是这个内容」，
      * 进而以为里面没有某个函数、又写一遍。换成「[已省略 N 字符]」说的是真话——我写过这个文件，
      * 正文在磁盘上，需要时 read 回来。
@@ -422,7 +426,7 @@ class ContextCompactor @Inject constructor(
                 }
             }
         }
-        return if (changed) call.copy(arguments = rebuilt) else call
+        return if (changed) call.copy(modelArguments = rebuilt) else call
     }
 
     /** 这些参数是「能重新读回来」的大块正文，超限直接换占位说明。 */

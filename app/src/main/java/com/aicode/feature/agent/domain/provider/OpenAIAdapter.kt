@@ -11,6 +11,7 @@ import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonParser
 import javax.inject.Inject
@@ -767,7 +768,7 @@ class OpenAIAdapter @Inject constructor(
             type = "function",
             function = com.aicode.feature.agent.data.remote.openai.OpenAIFunctionCall(
                 name = toolCall.name,
-                arguments = JsonObject(toolCall.arguments).toString()
+                arguments = JsonObject(toolCall.effectiveArguments).toString()
             )
         )
     }

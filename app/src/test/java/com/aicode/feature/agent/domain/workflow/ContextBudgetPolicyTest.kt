@@ -1,11 +1,18 @@
 package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import io.mockk.mockk
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -108,6 +115,60 @@ class ContextBudgetPolicyTest {
     fun `预算内不触发兜底`() {
         val messages = listOf<AgentMessage>(AgentMessage.UserMessage(content = "短问题"))
         assertSame(messages, compactor().enforceWindowLimit(messages, budgetTokens = 1_000))
+    }
+
+    @Test
+    fun `软精简参数只写模型副本，原文一字不动`() {
+        val text = "x".repeat(20_000)
+        val original = AgentMessage.AssistantMessage(
+            id = "m1",
+            content = "",
+            toolCalls = listOf(
+                ToolCall(
+                    id = "c1",
+                    name = "write",
+                    arguments = mapOf(
+                        "path" to JsonPrimitive("a.txt"),
+                        "content" to JsonPrimitive(text)
+                    )
+                )
+            )
+        )
+        val compactor = compactor()
+
+        val once = compactor.softTrim(listOf(original), targetTokens = 1)
+        val trimmedCall = (once[0] as AgentMessage.AssistantMessage).toolCalls.single()
+
+        // arguments（执行 / 界面 / 落库用）保持原文；小字段（path）也不动
+        assertEquals(original.toolCalls.single().arguments, trimmedCall.arguments)
+        assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
+        assertEquals("a.txt", (trimmedCall.arguments["path"] as JsonPrimitive).content)
+
+        // 只有模型那一份被换成占位说明
+        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
+        assertTrue(modelContent.length < text.length, "副本应该比原文短")
+        assertTrue(modelContent.startsWith("[已省略"), "大块正文应换成占位说明，实际：$modelContent")
+        assertEquals(trimmedCall.modelArguments, trimmedCall.effectiveArguments)
+
+        // 幂等：第二次仍以 arguments 为输入，算出同一份副本，不会越削越短
+        assertEquals(once, compactor.softTrim(once, targetTokens = 1))
+    }
+
+    @Test
+    fun `旧数据 toolCalls JSON 缺少 modelArguments 时反序列化回落原文`() {
+        val json = Json { ignoreUnknownKeys = true }
+        val legacy = """[{"id":"c1","name":"write","arguments":{"path":"a.txt","content":"正文"}}]"""
+
+        val decoded = json.decodeFromString<List<ToolCall>>(legacy).single()
+
+        assertNull(decoded.modelArguments)
+        assertEquals("正文", (decoded.effectiveArguments["content"] as JsonPrimitive).content)
+
+        // 带副本重新序列化后仍能读回副本（同一 JSON 列，不需要 DB 迁移）
+        val withModel = decoded.copy(modelArguments = mapOf("content" to JsonPrimitive("[已省略 2 字符]")))
+        val roundTrip = json.decodeFromString<List<ToolCall>>(json.encodeToString(listOf(withModel))).single()
+        assertEquals("[已省略 2 字符]", (roundTrip.effectiveArguments["content"] as JsonPrimitive).content)
+        assertEquals("正文", (roundTrip.arguments["content"] as JsonPrimitive).content)
     }
 
     private fun tool(text: String) = AgentMessage.ToolResultMessage(toolName = "read", result = text)

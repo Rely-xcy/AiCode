@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
 import kotlin.math.max
@@ -39,7 +40,8 @@ object TokenEstimator {
         is AgentMessage.AssistantMessage ->
             estimateText(message.content) +
                 estimateText(message.reasoning) +
-                message.toolCalls.sumOf { estimateText(it.name) + estimateText(it.arguments.toString()) } +
+                // 用实际喂模型的参数（modelArguments 优先），否则软精简后估算不会下降。
+                message.toolCalls.sumOf { estimateText(it.name) + estimateText(it.effectiveArguments.toString()) } +
                 message.images.sumOf { estimateImageTokens(it) }
 
         is AgentMessage.ToolResultMessage -> {

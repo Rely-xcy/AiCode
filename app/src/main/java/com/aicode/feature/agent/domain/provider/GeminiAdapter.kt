@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonParser
 import com.google.gson.JsonObject
@@ -723,7 +724,7 @@ class GeminiAdapter @Inject constructor(
                             mapOf(
                                 "functionCall" to mapOf(
                                     "name" to toolCall.name,
-                                    "args" to toolCall.arguments
+                                    "args" to toolCall.effectiveArguments
                                 )
                             )
                         )
