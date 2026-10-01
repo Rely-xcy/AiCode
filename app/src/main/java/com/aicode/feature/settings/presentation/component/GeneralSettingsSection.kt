@@ -36,10 +36,8 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.settings.data.repository.StartupSessionMode
-import com.aicode.feature.settings.presentation.EffectiveCompactionThresholds
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
-import java.util.Locale
 
 /**
  * 偏好设置：集中放置不属于单个提供商配置、也不针对某个专用模型的全局偏好。
@@ -60,8 +58,6 @@ internal fun GeneralSettingsSection(
     onToggleEnterToSend: (Boolean) -> Unit,
     compactionThresholdPercent: Int,
     softCompactionThresholdPercent: Int,
-    /** 实际生效的触发线（按默认模型窗口算）；取不到时为 null，只显示百分比。 */
-    effectiveCompaction: EffectiveCompactionThresholds? = null,
     onSetSoftCompactionThresholdPercent: (Int) -> Unit,
     onSetCompactionThresholdPercent: (Int) -> Unit,
     sendFileMaxSizeMb: Int,
@@ -102,27 +98,7 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_compaction_threshold),
-                subtitle = buildString {
-                    append(stringResource(R.string.settings_compaction_threshold_desc))
-                    effectiveCompaction?.let { effective ->
-                        append('\n')
-                        append(
-                            if (effective.thresholds.hardEnabled) {
-                                stringResource(
-                                    R.string.settings_compaction_effective_hard,
-                                    formatTokenAmount(effective.thresholds.hard),
-                                    formatTokenAmount(effective.thresholds.contextLimit),
-                                    formatTokenAmount(effective.tierCap)
-                                )
-                            } else {
-                                stringResource(
-                                    R.string.settings_compaction_effective_disabled,
-                                    formatTokenAmount(effective.thresholds.contextLimit)
-                                )
-                            }
-                        )
-                    }
-                },
+                subtitle = stringResource(R.string.settings_compaction_threshold_desc),
                 onClick = { editingCompactionThreshold = true },
                 trailing = {
                     Text(
@@ -136,19 +112,7 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_soft_compaction_threshold),
-                subtitle = buildString {
-                    append(stringResource(R.string.settings_soft_compaction_threshold_desc))
-                    effectiveCompaction?.let { effective ->
-                        append('\n')
-                        append(
-                            stringResource(
-                                R.string.settings_compaction_effective_soft,
-                                formatTokenAmount(effective.thresholds.soft),
-                                formatTokenAmount(effective.thresholds.contextLimit)
-                            )
-                        )
-                    }
-                },
+                subtitle = stringResource(R.string.settings_soft_compaction_threshold_desc),
                 onClick = { editingSoftCompactionThreshold = true },
                 trailing = {
                     Text(
@@ -485,8 +449,3 @@ private fun StartupSessionMode.descRes(): Int = when (this) {
     StartupSessionMode.NEW_SESSION -> R.string.settings_startup_session_new_desc
     StartupSessionMode.RECENT_SESSION -> R.string.settings_startup_session_recent_desc
 }
-
-/**
- * 阈值用千分位完整数字（800,000），不用 k/M 缩写：这几个数要能跟模型窗口、聊天页的 token 数字一眼对上。
- */
-private fun formatTokenAmount(value: Int): String = String.format(Locale.getDefault(), "%,d", value)

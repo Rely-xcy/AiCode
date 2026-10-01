@@ -102,18 +102,6 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `设置页显示的三个数取自同一份策略`() {
-        // 「实际触发线 850,000（窗口 1,000,000，档位上限 980,000）」：三个数都由这里算出，不另算一套
-        val window = 1_000_000
-        val thresholds = ModelContextPolicy.thresholds(window, softPercent = 40, hardPercent = 85)
-
-        assertEquals(850_000, thresholds.hard)
-        assertEquals(1_000_000, thresholds.contextLimit)
-        assertEquals(980_000, ModelContextPolicy.tierFor(window).hardThreshold)
-        assertEquals(400_000, thresholds.soft)
-    }
-
-    @Test
     fun `保留最近原文按窗口四分之一且上下限收敛`() {
         assertEquals(32_000, ModelContextPolicy.preserveRecentTokens(128_000))
         // 1M 窗口：25% 是 250k，收敛到上限 60k
