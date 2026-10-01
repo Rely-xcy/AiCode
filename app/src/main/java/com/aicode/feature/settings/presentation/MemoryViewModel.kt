@@ -34,7 +34,7 @@ data class SessionShortTermState(
     val retainedMessages: Int,
     /** 已折叠次数：每触发一次上下文压缩就多一条接手摘要。 */
     val foldCount: Int,
-    /** 上一次请求的输入 token 数，即短期上下文当前占用的近似值；没跑过请求时为 0。 */
+    /** 上一次请求的输入 token 数（provider 回传的真实值，不是本地估算）；没跑过请求时为 0。 */
     val lastInputTokens: Int
 )
 

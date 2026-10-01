@@ -135,7 +135,13 @@ internal fun MemorySection(
                         title = stringResource(R.string.memory_session_input_label),
                         trailing = {
                             SessionValueText(
-                                stringResource(R.string.memory_session_input_value, shortTerm.lastInputTokens)
+                                // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
+                                // 与聊天页指示器的「估算/真实」用同一对文案。
+                                stringResource(
+                                    R.string.memory_session_input_value,
+                                    shortTerm.lastInputTokens,
+                                    stringResource(R.string.common_token_source_reported)
+                                )
                             )
                         }
                     )

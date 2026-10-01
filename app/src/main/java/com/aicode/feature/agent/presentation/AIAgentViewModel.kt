@@ -68,6 +68,8 @@ import com.aicode.feature.workspace.domain.FileEntry
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.feature.agent.domain.workflow.AgentEvent
+import com.aicode.feature.agent.domain.workflow.ContextUsage
+import com.aicode.feature.agent.domain.workflow.ContextUsageHolder
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
@@ -155,8 +157,15 @@ class AIAgentViewModel @Inject constructor(
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
+    private val contextUsageHolder: ContextUsageHolder,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
+
+    /**
+     * 上下文占用快照：压缩判定算出的那套数（占用 / 窗口 / 实际生效阈值）原样给界面，
+     * 避免界面自己再算一遍导致「显示没到线、压缩却已触发」。未判定过时为 null，界面退到真实 usage。
+     */
+    val contextUsage: StateFlow<ContextUsage?> = contextUsageHolder.usage
 
     private val sessionJobs = mutableMapOf<String, Job>()
 

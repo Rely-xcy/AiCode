@@ -196,6 +196,13 @@ internal fun TokenStatsSection(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                // 本页全部取自 provider 回传的真实 usage（估算是另一套数，只在压缩阈值与聊天页指示器上用），
+                // 标注清楚以免和聊天页那个带「估算」字样的数字混为一谈。
+                Text(
+                    text = stringResource(R.string.settings_token_stats_source_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.semanticColors.subtleText
+                )
             }
         }
 

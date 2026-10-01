@@ -55,6 +55,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -165,6 +166,8 @@ internal fun ChatInputBar(
     onEditQueued: (QueuedRequest) -> Unit = {},
     onInterjectQueued: (String) -> Unit = {},
     tokenProgress: Float = 0f,
+    /** 该百分比是估算值（本地估算）还是真实值（provider 回传的 usage）：只影响读屏与弧线样式，不改变数字。 */
+    tokenUsageEstimated: Boolean = false,
     dashboardState: ProviderDashboardState = ProviderDashboardState.Idle,
     onRefreshDashboard: () -> Unit = {},
     onRefreshDashboardByButton: () -> Unit = {},
@@ -518,7 +521,7 @@ internal fun ChatInputBar(
                         contentDescription = stringResource(R.string.chat_add_attachment),
                         onClick = { showAttachmentSheet = true }
                     )
-                    SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, onSend = onSend, onStop = onStop)
+                    SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, tokenUsageEstimated = tokenUsageEstimated, onSend = onSend, onStop = onStop)
                 }
             }
         }
@@ -677,6 +680,7 @@ internal fun SendButton(
     hasContent: Boolean,
     isBusy: Boolean,
     tokenProgress: Float,
+    tokenUsageEstimated: Boolean = false,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -704,14 +708,19 @@ internal fun SendButton(
         contentAlignment = Alignment.Center
     ) {
         if (clampedProgress > 0f) {
+            // 真实 usage 与估算值必须分得清：估算时弧线画成虚线，读屏文案也带上来源（估算/真实）。
             val usageLabel = stringResource(
                 R.string.chat_context_usage,
-                (clampedProgress * 100).toInt()
+                (clampedProgress * 100).toInt(),
+                stringResource(
+                    if (tokenUsageEstimated) R.string.common_token_source_estimated
+                    else R.string.common_token_source_reported
+                )
             )
             Canvas(
                 modifier = Modifier
                     .size(44.dp)
-                    // 上下文用量只靠这圈弧表达，给读屏补上百分比。
+                    // 上下文用量只靠这圈弧表达，给读屏补上百分比与来源。
                     .semantics { contentDescription = usageLabel }
             ) {
                 val stroke = 3.dp.toPx()
@@ -724,7 +733,15 @@ internal fun SendButton(
                     useCenter = false,
                     topLeft = topLeft,
                     size = androidx.compose.ui.geometry.Size(arcSize, arcSize),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                    style = Stroke(
+                        width = stroke,
+                        cap = StrokeCap.Round,
+                        pathEffect = if (tokenUsageEstimated) {
+                            PathEffect.dashPathEffect(floatArrayOf(6f, 4f))
+                        } else {
+                            null
+                        }
+                    )
                 )
             }
         }

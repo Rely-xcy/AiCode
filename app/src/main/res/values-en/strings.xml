@@ -80,6 +80,7 @@
     <string name="settings_token_stats_period_30d">30 days</string>
     <string name="settings_token_stats_period_all">All</string>
     <string name="settings_token_stats_total">Total</string>
+    <string name="settings_token_stats_source_note">All figures are provider-reported usage, not estimates</string>
     <string name="settings_token_stats_requests">Requests</string>
     <string name="settings_token_stats_cost">Cost</string>
     <string name="settings_token_stats_cache_hit_rate">Cache hit rate</string>
@@ -167,6 +168,8 @@
     <!-- SettingsScreen common -->
     <string name="common_back">Back</string>
     <string name="common_scroll_to_bottom">Back to bottom</string>
+    <string name="common_token_source_reported">reported</string>
+    <string name="common_token_source_estimated">estimated</string>
     <string name="common_prev">Previous</string>
     <string name="common_next">Next</string>
     <string name="settings_add_provider">Add vendor</string>
@@ -613,7 +616,7 @@
     <string name="chat_tool_calls_count">%1$d tool calls</string>
     <string name="chat_turn_running">Running</string>
     <string name="chat_turn_completed">Completed in %1$s</string>
-    <string name="chat_context_usage">Context %1$d%% used</string>
+    <string name="chat_context_usage">Context %1$d%% used (%2$s)</string>
     <string name="chat_bg_command_done">Background command completed</string>
     <string name="chat_bg_commands_done">%1$d background tasks completed</string>
     <string name="chat_bg_commands_partial_failed">%1$d background tasks finished, %2$d failed</string>
@@ -991,7 +994,7 @@
     <string name="memory_session_fold_value">%1$d summaries</string>
     <string name="memory_session_no_fold">Not yet folded</string>
     <string name="memory_session_input_label">Last request input</string>
-    <string name="memory_session_input_value">%1$d tokens</string>
+    <string name="memory_session_input_value">%1$d tokens (%2$s)</string>
     <string name="memory_editor_basic">Basics</string>
     <string name="memory_editor_scope_locked">The scope decides where the memory file lives; it can\'t change after creation</string>
     <string name="memory_editor_discard_title">Unsaved changes</string>

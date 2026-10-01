@@ -553,6 +553,10 @@ fun AIChatPanel(
     val sessionInputTokens = currentSession?.totalInputTokens ?: 0
     val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
     val sessionLastInputTokens = currentSession?.lastInputTokens ?: 0
+    // 压缩判定发布的占用快照（含实际生效阈值）。切会话时它还是上一个会话的数，按 id 过滤掉，
+    // 否则会把别的会话的百分比显示到当前会话上。
+    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
+    val sessionContextUsage = contextUsage?.takeIf { it.sessionId == currentSessionId }
     val messagesReady = messagesState.loaded && messagesState.sessionId == currentSessionId
     val runningTool by viewModel.runningTool.collectAsStateWithLifecycle()
     val isCompacting by viewModel.isCompacting.collectAsStateWithLifecycle()
@@ -1597,11 +1601,14 @@ fun AIChatPanel(
                     }
                 },
                 tokenProgress = run {
-                    val contextLimit = activeModelMetadata?.contextTokens ?: 0
-                    if (contextLimit > 0) {
-                        sessionLastInputTokens.toFloat() / contextLimit
-                    } else 0f
+                    // 优先用压缩判定发布的快照：同一个数既决定显示百分比也决定是否触发压缩。
+                    // 本次运行还没判定过（刚启动 / 刚切会话）时退到上次请求的真实 usage。
+                    sessionContextUsage?.progress ?: run {
+                        val contextLimit = activeModelMetadata?.contextTokens ?: 0
+                        if (contextLimit > 0) sessionLastInputTokens.toFloat() / contextLimit else 0f
+                    }
                 },
+                tokenUsageEstimated = sessionContextUsage?.isEstimated ?: false,
                 isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,

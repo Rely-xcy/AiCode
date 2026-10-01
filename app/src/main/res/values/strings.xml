@@ -80,6 +80,7 @@
     <string name="settings_token_stats_period_30d">近30天</string>
     <string name="settings_token_stats_period_all">全部</string>
     <string name="settings_token_stats_total">总消耗</string>
+    <string name="settings_token_stats_source_note">本页均来自服务端回传的真实用量，不含估算</string>
     <string name="settings_token_stats_requests">请求次数</string>
     <string name="settings_token_stats_cost">费用</string>
     <string name="settings_token_stats_cache_hit_rate">缓存命中率</string>
@@ -167,6 +168,8 @@
     <!-- SettingsScreen 通用 -->
     <string name="common_back">返回</string>
     <string name="common_scroll_to_bottom">回到底部</string>
+    <string name="common_token_source_reported">真实</string>
+    <string name="common_token_source_estimated">估算</string>
     <string name="common_prev">上一页</string>
     <string name="common_next">下一页</string>
     <string name="settings_add_provider">添加供应商</string>
@@ -613,7 +616,7 @@
     <string name="chat_tool_calls_count">%1$d 次工具调用</string>
     <string name="chat_turn_running">执行中</string>
     <string name="chat_turn_completed">已完成 %1$s</string>
-    <string name="chat_context_usage">上下文已用 %1$d%%</string>
+    <string name="chat_context_usage">上下文已用 %1$d%%（%2$s）</string>
     <string name="chat_bg_command_done">后台命令已完成</string>
     <string name="chat_bg_commands_done">%1$d 个后台任务已完成</string>
     <string name="chat_bg_commands_partial_failed">%1$d 个后台任务结束，%2$d 个失败</string>
@@ -991,7 +994,7 @@
     <string name="memory_session_fold_value">%1$d 份</string>
     <string name="memory_session_no_fold">尚未折叠</string>
     <string name="memory_session_input_label">上次请求输入</string>
-    <string name="memory_session_input_value">%1$d tokens</string>
+    <string name="memory_session_input_value">%1$d tokens（%2$s）</string>
     <string name="memory_editor_basic">基本信息</string>
     <string name="memory_editor_scope_locked">作用域决定记忆文件落在哪，创建后不可修改</string>
     <string name="memory_editor_discard_title">有未保存的修改</string>
