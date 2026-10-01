@@ -14,6 +14,9 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.presentation.MessageRole
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import android.os.SystemClock
 import java.util.UUID
 import javax.inject.Inject
@@ -423,8 +426,9 @@ class ContextCompactor @Inject constructor(
      * 每次都以 `arguments`（原文）为输入重算，所以重复精简是幂等的（不会拿上一次的副本再削）。
      *
      * 为什么不做头尾截断：截出来的是一段**残缺代码**，模型容易把它当成「文件当时就是这个内容」，
-     * 进而以为里面没有某个函数、又写一遍。换成「[已省略 N 字符]」说的是真话——我写过这个文件，
-     * 正文在磁盘上，需要时 read 回来。
+     * 进而以为里面没有某个函数、又写一遍。换成占位说明说的是真话——我写过这个文件，
+     * 正文在磁盘上，需要时 read 回来；文案里另带一句禁令，阻止模型把占位说明本身当成正文回写
+     * （执行边界还有一道整串识别兜底，见 [omittedBulkArgumentKeyOf]）。
      *
      * id 与 name 一律不动：tool call 与 tool result 的配对靠 id，动了就成孤儿消息，API 直接 400。
      */
@@ -444,7 +448,7 @@ class ContextCompactor @Inject constructor(
 
                 BULK_ARG_KEYS.contains(key.lowercase()) -> {
                     changed = true
-                    kotlinx.serialization.json.JsonPrimitive("[已省略 ${text.length} 字符，正文不在上下文中，需要时用 read 工具读回]")
+                    JsonPrimitive(omittedContentPlaceholder(text.length))
                 }
 
                 // 其它字段（命令、路径等）保留头尾，让模型能认出是哪一条
@@ -456,11 +460,6 @@ class ContextCompactor @Inject constructor(
         }
         return if (changed) call.copy(modelArguments = rebuilt) else call
     }
-
-    /** 这些参数是「能重新读回来」的大块正文，超限直接换占位说明。 */
-    private val BULK_ARG_KEYS = setOf(
-        "content", "old_string", "new_string", "oldstring", "newstring", "text", "newtext"
-    )
 
     /** 大块正文的硬上限：即使兜底预算很大，也没必要把整份文件重新塞回上下文。 */
     private val BULK_ARG_LIMIT_CHARS = 200
@@ -624,3 +623,46 @@ class ContextCompactor @Inject constructor(
         return truncated
     }
 }
+
+/**
+ * 大块正文类参数：这些字段「能重新读回来」，超限时直接给占位说明。
+ *
+ * 与 [omittedBulkArgumentKeyOf]（执行边界的整串识别）共用同一份清单，避免两处漂移。
+ */
+internal val BULK_ARG_KEYS = setOf(
+    "content", "old_string", "new_string", "oldstring", "newstring", "text", "newtext"
+)
+
+/**
+ * 软精简留下的占位说明。
+ *
+ * 文案里必须带那句禁令：模型看到占位说明后，可能把它当成「文件正文」抄进新的 writeFile 调用，
+ * 照抄执行就会把占位文字写进磁盘（已实际发生过）。禁令只是降低概率，真正兜底的是执行边界的
+ * 整串识别 [omittedBulkArgumentKeyOf]。
+ */
+internal fun omittedContentPlaceholder(length: Int): String =
+    "[已省略 $length 字符，正文不在上下文中，需要时用 read 工具读回；" +
+        "严禁把这段占位文字当作参数值回写，它不代表文件内容]"
+
+/**
+ * 占位说明的整串形态。
+ *
+ * 必须整串匹配（用 `Regex.matches()`，不是 `contains`）：用户文件里恰好含这句话属于正常内容，
+ * 不能因为出现子串就拦下调用。容错范围限定在模型改写占位说明的常见变体——丢掉方括号、漏掉
+ * 「中」、尾部换措辞、末尾多一个句号；尾部不允许换行也不允许出现 `]`，所以「占位说明后面还跟着
+ * 真正文」与多行文件都进不了这个模式。
+ */
+internal val OMITTED_CONTENT_PLACEHOLDER = Regex(
+    "^\\[?已省略 \\d+ 字符，正文不在上下文(?:中)?[^\\]\\n]{0,80}\\]?[。.!！]?$"
+)
+
+/**
+ * 挑出「值整串就是占位说明」的大块正文字段名；没有则返回 null。
+ *
+ * 只查 [BULK_ARG_KEYS]：占位说明只会出现在这些字段上，收窄范围避免误伤其它字段。
+ */
+internal fun omittedBulkArgumentKeyOf(arguments: Map<String, JsonElement>): String? =
+    arguments.entries.firstOrNull { (key, value) ->
+        key.lowercase() in BULK_ARG_KEYS &&
+            (value as? JsonPrimitive)?.contentOrNull?.let { OMITTED_CONTENT_PLACEHOLDER.matches(it) } == true
+    }?.key

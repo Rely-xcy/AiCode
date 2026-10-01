@@ -853,21 +853,35 @@ class StatefulAgentWorkflow @Inject constructor(
                             coroutineScope {
                                 toolCalls.map { toolCall ->
                                     async {
-                                        // 写范围准入：结果按 index 与 toolCalls 对应，所以必须在这里短路，
+                                        // 两个准入检查都必须在这里短路：结果按 index 与 toolCalls 对应，
                                         // 不能把调用从列表里剔除（剔除会让索引错位）。
-                                        val leaseConflict = writeLeaseConflictOf(toolCall, currentContext)
-                                        if (leaseConflict != null) {
-                                            ToolRunResult(
+                                        // 占位符守卫排最前：参数里没有真正文时，不适合先认领写租约。
+                                        val omittedArgument = omittedArgumentRejectionOf(toolCall)
+                                        val leaseConflict = if (omittedArgument == null) {
+                                            writeLeaseConflictOf(toolCall, currentContext)
+                                        } else {
+                                            null
+                                        }
+                                        when {
+                                            omittedArgument != null -> ToolRunResult(
+                                                ToolResult.Error(omittedArgument, ARG_OMITTED_BY_COMPACTION)
+                                                    .toTransportString(),
+                                                true
+                                            )
+
+                                            leaseConflict != null -> ToolRunResult(
                                                 ToolResult.Error(leaseConflict, WRITE_LEASE_CONFLICT_CODE)
                                                     .toTransportString(),
                                                 true
                                             )
-                                        } else {
-                                            val tool = toolRegistry.getTool(toolCall.name)
-                                            if (tool is StreamingAgentTool) {
-                                                runToolStream(tool, toolCall, currentContext) { send(it) }
-                                            } else {
-                                                runToolSync(tool, toolCall, currentContext)
+
+                                            else -> {
+                                                val tool = toolRegistry.getTool(toolCall.name)
+                                                if (tool is StreamingAgentTool) {
+                                                    runToolStream(tool, toolCall, currentContext) { send(it) }
+                                                } else {
+                                                    runToolSync(tool, toolCall, currentContext)
+                                                }
                                             }
                                         }
                                     }
@@ -1449,4 +1463,29 @@ class StatefulAgentWorkflow @Inject constructor(
             }
         }
     }
+}
+
+/**
+ * 参数被上下文精简掉、模型又把占位说明当正文回写时的错误码。
+ *
+ * 取一个可识别的常量：子代理/调用方据此判断「不是偶发错误」，不必把失败当成工具本身报错。
+ */
+internal const val ARG_OMITTED_BY_COMPACTION = "ARG_OMITTED_BY_COMPACTION"
+
+/**
+ * 执行边界守卫：工具调用参数里某个大块正文字段「整串」就是上下文精简的占位说明时，返回拦截原因。
+ *
+ * 软精简只改模型可见的那份副本（`modelArguments`），模型可能把这句占位说明当成文件正文抄进新的
+ * `writeFile`，而执行读的是原文——照抄执行就会把占位文字写进磁盘。这里在落盘前拦下：
+ * 参数里没有真正文，重试也无意义，必须先 read 回全文。
+ *
+ * 识别用整串匹配（见 [omittedBulkArgumentKeyOf]），文件里恰好含这句话不会被误杀。
+ */
+internal fun omittedArgumentRejectionOf(toolCall: ToolCall): String? {
+    val key = omittedBulkArgumentKeyOf(toolCall.arguments) ?: return null
+    val path = (toolCall.arguments["path"] as? JsonPrimitive)?.contentOrNull
+    val target = if (path.isNullOrBlank()) "目标文件" else "`$path`"
+    return "参数 `$key` 的值整串是上下文精简留下的占位说明，不是真正文——照它执行会把占位文字写进磁盘，" +
+        "所以本次 ${toolCall.name} 调用已被拦下、未执行。请先用 readFile 读取 $target 拿回全文，" +
+        "再基于全文重新提交本次调用。"
 }

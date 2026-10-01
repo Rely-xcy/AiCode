@@ -155,6 +155,111 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
+    fun `占位说明带禁令，模型侧副本没有可回写的正文`() {
+        val text = "x".repeat(20_000)
+        val original = bigWriteFileCall(text)
+
+        val trimmedCall =
+            (compactor().softTrim(listOf(original), targetTokens = 1)[0] as AgentMessage.AssistantMessage).toolCalls.single()
+        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
+
+        // 执行/落库用的原文一字不动，只有模型那一份换成占位说明
+        assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
+        assertTrue(modelContent.contains("严禁"), "占位说明要明确禁止回写，实际：$modelContent")
+
+        // 软精简产出的占位说明，必须正好是执行边界守卫认得的形态（否则守卫漏拦）
+        assertEquals(
+            "content",
+            omittedBulkArgumentKeyOf(
+                mapOf("path" to JsonPrimitive("a.txt"), "content" to JsonPrimitive(modelContent))
+            )
+        )
+    }
+
+    @Test
+    fun `执行边界守卫只认整串占位说明，文件里含这句话不算`() {
+        val canonical = "[已省略 655 字符，正文不在上下文中，需要时用 read 工具读回]"
+        val canonicalNoZhong = "[已省略 655 字符，正文不在上下文，需要时用 read 工具读回]"
+        val withBan = omittedContentPlaceholder(655)
+        val noBrackets = "已省略 655 字符，正文不在上下文中，需要时用 read 工具读回"
+
+        // 模型照抄占位说明（含改写变体）→ 认出
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(withBan))))
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(canonical))))
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(canonicalNoZhong))))
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(noBrackets))))
+        // editFile 的正文类字段同样覆盖
+        assertEquals("old_string", omittedBulkArgumentKeyOf(mapOf("old_string" to JsonPrimitive(withBan))))
+
+        // 用户文件里恰好含这句话：整串不等于占位说明，不得拦下
+        val userFile = buildString {
+            appendLine("# 压缩行为说明")
+            appendLine()
+            appendLine("参数被精简后会出现 `$canonical` 这样的占位说明，模型必须 read 回来再看。")
+            appendLine("函数 foo() 与 bar() 都在这个文件里。")
+        }
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(userFile))))
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("请看：$canonical"))))
+        // 占位说明后面还跟着真正文：不是「整串占位说明」，不拦
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("$canonical，注意这不是文件内容"))))
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("$canonical\n再看看别的"))))
+        // 末尾只多一个句号仍算照抄
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("$canonical。"))))
+
+        // 只查大块正文字段：非 bulk key 上出现这句话不拦（收窄范围，避免误伤 path/command 等）
+        assertNull(omittedBulkArgumentKeyOf(mapOf("path" to JsonPrimitive(canonical))))
+        assertNull(omittedBulkArgumentKeyOf(mapOf("path" to JsonPrimitive("a.txt"))))
+    }
+
+    @Test
+    fun `占位符拦截文案要求先 readFile 读回全文`() {
+        assertEquals("ARG_OMITTED_BY_COMPACTION", ARG_OMITTED_BY_COMPACTION)
+
+        val rejection = assertNotNull(
+            omittedArgumentRejectionOf(
+                ToolCall(
+                    id = "c1",
+                    name = "writeFile",
+                    arguments = mapOf(
+                        "path" to JsonPrimitive("src/Main.kt"),
+                        "content" to JsonPrimitive(omittedContentPlaceholder(12_345))
+                    )
+                )
+            )
+        )
+        assertTrue(rejection.contains("`content`"), rejection)
+        assertTrue(rejection.contains("writeFile"), rejection)
+        assertTrue(rejection.contains("readFile"), rejection)
+        assertTrue(rejection.contains("src/Main.kt"), rejection)
+
+        // 拿不到 path 时也要给出可执行的下一步
+        val noPath = assertNotNull(
+            omittedArgumentRejectionOf(
+                ToolCall(
+                    id = "c2",
+                    name = "memory",
+                    arguments = mapOf("content" to JsonPrimitive(omittedContentPlaceholder(9)))
+                )
+            )
+        )
+        assertTrue(noPath.contains("目标文件"), noPath)
+
+        // 正常参数（哪怕内容里含这句话）不拦
+        assertNull(
+            omittedArgumentRejectionOf(
+                ToolCall(
+                    id = "c3",
+                    name = "writeFile",
+                    arguments = mapOf(
+                        "path" to JsonPrimitive("src/Main.kt"),
+                        "content" to JsonPrimitive("fun main() { /* 已省略 3 字符，正文不在上下文中 */ }")
+                    )
+                )
+            )
+        )
+    }
+
+    @Test
     fun `旧数据 toolCalls JSON 缺少 modelArguments 时反序列化回落原文`() {
         val json = Json { ignoreUnknownKeys = true }
         val legacy = """[{"id":"c1","name":"write","arguments":{"path":"a.txt","content":"正文"}}]"""
@@ -170,6 +275,21 @@ class ContextBudgetPolicyTest {
         assertEquals("[已省略 2 字符]", (roundTrip.effectiveArguments["content"] as JsonPrimitive).content)
         assertEquals("正文", (roundTrip.arguments["content"] as JsonPrimitive).content)
     }
+
+    private fun bigWriteFileCall(text: String) = AgentMessage.AssistantMessage(
+        id = "m1",
+        content = "",
+        toolCalls = listOf(
+            ToolCall(
+                id = "c1",
+                name = "writeFile",
+                arguments = mapOf(
+                    "path" to JsonPrimitive("a.txt"),
+                    "content" to JsonPrimitive(text)
+                )
+            )
+        )
+    )
 
     private fun tool(text: String) = AgentMessage.ToolResultMessage(toolName = "read", result = text)
 
