@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -46,6 +47,58 @@ class ContextBudgetPolicyTest {
         assertEquals(108_000, minOf(window * 85 / 100, tier.hardThreshold))
         // 50% × 128k = 64_000 < 上限 → 取百分比
         assertEquals(64_000, minOf(window * 50 / 100, tier.hardThreshold))
+    }
+
+    @Test
+    fun `生效阈值与判定同源：压缩模块与界面取同一份`() {
+        // 128K 走 GENEROUS：档位上限 108K 把 85% 的 108.8K 压下来
+        val generous = ModelContextPolicy.thresholds(128_000, softPercent = 40, hardPercent = 85)
+        assertEquals(128_000, generous.contextLimit)
+        assertEquals(108_000, generous.hard)
+        assertEquals(51_200, generous.soft)
+        assertTrue(generous.hardEnabled)
+
+        // 1M 窗口：85% = 850K，没碰上档位上限 980K
+        val million = ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 85)
+        assertEquals(850_000, million.hard)
+        assertEquals(400_000, million.soft)
+
+        // 64K 走 STANDARD：上限 54K 把 54.4K 压下来
+        assertEquals(54_000, ModelContextPolicy.thresholds(64_000, softPercent = 40, hardPercent = 85).hard)
+    }
+
+    @Test
+    fun `用户把硬线设为 100% 也会被档位上限封顶`() {
+        // 1M 窗口仍只到 980K（给输出与提示词留 headroom）
+        assertEquals(980_000, ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 100).hard)
+    }
+
+    @Test
+    fun `软线始终低于硬线`() {
+        // 软线也填到 100%：被封在硬线之下，不会抢在硬压缩前面触发
+        val thresholds = ModelContextPolicy.thresholds(128_000, softPercent = 100, hardPercent = 85)
+        assertEquals(107_999, thresholds.soft)
+        assertTrue(thresholds.soft < thresholds.hard)
+    }
+
+    @Test
+    fun `小窗口不启用硬压缩，软线按窗口 90% 封顶`() {
+        val softOnly = ModelContextPolicy.thresholds(32_000, softPercent = 40, hardPercent = 85)
+        assertFalse(softOnly.hardEnabled)
+        assertEquals(0, softOnly.hard)
+        assertEquals(12_800, softOnly.soft)
+        // 百分比填得再大也不超过窗口 90%
+        assertEquals(28_800, ModelContextPolicy.thresholds(32_000, softPercent = 100, hardPercent = 85).soft)
+
+        val disabled = ModelContextPolicy.thresholds(16_000, softPercent = 40, hardPercent = 85)
+        assertFalse(disabled.hardEnabled)
+        assertEquals(6_400, disabled.soft)
+    }
+
+    @Test
+    fun `兜底线固定为窗口的 92%`() {
+        assertEquals(92, ModelContextPolicy.GUARD_BUDGET_PERCENT)
+        assertEquals(92, ModelContextPolicy.thresholds(128_000, softPercent = 40, hardPercent = 85).guardPercent)
     }
 
     @Test

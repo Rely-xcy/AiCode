@@ -10,6 +10,8 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
+import com.aicode.feature.agent.domain.workflow.ContextUsage
+import com.aicode.feature.agent.domain.workflow.ContextUsageHolder
 import com.aicode.feature.agent.domain.workflow.TokenEstimator
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -25,7 +27,8 @@ import javax.inject.Singleton
  * 只做策略——什么时候压、压到哪一档、用哪个模型摘要；具体怎么改消息交给
  * [ContextCompactor]（软精简 / 硬压缩 / 发送前兜底三个纯变换）。
  *
- * 三级预算（都由用户设置的百分比 × 模型窗口算出，再受窗口档位约束）：
+ * 三级预算（都由用户设置的百分比 × 模型窗口算出，再受窗口档位约束；
+ * 实际生效值统一由 [ModelContextPolicy.thresholds] 算，界面显示也取同一份，见 [ContextUsageHolder]）：
  * 1. 软线（默认 40%）：只精简历史里的超长工具输出，不调模型、不发事件、界面无感；
  * 2. 硬线（默认 85%）：调摘要模型把早期对话折叠成结构化接手摘要；
  * 3. 兜底线（92%）：前两级都做完仍逼近窗口时，对超长消息本身做硬截断。
@@ -45,7 +48,9 @@ class CompactionModule @Inject constructor(
     /** 同样用 [Lazy]：解析抽取提示词要经 SystemPromptProvider，它又依赖引擎。 */
     private val systemPromptProvider: Lazy<SystemPromptProvider>,
     private val modelMetadataService: ModelMetadataService,
-    private val generalSettingsRepository: GeneralSettingsRepository
+    private val generalSettingsRepository: GeneralSettingsRepository,
+    /** 判定结果发布给界面：显示百分比与触发阈值必须同源。 */
+    private val contextUsageHolder: ContextUsageHolder
 ) : EngineModule {
 
     override val id = MODULE_ID
@@ -60,25 +65,33 @@ class CompactionModule @Inject constructor(
         val windowProvider = call.windowProvider ?: call.summaryProvider ?: return null
 
         val contextLimit = resolveContextTokens(windowProvider)
-        val tier = ModelContextPolicy.tierFor(contextLimit)
-        val hardAllowed = tier.hardThreshold > 0
-        val hardThreshold = if (hardAllowed) {
-            minOf(contextLimit * generalSettingsRepository.compactionThresholdPercent() / 100, tier.hardThreshold)
-        } else {
-            0
-        }
-        // 软线必须低于硬线，否则软精简永远轮不到（硬压缩先到）。
-        // 窗口太小、档位不允许硬压缩时，软线按窗口 90% 封顶。
-        val softCeiling = if (hardAllowed) (hardThreshold - 1).coerceAtLeast(1) else contextLimit * 90 / 100
-        val softThreshold = minOf(
-            contextLimit * generalSettingsRepository.softCompactionThresholdPercent() / 100,
-            softCeiling
-        ).coerceAtLeast(1)
+        // 阈值一律走 ModelContextPolicy.thresholds：它同时被界面百分比取用（见下方 publish），
+        // 两处各算一遍就会出现「显示的值没到线、压缩却已经触发」。
+        val thresholds = ModelContextPolicy.thresholds(
+            contextLimit = contextLimit,
+            softPercent = generalSettingsRepository.softCompactionThresholdPercent(),
+            hardPercent = generalSettingsRepository.compactionThresholdPercent()
+        )
+        val hardAllowed = thresholds.hardEnabled
+        val hardThreshold = thresholds.hard
+        val softThreshold = thresholds.soft
 
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
         val estimated = TokenEstimator.estimateMessages(messages) + call.overheadTokens
         val currentTokens = maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0, estimated)
+        // 判定算完立即发布给界面：同一个数既决定显示百分比也决定是否触发压缩。
+        // 子代理会话不发布，否则会顶掉前台会话指示器的数（两者并行跑）。
+        if (!ctx.isSubAgent) {
+            contextUsageHolder.publish(
+                ContextUsage.of(
+                    sessionId = ctx.sessionId,
+                    realTokens = call.lastInputTokens,
+                    estimatedTokens = estimated,
+                    thresholds = thresholds
+                )
+            )
+        }
         val reachedHard = hardAllowed && (call.force || currentTokens >= hardThreshold)
         val reachedSoft = currentTokens >= softThreshold
 
@@ -97,7 +110,8 @@ class CompactionModule @Inject constructor(
             } else {
                 FileLogger.i(
                     TAG,
-                    "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens（窗口 $contextLimit，${tier.tier}），" +
+                    "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens（窗口 $contextLimit，" +
+                        "${ModelContextPolicy.tierFor(contextLimit).tier}），" +
                         "${if (call.force) "手动强制压缩" else "达到硬压缩线 $hardThreshold"}，开始折叠早期对话"
                 )
                 call.onEvent(AgentEvent.CompactionStarted(currentTokens))
@@ -105,7 +119,7 @@ class CompactionModule @Inject constructor(
                     messages = result,
                     summaryProvider = summaryProvider,
                     sessionId = ctx.sessionId,
-                    preserveRecentTokens = tier.preserveRecentTokens,
+                    preserveRecentTokens = ModelContextPolicy.tierFor(contextLimit).preserveRecentTokens,
                     summaryWindowTokens = resolveContextTokens(summaryProvider),
                     // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
                     // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
@@ -157,7 +171,7 @@ class CompactionModule @Inject constructor(
         }
 
         // 兜底：system prompt 与工具定义也占窗口，预算里先扣掉。
-        val guardBudget = contextLimit * GUARD_BUDGET_PERCENT / 100 - call.overheadTokens
+        val guardBudget = contextLimit * ModelContextPolicy.GUARD_BUDGET_PERCENT / 100 - call.overheadTokens
         val guarded = compactor.get().enforceWindowLimit(result, budgetTokens = guardBudget)
 
         if (!compacted && guarded === messages) return null
@@ -183,8 +197,5 @@ class CompactionModule @Inject constructor(
     private companion object {
         const val MODULE_ID = "compaction"
         const val TAG = "CompactionModule"
-
-        /** 兜底线：压缩与软精简都做完仍超过窗口的该比例时，直接截断超长消息。 */
-        const val GUARD_BUDGET_PERCENT = 92
     }
 }

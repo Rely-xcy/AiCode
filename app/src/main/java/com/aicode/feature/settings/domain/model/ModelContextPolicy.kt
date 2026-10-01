@@ -5,6 +5,9 @@ object ModelContextPolicy {
     const val MIN_PRESERVE_RECENT_TOKENS = 2_000
     const val MAX_PRESERVE_RECENT_TOKENS = 60_000
 
+    /** 兜底线（发送前硬截断超长消息）占窗口的比例：软精简与硬压缩都做完仍超过该比例时才用。 */
+    const val GUARD_BUDGET_PERCENT = 92
+
     /** 保留最近原文的预算占窗口比例：留够原文，压缩后模型才不会「不记得」刚发生的事。 */
     private const val PRESERVE_RECENT_RATIO = 0.25
 
@@ -61,4 +64,44 @@ object ModelContextPolicy {
     fun preserveRecentTokens(usableTokens: Int): Int =
         (usableTokens * PRESERVE_RECENT_RATIO).toInt()
             .coerceIn(MIN_PRESERVE_RECENT_TOKENS, MAX_PRESERVE_RECENT_TOKENS)
+
+    /**
+     * 三级预算的实际生效值（token）。压缩判定与界面显示共用这一份，不允许各自再算一遍：
+     * 显示的是窗口占用百分比、触发的是这里的阈值，两者分子分母同源才不会出现
+     * 「显示 60% 却已经触发压缩」。
+     */
+    data class Thresholds(
+        /** 判定用的模型窗口（与界面百分比的分母同源）。 */
+        val contextLimit: Int,
+        /** 软精简线：超过就裁历史里的超长工具输出与参数，不调模型。 */
+        val soft: Int,
+        /** 硬压缩线：超过就调摘要模型折叠早期对话；该档不启用硬压缩时为 0。 */
+        val hard: Int,
+        /** 该窗口档位是否允许硬压缩（< 32K 的档位不允许）。 */
+        val hardEnabled: Boolean,
+        /** 兜底线占窗口的比例（[GUARD_BUDGET_PERCENT]）。 */
+        val guardPercent: Int = GUARD_BUDGET_PERCENT
+    )
+
+    /**
+     * 用户设置的两个百分比 → 实际生效阈值。
+     *
+     * 生效值 = min(窗口 × 用户百分比, 该档位的绝对上限)：档位上限是为了给输出与提示词留 headroom，
+     * 大窗口下用户设的 85% 可能被压到更低（如 128K 窗口：85% = 108.8K 被上限 108K 压住）。
+     * 软线必须严格低于硬线，否则软精简永远轮不到（硬压缩先到）；窗口太小、档位不允许硬压缩时
+     * 软线按窗口 90% 封顶。
+     */
+    fun thresholds(contextLimit: Int, softPercent: Int, hardPercent: Int): Thresholds {
+        val tier = tierFor(contextLimit)
+        val hardEnabled = tier.hardThreshold > 0
+        val hard = if (hardEnabled) minOf(contextLimit * hardPercent / 100, tier.hardThreshold) else 0
+        val softCeiling = if (hardEnabled) (hard - 1).coerceAtLeast(1) else contextLimit * 90 / 100
+        val soft = minOf(contextLimit * softPercent / 100, softCeiling).coerceAtLeast(1)
+        return Thresholds(
+            contextLimit = contextLimit,
+            soft = soft,
+            hard = hard,
+            hardEnabled = hardEnabled
+        )
+    }
 }

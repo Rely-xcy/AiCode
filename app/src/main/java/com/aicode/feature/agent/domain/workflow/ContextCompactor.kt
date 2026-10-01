@@ -610,23 +610,22 @@ class ContextCompactor @Inject constructor(
 
     /**
      * 按摘要模型窗口预算截断 head：从新到旧保留消息，超预算丢弃更旧的消息。
-     * 预算按 1 字符 ≈ 1 token 的保守口径（[TokenEstimator] 对中文是 1 字/token，
-     * 4 字符/token 的口径会截不干净），并预留 30% 给摘要提示词与旧摘要。
+     * 预算与记账都用 [TokenEstimator] 的估算 token（不是字符数），并预留 30% 给摘要提示词与旧摘要。
      */
     private fun List<AgentMessage>.truncateForSummaryWindow(contextTokens: Int): List<AgentMessage> {
         if (isEmpty()) return this
-        val budgetChars = (contextTokens * 0.7f).toInt()
-        var totalChars = 0
+        val budgetTokens = (contextTokens * 0.7f).toInt()
+        var totalTokens = 0
         val kept = mutableListOf<AgentMessage>()
         for (msg in asReversed()) {
-            val chars = TokenEstimator.estimateMessage(msg)
-            if (kept.isNotEmpty() && totalChars + chars > budgetChars) break
-            totalChars += chars
+            val tokens = TokenEstimator.estimateMessage(msg)
+            if (kept.isNotEmpty() && totalTokens + tokens > budgetTokens) break
+            totalTokens += tokens
             kept.add(msg)
         }
         val truncated = kept.asReversed()
         if (truncated.size != size) {
-            FileLogger.i(TAG, "head 超出压缩模型窗口预算，丢弃 ${size - truncated.size} 条最旧消息（预算 $budgetChars 字符）")
+            FileLogger.i(TAG, "head 超出压缩模型窗口预算，丢弃 ${size - truncated.size} 条最旧消息（预算约 $budgetTokens tokens）")
         }
         return truncated
     }
