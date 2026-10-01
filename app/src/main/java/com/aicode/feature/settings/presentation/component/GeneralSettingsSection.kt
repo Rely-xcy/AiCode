@@ -108,11 +108,19 @@ internal fun GeneralSettingsSection(
                         append('\n')
                         append(
                             if (effective.thresholds.hardEnabled) {
+                                val percent = effectivePercent(
+                                    effective.thresholds.hard,
+                                    effective.thresholds.contextLimit
+                                )
+                                // 档位上限真的把线压低了才提它；没压低就只给「百分比 + 等值 token」。
                                 stringResource(
-                                    R.string.settings_compaction_effective_hard,
-                                    formatTokenAmount(effective.thresholds.hard),
-                                    formatTokenAmount(effective.thresholds.contextLimit),
-                                    formatTokenAmount(effective.tierCap)
+                                    if (percent < compactionThresholdPercent) {
+                                        R.string.settings_compaction_effective_hard_capped
+                                    } else {
+                                        R.string.settings_compaction_effective_hard
+                                    },
+                                    percent,
+                                    formatTokenAmount(effective.thresholds.hard)
                                 )
                             } else {
                                 stringResource(
@@ -143,8 +151,8 @@ internal fun GeneralSettingsSection(
                         append(
                             stringResource(
                                 R.string.settings_compaction_effective_soft,
-                                formatTokenAmount(effective.thresholds.soft),
-                                formatTokenAmount(effective.thresholds.contextLimit)
+                                effectivePercent(effective.thresholds.soft, effective.thresholds.contextLimit),
+                                formatTokenAmount(effective.thresholds.soft)
                             )
                         )
                     }
@@ -485,6 +493,13 @@ private fun StartupSessionMode.descRes(): Int = when (this) {
     StartupSessionMode.NEW_SESSION -> R.string.settings_startup_session_new_desc
     StartupSessionMode.RECENT_SESSION -> R.string.settings_startup_session_recent_desc
 }
+
+/**
+ * 有效百分比 = 实际触发线 ÷ 窗口 × 100，四舍五入到整数，与右侧胶囊的百分比同量纲。
+ * 档位上限只能把线压低，所以硬线的有效百分比小于用户填的比例就等于上限生效了。
+ */
+private fun effectivePercent(threshold: Int, contextLimit: Int): Int =
+    if (contextLimit <= 0) 0 else Math.round(threshold * 100.0 / contextLimit).toInt()
 
 /**
  * 阈值用千分位完整数字（800,000），不用 k/M 缩写：这几个数要能跟模型窗口、聊天页的 token 数字一眼对上。
