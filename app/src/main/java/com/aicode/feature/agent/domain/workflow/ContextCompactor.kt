@@ -461,8 +461,16 @@ class ContextCompactor @Inject constructor(
         return if (changed) call.copy(modelArguments = rebuilt) else call
     }
 
-    /** 大块正文的硬上限：即使兜底预算很大，也没必要把整份文件重新塞回上下文。 */
-    private val BULK_ARG_LIMIT_CHARS = 200
+    /**
+     * 大块正文的硬上限：超过它就整段换成占位说明（文件已在磁盘上，需要时 read 回来）。
+     *
+     * 原值 200 过小——正常的 writeFile 正文随手就上千字符，等于"只要压缩一启动就把参数全换掉"，
+     * 模型的上下文里再也看不到自己写过什么。而占位说明是**可以被逐字复制的正文形态**，
+     * 模型在重写/补写同一文件时会把它当成文件内容拄回去（已发生三次，连新建文件都中招）。
+     * 执行边界的 ARG_OMITTED_BY_COMPACTION 守卫负责兜底，这里从源头减少发生机会。
+     * 4000 字符约等于一两千 token，需要时仍能省下大头，又不会误伤日常写文件。
+     */
+    private val BULK_ARG_LIMIT_CHARS = 4_000
 
     /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
     private fun headTailTrim(text: String, maxChars: Int): String {
