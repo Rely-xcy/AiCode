@@ -954,7 +954,11 @@ fun AIChatPanel(
             val prefix = currentText.trimStart().take(20)
             prefix.isEmpty() || lastMsg.content.trimStart().startsWith(prefix)
         }
-        val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
+        // 落库消息没有 reasoning 时也算已就位：思考过程不落库的场景下，拿前缀去比会永远不吻合，
+        // 保留缓冲就永不退休 → 尾巴气泡与已落库气泡同屏，看起来就是同一条回复显示两遍。
+        // （textSettled 那条仍要比前缀——正文一定落库；reasoning 不一定。）
+        // 同 origin/fix/chat-duplicate-reply（929d8684）的判定。
+        val reasoningSettled = if (currentReasoning.isNullOrBlank() || lastMsg.reasoning.isNullOrBlank()) {
             true
         } else {
             val prefix = currentReasoning.trimStart().take(20)
