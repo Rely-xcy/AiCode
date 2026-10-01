@@ -81,6 +81,7 @@ import com.aicode.feature.workspace.domain.repository.RemoteRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ModelMetadata
+import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderDashboardResult
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
@@ -101,6 +102,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
@@ -292,6 +294,27 @@ private fun padTrend(
         byDay[index] ?: com.aicode.feature.agent.data.local.dao.DayCallStats(index, 0, 0, 0, 0, 0, null, null)
     }
 }
+
+/**
+ * 设置页「实际触发线」的三个数：与压缩判定同源，均由 [ModelContextPolicy.thresholds] 算出。
+ *
+ * @param model 这条线是按哪个默认模型算的（不同模型窗口不同，触发线也不同）。
+ * @param thresholds 实际生效的软/硬线（硬线已被档位上限约束过）；`hardEnabled=false` 表示该窗口不做自动压缩。
+ * @param tierCap 该窗口档位的硬上限（就是压低硬线的那个数）；该档不启用硬压缩时为 0。
+ */
+data class EffectiveCompactionThresholds(
+    val model: String,
+    val thresholds: ModelContextPolicy.Thresholds,
+    val tierCap: Int
+)
+
+/** [SettingsViewModel.effectiveCompactionThresholds] 的组合输入（仅供内部流转）。 */
+private data class CompactionThresholdInputs(
+    val provider: AIProviderConfig?,
+    val model: String,
+    val hardPercent: Int,
+    val softPercent: Int
+)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -501,6 +524,43 @@ class SettingsViewModel @Inject constructor(
 
     private val _softCompactionThresholdPercent = MutableStateFlow(GeneralSettingsRepository.DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT)
     val softCompactionThresholdPercent: StateFlow<Int> = _softCompactionThresholdPercent.asStateFlow()
+
+    /**
+     * 压缩阈值的**实际生效值**，供设置页显示「实际触发线」。
+     *
+     * 用户填的百分比会被窗口档位上限压低（大窗口要给输出与提示词留 headroom），不显示实际值就会出现
+     * 「填 85%、实际按 84% 触发」这种看不懂的差异。三个数（实际触发线 / 窗口 / 档位上限）与压缩判定
+     * 走同一个 [ModelContextPolicy.thresholds]，不另算一套。
+     *
+     * 窗口按**默认模型**现取现解析：设置页是全局页面，而判定按当前会话模型的窗口算，默认模型是新会话
+     * 会用的那个，是这页能给出的最贴切参照。取不到（没设默认模型、或模型不在已启用渠道里）时为 null，
+     * 界面只显示百分比。
+     */
+    val effectiveCompactionThresholds: StateFlow<EffectiveCompactionThresholds?> = combine(
+        _providers,
+        defaultModelProviderId,
+        defaultModel,
+        _compactionThresholdPercent,
+        _softCompactionThresholdPercent
+    ) { providers, providerId, model, hardPercent, softPercent ->
+        CompactionThresholdInputs(
+            provider = providers.firstOrNull { it.id == providerId }?.takeIf { model.isNotBlank() },
+            model = model,
+            hardPercent = hardPercent,
+            softPercent = softPercent
+        )
+    }.mapLatest { inputs ->
+        val provider = inputs.provider ?: return@mapLatest null
+        val metadata = runCatching {
+            modelMetadataService.resolve(provider.id, provider.type, inputs.model)
+        }.getOrNull()
+        val window = metadata?.contextTokens?.takeIf { it > 0 } ?: return@mapLatest null
+        EffectiveCompactionThresholds(
+            model = inputs.model,
+            thresholds = ModelContextPolicy.thresholds(window, inputs.softPercent, inputs.hardPercent),
+            tierCap = ModelContextPolicy.tierFor(window).hardThreshold
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
