@@ -516,6 +516,10 @@ fun AppNavigation(
     }
 
     // 终端 / Git：大屏在右栏内开合切换，窄窗跳全屏页。
+    // 窄窗 navigate 用 popUpTo("chat") { saveState = true } + launchSingleTop：不这样，
+    // 每次开终端/Git 都往返回栈里压一层，用户连按几次返回会穿到空栈（白屏），
+    // 再从预览手势右滑反而能切到设置页，而设置页的 BackHandler 又把返回键全吞了 → 卡死。
+    // popUpTo 折叠栈后，返回键从终端/Git 只会回聊天页，不会进入空栈。
     val openWorkbench: (WorkbenchPaneKind) -> Unit = { target ->
         if (expanded) {
             paneKind = if (paneKind == target) WorkbenchPaneKind.NONE else target
@@ -526,7 +530,10 @@ fun AppNavigation(
                 WorkbenchPaneKind.BROWSER -> "browser"
                 else -> "chat"
             }
-            navController.navigate(route)
+            navController.navigate(route) {
+                popUpTo("chat") { saveState = true }
+                launchSingleTop = true
+            }
         }
     }
 
@@ -697,7 +704,17 @@ fun AppNavigation(
                 SettingsScreen(
                     viewModel = settingsViewModel,
                     onNavigateBack = {
-                        navController.popBackStack()
+                        // 设置页内部的 BackHandler 在有上一层时会吞掉返回键（用于内部层级返回），
+                        // 走到这里说明已在首页菜单层；若返回栈被弄乱导致栈里没有 "chat" 了
+                        // （终端/Git 历史上会把栈压穿），popBackStack 会无事发生且留在设置页 →
+                        // 用户怎么按返回都出不去（卡死）。所以这里用 navigate 回聊天页，
+                        // 不依赖返回栈是否完好。
+                        navController.navigate("chat") {
+                            popUpTo(navController.graph.startDestinationRoute ?: "chat") {
+                                inclusive = true
+                            }
+                            launchSingleTop = true
+                        }
                         // 大屏返回聊天页后侧栏本就常驻，不再弹 modal 抽屉。
                         if (!expanded) scope.launch { drawerState.open() }
                     },
