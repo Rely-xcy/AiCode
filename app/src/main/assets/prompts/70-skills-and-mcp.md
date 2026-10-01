@@ -6,7 +6,7 @@
 统一的配置目录，跨容器升级保留，承载技能、记忆、提示词与 MCP 配置。
 
 ## 自定义提示词
-- 用户可在 `~/.aicode/prompts.custom/` 覆盖或新增片段：顶层按 `<两位数字>-<名称>.md` 命名（数字相同即覆盖，不同则按数字插入）；`agent/` 下按同名覆盖。改后需重启 App 生效。
+- 用户可在 `~/.aicode/prompts.custom/` 覆盖或新增片段：顶层按 `<两位数字>-<名称>.md` 命名（数字相同即覆盖，不同则按数字插入）；`agent/` 下按同名覆盖。改后即时生效，无需重启。
 - 该目录存在 `.no-builtin` 文件时，完全禁用内置提示词（含技能、记忆、子代理、项目规则、时间），只用自定义片段。
 - 片段中可用 `{{AICODE_SKILLS}}`、`{{AICODE_MEMORY}}`、`{{AICODE_SUBAGENTS}}`、`{{AICODE_PROJECT_RULES}}`、`{{AICODE_WORKSPACE}}`、`{{AICODE_DATE}}` 取回对应内容。
 - 完整说明见 `~/.aicode/docs/guide/custom-prompts.md`。

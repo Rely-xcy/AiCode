@@ -72,10 +72,9 @@ import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
 import com.aicode.R
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
-import com.aicode.feature.agent.domain.prompt.UserPrompt
-import com.aicode.feature.agent.domain.prompt.UserPromptPosition
-import com.aicode.feature.agent.domain.prompt.UserPromptScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
+import com.aicode.feature.agent.domain.prompt.PromptFragment
+import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.presentation.component.MarkdownContent
 import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
@@ -152,9 +151,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Memory(R.string.settings_memory),
     MemoryEditor(R.string.settings_memory),
     Prompts(R.string.prompts_title),
+    PromptDetail(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
-    PromptsAdvanced(R.string.prompts_advanced),
-    PromptsHelp(R.string.prompts_help),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
@@ -185,11 +183,10 @@ private fun SettingsSection.depth(): Int = when (this) {
     // 技能/子代理编辑页既可从列表(1) 进也可从详情页(2) 进，必须比详情页更深：
     // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SkillEditor,
-    SettingsSection.SubAgentEditor -> 3
+    SettingsSection.SubAgentEditor,
+    SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
-    SettingsSection.PromptEditor,
-    SettingsSection.PromptsAdvanced,
-    SettingsSection.PromptsHelp,
+    SettingsSection.PromptDetail,
     SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
@@ -197,9 +194,6 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.Log -> 2
     else -> 1
 }
-
-/** 待确认删除的提示词：删除需要 prompt 与它所在作用域两个参数。 */
-private data class PromptDeleteTarget(val prompt: UserPrompt, val scope: UserPromptScope)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -266,6 +260,8 @@ fun SettingsScreen(
     val updateCheckChannel by viewModel.updateCheckChannel.collectAsStateWithLifecycle()
     val containerAnnouncementText by viewModel.containerAnnouncementText.collectAsStateWithLifecycle()
     val containerAnnouncementOutdated by viewModel.containerAnnouncementOutdated.collectAsStateWithLifecycle()
+    val promptsAnnouncementText by viewModel.promptsAnnouncementText.collectAsStateWithLifecycle()
+    val promptsAnnouncementOutdated by viewModel.promptsAnnouncementOutdated.collectAsStateWithLifecycle()
     val imageCatalog by viewModel.imageCatalog.collectAsStateWithLifecycle()
     val imageDownload by viewModel.containerImageDownload.collectAsStateWithLifecycle()
     val containerReset by viewModel.containerReset.collectAsStateWithLifecycle()
@@ -344,14 +340,13 @@ fun SettingsScreen(
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
 
-    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/片段）
+    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
-    // 片段编辑页的未保存状态：由编辑页上报，返回时先确认再走，避免改了一半被丢掉
-    var fragmentEditorDirty by remember { mutableStateOf(false) }
-    var showFragmentDiscardDialog by remember { mutableStateOf(false) }
-    // 待确认删除的提示词：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
-    var promptToDelete by remember { mutableStateOf<PromptDeleteTarget?>(null) }
+    var selectedPrompt by remember { mutableStateOf<PromptFragment?>(null) }
+    var showPromptsAnnouncement by remember { mutableStateOf(false) }
+    // 编辑页返回目标：从详情进就回详情，从列表「+」进就回列表。
+    var promptEditorReturn by remember { mutableStateOf(SettingsSection.Prompts) }
     // 记忆编辑目标：null 表示编辑器未打开；MemoryEditorTarget(memory = null) 表示从右上角「+」新建。
     // 编辑器是整屏分区（SettingsSection.MemoryEditor），不再是底部弹层。
     var memoryEditorTarget by remember { mutableStateOf<MemoryEditorTarget?>(null) }
@@ -404,9 +399,8 @@ fun SettingsScreen(
         SettingsSection.ProviderEditor -> SettingsSection.Providers
         SettingsSection.Log -> logReturnSection.takeUnless { expanded && it == SettingsSection.Menu }
         SettingsSection.SkillDetail -> SettingsSection.Skills
-        SettingsSection.PromptEditor -> SettingsSection.Prompts
-        SettingsSection.PromptsAdvanced -> SettingsSection.Prompts
-        SettingsSection.PromptsHelp -> SettingsSection.Prompts
+        SettingsSection.PromptEditor -> promptEditorReturn
+        SettingsSection.PromptDetail -> SettingsSection.Prompts
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
@@ -416,43 +410,8 @@ fun SettingsScreen(
     }
 
     // 有上一层时系统返回键先回上一层；没有则交还给上层导航。
-    // 片段编辑页有未保存改动时先拦下来确认：直接走会把刚写的内容丢掉。
-    // 编辑页只从「提示词」页进，所以待确认的返回目标恒为它。
-    val leaveCurrentSection: (SettingsSection) -> Unit = { target ->
-        if (section == SettingsSection.PromptEditor && fragmentEditorDirty) {
-            showFragmentDiscardDialog = true
-        } else {
-            section = target
-        }
-    }
-
-    // 离开片段编辑页后清掉脏标记：脏标记是页面级状态，留着会误拦下一次进入的其它页面
-    LaunchedEffect(section) {
-        if (section != SettingsSection.PromptEditor) fragmentEditorDirty = false
-    }
-
-    if (showFragmentDiscardDialog) {
-        AlertDialog(
-            onDismissRequest = { showFragmentDiscardDialog = false },
-            title = { Text(stringResource(R.string.editor_unsaved_title)) },
-            text = { Text(stringResource(R.string.prompts_unsaved_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showFragmentDiscardDialog = false
-                    fragmentEditorDirty = false
-                    section = SettingsSection.Prompts
-                }) { Text(stringResource(R.string.prompts_discard)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showFragmentDiscardDialog = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            }
-        )
-    }
-
     BackHandler(enabled = parentSection != null) {
-        parentSection?.let(leaveCurrentSection)
+        parentSection?.let { section = it }
     }
 
     // settingsViewModel 为 Activity 级共享实例，每次进入设置页重新扫描技能，反映磁盘增删改。
@@ -483,6 +442,13 @@ fun SettingsScreen(
     LaunchedEffect(section, containerAnnouncementOutdated) {
         if (section == SettingsSection.Container && containerAnnouncementOutdated && containerAnnouncementText.isNotBlank()) {
             showContainerAnnouncement = true
+        }
+    }
+
+    // 首次（或公告内容更新后）进入「提示词」页自动弹出使用说明公告；哈希比对在 ViewModel 完成。
+    LaunchedEffect(section, promptsAnnouncementOutdated) {
+        if (section == SettingsSection.Prompts && promptsAnnouncementOutdated && promptsAnnouncementText.isNotBlank()) {
+            showPromptsAnnouncement = true
         }
     }
 
@@ -623,6 +589,28 @@ fun SettingsScreen(
                 }
             )
 
+            current == SettingsSection.PromptEditor -> {
+                val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                val number = promptEditTarget?.number
+                val fragment = number?.let { value -> promptsState.fragments.firstOrNull { it.number == value } }
+                PromptEditorScreen(
+                    isNew = number == null,
+                    initialNumber = number ?: 0,
+                    initialTitle = fragment?.title.orEmpty(),
+                    initialDescription = fragment?.description.orEmpty(),
+                    initialContent = fragment?.body.orEmpty(),
+                    initialScope = fragment?.source ?: PromptFragmentSource.GLOBAL,
+                    hasWorkspace = promptsState.hasWorkspace,
+                    onSave = { savedNumber, title, scope, content ->
+                        promptsViewModel.saveFragment(savedNumber, title, scope, content, previousNumber = number)
+                        section = promptEditorReturn
+                    },
+                    onNavigateBack = { section = promptEditorReturn }
+                )
+            }
+
             // 记忆新建/编辑页：与子代理编辑页一样自带顶栏，占满整屏（大屏占右栏）。
             // 点右上角「+」或长按列表行会先设好 memoryEditorTarget 再切到本分区。
             current == SettingsSection.MemoryEditor -> {
@@ -680,7 +668,7 @@ fun SettingsScreen(
                     if (!expanded || parentSection != null) {
                         IconButton(onClick = {
                             val parent = parentSection
-                            if (parent != null) leaveCurrentSection(parent) else onNavigateBack()
+                            if (parent != null) section = parent else onNavigateBack()
                         }) {
                             Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
                         }
@@ -818,13 +806,37 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Prompts -> IconButton(onClick = { showPromptsAddSheet = true }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.prompts_add_prompt),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Prompts -> {
+                            IconButton(onClick = { showPromptsAnnouncement = true }) {
+                                Icon(
+                                    FeatherIcons.Info,
+                                    contentDescription = stringResource(R.string.prompts_help),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            IconButton(onClick = { showPromptsAddSheet = true }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.prompts_add_prompt),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        SettingsSection.PromptDetail -> selectedPrompt?.let { fragment ->
+                            IconButton(onClick = {
+                                promptEditTarget = PromptEditTarget(fragment.number)
+                                promptEditorReturn = SettingsSection.PromptDetail
+                                section = SettingsSection.PromptEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Edit2,
+                                    contentDescription = stringResource(R.string.subagent_edit),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         SettingsSection.Memory -> IconButton(onClick = {
                             memoryEditorTarget = MemoryEditorTarget()
@@ -942,125 +954,43 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
                     LaunchedEffect(Unit) { promptsViewModel.refresh() }
-                    // 写覆盖副本失败：提示一次。失败时用户已经退回本页，所以就在这里等这个信号。
-                    val fragmentSaveFailed by promptsViewModel.fragmentSaveFailed.collectAsStateWithLifecycle()
-                    val promptsToastContext = LocalContext.current
-                    LaunchedEffect(fragmentSaveFailed) {
-                        if (fragmentSaveFailed) {
-                            Toast.makeText(
-                                promptsToastContext,
-                                promptsToastContext.getString(R.string.prompts_save_failed),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            promptsViewModel.clearFragmentSaveFailed()
-                        }
-                    }
                     PromptsSection(
                         state = promptsState,
-                        onMarkHelpRead = promptsViewModel::markHelpRead,
                         onOpenFragment = { fragment ->
-                            promptEditTarget = PromptEditTarget(fragmentNumber = fragment.number)
-                            section = SettingsSection.PromptEditor
+                            selectedPrompt = fragment
+                            section = SettingsSection.PromptDetail
                         },
-                        onOpenPrompt = { prompt, scope ->
-                            promptEditTarget = PromptEditTarget(prompt = prompt, scope = scope)
-                            section = SettingsSection.PromptEditor
-                        },
-                        onDeletePrompt = { prompt, scope ->
-                            promptToDelete = PromptDeleteTarget(prompt, scope)
-                        }
+                        onDeleteFragment = promptsViewModel::deleteFragment,
+                        onReorder = promptsViewModel::reorderFragments,
+                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled
                     )
                     if (showPromptsAddSheet) {
                         PromptsAddSheet(
                             onDismiss = { showPromptsAddSheet = false },
-                            onAddPrompt = {
+                            onAddFragment = {
                                 showPromptsAddSheet = false
-                                promptEditTarget = PromptEditTarget()
+                                promptEditTarget = PromptEditTarget(null)
+                                promptEditorReturn = SettingsSection.Prompts
                                 section = SettingsSection.PromptEditor
-                            },
-                            onAdvanced = {
-                                showPromptsAddSheet = false
-                                section = SettingsSection.PromptsAdvanced
                             },
                             onHelp = {
                                 showPromptsAddSheet = false
-                                section = SettingsSection.PromptsHelp
-                            }
-                        )
-                    }
-                    // 删除提示词二次确认：确认按钮里才真正删（需要 prompt + scope，状态带住两个）
-                    promptToDelete?.let { target ->
-                        AlertDialog(
-                            onDismissRequest = { promptToDelete = null },
-                            title = { Text(stringResource(R.string.prompts_delete_confirm_title)) },
-                            text = { Text(stringResource(R.string.prompts_delete_confirm_message, target.prompt.name)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    promptsViewModel.deletePrompt(target.prompt, target.scope)
-                                    promptToDelete = null
-                                }) { Text(stringResource(R.string.common_delete)) }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { promptToDelete = null }) { Text(stringResource(R.string.common_cancel)) }
+                                showPromptsAnnouncement = true
                             }
                         )
                     }
                 }
-                SettingsSection.PromptEditor -> {
+                SettingsSection.PromptDetail -> {
                     val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
-                    val target = promptEditTarget
-                    val fragment = target?.fragmentNumber?.let { number ->
-                        promptsState.fragments.firstOrNull { it.number == number }
-                    }
-                    if (fragment != null) {
-                        FragmentEditorSection(
-                            number = fragment.number,
-                            title = fragment.title,
-                            initialContent = fragment.content,
-                            overridden = fragment.isOverridden,
-                            onSave = { content ->
-                                promptsViewModel.saveFragment(fragment.number, fragment.title, content)
-                                section = SettingsSection.Prompts
-                            },
-                            onRestoreBuiltin = {
-                                promptsViewModel.restoreBuiltin(fragment.number)
-                                section = SettingsSection.Prompts
-                            },
-                            onDirtyChange = { fragmentEditorDirty = it }
-                        )
-                    } else {
-                        PromptEditorSection(
-                            isNew = target?.prompt == null,
-                            initialName = target?.prompt?.name.orEmpty(),
-                            initialScope = target?.scope ?: UserPromptScope.GLOBAL,
-                            initialPosition = target?.prompt?.position ?: UserPromptPosition.AFTER_SYSTEM,
-                            initialContent = target?.prompt?.content.orEmpty(),
-                            initialEnabled = target?.prompt?.enabled ?: true,
-                            hasWorkspace = promptsState.hasWorkspace,
-                            onSave = { name, scope, position, content, enabled ->
-                                promptsViewModel.savePrompt(target?.prompt, name, scope, position, content, enabled)
-                                section = SettingsSection.Prompts
-                            }
-                        )
-                    }
-                }
-                SettingsSection.PromptsAdvanced -> {
-                    val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
-                        androidx.hilt.navigation.compose.hiltViewModel()
-                    val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
-                    PromptsAdvancedSection(
-                        builtinDisabled = promptsState.builtinDisabled,
-                        fragments = promptsState.fragments,
-                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled,
-                        onOpenFragment = { fragment ->
-                            promptEditTarget = PromptEditTarget(fragmentNumber = fragment.number)
-                            section = SettingsSection.PromptEditor
+                    selectedPrompt?.let { sel ->
+                        promptsState.fragments.firstOrNull { it.number == sel.number }?.let { fragment ->
+                            PromptDetailSection(fragment = fragment)
                         }
-                    )
+                    }
                 }
-                SettingsSection.PromptsHelp -> PromptsHelpSection()
+                SettingsSection.PromptEditor -> Unit
                 SettingsSection.Memory -> {
                     // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
@@ -1493,6 +1423,71 @@ fun SettingsScreen(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(stringResource(R.string.container_announcement_got_it))
+                    }
+                }
+            }
+        }
+    }
+
+    // 提示词使用说明公告：首次进入（或内容更新后）自动弹出，右上角 Info 按钮可随时重看。
+    if (showPromptsAnnouncement) {
+        val dismiss = {
+            showPromptsAnnouncement = false
+            viewModel.markPromptsAnnouncementShown()
+        }
+        Dialog(onDismissRequest = dismiss) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.72f)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .padding(20.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.prompts_help),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (promptsAnnouncementText.isNotBlank()) {
+                        // mikepenz Markdown 内部是 Column（非 LazyColumn），本身不可滚动，
+                        // 必须由外层提供滚动容器，否则超出弹窗高度的内容被直接裁剪。
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                                .padding(top = 8.dp, bottom = Spacing.lg)
+                        ) {
+                            MarkdownContent(
+                                text = promptsAnnouncementText,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.fillMaxWidth(),
+                                loading = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 24.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator()
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = dismiss,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .padding(top = 4.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(stringResource(R.string.common_got_it))
                     }
                 }
             }

@@ -673,6 +673,14 @@ class SettingsViewModel @Inject constructor(
     private val _containerAnnouncementOutdated = MutableStateFlow(false)
     val containerAnnouncementOutdated: StateFlow<Boolean> = _containerAnnouncementOutdated.asStateFlow()
 
+    /** 「提示词」页公告内容（跟随界面语言），与 [promptsAnnouncementOutdated] 配套供弹窗渲染。 */
+    private val _promptsAnnouncementText = MutableStateFlow("")
+    val promptsAnnouncementText: StateFlow<String> = _promptsAnnouncementText.asStateFlow()
+
+    /** 「提示词」页公告是否需要弹出：本地未存哈希或与当前内容哈希不一致（内容更新过）时为 true。 */
+    private val _promptsAnnouncementOutdated = MutableStateFlow(false)
+    val promptsAnnouncementOutdated: StateFlow<Boolean> = _promptsAnnouncementOutdated.asStateFlow()
+
     private val _imageCatalog = MutableStateFlow<List<ContainerImageEntry>>(emptyList())
     val imageCatalog: StateFlow<List<ContainerImageEntry>> = _imageCatalog.asStateFlow()
 
@@ -761,6 +769,14 @@ class SettingsViewModel @Inject constructor(
                 val text = loadContainerAnnouncement(context, tag)
                 _containerAnnouncementText.value = text
                 _containerAnnouncementOutdated.value = storedHash != sha256(text)
+            }.collect {}
+        }
+        // 「提示词」页公告同样按「内容哈希比对」判断是否弹出。
+        viewModelScope.launch {
+            combine(_languageTag, generalSettingsRepository.promptsAnnouncementShownHashFlow) { tag, storedHash ->
+                val text = loadPromptsAnnouncement(context, tag)
+                _promptsAnnouncementText.value = text
+                _promptsAnnouncementOutdated.value = storedHash != sha256(text)
             }.collect {}
         }
         viewModelScope.launch {
@@ -1791,6 +1807,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 标记「提示词」页公告已展示；与容器公告同理，内容更新（哈希变）后自动重新弹。 */
+    fun markPromptsAnnouncementShown() {
+        viewModelScope.launch {
+            generalSettingsRepository.markPromptsAnnouncementShown(sha256(_promptsAnnouncementText.value))
+        }
+    }
+
     /** 切换全局下载源（官方/华为云/阿里云/腾讯云等）。 */
     fun setImageSource(sourceId: String) {
         _selectedImageSource.value = sourceId
@@ -2359,6 +2382,16 @@ private fun loadContainerAnnouncement(context: Context, languageTag: String?): S
     val zh = lang.startsWith("zh", ignoreCase = true)
     return runCatching {
         context.assets.open("announcements/container-guide.${if (zh) "zh" else "en"}.md")
+            .bufferedReader().use { it.readText() }
+    }.getOrDefault("")
+}
+
+/** 读取「提示词」页公告 md（zh 用中文版，其余英文版）；读取失败返回空串（空内容不弹窗）。 */
+private fun loadPromptsAnnouncement(context: Context, languageTag: String?): String {
+    val lang = languageTag?.takeIf { it.isNotBlank() } ?: java.util.Locale.getDefault().language
+    val zh = lang.startsWith("zh", ignoreCase = true)
+    return runCatching {
+        context.assets.open("announcements/prompts-guide.${if (zh) "zh" else "en"}.md")
             .bufferedReader().use { it.readText() }
     }.getOrDefault("")
 }

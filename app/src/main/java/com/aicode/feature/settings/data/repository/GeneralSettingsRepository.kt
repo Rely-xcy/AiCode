@@ -49,6 +49,8 @@ class GeneralSettingsRepository @Inject constructor(
         val SOFT_COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("soft_compaction_threshold_percent")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
+        /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
+        val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
 
         /** 首字超时默认 5 分钟，与原硬编码值一致。 */
         const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 300
@@ -237,6 +239,15 @@ class GeneralSettingsRepository @Inject constructor(
 
     /** 移除外部工作区前读取一次该偏好。 */
     suspend fun deleteExternalWorkspaceSessions(): Boolean = deleteExternalWorkspaceSessionsFlow.first()
+
+    /** 「提示词」页公告已展示内容的哈希；无值表示从未展示过。 */
+    val promptsAnnouncementShownHashFlow: Flow<String?> = context.generalDataStore.data.map { prefs ->
+        prefs[PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY]
+    }
+
+    suspend fun markPromptsAnnouncementShown(hash: String) {
+        context.generalDataStore.edit { it[PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY] = hash }
+    }
 
     /** 备份快照：外部工作区聊天记录处理偏好。 */
     suspend fun deleteExternalWorkspaceSessionsSnapshot(): Boolean = deleteExternalWorkspaceSessionsFlow.first()

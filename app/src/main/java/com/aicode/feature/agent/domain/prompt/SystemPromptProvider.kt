@@ -18,10 +18,10 @@ import javax.inject.Singleton
 
 /**
  * 按模块组装系统提示词：稳定基线放最前（享受 KV Cache），仅日期为低频变化。
- * 每个 Source 维护内容缓存，避免重复读取与格式化。
+ * 多数 Source 维护内容缓存，避免重复读取与格式化；静态基线片段除外，每次读盘以保证编辑即时生效。
  *
  * 片段分两类：
- * - 静态基线：`prompts/` 顶层 `<NN>-<名称>.md`（见 [BASE_FRAGMENTS]），可被 `prompts.custom/` 按数字身份覆盖或新增；
+ * - 静态基线：`prompts/` 顶层 `<NN>-<名称>.md`，可被 `prompts.custom/` 按数字身份覆盖或新增；
  * - 按需叶子：`prompts/agent/` 下的无数字片段（模式提醒、子代理基线、压缩/标题提示词），按精确同名覆盖。
  *
  * `prompts.custom/` 存在 [PromptFragmentResolver.DISABLE_BUILTIN_FILE] 时，主代理提示词只由自定义数字片段组成，
@@ -32,7 +32,7 @@ class SystemPromptProvider @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val skillRepository: SkillRepository,
     private val agentEngine: AgentEngine,
-    private val userPromptStore: UserPromptStore,
+    private val promptFragmentCatalog: PromptFragmentCatalog,
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository
 ) {
@@ -42,28 +42,8 @@ class SystemPromptProvider @Inject constructor(
     }
 
     private inner class StaticRuleSource : PromptSource {
-        @Volatile private var cached: String? = null
-
-        override fun build(ctx: AgentContext): String {
-            return cached ?: run {
-                val merged = PromptFragmentResolver.mergeStatic(
-                    BASE_FRAGMENTS.keys.toList(),
-                    PromptFragmentResolver.numberedFragments(customDir)
-                )
-                val pieces = merged.mapNotNull { (number, override) ->
-                    // 内置数字走 resolvePrompt（内部按数字身份查覆盖）；新增片段直接读自定义文件。
-                    val raw = BASE_FRAGMENTS[number]?.let { resolvePrompt(it) }
-                        ?: override?.let { readOverrideOrNull(it, it.name) }
-                    raw?.replace(LEADING_COMMENT, "")?.trim()?.takeIf { it.isNotEmpty() }
-                }
-                // 所有片段都空会让系统提示词整体变空。空片段本身合法（用户有意清空某个片段），
-                // 但「全空」几乎必然是出错了，留一条日志，别让这种失效无声无息。
-                if (pieces.isEmpty() && merged.isNotEmpty()) {
-                    FileLogger.w(TAG, "静态基线片段全部为空，系统提示词将不包含内置基线（共 ${merged.size} 个片段）")
-                }
-                pieces.joinToString("\n\n").also { cached = it }
-            }
-        }
+        // 每次都重新读盘：未编辑时字符串一致，KV Cache 照常命中；编辑后立即生效，无需重启。
+        override fun build(ctx: AgentContext): String = promptFragmentCatalog.renderStatic(ctx.projectRoot)
     }
 
     private inner class ActiveSkillsSource : PromptSource {
@@ -224,28 +204,6 @@ class SystemPromptProvider @Inject constructor(
     private val engineFragmentSource = EngineFragmentSource()
     private val subAgentRulesSource = SubAgentRulesSource()
 
-    /**
-     * 用户自定义提示词：不参与内置片段的编号排序，只按注入位置拼在两端。
-     *
-     * - [UserPromptPosition.BEFORE_ALL]：拼在所有内置提示词之前
-     * - [UserPromptPosition.AFTER_SYSTEM]：拼在整个系统提示词之后
-     * - [UserPromptPosition.OFF]：不注入
-     *
-     * 只在主代理的 build() 里用（子代理与「仅自定义片段」模式不注入）。
-     */
-    private inner class UserPromptSource {
-        fun buildAt(position: UserPromptPosition, ctx: AgentContext): String? {
-            val prompts = runCatching {
-                userPromptStore.list(UserPromptScope.GLOBAL, ctx.projectRoot) +
-                    userPromptStore.list(UserPromptScope.PROJECT, ctx.projectRoot)
-            }.getOrDefault(emptyList())
-                .filter { it.enabled && it.position == position && it.content.isNotBlank() }
-            if (prompts.isEmpty()) return null
-            return prompts.joinToString("\n\n") { it.content.trim() }
-        }
-    }
-
-    private val userPromptSource = UserPromptSource()
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
@@ -290,11 +248,6 @@ class SystemPromptProvider @Inject constructor(
 
         // 4. 组装最终提示词：把稳定不变的重头基线放最前面（享受 KV Cache），变化部分放末尾
         return buildString {
-            // 用户提示词（最前）：拼在基线之前
-            userPromptSource.buildAt(UserPromptPosition.BEFORE_ALL, agentContext)?.let {
-                append(it)
-                append("\n\n")
-            }
             append(staticContent)
 
             if (SKILLS_VAR !in rawStatic) skillsContent?.let { append("\n\n"); append(it) }
@@ -310,12 +263,6 @@ class SystemPromptProvider @Inject constructor(
                 append("\n\n")
                 append(timeContent)
             }
-
-            // 用户提示词（最后）：拼在整个系统提示词之后
-            userPromptSource.buildAt(UserPromptPosition.AFTER_SYSTEM, agentContext)?.let {
-                append("\n\n")
-                append(it)
-            }
         }
     }
 
@@ -324,22 +271,14 @@ class SystemPromptProvider @Inject constructor(
      * 不注入任何内置来源；动态内容仅通过 `{{AICODE_*}}` 变量按需取回。
      */
     private fun buildCustomOnly(ctx: AgentContext): String {
-        val fragments = PromptFragmentResolver.numberedFragments(customDir)
-        if (fragments.isEmpty()) {
+        val content = promptFragmentCatalog.renderCustomOnly(ctx.projectRoot)
+        if (content.isEmpty()) {
             FileLogger.w(
                 TAG,
                 "已启用 ${PromptFragmentResolver.DISABLE_BUILTIN_FILE}，但 $customDir 下没有 <两位数字>-<名称>.md 片段，系统提示词为空"
             )
             return ""
         }
-        val content = fragments
-            .mapNotNull { (_, file) ->
-                readOverrideOrNull(file, file.name)
-                    ?.replace(LEADING_COMMENT, "")
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            }
-            .joinToString("\n\n")
         return renderVariables(
             content,
             activeSkillsSource.build(ctx),
@@ -447,37 +386,18 @@ class SystemPromptProvider @Inject constructor(
     /**
      * 按优先级解析单个提示词片段：
      * - 名字是顶层 `<NN>-*.md`：先按数字身份在 `prompts.custom/` 顶层找覆盖（尾部名称可自由改），
-     *   没按编号命中才看同目录下的精确同名文件（1.12.0 之前的老写法）；
      * - 其余名字（含 `agent/` 子目录）：按精确同名在 `prompts.custom/<name>` 找覆盖；
      * 再落到 `prompts/<name>`（本地默认副本），最后 assets（内置兜底）。
      *
      * 本地副本由 [ContainerInstaller.extractPrompts] 在启动时全量释放，App 升级后随之更新。
      */
     fun resolvePrompt(name: String): String {
-        val override = PromptFragmentResolver.parseNumber(name)
-            ?.let { customFragmentsByNumber[it] }
-            ?: File(customDir, name)
-        readOverrideOrNull(override, name)?.let { return it }
+        PromptFragmentResolver.parseNumber(name)
+            ?.let { number -> readFileOrNull(customFragmentsByNumber[number])?.let { return it } }
+        readFileOrNull(File(customDir, name))?.let { return it }
         readFileOrNull(File(File(containerInstaller.aicodeDir, "prompts"), name))?.let { return it }
         return context.assets.open("prompts/$name").bufferedReader().use { it.readText() }
     }
-
-    /**
-     * 读 `prompts.custom/` 下的覆盖副本，判定规则与设置页共用 [PromptFragmentResolver.readOverride]：
-     * 副本不可用时返回 null，交给调用方继续往下找内置版本，同时在这里留下日志。
-     *
-     * 两处各写一套判定会漂移：设置页拿内置内容给用户看、运行时却用了坏副本，
-     * 用户看到的就不是实际生效的东西。
-     */
-    private fun readOverrideOrNull(file: File?, name: String): String? =
-        when (val read = PromptFragmentResolver.readOverride(file)) {
-            is PromptFragmentResolver.OverrideRead.Present -> read.content
-            PromptFragmentResolver.OverrideRead.Absent -> null
-            is PromptFragmentResolver.OverrideRead.Unreadable -> {
-                FileLogger.w(TAG, "覆盖副本不可用，已回落内置: $name", read.cause)
-                null
-            }
-        }
 
     private fun readFileOrNull(file: File?): String? {
         if (file == null || !file.isFile) return null
@@ -500,18 +420,6 @@ class SystemPromptProvider @Inject constructor(
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
 
         /** 内置静态基线：数字身份 → 规范文件名，决定默认拼接顺序。 */
-        val BASE_FRAGMENTS = linkedMapOf(
-            0 to "00-identity.md",
-            10 to "10-communication.md",
-            15 to "15-project-rules.md",
-            20 to "20-coding-discipline.md",
-            30 to "30-comments.md",
-            40 to "40-approach.md",
-            50 to "50-safety.md",
-            60 to "60-tools-and-paths.md",
-            70 to "70-skills-and-mcp.md"
-        )
-
         // 片段里可用的运行期变量，渲染时替换为真实内容
         const val SKILLS_VAR = "{{AICODE_SKILLS}}"
         const val MEMORY_VAR = "{{AICODE_MEMORY}}"
