@@ -151,7 +151,7 @@ class TodoTool @Inject constructor(
         return try {
             val existing = todoItemDao.getBySessionOnce(sessionId)
             when (action) {
-                Action.LIST -> buildSuccess("当前清单", existing.map { it.toDomain() })
+                Action.LIST -> buildSuccess(TodoListText.LIST_ACTION_MESSAGE, existing.map { it.toDomain() })
                 Action.CLEAR -> clearAll(sessionId)
                 Action.REPLACE -> replaceAll(args, sessionId, existing)
                 Action.ADD -> addItems(args, sessionId, existing)

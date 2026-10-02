@@ -76,6 +76,7 @@ data class MemoryListGroups(val global: String?, val project: String?)
  * - [subAgentRules]：会话是子代理时要加的固定纪律段（不受 inject 门禁）；
  * - [tools]：本轮要不要额外提供工具；
  * - [beforeLlmCall]：调模型前对即将发送的消息做处理（压缩、精简、过滤）；
+ * - [finalResponseGuard]：模型要收尾时的边界守卫（拦下并回灌一条提醒）；
  * - [onTurnCompleted]：一轮对话正常结束后的沉淀/维护；
  * - [onSessionDeleted]：会话被删除后的清理（模块自持的会话级状态在这里释放）。
  *
@@ -123,6 +124,17 @@ interface EngineModule {
      * 调用方要用返回值去发请求，所以必须等结果；返回 null 表示本轮不改动。
      */
     suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? = null
+
+    /**
+     * 模型要给出本轮最终回复（没有工具调用、没被截断）时的收尾守卫：返回非空文本表示**拦下这一轮**，
+     * 调用方把这段文本当用户消息回灌并重新请求模型。
+     *
+     * 与 [promptFragment] 的区别：那个只能在轮次开始时说话，改的是「倾向」；这个在模型「已经说完」
+     * 的边界上拦，改的是「保证」——提示词里提醒一百遍不如边界上一次拦截。
+     * 与 [beforeLlmCall] 一样是同步链路（调用方要拿返回值决定是否再发一次请求），
+     * 拿不到结论时返回 null：守卫不能把对话拖死。
+     */
+    suspend fun finalResponseGuard(ctx: EngineContext, finalText: String): String? = null
 
     /** 一轮对话正常结束（成功、未取消）后调用。 */
     suspend fun onTurnCompleted(ctx: EngineContext) {}

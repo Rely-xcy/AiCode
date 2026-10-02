@@ -4,9 +4,10 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
-import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.TodoItem
+import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.todo.TodoListText
+import com.aicode.feature.agent.domain.todo.TodoProgressGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,14 +20,18 @@ import javax.inject.Singleton
 /**
  * 任务模块：把「当前会话的任务清单」接进引擎。
  *
- * 只做一件事——每轮把清单连同**新鲜度**注入系统提示词，让「该更新了」变成看得见的事实：
- * 清单存在独立表里而不是消息历史里，所以上下文压到多深都能看到进度；而「上一回合调了多少次工具、
- * 有没有更新过清单」这类信号，是模型判断自己是否落后的唯一依据（以前它连清单都看不到）。
+ * 两个口子，一前一后：
+ * 1. **注入**——每轮把清单连同新鲜度放进系统提示词，让进度在上下文压到多深时都看得见
+ *    （清单存在独立表里而不是消息历史里，就是为了这个）；
+ * 2. **收尾守卫**——模型要给出本轮最终回复时在边界上拦一次：这一轮在推进任务、清单里还有
+ *    未完成项、清单却整轮没被动过，就把「清单落后」这件事当场告诉它（判据见 [TodoProgressGuard]）。
+ *    以前只有第一件事，靠提示词里的「提醒 + 统计」推动更新，实测治不住——提醒是描述，边界是动作。
  *
  * 为什么需要同步快照：系统提示词是同步拼接的（[EngineModule.promptFragment] 不是 suspend），
  * 读不了 Room 的 suspend 查询。所以这里沿用记忆开关（`MemorySettingsRepository`）的做法——
  * 进程启动时先把各会话的清单铺进内存，之后每个会话挂一个 Flow 收集器持续刷新。
- * 快照还没就绪时**什么都不说**（不谎报「没有清单」），只注入纪律规则。
+ * 快照还没就绪时**什么都不说**（不谎报「没有清单」），只注入纪律规则；收尾守卫是 suspend 的，
+ * 快照没就绪就补读一次库——提示词可以等下一轮，收尾拦截错过就没了。
  *
  * 这里只读不写：清单的增删改都归 `todo` 工具，语义上「目标（goal）」是另一层，不混进来。
  */
@@ -75,6 +80,21 @@ class TaskModule @Inject constructor(
      */
     override fun subAgentRules(ctx: EngineContext): String? =
         DISCIPLINE_RULE.takeIf { ctx.isSubAgent }
+
+    /**
+     * 收尾守卫：模型要给出本轮最终回复时，若这一轮在推进任务、清单里还有未完成项、而清单整轮没被动过，
+     * 就拦下并给一条点名到项级的提醒（判据与文案在 [TodoProgressGuard]）。
+     *
+     * 快照没就绪就补读一次库；读失败直接抛给 [AgentEngine] 兜（记日志、本轮放行）——守卫不能把对话弄挂。
+     */
+    override suspend fun finalResponseGuard(ctx: EngineContext, finalText: String): String? {
+        val sessionId = ctx.sessionId ?: return null
+        val items = snapshotOf(sessionId) ?: todoItemDao.getBySessionOnce(sessionId).map { it.toDomain() }
+        if (!TodoProgressGuard.needsReminder(items, ctx.history, finalText)) return null
+        val streak = TodoProgressGuard.missedStreak(ctx.history).missedTurns + 1
+        FileLogger.w(TAG, "收尾守卫拦下本轮回复：清单未随本轮工作更新（连续第 $streak 轮）")
+        return TodoProgressGuard.buildReminder(items, ctx.history)
+    }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         val sessionId = ctx.sessionId ?: return
@@ -129,59 +149,35 @@ class TaskModule @Inject constructor(
     }
 
     /**
-     * 新鲜度：清单多久没动过 + 上一回合干了多少活。两行都只陈述事实，不做猜测——
-     * 模型要的是「我是不是落后了」，而不是被念一遍。
+     * 新鲜度：只说「要你动手」的那种，其余一律不开口。
+     *
+     * 上一版每轮都念「清单最后变动：约 N 分钟前；上一回合调用工具 N 次，其中更新清单 0 次」——
+     * 正常也念、落后也念，很快就变成背景音被整段无视。现在只在两种情况注入：
+     * 清单已连续若干轮没跟着工作更新（跨轮升级；收尾守卫没兜住时才会走到这里），
+     * 或清单全部完成且久未变动（该清空、该建新清单）。
      */
     private fun freshness(items: List<TodoItem>, ctx: EngineContext): String? {
-        val parts = mutableListOf<String>()
-        val lastTouchedAt = items.maxOf { it.updatedAt }
-        val minutes = ((System.currentTimeMillis() - lastTouchedAt) / 60_000L).coerceAtLeast(0)
-        parts += if (minutes < 1) "清单刚刚更新过" else "清单最后变动：约 $minutes 分钟前"
-
-        val stats = previousTurnStats(ctx.history)
-        if (stats != null && stats.toolCalls > 0) {
-            parts += "上一回合调用工具 ${stats.toolCalls} 次，其中更新清单 ${stats.todoCalls} 次"
+        val minutes = ((System.currentTimeMillis() - items.maxOf { it.updatedAt }) / 60_000L).coerceAtLeast(0)
+        if (items.none { it.status != TodoStatus.COMPLETED }) {
+            if (minutes < ALL_DONE_QUIET_MINUTES) return null
+            return "清单已全部完成、约 $minutes 分钟没变动：没有待办时 todo(action=\"clear\") 清空，" +
+                "或把下一件事建成新清单。"
         }
-
-        val stale = stats != null && stats.toolCalls >= STALE_TOOL_CALLS && stats.todoCalls == 0
-        val staleCalls = if (stale) stats?.toolCalls ?: 0 else 0
-        return buildString {
-            append(parts.joinToString("；"))
-            if (stale) {
-                append("\n上一回合做了 $staleCalls 次工具调用却没更新过清单——")
-                append("如果那里面有已经完成的步骤，先 todo(action=\"update\") 把状态补上，再开始新工作。")
-            }
-        }
+        val missed = TodoProgressGuard.missedStreak(ctx.history)
+        if (missed.missedTurns == 0) return null
+        return "清单已连续 ${missed.missedTurns} 轮没随工作更新（这 ${missed.missedTurns} 轮共 ${missed.toolCalls} 次工具调用、" +
+            "约 $minutes 分钟前最后一次变动）——上面未完成的项若已做完或正在做，先 todo(action=\"update\") 对齐，再开始新工作。"
     }
-
-    /** 上一回合（最后一条用户消息之前的那一段）的工具调用统计。看不到就返回 null。 */
-    private fun previousTurnStats(history: List<AgentMessage>): TurnStats? {
-        val lastUser = history.indexOfLast { it is AgentMessage.UserMessage }
-        if (lastUser <= 0) return null
-        val previousUser = history.subList(0, lastUser).indexOfLast { it is AgentMessage.UserMessage }
-        val segment = history.subList(if (previousUser < 0) 0 else previousUser + 1, lastUser)
-        val toolResults = segment.filterIsInstance<AgentMessage.ToolResultMessage>()
-        if (toolResults.isEmpty()) return null
-        return TurnStats(
-            toolCalls = toolResults.size,
-            todoCalls = toolResults.count { it.toolName == TOOL_NAME }
-        )
-    }
-
-    private data class TurnStats(val toolCalls: Int, val todoCalls: Int)
 
     private companion object {
         const val MODULE_ID = "task"
         const val TAG = "TaskModule"
 
-        /** `todo` 工具的注册名（协议字段，不随文案变）。 */
-        const val TOOL_NAME = "todo"
-
         /** 同时跟踪的会话数上限：只防长期累积。 */
         const val MAX_WATCHED_SESSIONS = 64
 
-        /** 上一回合达到这么多次工具调用、却一次都没更新清单，就在注入里点出来。 */
-        const val STALE_TOOL_CALLS = 6
+        /** 清单全部完成、且这么久没再动过，才提一句「该清空或建新清单」：刚做完那一轮不念。 */
+        const val ALL_DONE_QUIET_MINUTES = 30L
 
         /**
          * 清单纪律：钉死「哪些时刻必须先调用工具」。规则写成动作，不写成态度——

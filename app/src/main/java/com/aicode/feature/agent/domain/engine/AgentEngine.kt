@@ -93,6 +93,26 @@ class AgentEngine @Inject constructor(
         return current
     }
 
+    /**
+     * 收尾守卫：依次问各模块「这次收尾要不要拦」，返回第一个非空提醒。
+     *
+     * 取第一个而不是拼接：拦一次就多一次模型往返，两个模块同时拦就是两次；
+     * 先拦下的那个把话说完，后面那个等下一轮（各模块自己的「本轮已补过」门禁负责收敛）。
+     * 模块抛异常只记日志并跳过——守卫失效可以退回提示词层，但不能把整轮对话弄挂。
+     */
+    suspend fun finalResponseGuard(ctx: EngineContext, finalText: String): String? {
+        sortedModules().forEach { module ->
+            val reminder = try {
+                module.finalResponseGuard(ctx, finalText)
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "模块 ${module.id} 的 finalResponseGuard 失败，已跳过", e)
+                null
+            }
+            if (!reminder.isNullOrBlank()) return reminder
+        }
+        return null
+    }
+
     /** 会话被删除：并发分发给所有模块，调用方不等待。 */
     fun onSessionDeleted(ctx: EngineContext) {
         dispatch("onSessionDeleted") { it.onSessionDeleted(ctx) }

@@ -15,6 +15,14 @@ object TodoListText {
     /** 单次渲染的条目上限：清单很长时优先列未完成的，避免提示词无上限膨胀。 */
     const val MAX_LINES = 30
 
+    /**
+     * `list` 动作的成功消息开头（后面还会拼「；下一个未完成项：…」这类后缀，所以只比对前缀）。
+     *
+     * 工具结果里不带调用参数，收尾守卫只能认这条文本，用来区分「只是看了一眼清单」与「真的改了清单」；
+     * [TodoProgressGuard] 依赖它，改这里要同步。
+     */
+    const val LIST_ACTION_MESSAGE = "当前清单"
+
     /** 待办状态标记：[x] 完成 / [~] 进行中 / [ ] 未开始。 */
     fun mark(status: TodoStatus): String = when (status) {
         TodoStatus.COMPLETED -> "[x]"

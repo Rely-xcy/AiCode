@@ -30,7 +30,9 @@ class AgentEngineTest {
         private val providedTools: List<AgentTool> = emptyList(),
         private val fragmentThrows: Boolean = false,
         private val hookThrows: Boolean = false,
-        private val subAgentFragment: String? = null
+        private val subAgentFragment: String? = null,
+        private val guardReminder: String? = null,
+        private val guardThrows: Boolean = false
     ) : EngineModule {
         var turnCompleted = 0
         var sessionDeleted = 0
@@ -43,6 +45,11 @@ class AgentEngineTest {
         override fun subAgentRules(ctx: EngineContext): String? = subAgentFragment
 
         override fun tools(ctx: EngineContext): List<AgentTool> = providedTools
+
+        override suspend fun finalResponseGuard(ctx: EngineContext, finalText: String): String? {
+            if (guardThrows) error("guard boom")
+            return guardReminder
+        }
 
         override suspend fun onTurnCompleted(ctx: EngineContext) {
             turnCompleted++
@@ -118,6 +125,21 @@ class AgentEngineTest {
         scope.advanceUntilIdle()
 
         assertEquals(1, module.sessionDeleted)
+    }
+
+    @Test
+    fun finalResponseGuard_returnsFirstNonBlankAndIsolatesFailures() = runTest {
+        val broken = FakeModule(id = "a", order = 1, guardThrows = true)
+        val silent = FakeModule(id = "b", order = 2)
+        val blank = FakeModule(id = "c", order = 3, guardReminder = "   ")
+        val hit = FakeModule(id = "d", order = 4, guardReminder = "清单落后了")
+        val later = FakeModule(id = "e", order = 5, guardReminder = "另一个模块的提醒")
+
+        val engine = AgentEngine(setOf(broken, silent, blank, hit, later), TestScope(testScheduler))
+
+        // 抛异常的跳过、空白不算命中、只取第一个非空（拦一次就多一次模型往返，不能叠加）
+        assertEquals("清单落后了", engine.finalResponseGuard(ctx, "已完成"))
+        assertNull(AgentEngine(setOf(silent), TestScope(testScheduler)).finalResponseGuard(ctx, "已完成"))
     }
 
     @Test

@@ -96,6 +96,7 @@ import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
+import com.aicode.feature.agent.domain.subagent.InterruptedWorkRecorder
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -436,7 +437,8 @@ object AgentModule {
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
         fileAccess: FileAccessProvider,
-        writeLeaseRegistry: WriteLeaseRegistry
+        writeLeaseRegistry: WriteLeaseRegistry,
+        interruptedWorkRecorder: InterruptedWorkRecorder
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -464,7 +466,8 @@ object AgentModule {
             agentNotificationCenter,
             eventInjector,
             fileAccess,
-            writeLeaseRegistry
+            writeLeaseRegistry,
+            interruptedWorkRecorder
         )
     }
 }

@@ -157,4 +157,44 @@ class WriteLeaseRegistryTest {
         assertTrue(message, message.contains("app/src/login"))
         assertTrue(message, message.contains("messageParent"))
     }
+
+    // ---------- 具体文件：半成品备份与 shell 盯防的依据 ----------
+
+    @Test
+    fun concreteFiles_onlyHoldsPathsClaimedForWrite() {
+        val reg = registry()
+        assertNull(reg.claimForWrite("sub-1", "改登录", "app/src/Login.kt", ROOT))
+        assertTrue(reg.claim("sub-1", "改登录", listOf("app/src/login"), ROOT).isEmpty())
+
+        // 写入认领的是具体文件；声明的范围（补了双星号的那份）不是单个文件，不列进来
+        assertEquals(listOf("app/src/Login.kt"), reg.concreteFiles().map { it.pattern })
+        assertEquals(listOf("app/src/Login.kt"), reg.concreteFilesOf("sub-1").map { it.pattern })
+        assertTrue(reg.concreteFilesOf("sub-2").isEmpty())
+    }
+
+    @Test
+    fun concreteFiles_doNotSurviveRelease() {
+        val reg = registry()
+        assertNull(reg.claimForWrite("sub-1", "改登录", "app/src/Login.kt", ROOT))
+        reg.release("sub-1")
+
+        assertTrue(reg.concreteFiles().isEmpty())
+    }
+
+    @Test
+    fun mainAgentMessageNamesHolderAndGivesWayOut() {
+        val reg = registry()
+        assertNull(reg.claimForWrite("sub-1", "改登录", "app/src/Login.kt", ROOT))
+
+        val message = reg.claimForWrite("parent", "主会话", "app/src/Login.kt", ROOT)
+            ?.describeForMainAgent("app/src/Login.kt")
+            .orEmpty()
+
+        assertTrue(message, message.contains("改登录"))
+        assertTrue(message, message.contains("app/src/Login.kt"))
+        assertTrue(message, message.contains("task(action=\"stop\""))
+        assertTrue(message, message.contains("task(action=\"send\""))
+        // 主代理那边是「照常执行 + 警告」，不能说成已被拒绝
+        assertFalse(message, message.contains("已拒绝"))
+    }
 }

@@ -16,6 +16,7 @@ private val projectionJson = Json { ignoreUnknownKeys = true }
  * - writeFile：一句话确认 + 行数，不回显内容。
  *
  * 只投影成功结果，其它工具 / 失败返回 null，由调用方回退用完整 result。
+ * 带插话通知（顶层 `notifications`）的结果同样返回 null：那份通知只能靠完整结果才能到模型。
  * 注意：此文本仅喂模型，UI 与持久化仍走 result 的完整 diff。
  */
 fun modelToolResultText(toolName: String, transportJson: String): String? {
@@ -25,6 +26,9 @@ fun modelToolResultText(toolName: String, transportJson: String): String? {
     val raw = transportJson.trim()
     if (raw.isEmpty()) return null
     val obj = runCatching { projectionJson.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return null
+    // 带通知时必须回退完整结果：通知挂在 transport JSON 顶层，投影会把整段吃掉；
+    // 而通知在注入后就被 ack，模型这一份丢了就真丢了（用户插话到不了模型，且不会重发）。
+    if (obj.containsKey("notifications")) return null
     if (obj["status"]?.jsonPrimitive?.contentOrNull != "success") return null
     val data = obj["data"] as? JsonObject ?: return null
     return when (toolName) {

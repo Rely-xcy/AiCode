@@ -32,6 +32,15 @@ data class LeaseConflict(
     /** 写被拒时的提示：额外要求被拒方上报，否则派发方只会看到子代理卡住而不知道原因。 */
     fun describeForWrite(requested: String): String =
         describe(requested) + "请用 messageParent 把被拒的文件与占用者报给派发方，再继续做不冲突的部分。"
+
+    /**
+     * 主代理写入时的提示：**不拒绝**（它是对用户负责的一方，直接拒掉只会让用户看到「改不动」），
+     * 但要把「有人正在同一个文件上干活」摆明，并给出三条可执行的出路。
+     */
+    fun describeForMainAgent(requested: String): String =
+        "\n\n[写范围提示] $requested 正被「$holderLabel」持有（写范围：$pattern），本次写入已照常执行。" +
+            "两边可能各自基于旧内容改同一处，刚写的内容有被覆盖的风险：要么等它结束再改，" +
+            "要么 task(action=\"stop\", id=…) 停掉它，要么用 task(action=\"send\", id=…, message=…) 让它自己改。"
 }
 
 /**
@@ -168,6 +177,25 @@ class WriteLeaseRegistry @Inject constructor(
         pruneExpired()
         return byHolder.values.flatMap { it.values }
     }
+
+    /**
+     * 该持有者写过的**具体文件**：不含通配符的那些租约——[claimForWrite] 认领的一定是具体文件路径。
+     *
+     * 异常收尾时用它列半成品。声明式范围（`app/src` 这类）指的不是单个文件，枚举它就得扫目录，
+     * 所以不含在内：那份范围里到底写过什么，只有第一次写入认领时才看得见。
+     */
+    fun concreteFilesOf(holderId: String): List<WriteLease> =
+        leasesOf(holderId).filter { isConcreteFile(it) }
+
+    /**
+     * 全部在册的「具体文件」租约，供 shell 写入的事后比对。
+     * 调用方只为这几份文件记指纹，不扫任何目录；没有人在写文件时返回空列表（代价为零）。
+     */
+    fun concreteFiles(): List<WriteLease> =
+        snapshot().filter { isConcreteFile(it) }
+
+    private fun isConcreteFile(lease: WriteLease): Boolean =
+        lease.segments.isNotEmpty() && lease.segments.none { it.contains(WriteScopePattern.WILDCARD) }
 
     /** 把路径规范成「工作区相对」或「容器绝对」的段序列；解析不出内容时返回 null（不拦）。 */
     private fun segmentsOf(path: String, projectRoot: String): List<String>? {

@@ -27,7 +27,9 @@ import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.PermissionScope
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
+import com.aicode.feature.agent.domain.schedule.WriteLease
 import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
+import com.aicode.feature.agent.domain.subagent.InterruptedWorkRecorder
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
@@ -114,7 +116,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
     private val fileAccess: FileAccessProvider,
-    private val writeLeaseRegistry: WriteLeaseRegistry
+    private val writeLeaseRegistry: WriteLeaseRegistry,
+    private val interruptedWorkRecorder: InterruptedWorkRecorder
 ) : AgentWorkflow {
 
     private companion object {
@@ -124,6 +127,18 @@ class StatefulAgentWorkflow @Inject constructor(
         const val USER_REJECTED_CODE = "USER_REJECTED"
         /** 写范围冲突的错误码：被拒的子代理据此识别「不是偶发错误」，派发方也能从结果里看出原因。 */
         const val WRITE_LEASE_CONFLICT_CODE = "WRITE_LEASE_CONFLICT"
+
+        /** 收尾结果：被取消（用户停掉 / 停掉子代理）。 */
+        const val OUTCOME_CANCELLED = "被停止或取消"
+
+        /** 收尾结果：运行失败（模型调用报错、拒答、上下文超限）。 */
+        const val OUTCOME_FAILED = "运行失败"
+
+        /**
+         * 能绕过工具层准入直接改文件的 shell 类工具（重定向、`sed -i`、rm 等）：
+         * 拿不到命令实际写了哪个路径，只能在执行前后比对「租约内具体文件」的指纹来事后发现。
+         */
+        val SHELL_WRITE_TOOLS = setOf("Bash", "terminal")
 
         /**
          * 受写范围准入管控的工具。只含「读旧内容 → 改 → 写回」那两个：
@@ -169,7 +184,9 @@ class StatefulAgentWorkflow @Inject constructor(
         /** 本轮是否启用「声称记住了却没调用工具」的兜底提醒（主代理 + 自动沉淀开关打开）。 */
         val memoryGuardEnabled: Boolean = false,
         /** 本轮是否已经补过提醒：兜底只补一次，避免模型反复只说不做时无限重发。 */
-        val memoryReminderSent: Boolean = false
+        val memoryReminderSent: Boolean = false,
+        /** 本轮是否已经补过清单提醒：同记忆兜底，一轮只拦一次，否则模型坚持不更新时会永远收不了尾。 */
+        val todoReminderSent: Boolean = false
     )
 
     /** 改变状态的动作 (Action) */
@@ -179,7 +196,14 @@ class StatefulAgentWorkflow @Inject constructor(
             /** 由调用方（拿得到设置的地方）决定，[reduce] 保持纯函数。 */
             val memoryGuardEnabled: Boolean = false
         ) : AgentAction
-        data class LlmResponse(val response: AIResponse) : AgentAction
+        data class LlmResponse(
+            val response: AIResponse,
+            /**
+             * 收尾守卫（清单落后）回灌的提醒；null 表示放行。
+             * 判据要读清单快照与数据库，纯函数的 [reduce] 拿不到，所以在进 [reduce] 之前算好挂在动作上。
+             */
+            val todoGuardReminder: String? = null
+        ) : AgentAction
         data class LlmError(val error: String) : AgentAction
         data class PermissionEvaluated(
             val toolCall: ToolCall,
@@ -392,6 +416,13 @@ class StatefulAgentWorkflow @Inject constructor(
                             messages = newState.messages + AgentMessage.UserMessage(content = "你的回复因长度限制被截断了，请从截断处继续。")
                         )
                         effects.add(AgentSideEffect.CallLlm)
+                    } else if (action.todoGuardReminder != null) {
+                        // 收尾守卫拦下：这一轮活干完了，清单却整轮没动。提醒只进本轮上下文，不落库、不上 UI。
+                        newState = newState.copy(
+                            messages = newState.messages + AgentMessage.UserMessage(content = action.todoGuardReminder),
+                            todoReminderSent = true
+                        )
+                        effects.add(AgentSideEffect.CallLlm)
                     } else if (shouldRemindMemory(newState, action.response.content)) {
                         // 兜底：回复声称记住了、本轮却没有任何 memory 工具调用（提示词管「倾向」，这里管「保证」）。
                         // 补一条系统提醒让它当场补调用；提醒消息只进本轮上下文，不落库、不上 UI。
@@ -524,31 +555,66 @@ class StatefulAgentWorkflow @Inject constructor(
         state.memoryGuardEnabled && !state.memoryReminderSent &&
             MemoryClaimGuard.needsReminder(state.messages, finalText)
 
+    /**
+     * 该不该问一次收尾守卫：只有「模型要给本轮最终回复、且本轮还没拦过」时才问。
+     * 被截断要继续写、拒答要直接收场，这两条路径都轮不到清单；
+     * 状态位保证同一条回复最多拦一次——否则模型坚持不更新时会在收尾边界来回重发，永远收不了尾。
+     */
+    private fun shouldAskTodoGuard(response: AIResponse, state: AgentSessionState): Boolean =
+        response.toolCalls.isEmpty() && !response.isAborted && !response.isTruncated && !state.todoReminderSent
+
     override fun executeEvents(
         userRequest: String,
         context: AgentContext,
         tools: List<AgentTool>
     ): Flow<AgentEvent> = channelFlow {
-        // 本次会话运行结束（正常完成 / 取消 / 异常）就把写范围交还回去。
-        // 只挂在成功路径上不行：取消与报错那两条没人释放，文件会被一直占着直到 TTL 过期，
-        // 期间连主代理都改不了它。挂在这里一次覆盖三条路径。
-        coroutineContext[Job]?.invokeOnCompletion {
-            context.sessionId?.let { writeLeaseRegistry.release(it) }
-        }
         var currentContext = context
         var state = AgentSessionState()
         var currentTools = tools
+        // 本次运行怎么收场的：正常收尾为 null，失败在下面回填。运行结束回调据此判定要不要留痕。
+        var runOutcome: String? = null
+        // 本次会话运行结束（正常完成 / 取消 / 异常）就把写范围交还回去。
+        // 只挂在成功路径上不行：取消与报错那两条没人释放，文件会被一直占着直到 TTL 过期，
+        // 期间连主代理都改不了它。挂在这里一次覆盖三条路径。
+        // 非正常结束时额外做一件事：把该代理写过的具体文件备份登记（见 [InterruptedWorkRecorder]）——
+        // 租约必须在 release 之前取，否则读到的就是空的。
+        coroutineContext[Job]?.invokeOnCompletion { cause ->
+            val sessionId = context.sessionId
+            if (sessionId == null) return@invokeOnCompletion
+            val written = writeLeaseRegistry.concreteFilesOf(sessionId)
+            writeLeaseRegistry.release(sessionId)
+            val reason = when {
+                cause is CancellationException -> OUTCOME_CANCELLED
+                cause != null -> OUTCOME_FAILED
+                else -> runOutcome
+            }
+            // 只给子代理留痕：主代理的半成品就在用户眼前那轮对话里，再备份一份只是噪声
+            if (reason != null && context.isSubAgent) {
+                interruptedWorkRecorder.record(
+                    sessionId = sessionId,
+                    projectRoot = context.projectRoot,
+                    reason = reason,
+                    paths = written.map { it.pattern },
+                    titleProvider = { holderLabelOf(sessionId) }
+                )
+            }
+        }
         val actionQueue = ArrayDeque<AgentAction>()
         // 模式提醒仅在模式变化时随最新用户消息注入一次（不进 system，避免切换时 system 前缀变化打断缓存）。
         val modeReminder = takeModeReminderIfChanged(currentContext.sessionId, currentContext.mode)
+        // 上一个代理被打断时留下的半成品：搭同一条带外通道送一次，别让它变成 system 里多出来的一段
+        val interruptedNotice = interruptedWorkRecorder.takeNotice(currentContext.projectRoot)
+        val turnReminder = listOfNotNull(modeReminder, interruptedNotice)
+            .joinToString("\n\n")
+            .ifBlank { null }
         // 提醒是「模型可见的那份」，不拼进正文：content 只留用户原话（界面/落库/回放都只认它），
         // 提醒落 modelReminder 列，组装请求时再拼回（见 AgentMessage.UserMessage.modelFacingContent）。
         // 落库后下一轮重建历史时这条的模型侧文本与上一轮一致，不会在该位置打断前缀缓存。
         // 自动触发轮次（/init、/skill 等）没有对应的用户行，提醒只在本轮请求里生效。
         val reminderRowId = currentContext.userMessageId
-        if (modeReminder != null && reminderRowId != null) {
-            runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, modeReminder) }
-                .onFailure { FileLogger.w(TAG, "写入模式提醒失败，本轮提醒只在内存态生效", it) }
+        if (turnReminder != null && reminderRowId != null) {
+            runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, turnReminder) }
+                .onFailure { FileLogger.w(TAG, "写入本轮提醒失败，本轮提醒只在内存态生效", it) }
         }
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，主动记忆规则在 MemoryModule 就没给它注入，
         // 兜底也无从谈起。判据必须与那道门禁同源（都是 isSubAgent），不能再用「有没有自定义定义」近似。
@@ -559,7 +625,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(
                     content = userRequest,
                     images = currentContext.inputImages,
-                    modelReminder = modeReminder
+                    modelReminder = turnReminder
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
             )
@@ -585,7 +651,28 @@ class StatefulAgentWorkflow @Inject constructor(
                     TokenEstimator.estimateText(tool.toJsonSchema().toString())
             }
         while (!state.isFinished && actionQueue.isNotEmpty()) {
-            val action = actionQueue.removeFirst()
+            val queued = actionQueue.removeFirst()
+            var action = queued
+            // 收尾守卫：模型要给出本轮最终回复时，先问一次「清单是不是落后了」。
+            // 判据在模块侧（要读清单快照与历史），这里只做「是不是最终回复」的门禁；
+            // 命中就把提醒挂到动作上，由 reduce 注入一条用户消息并重新请求模型——
+            // 这一轮还没真正收尾，先让它把清单对齐。
+            if (queued is AgentAction.LlmResponse && shouldAskTodoGuard(queued.response, state)) {
+                val reminder = agentEngine.finalResponseGuard(
+                    EngineContext(
+                        sessionId = currentContext.sessionId,
+                        projectRoot = currentContext.projectRoot,
+                        mode = currentContext.mode,
+                        history = state.messages,
+                        isSubAgent = currentContext.isSubAgent
+                    ),
+                    queued.response.content
+                )
+                if (!reminder.isNullOrBlank()) {
+                    FileLogger.w(TAG, "收尾守卫拦下本轮回复：清单未随本轮工作更新，回灌提醒后重发")
+                    action = queued.copy(todoGuardReminder = reminder)
+                }
+            }
             val (newState, effects) = reduce(state, action)
             state = newState
 
@@ -855,8 +942,21 @@ class StatefulAgentWorkflow @Inject constructor(
                                         // 不能把调用从列表里剔除（剔除会让索引错位）。
                                         // 占位符守卫排最前：参数里没有真正文时，不适合先认领写租约。
                                         val omittedArgument = omittedArgumentRejectionOf(toolCall)
-                                        val leaseConflict = if (omittedArgument == null) {
+                                        // 写范围：子代理之间硬拦（并发写必须串行化）；主代理只警告——
+                                        // 它是对用户负责的一方，直接拒掉只会让用户看到「改不动」。
+                                        val leaseConflict = if (omittedArgument == null && currentContext.isSubAgent) {
                                             writeLeaseConflictOf(toolCall, currentContext)
+                                        } else {
+                                            null
+                                        }
+                                        val leaseWarning = if (omittedArgument == null && !currentContext.isSubAgent) {
+                                            writeLeaseWarningOf(toolCall, currentContext)
+                                        } else {
+                                            null
+                                        }
+                                        // shell 能绕过工具层写入准入（重定向、`sed -i`）：跑之前记下租约内具体文件的指纹
+                                        val shellWatch = if (omittedArgument == null) {
+                                            shellWriteWatchOf(toolCall, currentContext)
                                         } else {
                                             null
                                         }
@@ -875,11 +975,13 @@ class StatefulAgentWorkflow @Inject constructor(
 
                                             else -> {
                                                 val tool = toolRegistry.getTool(toolCall.name)
-                                                if (tool is StreamingAgentTool) {
+                                                val run = if (tool is StreamingAgentTool) {
                                                     runToolStream(tool, toolCall, currentContext) { send(it) }
                                                 } else {
                                                     runToolSync(tool, toolCall, currentContext)
                                                 }
+                                                // 两条提示都拼在结果尾部：租约本无事时不加任何多余文字
+                                                run.withLeaseNotices(leaseWarning, shellWatch?.let { shellWriteWarningOf(it) })
                                             }
                                         }
                                     }
@@ -973,15 +1075,19 @@ class StatefulAgentWorkflow @Inject constructor(
             }
         }
         
-        state.error?.let { send(AgentEvent.Failed(it, state.errorCode)) }
+        state.error?.let {
+            runOutcome = OUTCOME_FAILED
+            send(AgentEvent.Failed(it, state.errorCode))
+        }
         send(AgentEvent.Completed)
     }
 
     /**
-     * 写类工具的执行前准入检查（写范围租约）。
+     * 写类工具的执行前准入检查（写范围租约）——**子代理路径**。
      *
      * 首次写入即认领该文件，别人已持有同一路径时直接拒绝——而不是让两个代理各自基于自己读到的
      * 旧内容改同一个文件。拒绝必须带原因与后续动作，否则就是静默失败。
+     * 主代理不走这里（它写入时只给警告，见 [writeLeaseWarningOf]）。
      *
      * @return 拒绝原因；无冲突返回 null。
      */
@@ -997,6 +1103,80 @@ class StatefulAgentWorkflow @Inject constructor(
         ) ?: return null
         return conflict.describeForWrite(path)
     }
+
+    /**
+     * 主代理写入的写范围检查：目标落在别人（在跑的子代理）的范围内时**不拒绝**，只返回一条警告，
+     * 由调用方拼到工具结果尾部；没冲突时返回 null，结果里看不到租约的存在。
+     *
+     * 主代理不硬拦的理由：它是对用户负责的一方，拒掉它的写入只会让用户看到「改不动」，
+     * 而用户眼前就是那个文件——把「谁在同时改」告诉它，比替它拒绝更有用。
+     */
+    private suspend fun writeLeaseWarningOf(toolCall: ToolCall, context: AgentContext): String? {
+        if (toolCall.name !in WRITE_LEASE_TOOLS) return null
+        val path = (toolCall.arguments["path"] as? JsonPrimitive)?.contentOrNull ?: return null
+        val sessionId = context.sessionId ?: return null
+        val conflict = writeLeaseRegistry.claimForWrite(
+            holderId = sessionId,
+            holderLabel = holderLabelOf(sessionId),
+            path = path,
+            projectRoot = context.projectRoot
+        ) ?: return null
+        FileLogger.w(TAG, "主代理写入与「${conflict.holderLabel}」的写范围重叠：$path（${conflict.pattern}），已附加警告")
+        return conflict.describeForMainAgent(path)
+    }
+
+    /**
+     * shell 命令的写范围盯防：只有存在「具体文件租约」时才记指纹，否则返回 null。
+     * 只盯租约里已认领过的具体文件（典型是子代理刚写过的几个），不扫任何目录。
+     */
+    private fun shellWriteWatchOf(toolCall: ToolCall, context: AgentContext): ShellWriteWatch? {
+        if (toolCall.name !in SHELL_WRITE_TOOLS) return null
+        val leases = writeLeaseRegistry.concreteFiles()
+        if (leases.isEmpty()) return null
+        return ShellWriteWatch(
+            leases = leases.associateBy { it.pattern },
+            before = leases.associate { it.pattern to stampOf(it.pattern) },
+            holderId = context.sessionId
+        )
+    }
+
+    /**
+     * 命令执行后的比对：租约内的文件变了、而当前会话不是它的持有者 → 拼一条告警（不拦）。
+     * 拿不到命令实际写了哪个路径，这是 shell 绕过工具层准入的已知盲区，只能事后发现。
+     */
+    private fun shellWriteWarningOf(watch: ShellWriteWatch): String? {
+        val changed = watch.leases.filter { (path, lease) ->
+            lease.holderId != watch.holderId && stampOf(path) != watch.before[path]
+        }
+        if (changed.isEmpty()) return null
+        val detail = changed.entries.joinToString("；") { (path, lease) ->
+            "$path（持有者：${lease.holderLabel}）"
+        }
+        FileLogger.w(TAG, "shell 命令改动了别人的写范围：$detail")
+        return "\n\n[写范围告警] 这条命令改动了别的代理正在改的文件：$detail。" +
+            "继续改之前先读一遍当前内容——对方再基于旧内容写一次就会覆盖掉这次改动。"
+    }
+
+    /** 文件指纹：不存在（或读不到）时为 null，因而「之前不存在、现在存在」也算变化。 */
+    private fun stampOf(path: String): FileStamp? = runCatching {
+        if (!fileAccess.isFile(path)) return@runCatching null
+        FileStamp(fileAccess.lastModified(path), fileAccess.fileSize(path))
+    }.getOrNull()
+
+    /** 把租约相关提示拼到工具结果尾部；全为 null 时原样返回。 */
+    private fun ToolRunResult.withLeaseNotices(vararg notices: String?): ToolRunResult {
+        val text = notices.filterNotNull().joinToString("")
+        return if (text.isEmpty()) this else copy(raw = raw + text)
+    }
+
+    /** shell 命令执行前的租约盯防：[leases] 是具体文件租约，[before] 是执行前的指纹。 */
+    private data class ShellWriteWatch(
+        val leases: Map<String, WriteLease>,
+        val before: Map<String, FileStamp?>,
+        val holderId: String?
+    )
+
+    private data class FileStamp(val modifiedAt: Long, val size: Long)
 
     /** 冲突提示里的人话标识：用会话标题（子代理的标题就是任务描述），拿不到就退到短 id。 */
     private suspend fun holderLabelOf(sessionId: String): String =
