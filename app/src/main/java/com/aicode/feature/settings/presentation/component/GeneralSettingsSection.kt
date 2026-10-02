@@ -146,7 +146,17 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_soft_compaction_threshold),
-                subtitle = stringResource(R.string.settings_soft_compaction_threshold_desc),
+                subtitle = buildString {
+                    append(stringResource(R.string.settings_soft_compaction_threshold_desc))
+                    // 软线会被硬线压低（软 = min(窗口×软线%, 硬线-1)），右侧显的百分比在那种情况下已经不成立。
+                    effectiveCompaction?.let { effective ->
+                        val percent = effectivePercent(effective.thresholds.soft, effective.thresholds.contextLimit)
+                        if (percent < softCompactionThresholdPercent) {
+                            append('\n')
+                            append(stringResource(R.string.settings_compaction_effective_soft_capped, percent))
+                        }
+                    }
+                },
                 onClick = { editingSoftCompactionThreshold = true },
                 trailing = {
                     Text(

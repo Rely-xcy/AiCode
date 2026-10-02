@@ -40,6 +40,7 @@
     <string name="settings_soft_compaction_threshold">Soft-trim threshold</string>
     <string name="settings_soft_compaction_threshold_desc">Trim oversized tool outputs from history at this share without calling a model (short-term memory, this session only)</string>
     <string name="settings_compaction_effective_hard_capped">Actual %1$d%% (%2$s tokens, capped by tier limit)</string>
+    <string name="settings_compaction_effective_soft_capped">Limited by the auto-compaction threshold; effective at %1$d%%</string>
     <string name="settings_compaction_effective_disabled">Auto-compaction is unavailable at this tier (window %1$s); only soft trimming runs</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">Integer percentage between 1 and 100</string>
