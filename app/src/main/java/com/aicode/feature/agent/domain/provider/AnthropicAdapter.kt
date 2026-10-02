@@ -68,9 +68,12 @@ class AnthropicAdapter @Inject constructor(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        cacheTail: Boolean
     ): AIResponse {
-        val anthropicMessages = convertToAnthropicMessages(messages, cacheBreakpointsEnabled)
+        // 尾部断点按调用开关：一次性调用（压缩摘要、记忆抽取）传 false，
+        // 否则会把「不会再被复用的整段前缀」写进缓存，永远读不回来（1.25× 白付）。
+        val anthropicMessages = convertToAnthropicMessages(messages, cacheBreakpointsEnabled && cacheTail)
 
         val toolDefs = tools.takeIf { it.isNotEmpty() }?.mapIndexed { index, tool ->
             AnthropicToolDefinition(

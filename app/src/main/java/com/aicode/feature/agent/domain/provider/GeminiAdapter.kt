@@ -68,7 +68,8 @@ class GeminiAdapter @Inject constructor(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        cacheTail: Boolean
     ): AIResponse {
         if (useResponseApi) {
             return completeViaInteractions(systemPrompt, messages, tools, reasoningEffort)

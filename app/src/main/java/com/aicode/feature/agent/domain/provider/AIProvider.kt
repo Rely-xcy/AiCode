@@ -195,12 +195,19 @@ interface AIProvider {
      * 模型若决定调用工具，结果会出现在返回的 [AIResponse.toolCalls] 中。
      * [reasoningEffort] 为思考强度（"low"/"medium"/"high"），仅 OpenAI 系生效；
      * Anthropic/Gemini 与不支持该参数的模型忽略。
+     *
+     * [cacheTail]：是否允许在**消息尾部**打缓存断点（目前只有 Anthropic 有尾部断点）。
+     * 一次性调用（压缩摘要、折叠前记忆抽取）传 false：它们的请求不会被后续请求复用，
+     * 写入的缓存永远读不回来，只会白付一次 1.25× 的写入价。
+     * 默认 true 保持主对话的既有行为（主对话的尾部断点打在本轮用户提问上，是能命中的）；
+     * system 与 tools 上的断点不受它影响。
      */
     suspend fun complete(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool> = emptyList(),
-        reasoningEffort: String? = null
+        reasoningEffort: String? = null,
+        cacheTail: Boolean = true
     ): AIResponse
 
     /**

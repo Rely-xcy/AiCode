@@ -55,12 +55,17 @@ class CompactionModuleTest {
             compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
         )
         var completeCalls = 0
-        // 摘要模型一直失败：折叠拿不到结果，模块必须退化为「软精简 + 兜底」而不是就此罢手。
-        val provider = mockk<AIProvider>(relaxed = true)
-        coEvery { provider.complete(any(), any(), any()) } answers {
+        fun failSummaryCall(): Nothing {
             completeCalls++
             throw RuntimeException("摘要模型挂了")
         }
+        val provider = mockk<AIProvider>(relaxed = true)
+        // 压缩请求现在多带一个 cacheTail 形参（一次性调用不打尾部缓存断点）。
+        // mockk 按「调用点解析后的实参列表」匹配（默认参数也会参与），所以把 4 个与 5 个实参
+        // 的形态都挂上：否则一次都匹配不上，协程会抛「no answer found」——那走的就不是
+        // 「摘要模型挂了」这条被测路径了。
+        coEvery { provider.complete(any(), any(), any(), any()) } answers { failSummaryCall() }
+        coEvery { provider.complete(any(), any(), any(), any(), any()) } answers { failSummaryCall() }
         val metadata = mockk<ModelMetadataService>()
         coEvery { metadata.resolve(any(), any(), any()) } returns
             ModelMetadata(id = "test-model", contextTokens = WINDOW)

@@ -204,7 +204,10 @@ class CompactionModule @Inject constructor(
                                 summaryProvider.complete(
                                     systemPrompt = systemPromptProvider.get().resolvePrompt(MemoryExtractor.PROMPT_FILE),
                                     messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
-                                    tools = emptyList()
+                                    tools = emptyList(),
+                                    // 同压缩：一次性调用，尾部断点写进去的缓存不会被复用。
+                                    // system 上的断点保留（memory-distiller.md 这类提示词够长，能真命中）。
+                                    cacheTail = false
                                 ).content
                             }
                         )

@@ -53,12 +53,15 @@ class ContextCompactionCommitTest {
     }
 
     /**
-     * `AIProvider.complete` 有默认参数（tools / reasoningEffort），调用点写 3 个、实际可能落成 4 个实参，
-     * 两种形态都挂上响应，避免因为实参个数对不上而变成「调用抛异常」。
+     * `AIProvider.complete` 有默认参数（tools / reasoningEffort / cacheTail），mockk 按调用点
+     * **解析后的实参列表**匹配，所以各实参个数都挂上同一个响应：实参个数对不上时 mockk 会抛
+     * 「no answer found」，那就变成「调用直接异常」——正是下面这些用例要排除的假通过路径
+     * （每条「不落库」用例都另断言 records.insert 恰好一次，钉住「摘要调用成功返回过」）。
      */
     private fun stubSummary(response: AIResponse) {
         coEvery { provider.complete(any(), any(), any()) } returns response
         coEvery { provider.complete(any(), any(), any(), any()) } returns response
+        coEvery { provider.complete(any(), any(), any(), any(), any()) } returns response
     }
 
     /** head 三条（靠前两条汉字撑出体积）+ 一条尾部用户消息：尾部决定锚点，head 决定被折叠的范围。 */
