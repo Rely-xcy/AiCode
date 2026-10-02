@@ -556,7 +556,6 @@ class SettingsViewModel @Inject constructor(
         val metadata = runCatching {
             modelMetadataService.resolve(provider.id, provider.type, inputs.model)
         }.getOrNull()
-        // 分母与压缩判定同源：都用模型窗口裸值（输出预留由档位上限与 92% 兜底线承担）。
         val window = metadata?.contextTokens?.takeIf { it > 0 } ?: return@mapLatest null
         EffectiveCompactionThresholds(
             model = inputs.model,

@@ -8,7 +8,7 @@ import com.aicode.feature.agent.domain.tool.ToolCall
 sealed class AgentMessage {
     @Serializable
     data class UserMessage(
-        val id: String = java.util.UUID.randomUUID().toString(),
+        val id: String = "",
         val content: String,
         val images: List<AgentImage> = emptyList(),
         /**
@@ -21,7 +21,7 @@ sealed class AgentMessage {
 
     @Serializable
     data class AssistantMessage(
-        val id: String = java.util.UUID.randomUUID().toString(),
+        val id: String = "",
         val content: String,
         val toolCalls: List<ToolCall> = emptyList(),
         /** 本轮模型的思考过程（对应 OpenAI/DeepSeek 的 reasoning_content）。回传上下文时需要原样发回，否则 DeepSeek 思考模式会报 400 错误。 */
@@ -34,19 +34,17 @@ sealed class AgentMessage {
          * 本轮模型直接生成的图片（Gemini 图像模型）。内存态下 base64Data 可为空、path 指向容器文件，
          * 回放时按 path 重建 base64 喂模型；落库只存附件路径不存 base64（见 [MessagePersistenceUseCase]）。
          */
-        val images: List<AgentImage> = emptyList(),
-        val inputTokens: Int = 0
+        val images: List<AgentImage> = emptyList()
     ) : AgentMessage()
 
     @Serializable
     data class ToolResultMessage(
-        val id: String = java.util.UUID.randomUUID().toString(),
+        val id: String = "",
         val toolName: String,
         val result: String,
         val images: List<AgentImage> = emptyList(),
         /** 仅喂模型的精简结果文本；null 时回退用 [result]。UI 与持久化仍用 result。 */
-        val modelResult: String? = null,
-        val messageId: String = "tool_$id"
+        val modelResult: String? = null
     ) : AgentMessage()
 }
 
@@ -64,7 +62,7 @@ val AgentMessage.id: String
     get() = when (this) {
         is AgentMessage.UserMessage -> id
         is AgentMessage.AssistantMessage -> id
-        is AgentMessage.ToolResultMessage -> messageId
+        is AgentMessage.ToolResultMessage -> id
     }
 
 /**
@@ -91,11 +89,10 @@ data class AgentContext(
     val sessionId: String? = null,
     /**
      * 本轮用户消息在库里的行 id。workflow 把模式提醒写回这一行的 modelReminder 列，
-     * content 仍只存用户原话；自动触发轮次（/init、/skill 等）也落这一行，
-     * 让折叠能在保留区里找到已落库的行做时间戳锚点。
+     * content 仍只存用户原话。null 表示本轮没有对应的用户行（自动触发的 /init、/skill 轮次），
+     * 此时提醒只在本轮请求里生效。
      */
-    val inputMessageId: String = java.util.UUID.randomUUID().toString(),
-    val lastInputTokens: Int = 0,
+    val userMessageId: String? = null,
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）：退出 PLAN 时恢复到它，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,

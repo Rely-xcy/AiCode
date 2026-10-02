@@ -256,14 +256,6 @@ class CompactionModule @Inject constructor(
         return call.copy(messages = guarded)
     }
 
-    /**
-     * 判定用的窗口：模型窗口（裸值，不扣输出预留）。
-     *
-     * 输出预留已经由档位上限（[ModelContextPolicy.tierFor] 的 hardThreshold = 窗口 − 10K/20K）
-     * 与 92% 兜底线承担；这里再扣一道会把 64K 这类小窗口降到 57600 而下探一档
-     * （64K → SOFT_ONLY），硬折叠对它们直接失效。
-     * 发送前的硬预算闸（workflow 侧的 effectiveInputBudget）是另一回事，不受这里影响。
-     */
     private suspend fun resolveContextTokens(provider: AIProvider): Int =
         modelMetadataService
             .resolve(provider.providerId, inferProviderType(provider), provider.model)

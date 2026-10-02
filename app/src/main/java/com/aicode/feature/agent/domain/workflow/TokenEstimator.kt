@@ -5,7 +5,6 @@ import android.util.Base64
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
-import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import java.util.concurrent.ConcurrentHashMap
@@ -37,12 +36,6 @@ object TokenEstimator {
     /** 连续字母数字串达到该长度即视为内嵌 base64/二进制块（data URL、思考签名、附件正文），改按图片尺寸折算。 */
     private const val BLOB_RUN_MIN = 256
 
-    /** 每条消息的协议固定开销（role、分隔符、包装结构）：正文字数体现不了，但确实占窗口。 */
-    private const val MESSAGE_OVERHEAD_TOKENS = 12
-
-    /** 每个工具定义的协议固定开销（同上，工具声明会被包成 provider 各自的结构）。 */
-    private const val TOOL_OVERHEAD_TOKENS = 16
-
     /** 图片分档阈值：长边 ≤512 按小图、≤1024 按中图、更大按大图。 */
     internal const val IMAGE_SMALL_MAX_EDGE = 512
     internal const val IMAGE_MEDIUM_MAX_EDGE = 1024
@@ -61,37 +54,6 @@ object TokenEstimator {
     private val imageTokenCache = ConcurrentHashMap<Int, Int>()
 
     fun estimateMessages(messages: List<AgentMessage>): Int = messages.sumOf { estimateMessage(it) }
-
-    /**
-     * 整个请求的估算：system prompt + 工具定义 + 消息，另加各自的协议固定开销。
-     *
-     * 与前两个入口的分工：[estimateMessages] 量的是「消息本身」，本入口量的是「这一次请求」——
-     * 工具声明、system prompt 与每条消息的包装结构都实打实占窗口，只算消息会系统性偏低，
-     * 发送前的输入预算拦截就会晚一步才发现超窗。
-     */
-    fun estimateRequest(systemPrompt: String, messages: List<AgentMessage>, tools: List<AgentTool>): Int {
-        val toolTokens = tools.sumOf { tool ->
-            estimateText(tool.name).toLong() +
-                estimateText(tool.description).toLong() +
-                estimateText(tool.toJsonSchema().toString()).toLong() +
-                TOOL_OVERHEAD_TOKENS
-        }
-        val messageTokens = messages.sumOf { est -> estimateMessage(est).toLong() + MESSAGE_OVERHEAD_TOKENS }
-        return (estimateText(systemPrompt).toLong() + toolTokens + messageTokens)
-            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-    }
-
-    /**
-     * 用上一次请求的真实 usage 校准本次估算：同一段历史估算与真实常差一截（BPE 分词与本地字符
-     * 加权本就对不上），但两轮之间相差的那部分内容量估得准。所以只补差额：
-     * `真实 + (本次估算 − 上次估算)`，再与本次估算取大值（宁可早压不可晚压）。
-     * 没拿到真实 usage（provider 不回传、首轮）时原样返回。接口分工：真实值来自 provider。
-     */
-    fun calibrated(estimated: Int, baselineEstimate: Int, baselineUsage: Int): Int =
-        if (baselineUsage > 0) {
-            maxOf(estimated.toLong(), baselineUsage.toLong() + estimated - baselineEstimate)
-                .coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
-        } else estimated
 
     fun estimateMessage(message: AgentMessage): Int = when (message) {
         is AgentMessage.UserMessage ->

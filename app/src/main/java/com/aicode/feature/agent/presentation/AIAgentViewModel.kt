@@ -226,7 +226,6 @@ class AIAgentViewModel @Inject constructor(
             "refusal", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII" ->
                 context.getString(R.string.agent_stop_refusal)
             "model_context_window_exceeded" -> context.getString(R.string.agent_stop_context_exceeded)
-            "input_budget_exceeded" -> context.getString(R.string.agent_input_budget_exceeded)
             else -> null
         } ?: return event.error
         return if (event.error.isBlank()) localized else "$localized\n${event.error}"
@@ -1511,12 +1510,10 @@ class AIAgentViewModel @Inject constructor(
             val isFirst = history.isEmpty()
 
             // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
-            // 自动触发轮次（/init、/skill 等）也落这一行：硬折叠要在保留区里找到「已落库的行」做时间戳锚点，
-            // 少了它、保留区又刚好只剩本轮这条消息时，本次折叠只能放弃。落的依旧是显示侧文本，
-            // 模型可见的那份（modelRequest）只进本轮请求，不写进 content。
-            val userMsgId = UUID.randomUUID().toString()
-            messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
-            if (!isAutoTrigger) {
+            // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
+            val userMsgId = if (isAutoTrigger) null else UUID.randomUUID().toString()
+            if (userMsgId != null) {
+                messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
                 if (isFirst && !skipTitleUpdate) {
                     sessionUseCase.updateTitle(sessionId, sessionUseCase.deriveTitle(request))
@@ -1526,7 +1523,6 @@ class AIAgentViewModel @Inject constructor(
                     }
                 }
             }
-            messagePersistenceUseCase.invalidateHistory(sessionId)
             sessionUseCase.touch(sessionId, messagePersistenceUseCase.nextTimestamp())
 
             val sessionEntity = sessionUseCase.getSessionById(sessionId)
@@ -1549,8 +1545,7 @@ class AIAgentViewModel @Inject constructor(
                 history = history,
                 inputImages = inputImages,
                 sessionId = sessionId,
-                inputMessageId = userMsgId,
-                lastInputTokens = sessionEntity?.lastInputTokens ?: 0,
+                userMessageId = userMsgId,
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,
@@ -1673,7 +1668,7 @@ class AIAgentViewModel @Inject constructor(
 
                         val normalized = if (event.content.hasVisibleContent()) event.content else ""
                         val reasoning = event.reasoning.takeIf { it.hasVisibleContent() }
-                        val msgId = event.messageId
+                        val msgId = java.util.UUID.randomUUID().toString()
                         if (reasoningDuration != null && reasoningDuration > 0) {
                             reasoningDurations[msgId] = reasoningDuration
                         }
@@ -1702,7 +1697,6 @@ class AIAgentViewModel @Inject constructor(
                                 }
                             }
                         }
-                        event.persisted?.complete(Unit)
                     }
                     is AgentEvent.ToolCallStarted -> {
                         val msgId = "tool_${event.id}"
@@ -1745,7 +1739,6 @@ class AIAgentViewModel @Inject constructor(
                         )
                         toolArgsByMsgId.remove(msgId)
                         removeRunningTool(sessionId, msgId)
-                        event.persisted?.complete(Unit)
                     }
                     is AgentEvent.Failed -> {
                         failed = true
@@ -2147,7 +2140,7 @@ class AIAgentViewModel @Inject constructor(
                 appendLine("| 预估费用 | ${formatCostUsd(today.costUsd)} | ${formatCostUsd(allTime.costUsd)} |")
             }
             sessionUseCase.touch(sid, messagePersistenceUseCase.nextTimestamp())
-            messagePersistenceUseCase.persist(sid, MessageRole.ASSISTANT, table.trimEnd(), isContextExcluded = true)
+            messagePersistenceUseCase.persist(sid, MessageRole.ASSISTANT, table.trimEnd(), isCompacted = true)
         }
     }
 
@@ -2190,9 +2183,7 @@ class AIAgentViewModel @Inject constructor(
                 val changed = agentWorkflow.compactSession(sid) { event ->
                     when (event) {
                         is AgentEvent.CompactionStarted -> setCompacting(sid, true)
-                        AgentEvent.CompactionFinished -> {
-                            setCompacting(sid, false)
-                        }
+                        AgentEvent.CompactionFinished -> setCompacting(sid, false)
                         is AgentEvent.CompactionFailed -> {
                             failed = true
                             setCompacting(sid, false)
@@ -2389,11 +2380,11 @@ class AIAgentViewModel @Inject constructor(
                 if (checkpoint != null) {
                     checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
                 }
-                messagePersistenceUseCase.rewindConversation(sessionId, targetMsgEntity.timestamp)
+                agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CONVERSATION -> {
-                messagePersistenceUseCase.rewindConversation(sessionId, targetMsgEntity.timestamp)
+                agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CODE -> {

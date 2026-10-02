@@ -68,7 +68,7 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions WHERE workspacePath = :workspacePath")
     suspend fun deleteByWorkspace(workspacePath: String)
 
-    @Query("UPDATE chat_sessions SET providerId = :providerId, model = :model, lastInputTokens = 0 WHERE id = :id")
+    @Query("UPDATE chat_sessions SET providerId = :providerId, model = :model WHERE id = :id")
     suspend fun updateProviderModel(id: String, providerId: String?, model: String?)
 
     @Query("UPDATE chat_sessions SET reasoningEffort = :effort WHERE id = :id")

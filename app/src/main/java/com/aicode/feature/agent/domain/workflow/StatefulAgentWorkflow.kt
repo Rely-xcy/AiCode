@@ -62,8 +62,6 @@ import com.aicode.feature.agent.domain.provider.KeySwitchOutcome
 import com.aicode.feature.agent.domain.provider.isKeySwitchFailure
 import com.aicode.feature.agent.domain.provider.OpenAIAdapter
 import com.aicode.feature.settings.domain.model.ProviderType
-import com.aicode.feature.settings.domain.model.ModelContextPolicy
-import com.aicode.feature.agent.domain.provider.StreamApiException
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CancellationException
@@ -181,15 +179,8 @@ class StatefulAgentWorkflow @Inject constructor(
             /** 由调用方（拿得到设置的地方）决定，[reduce] 保持纯函数。 */
             val memoryGuardEnabled: Boolean = false
         ) : AgentAction
-
-        /** [messageId]：本轮助手消息在库里的行 id，落库与折叠的稳定标识都靠它。 */
-        data class LlmResponse(
-            val response: AIResponse,
-            val messageId: String = UUID.randomUUID().toString()
-        ) : AgentAction
-
-        /** [reasonCode]：错误类型码（服务端 stop_reason 或本地预算判定），UI 据此换本地化文案。 */
-        data class LlmError(val error: String, val reasonCode: String? = null) : AgentAction
+        data class LlmResponse(val response: AIResponse) : AgentAction
+        data class LlmError(val error: String) : AgentAction
         data class PermissionEvaluated(
             val toolCall: ToolCall,
             val approved: Boolean,
@@ -230,7 +221,6 @@ class StatefulAgentWorkflow @Inject constructor(
     /** 需要在外部环境中执行的副作用 (SideEffect) */
     sealed interface AgentSideEffect {
         object CallLlm : AgentSideEffect
-        data class PersistUser(val message: AgentMessage.UserMessage) : AgentSideEffect
         data class RequestPermission(val toolCall: ToolCall) : AgentSideEffect
         /** 批量并行执行已批准的工具；传入空列表表示本批无工具可执行，直接进入收尾。 */
         data class ExecuteToolBatch(val toolCalls: List<ToolCall>) : AgentSideEffect
@@ -377,14 +367,12 @@ class StatefulAgentWorkflow @Inject constructor(
             }
             is AgentAction.LlmResponse -> {
                 val assistantMsg = AgentMessage.AssistantMessage(
-                    id = action.messageId,
                     content = action.response.content,
                     toolCalls = action.response.toolCalls,
                     reasoning = action.response.reasoning ?: "",
                     signature = action.response.signature ?: "",
                     thinkingBlocksJson = action.response.thinkingBlocksJson ?: "",
-                    images = action.response.images,
-                    inputTokens = action.response.inputTokens
+                    images = action.response.images
                 )
                 newState = state.copy(
                     messages = state.messages + assistantMsg,
@@ -400,9 +388,9 @@ class StatefulAgentWorkflow @Inject constructor(
                             errorCode = action.response.stopReason
                         )
                     } else if (action.response.isTruncated) {
-                        val continuation = AgentMessage.UserMessage(content = "Your response was truncated. Continue from where it stopped.")
-                        newState = newState.copy(messages = newState.messages + continuation)
-                        effects.add(AgentSideEffect.PersistUser(continuation))
+                        newState = newState.copy(
+                            messages = newState.messages + AgentMessage.UserMessage(content = "你的回复因长度限制被截断了，请从截断处继续。")
+                        )
                         effects.add(AgentSideEffect.CallLlm)
                     } else if (shouldRemindMemory(newState, action.response.content)) {
                         // 兜底：回复声称记住了、本轮却没有任何 memory 工具调用（提示词管「倾向」，这里管「保证」）。
@@ -430,7 +418,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 }
             }
             is AgentAction.LlmError -> {
-                newState = state.copy(isFinished = true, error = action.error, errorCode = action.reasonCode)
+                newState = state.copy(isFinished = true, error = action.error)
             }
             is AgentAction.PermissionEvaluated -> {
                 if (action.approved) {
@@ -556,9 +544,9 @@ class StatefulAgentWorkflow @Inject constructor(
         // 提醒是「模型可见的那份」，不拼进正文：content 只留用户原话（界面/落库/回放都只认它），
         // 提醒落 modelReminder 列，组装请求时再拼回（见 AgentMessage.UserMessage.modelFacingContent）。
         // 落库后下一轮重建历史时这条的模型侧文本与上一轮一致，不会在该位置打断前缀缓存。
-        // 本轮用户行由 ViewModel 先落库（自动触发轮次也落），提醒写回的就是那一行。
-        val reminderRowId = currentContext.inputMessageId
-        if (modeReminder != null) {
+        // 自动触发轮次（/init、/skill 等）没有对应的用户行，提醒只在本轮请求里生效。
+        val reminderRowId = currentContext.userMessageId
+        if (modeReminder != null && reminderRowId != null) {
             runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, modeReminder) }
                 .onFailure { FileLogger.w(TAG, "写入模式提醒失败，本轮提醒只在内存态生效", it) }
         }
@@ -569,11 +557,8 @@ class StatefulAgentWorkflow @Inject constructor(
         actionQueue.addLast(
             AgentAction.InitRequest(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(
-                    // 用 ViewModel 落库时那一行的 id：折叠按稳定 id 标 head，内存态与库里的 id 必须一致。
-                    id = currentContext.inputMessageId,
                     content = userRequest,
                     images = currentContext.inputImages,
-                    // 提醒走独立列，不拼进 content：界面/落库只认用户原话（modelFacingContent 负责拼回模型侧）。
                     modelReminder = modeReminder
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
@@ -599,27 +584,6 @@ class StatefulAgentWorkflow @Inject constructor(
                     TokenEstimator.estimateText(tool.description) +
                     TokenEstimator.estimateText(tool.toJsonSchema().toString())
             }
-        // 发送前的输入预算：模型窗口扣掉输出预留与模型自带的输入上限（见 ModelContextPolicy）。
-        val metadata = modelMetadataService.resolve(aiProvider.providerId, when (aiProvider) {
-            is AnthropicAdapter -> ProviderType.ANTHROPIC
-            is GeminiAdapter -> ProviderType.GEMINI
-            else -> ProviderType.OPENAI
-        }, aiProvider.model)
-        val inputBudget = ModelContextPolicy.effectiveInputBudget(metadata)
-        if (aiProvider is AnthropicAdapter) {
-            aiProvider.maxOutputTokens = ModelContextPolicy.outputReserveTokens(metadata)
-        }
-        // 增量校准的基线：最近一条带真实 usage 的助手消息。本地估算与真实值之间差一个相对固定的
-        // 偏置，用「真实 + 增量」校准比单纯估算准得多；拿不到 usage 时基数为 0，calibrated 原样返回估算。
-        val lastAssistantIndex = currentContext.history.indexOfLast { it is AgentMessage.AssistantMessage && it.inputTokens > 0 }
-        var baselineEstimate = TokenEstimator.estimateRequest(systemPrompt,
-            currentContext.history.take(lastAssistantIndex.coerceAtLeast(0)), currentTools)
-        var baselineUsage = if (currentContext.lastInputTokens > 0 && lastAssistantIndex >= 0) {
-            (currentContext.history[lastAssistantIndex] as AgentMessage.AssistantMessage).inputTokens
-        } else 0
-        // 超窗恢复只做一次：服务端反复报超窗时不能无限重试（每轮都会白花一次调用）。
-        var overflowRecoveryAttempted = false
-
         while (!state.isFinished && actionQueue.isNotEmpty()) {
             val action = actionQueue.removeFirst()
             val (newState, effects) = reduce(state, action)
@@ -627,13 +591,6 @@ class StatefulAgentWorkflow @Inject constructor(
 
             for (effect in effects) {
                 when (effect) {
-                    is AgentSideEffect.PersistUser -> {
-                        currentContext.sessionId?.let { sessionId ->
-                            messagePersistenceUseCase.persist(sessionId, com.aicode.feature.agent.presentation.MessageRole.USER,
-                                effect.message.content, id = effect.message.id)
-                            messagePersistenceUseCase.invalidateHistory(sessionId)
-                        }
-                    }
                     is AgentSideEffect.CallLlm -> {
                         val providerInUse = aiProvider
                         // 压缩轮：若配置了压缩专用模型，使用独立压缩模型压缩
@@ -667,14 +624,6 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 引用比较：模块未改动时原样返回同一个列表，不必白写一次状态
                         if (call.messages !== state.messages) {
                             state = state.copy(messages = call.messages)
-                        }
-                        // 发送前最后一道预算闸：估算经真实 usage 校准后仍超输入预算就别发了——
-                        // 发出去只会拿到超窗错误，白花一次调用；交给下面的超窗恢复折一轮再试。
-                        val requestEstimate = TokenEstimator.estimateRequest(systemPrompt, compactedMessages, currentTools)
-                        val predictedInput = TokenEstimator.calibrated(requestEstimate, baselineEstimate, baselineUsage)
-                        if (predictedInput >= inputBudget) {
-                            actionQueue.addLast(AgentAction.LlmError("", "input_budget_exceeded"))
-                            continue
                         }
 
                         val acc = StringBuilder()
@@ -780,37 +729,11 @@ class StatefulAgentWorkflow @Inject constructor(
                                 if (aiResponse.images.isNotEmpty()) persistModelImages(aiResponse.images) else emptyList<AgentImage>() to emptyList()
                             callCompleted = true
                             // 将本轮 reasoning 附加到 AIResponse，以便 reduce 时存入 AssistantMessage 并在下一轮回传
-                            if (aiResponse.stopReason == "model_context_window_exceeded" && !overflowRecoveryAttempted) {
-                                overflowRecoveryAttempted = true
-                                val recovery = forceCompaction(
-                                    context = currentContext,
-                                    messages = state.messages,
-                                    windowProvider = aiProvider,
-                                    summaryProvider = compactionProvider,
-                                    overheadTokens = baseOverheadTokens,
-                                    onEvent = { event -> send(event) }
-                                )
-                                if (recovery != null) {
-                                    state = state.copy(messages = recovery)
-                                    baselineUsage = 0
-                                    baselineEstimate = 0
-                                    // 重开一轮：memoryGuardEnabled 是会话级开关，不能让它被默认值重置。
-                                    actionQueue.addLast(
-                                        AgentAction.InitRequest(recovery, memoryGuardEnabled = state.memoryGuardEnabled)
-                                    )
-                                    continue
-                                }
-                            }
-                            // 校准基线换成这一轮的真实值：下一轮的 predictedInput 以它为锚。
-                            baselineEstimate = requestEstimate
-                            baselineUsage = aiResponse.inputTokens
-                            val responseMessageId = UUID.randomUUID().toString()
                             val responseWithReasoning = if (reasoningAcc.isNotEmpty()) {
                                 aiResponse.copy(reasoning = reasoningAcc.toString())
                             } else aiResponse
 
                             if (aiResponse.content.isNotBlank() || aiResponse.toolCalls.isNotEmpty() || attachments.isNotEmpty()) {
-                                val persisted = kotlinx.coroutines.CompletableDeferred<Unit>()
                                 send(
                                     AgentEvent.AssistantText(
                                         aiResponse.content,
@@ -821,45 +744,19 @@ class StatefulAgentWorkflow @Inject constructor(
                                         aiResponse.outputTokens,
                                         aiResponse.cachedInputTokens,
                                         aiResponse.thinkingBlocksJson ?: "",
-                                        attachments = attachments,
-                                        messageId = responseMessageId,
-                                        persisted = persisted
+                                        attachments = attachments
                                     )
                                 )
-                                persisted.await()
                             }
                             actionQueue.addLast(
                                 AgentAction.LlmResponse(
                                     if (persistedImages.isNotEmpty()) responseWithReasoning.copy(images = persistedImages)
-                                    else responseWithReasoning,
-                                    messageId = responseMessageId
+                                    else responseWithReasoning
                                 )
                             )
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            if (!overflowRecoveryAttempted && acc.isEmpty() && reasoningAcc.isEmpty() && isContextOverflow(e)) {
-                                overflowRecoveryAttempted = true
-                                val recovery = forceCompaction(
-                                    context = currentContext,
-                                    messages = state.messages,
-                                    windowProvider = aiProvider,
-                                    summaryProvider = compactionProvider,
-                                    overheadTokens = baseOverheadTokens,
-                                    onEvent = { event -> send(event) }
-                                )
-                                if (recovery != null) {
-                                    state = state.copy(messages = recovery)
-                                    baselineUsage = 0
-                                    baselineEstimate = 0
-                                    // 重开一轮：memoryGuardEnabled 是会话级开关，不能让它被默认值重置。
-                                    actionQueue.addLast(
-                                        AgentAction.InitRequest(recovery, memoryGuardEnabled = state.memoryGuardEnabled)
-                                    )
-                                    callError = e.message
-                                    continue
-                                }
-                            }
                             val partial = acc.toString()
                             val reasoning = reasoningAcc.toString()
                             // 流式被中断时也要落库已收到的思考：否则下方 finally 会清空流式思考气泡，
@@ -1065,10 +962,7 @@ class StatefulAgentWorkflow @Inject constructor(
 
                         // 逐个推送完成事件（保持与 batchToolCalls 一致顺序），并进入收尾。
                         batchResults.forEach { br ->
-                            val persisted = kotlinx.coroutines.CompletableDeferred<Unit>()
-                            send(AgentEvent.ToolCallFinished(br.id, br.toolName, br.result, br.isError,
-                                attachments = br.attachments, persisted = persisted))
-                            persisted.await()
+                            send(AgentEvent.ToolCallFinished(br.id, br.toolName, br.result, br.isError, attachments = br.attachments))
                         }
                         if (notifySessionId != null && notifications.isNotEmpty()) {
                             agentNotificationCenter.ack(notifySessionId, notifications.map { it.seq })
@@ -1110,53 +1004,6 @@ class StatefulAgentWorkflow @Inject constructor(
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?: "会话 ${sessionId.take(8)}"
-
-    /**
-     * 「服务端因为上下文超窗拒掉了这次请求」的识别：优先看结构化错误码，再退到错误文案匹配。
-     *
-     * 只用于决定「要不要强制折叠一次再重试」，不做错误展示分流（那是 errorCode 的职责）。
-     */
-    private fun isContextOverflow(error: Throwable): Boolean {
-        if (error is StreamApiException && error.code == "context_window_exceeded") return true
-        val text = error.message.orEmpty().lowercase()
-        return listOf("context_length_exceeded", "context_window_exceeded", "maximum context length",
-            "prompt is too long", "input token limit").any { it in text }
-    }
-
-    /**
-     * 超窗恢复：强制折叠一次，返回折叠后的消息；没折成（无可压缩内容 / 未配摘要模型 / 摘要报错）返回 null。
-     *
-     * 走引擎的 [AgentEngine.beforeLlmCall] 而不是直接调 ContextCompactor：档位判定、软精简、
-     * 92% 兜底与占用快照都在压缩模块里，绕过模块这些就都没了。force 用于绕过模块的
-     * 「不在原处重复折」抑制——超窗是必须立刻处理的，等上下文再长一截就晚了。
-     */
-    private suspend fun forceCompaction(
-        context: AgentContext,
-        messages: List<AgentMessage>,
-        windowProvider: AIProvider,
-        summaryProvider: AIProvider,
-        overheadTokens: Int,
-        onEvent: suspend (AgentEvent) -> Unit
-    ): List<AgentMessage>? {
-        val call = agentEngine.beforeLlmCall(
-            EngineContext(
-                sessionId = context.sessionId,
-                projectRoot = context.projectRoot,
-                mode = context.mode,
-                isSubAgent = context.isSubAgent
-            ),
-            LlmCall(
-                messages = messages,
-                windowProvider = windowProvider,
-                summaryProvider = summaryProvider,
-                overheadTokens = overheadTokens,
-                force = true,
-                onEvent = onEvent
-            )
-        ) ?: return null
-        // 模块未改动时原样返回同一个列表：没折成时不能把同一个引用当成「折过了」。
-        return call.messages.takeIf { it !== messages }
-    }
 
     private suspend fun runToolSync(tool: AgentTool?, toolCall: ToolCall, context: AgentContext): ToolRunResult {
         val name = toolCall.name

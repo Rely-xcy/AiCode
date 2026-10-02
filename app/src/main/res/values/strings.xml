@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
-    <string name="agent_input_budget_exceeded">上下文超过当前模型的可用输入预算，请缩短输入或减少工具定义。</string>
 
     <!-- 设置页菜单标题 -->
     <string name="settings_title">设置</string>

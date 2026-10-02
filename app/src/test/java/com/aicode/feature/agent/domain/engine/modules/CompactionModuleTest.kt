@@ -52,7 +52,6 @@ class CompactionModuleTest {
             agentMessageDao = mockk(relaxed = true),
             systemPromptProvider = mockk(relaxed = true),
             llmCallRecordDao = mockk(relaxed = true),
-            messagePersistenceUseCase = mockk(relaxed = true),
             compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
         )
         var completeCalls = 0
