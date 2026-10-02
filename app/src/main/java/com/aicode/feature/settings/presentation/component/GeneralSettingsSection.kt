@@ -104,31 +104,33 @@ internal fun GeneralSettingsSection(
                 title = stringResource(R.string.settings_compaction_threshold),
                 subtitle = buildString {
                     append(stringResource(R.string.settings_compaction_threshold_desc))
+                    // 第二行只在「实际生效值 ≠ 右侧显示的值」时出现：正常情况下与相邻选项一样是单行说明。
                     effectiveCompaction?.let { effective ->
-                        append('\n')
-                        append(
-                            if (effective.thresholds.hardEnabled) {
-                                val percent = effectivePercent(
-                                    effective.thresholds.hard,
-                                    effective.thresholds.contextLimit
-                                )
-                                // 档位上限真的把线压低了才提它；没压低就只给「百分比 + 等值 token」。
-                                stringResource(
-                                    if (percent < compactionThresholdPercent) {
-                                        R.string.settings_compaction_effective_hard_capped
-                                    } else {
-                                        R.string.settings_compaction_effective_hard
-                                    },
-                                    percent,
-                                    formatTokenAmount(effective.thresholds.hard)
-                                )
-                            } else {
+                        if (!effective.thresholds.hardEnabled) {
+                            append('\n')
+                            append(
                                 stringResource(
                                     R.string.settings_compaction_effective_disabled,
                                     formatTokenAmount(effective.thresholds.contextLimit)
                                 )
+                            )
+                        } else {
+                            val percent = effectivePercent(
+                                effective.thresholds.hard,
+                                effective.thresholds.contextLimit
+                            )
+                            // 档位上限真的把线压低了才提它
+                            if (percent < compactionThresholdPercent) {
+                                append('\n')
+                                append(
+                                    stringResource(
+                                        R.string.settings_compaction_effective_hard_capped,
+                                        percent,
+                                        formatTokenAmount(effective.thresholds.hard)
+                                    )
+                                )
                             }
-                        )
+                        }
                     }
                 },
                 onClick = { editingCompactionThreshold = true },
@@ -144,19 +146,7 @@ internal fun GeneralSettingsSection(
             SettingsRow(
                 icon = null,
                 title = stringResource(R.string.settings_soft_compaction_threshold),
-                subtitle = buildString {
-                    append(stringResource(R.string.settings_soft_compaction_threshold_desc))
-                    effectiveCompaction?.let { effective ->
-                        append('\n')
-                        append(
-                            stringResource(
-                                R.string.settings_compaction_effective_soft,
-                                effectivePercent(effective.thresholds.soft, effective.thresholds.contextLimit),
-                                formatTokenAmount(effective.thresholds.soft)
-                            )
-                        )
-                    }
-                },
+                subtitle = stringResource(R.string.settings_soft_compaction_threshold_desc),
                 onClick = { editingSoftCompactionThreshold = true },
                 trailing = {
                     Text(
