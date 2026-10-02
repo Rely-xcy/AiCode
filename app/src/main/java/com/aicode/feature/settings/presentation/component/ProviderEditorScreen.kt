@@ -1197,7 +1197,8 @@ private fun AddModelSheet(
     var supportsImageOutput by remember { mutableStateOf(initial?.supportsImageOutput ?: false) }
     var supportsTools by remember { mutableStateOf(initial?.supportsTools ?: false) }
     var supportsReasoning by remember { mutableStateOf(initial?.supportsReasoning ?: false) }
-    var inputTokens by remember { mutableStateOf((initial?.inputTokens ?: initial?.contextTokens?.takeIf { it > 0 })?.toString() ?: "") }
+    var contextTokens by remember { mutableStateOf(initial?.contextTokens?.takeIf { it > 0 }?.toString() ?: "") }
+    var inputTokens by remember { mutableStateOf(initial?.inputTokens?.toString() ?: "") }
     var outputTokens by remember { mutableStateOf(initial?.outputTokens?.toString() ?: "") }
     var inputPrice by remember { mutableStateOf(initial?.inputCostUsdPerM?.toString() ?: "") }
     var outputPrice by remember { mutableStateOf(initial?.outputCostUsdPerM?.toString() ?: "") }
@@ -1205,7 +1206,10 @@ private fun AddModelSheet(
     var cacheWritePrice by remember { mutableStateOf(initial?.cacheWriteCostUsdPerM?.toString() ?: "") }
     val trimmedModel = modelName.trim()
     val duplicate = existingModels.any { it == trimmedModel && it != initial?.id }
-    val canSave = trimmedModel.isNotEmpty() && !duplicate
+    val contextError = contextTokens.isNotBlank() && (contextTokens.trim().toIntOrNull() ?: 0) <= 0
+    val inputError = inputTokens.isNotBlank() && (inputTokens.trim().toIntOrNull() ?: 0) <= 0
+    val outputError = outputTokens.isNotBlank() && (outputTokens.trim().toIntOrNull() ?: 0) <= 0
+    val canSave = trimmedModel.isNotEmpty() && !duplicate && !contextError && !inputError && !outputError
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1265,14 +1269,25 @@ private fun AddModelSheet(
                     )
                 }
                 ModelSheetTextField(
+                    label = stringResource(R.string.provider_model_context_total),
+                    value = contextTokens,
+                    onValueChange = { contextTokens = it },
+                    keyboardType = KeyboardType.Number,
+                    isError = contextError
+                )
+                ModelSheetTextField(
                     label = stringResource(R.string.provider_model_context_input),
                     value = inputTokens,
-                    onValueChange = { inputTokens = it }
+                    onValueChange = { inputTokens = it },
+                    keyboardType = KeyboardType.Number,
+                    isError = inputError
                 )
                 ModelSheetTextField(
                     label = stringResource(R.string.provider_model_context_output),
                     value = outputTokens,
-                    onValueChange = { outputTokens = it }
+                    onValueChange = { outputTokens = it },
+                    keyboardType = KeyboardType.Number,
+                    isError = outputError
                 )
 
                 SectionLabel(stringResource(R.string.provider_model_section_price))
@@ -1356,7 +1371,7 @@ private fun AddModelSheet(
                         val meta = ModelMetadata(
                             id = trimmedModel,
                             displayName = trimmedModel,
-                            contextTokens = input ?: 0,
+                            contextTokens = contextTokens.trim().toIntOrNull() ?: 0,
                             inputTokens = input,
                             outputTokens = output,
                             inputCostUsdPerM = inputPrice.trim().toDoubleOrNull(),
@@ -1402,12 +1417,19 @@ private fun ModelSheetTextField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    keyboardType: KeyboardType = KeyboardType.Text
+    keyboardType: KeyboardType = KeyboardType.Text,
+    isError: Boolean = false
 ) {
     AppTextField(
         value = value,
         onValueChange = onValueChange,
         label = label,
+        isError = isError,
+        supportingText = if (isError) {
+            { Text(stringResource(R.string.provider_model_window_invalid)) }
+        } else {
+            null
+        },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         modifier = Modifier.fillMaxWidth()

@@ -44,6 +44,39 @@ class TokenEstimatorTest {
     }
 
     @Test
+    fun `中文不按四字符一 token`() {
+        // 同一个口径的极端例：100 个汉字 ≈ 100 token，100 个拉丁字母 ≈ 25 token。
+        // 若统一按「字符数 ÷ 4」，中文会被低估到 1/4，压缩触发随之偏晚。
+        assertEquals(100, TokenEstimator.estimateText("汉".repeat(100)))
+        assertEquals(25, TokenEstimator.estimateText("a".repeat(100)))
+    }
+
+    @Test
+    fun `整请求估算在消息之外带上固定开销`() {
+        val messages = listOf(AgentMessage.UserMessage(content = "继续"))
+        val request = TokenEstimator.estimateRequest("system", messages, emptyList())
+        // 每条消息的协议包装也算占窗口，只算正文会系统性偏低
+        assertEquals(
+            TokenEstimator.estimateText("system") + TokenEstimator.estimateMessages(messages) + 12,
+            request
+        )
+    }
+
+    @Test
+    fun `增量校准会把新追加的大块输出算进预算`() {
+        val before = listOf(AgentMessage.UserMessage(content = "request"))
+        val after = before + AgentMessage.ToolResultMessage(
+            id = "call", toolName = "readFile", result = "汉".repeat(25_000)
+        )
+        val baseline = TokenEstimator.estimateRequest("system", before, emptyList())
+        val current = TokenEstimator.estimateRequest("system", after, emptyList())
+        // 真实 usage 110k + 本轮的 25k 增量 → 至少 135k：拿到过 usage 也不意味着本轮一定装得下
+        assertTrue(TokenEstimator.calibrated(current, baseline, 110_000) >= 135_000)
+        // 没拿到真实 usage 时原样返回估算值
+        assertEquals(current, TokenEstimator.calibrated(current, baseline, 0))
+    }
+
+    @Test
     fun `工具结果按实际喂模型的 modelResult 估算`() {
         val full = AgentMessage.ToolResultMessage(toolName = "read", result = "x".repeat(40_000), modelResult = "短")
         val projected = AgentMessage.ToolResultMessage(toolName = "read", result = "x".repeat(40_000))

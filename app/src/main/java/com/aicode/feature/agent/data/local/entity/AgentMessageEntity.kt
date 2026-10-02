@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -53,8 +54,14 @@ data class AgentMessageEntity(
     // 仅 ASSISTANT 行：本轮输入中命中服务端缓存的 token 数，UI 据此显示缓存命中率。同样只能追加在末尾。
     val cachedInputTokens: Int = 0,
     // 仅 USER 行：模式变化时注入的模式提醒（模型可见的那份）。content 只存用户原话，
-    // 组装请求时把它拼回该条消息的文本；界面与回放只认 content。无提醒时为 null。同样只能追加在末尾。
-    val modelReminder: String? = null
+    // 组装请求时把它拼回该条消息的文本；界面与回放只认 content。无提醒时为 null。
+    // 与下面两列一起只能追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
+    val modelReminder: String? = null,
+    // 仅用于把「老的 /usage 行」排除出上下文（不回退恢复），与压缩归属分开记。
+    @ColumnInfo(defaultValue = "0")
+    val isContextExcluded: Boolean = false,
+    // 本行是被哪份摘要折叠掉的（摘要行 id）；回退恢复据此判断归属。无归属时为 null。
+    val compactedBySummaryId: String? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)

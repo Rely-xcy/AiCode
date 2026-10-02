@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -37,7 +38,7 @@ interface AgentMessageDao {
         SELECT COUNT(*) AS retainedMessages,
                IFNULL(SUM(CASE WHEN isContextSummary = 1 THEN 1 ELSE 0 END), 0) AS foldCount
         FROM agent_messages
-        WHERE sessionId = :sessionId AND isCompacted = 0
+        WHERE sessionId = :sessionId AND isCompacted = 0 AND isContextExcluded = 0
         """
     )
     suspend fun sessionContextStats(sessionId: String): SessionContextStats
@@ -80,6 +81,64 @@ interface AgentMessageDao {
         keepMarkerId: String,
         keepSummaryId: String
     ): Int
+
+    /**
+     * 按**稳定 id** 把已折叠的 head 标为已压缩，并记下归属摘要：[summaryId]。
+     *
+     * 与 [markMessagesCompactedBeforeTimestamp] 的时间戳判据互补：那条按「时间早于新 marker」标，
+     * 判据不依赖 id，但两次折叠之间保留区起点没前移时会标不到；这一条按精确 id 标，用于
+     * [commitCompaction] 的事务提交路径。`isContextExcluded = 0` 限定只动真正参与上下文回放的行，
+     * 不回写那些已排除出上下文的（如老 /usage 行）。
+     */
+    @Query("UPDATE agent_messages SET isCompacted = 1, compactedBySummaryId = :summaryId WHERE sessionId = :sessionId AND id IN (:headIds) AND isContextExcluded = 0")
+    suspend fun markMessagesCompactedByIds(sessionId: String, headIds: List<String>, summaryId: String)
+
+    /** 上下文刚被折叠：上次请求的 usage 已不能代表新上下文，清掉避免下一轮拿旧值判定。 */
+    @Query("UPDATE chat_sessions SET lastInputTokens = 0 WHERE id = :sessionId")
+    suspend fun resetLastInputTokens(sessionId: String)
+
+    /**
+     * 一次事务里提交折叠结果：标 head（带摘要归属）、插 marker 与摘要、清旧 usage。
+     *
+     * 分三步写完必须同生共死：只标 head 不插摘要会真丢历史，只插摘要不标 head 会让下一轮重复折叠。
+     * `chunked(900)` 是因为 SQLite 的绑定参数上限（999），head 长时不能一次 `IN` 完。
+     */
+    @Transaction
+    suspend fun commitCompaction(
+        sessionId: String,
+        headIds: List<String>,
+        messages: List<AgentMessageEntity>,
+        summaryId: String
+    ) {
+        headIds.chunked(900).forEach { ids ->
+            markMessagesCompactedByIds(sessionId, ids, summaryId)
+        }
+        insertAll(messages)
+        resetLastInputTokens(sessionId)
+    }
+
+    /** 回退恢复：清掉本会话的 marker 与摘要行（它们随折叠一起产生，回退时一并撤掉）。 */
+    @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId AND (isCompactionMarker = 1 OR isContextSummary = 1)")
+    suspend fun deleteCompactionMessages(sessionId: String)
+
+    /**
+     * 回退恢复：把 cutoff 之前被折叠的普通原文重新放回上下文。
+     *
+     * 四个条件都是有意的：`isContextExcluded = 0` 不动已排除出上下文的老 /usage 行，
+     * `isContextSummary = 0 AND isCompactionMarker = 0` 不动摘要与锚点（它们由上一条删除），
+     * `isCompacted = 1` 只恢复真被标过的行。
+     */
+    @Query("UPDATE agent_messages SET isCompacted = 0, compactedBySummaryId = NULL WHERE sessionId = :sessionId AND timestamp < :cutoff AND isCompacted = 1 AND isContextExcluded = 0 AND isContextSummary = 0 AND isCompactionMarker = 0")
+    suspend fun restoreCompactedMessagesBefore(sessionId: String, cutoff: Long)
+
+    /** 回退恢复的完整动作：撤折叠痕迹 → 恢复被折叠的原文 → 删掉 cutoff 之后的对话 → 清旧 usage。 */
+    @Transaction
+    suspend fun rewindConversation(sessionId: String, cutoff: Long) {
+        deleteCompactionMessages(sessionId)
+        restoreCompactedMessagesBefore(sessionId, cutoff)
+        deleteMessagesFromTimestamp(sessionId, cutoff)
+        resetLastInputTokens(sessionId)
+    }
 
     @Query("DELETE FROM agent_messages")
     suspend fun deleteAllMessages()

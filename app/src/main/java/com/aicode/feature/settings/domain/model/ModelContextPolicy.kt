@@ -104,4 +104,27 @@ object ModelContextPolicy {
             hardEnabled = hardEnabled
         )
     }
+
+    /**
+     * 为输出预留的 token：输出不能占满整窗口，否则输入没地方放。
+     *
+     * 取窗口的 10%（夹在 1K〜8K，且不超过窗口的 1/4），模型元数据里声明了更小的输出上限就用它：
+     * 声明值比预留值大时仍按预留值封顶——预留是输入侧的安全阀，不能反过来被模型宣传值抬走。
+     */
+    fun outputReserveTokens(metadata: ModelMetadata): Int {
+        val context = metadata.contextTokens.takeIf { it > 0 } ?: DEFAULT_CONTEXT_TOKENS
+        val reserve = (context / 10).coerceIn(1_024, 8_192).coerceAtMost(context / 4)
+        return metadata.outputTokens?.takeIf { it > 0 }?.coerceAtMost(reserve) ?: reserve
+    }
+
+    /**
+     * 实际可用的输入预算 = 模型窗口 − [outputReserveTokens]，再受模型自带的输入上限约束。
+     *
+     * 发送前的预算拦截与界面的百分比分母都取这一个数：拿裸窗口当分母会把「快撞输入上限」显示成还很宽裕。
+     */
+    fun effectiveInputBudget(metadata: ModelMetadata): Int {
+        val context = metadata.contextTokens.takeIf { it > 0 } ?: DEFAULT_CONTEXT_TOKENS
+        val shared = (context - outputReserveTokens(metadata)).coerceAtLeast(1)
+        return metadata.inputTokens?.takeIf { it > 0 }?.coerceAtMost(shared) ?: shared
+    }
 }

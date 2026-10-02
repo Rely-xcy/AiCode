@@ -78,4 +78,30 @@ class ModelContextPolicyTest {
         // 1M 窗口同档：上限 = 窗口 - 20k
         assertEquals(980_000, ModelContextPolicy.tierFor(1_000_000).hardThreshold)
     }
+
+    // ---------- outputReserveTokens / effectiveInputBudget：给输出留出窗口 ----------
+
+    @Test
+    fun outputReserveTokens_tenthOfWindowClamped() {
+        assertEquals(8_192, ModelContextPolicy.outputReserveTokens(ModelMetadata(id = "model", contextTokens = 128_000)))
+        // 小窗口的下限 1024（4K 的 10% 只有 400，留不够输出）
+        assertEquals(1_024, ModelContextPolicy.outputReserveTokens(ModelMetadata(id = "model", contextTokens = 8_000)))
+    }
+
+    @Test
+    fun outputReserveTokens_prefersSmallerDeclaredLimit() {
+        assertEquals(2_000, ModelContextPolicy.outputReserveTokens(
+            ModelMetadata(id = "model", contextTokens = 128_000, outputTokens = 2_000)))
+    }
+
+    @Test
+    fun effectiveInputBudget_subtractsOutputReserve() {
+        assertEquals(119_808, ModelContextPolicy.effectiveInputBudget(ModelMetadata(id = "model", contextTokens = 128_000)))
+    }
+
+    @Test
+    fun effectiveInputBudget_neverExceedsDeclaredInputLimit() {
+        assertEquals(272_000, ModelContextPolicy.effectiveInputBudget(
+            ModelMetadata(id = "model", contextTokens = 400_000, inputTokens = 272_000, outputTokens = 128_000)))
+    }
 }

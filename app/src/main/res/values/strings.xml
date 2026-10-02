@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
+    <string name="chat_context_usage_estimated">预计占可用输入预算 %1$d%%</string>
+    <string name="agent_input_budget_exceeded">上下文超过当前模型的可用输入预算，请缩短输入或减少工具定义。</string>
 
     <!-- 设置页菜单标题 -->
     <string name="settings_title">设置</string>
@@ -133,15 +135,13 @@
     <string name="storage_scanning">统计中…</string>
     <string name="storage_device_free">设备可用 %1$s / 共 %2$s</string>
     <string name="storage_section_breakdown">占用明细</string>
-    <string name="storage_section_reclaimable">可释放空间</string>
     <string name="storage_breakdown_note">点击带箭头的分类可展开明细。删会话可减小聊天记录，容器与工作区请在各自的页面重置或删除；外部目录工作区位于设备存储，未计入。</string>
     <string name="storage_freed">已释放 %1$s</string>
     <string name="storage_clean">清理</string>
-    <string name="storage_clean_all">一键清理</string>
-    <string name="storage_clean_all_desc">清理以上全部项，不动聊天记录、容器与工作区</string>
+    <string name="storage_clean_selected">清理选中项 · %1$s</string>
     <string name="storage_clean_confirm_title">确认清理</string>
-    <string name="storage_clean_confirm_all">将清理缓存、日志、工具输出与识图会话缓存，共约 %1$s。聊天记录、容器与工作区不受影响。</string>
-    <string name="storage_clean_confirm_single">将删除「%1$s」，约 %2$s。此操作不可恢复。</string>
+    <string name="storage_clean_confirm_selected">将清理以下选中项，共约 %1$s。此操作不可恢复。</string>
+    <string name="storage_clean_scope">仅清理本机应用缓存、日志及全局目录中的所选数据，可能影响多个工作区的历史输出读取或识图追问；不会删除聊天记录、工作区文件、容器、AI 配置或远程服务器数据。</string>
     <string name="storage_category_chat">聊天记录</string>
     <string name="storage_category_container">容器</string>
     <string name="storage_category_container_images">容器镜像包</string>
@@ -1210,6 +1210,8 @@
     <string name="provider_test_success">连接正常 · %1$dms</string>
     <string name="common_error">错误</string>
     <string name="common_select">选择</string>
+    <string name="provider_model_context_total">总上下文窗口 (Token)</string>
+    <string name="provider_model_window_invalid">请输入有效的正整数，或留空使用自动识别值</string>
     <string name="provider_model_context_input">输入窗口 (Token)</string>
     <string name="provider_model_context_output">输出窗口 (Token)</string>
     <string name="provider_new">新供应商</string>

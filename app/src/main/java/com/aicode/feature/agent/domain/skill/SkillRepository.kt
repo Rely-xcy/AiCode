@@ -44,8 +44,8 @@ class SkillRepository @Inject constructor(
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
     fun loadInstructions(name: String): String? {
         if (name.lowercase() in skillConfigRepository.disabledNames()) return null
-        return globalDirectorySkillSource.loadInstructions(name)
-            ?: projectDirectorySkillSource.loadInstructions(name)
+        return projectDirectorySkillSource.loadInstructions(name)
+            ?: globalDirectorySkillSource.loadInstructions(name)
     }
 
     /** 技能是否在任一作用域中被禁用。 */

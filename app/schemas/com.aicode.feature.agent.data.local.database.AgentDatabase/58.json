@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 58,
-    "identityHash": "7c32890724e77562580916692b6e000b",
+    "identityHash": "29049a6535a94021f6bd50f3dd77ee36",
     "entities": [
       {
         "tableName": "agent_messages",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `role` TEXT NOT NULL, `content` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `toolCallsJson` TEXT, `toolCallId` TEXT, `toolName` TEXT, `toolArgs` TEXT, `isError` INTEGER NOT NULL, `reasoning` TEXT, `signature` TEXT, `attachmentsJson` TEXT, `isCompacted` INTEGER NOT NULL, `isContextSummary` INTEGER NOT NULL, `isCompactionMarker` INTEGER NOT NULL, `inputTokens` INTEGER NOT NULL, `outputTokens` INTEGER NOT NULL, `thinkingBlocksJson` TEXT, `cachedInputTokens` INTEGER NOT NULL, `modelReminder` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `role` TEXT NOT NULL, `content` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `toolCallsJson` TEXT, `toolCallId` TEXT, `toolName` TEXT, `toolArgs` TEXT, `isError` INTEGER NOT NULL, `reasoning` TEXT, `signature` TEXT, `attachmentsJson` TEXT, `isCompacted` INTEGER NOT NULL, `isContextSummary` INTEGER NOT NULL, `isCompactionMarker` INTEGER NOT NULL, `inputTokens` INTEGER NOT NULL, `outputTokens` INTEGER NOT NULL, `thinkingBlocksJson` TEXT, `cachedInputTokens` INTEGER NOT NULL, `isContextExcluded` INTEGER NOT NULL DEFAULT 0, `compactedBySummaryId` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -121,8 +121,15 @@
             "notNull": true
           },
           {
-            "fieldPath": "modelReminder",
-            "columnName": "modelReminder",
+            "fieldPath": "isContextExcluded",
+            "columnName": "isContextExcluded",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "compactedBySummaryId",
+            "columnName": "compactedBySummaryId",
             "affinity": "TEXT"
           }
         ],
@@ -913,7 +920,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7c32890724e77562580916692b6e000b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '29049a6535a94021f6bd50f3dd77ee36')"
     ]
   }
 }

@@ -580,6 +580,7 @@ class ContextBudgetPolicyTest {
         agentMessageDao = mockk(relaxed = true),
         systemPromptProvider = mockk(relaxed = true),
         llmCallRecordDao = mockk(relaxed = true),
+        messagePersistenceUseCase = mockk(relaxed = true),
         compactedHistoryArchive = mockk(relaxed = true)
     )
 }

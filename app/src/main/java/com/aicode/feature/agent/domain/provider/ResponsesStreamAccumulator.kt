@@ -153,6 +153,8 @@ internal sealed class ResponsesDelta {
  * failed 直接抛 [StreamApiException] 交给重试判定。
  */
 internal class ResponsesStreamAccumulator {
+    var receivedContent: Boolean = false
+        private set
 
     private class CallAcc {
         var callId = ""
@@ -226,6 +228,7 @@ internal class ResponsesStreamAccumulator {
                     ResponsesItem.IMAGE_GENERATION_CALL -> {
                         item.str("result")?.takeIf { it.isNotEmpty() }?.let { result ->
                             val key = item.str("id") ?: event.callKey()
+                            receivedContent = true
                             images[key] = AgentImage(mimeType = mimeForImageFormat(item.str("output_format")), base64Data = result)
                         }
                     }

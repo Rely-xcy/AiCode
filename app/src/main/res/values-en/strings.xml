@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
+    <string name="chat_context_usage_estimated">Estimated input budget usage: %1$d%%</string>
+    <string name="agent_input_budget_exceeded">Context exceeds the model input budget. Shorten the input or reduce tool definitions.</string>
 
     <!-- Settings menu titles -->
     <string name="settings_title">Settings</string>
@@ -133,15 +135,13 @@
     <string name="storage_scanning">Calculating…</string>
     <string name="storage_device_free">%1$s free of %2$s</string>
     <string name="storage_section_breakdown">Breakdown</string>
-    <string name="storage_section_reclaimable">Reclaimable space</string>
     <string name="storage_breakdown_note">Tap a category with an arrow to expand details. Delete sessions to shrink chat history; reset or remove containers and workspaces from their own pages. External folder workspaces live on device storage and are not counted.</string>
     <string name="storage_freed">Freed %1$s</string>
     <string name="storage_clean">Clean</string>
-    <string name="storage_clean_all">Clean all</string>
-    <string name="storage_clean_all_desc">Cleans every item above; chat history, containers and workspaces are untouched</string>
+    <string name="storage_clean_selected">Clean selected · %1$s</string>
     <string name="storage_clean_confirm_title">Confirm cleanup</string>
-    <string name="storage_clean_confirm_all">Caches, logs, tool output and vision session cache will be deleted (about %1$s). Chat history, containers and workspaces are not affected.</string>
-    <string name="storage_clean_confirm_single">“%1$s” will be deleted (about %2$s). This cannot be undone.</string>
+    <string name="storage_clean_confirm_selected">The selected items below will be deleted (about %1$s). This cannot be undone.</string>
+    <string name="storage_clean_scope">Only selected local app caches, logs and data in global directories are cleaned. This may affect historical output access or image follow-ups across multiple workspaces. Chat history, workspace files, containers, AI configuration and remote server data are not deleted.</string>
     <string name="storage_category_chat">Chat history</string>
     <string name="storage_category_container">Containers</string>
     <string name="storage_category_container_images">Container images</string>
@@ -1210,6 +1210,8 @@
     <string name="provider_test_success">Connected · %1$dms</string>
     <string name="common_error">Error</string>
     <string name="common_select">Select</string>
+    <string name="provider_model_context_total">Total Context Window (tokens)</string>
+    <string name="provider_model_window_invalid">Enter a valid positive integer, or leave blank to use the automatically detected value</string>
     <string name="provider_model_context_input">Input Window (tokens)</string>
     <string name="provider_model_context_output">Output Window (tokens)</string>
     <string name="provider_new">New Vendor</string>

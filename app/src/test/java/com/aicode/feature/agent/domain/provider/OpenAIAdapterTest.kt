@@ -28,6 +28,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 /**
  * OpenAI 适配器（[OpenAIAdapter]）：Chat Completions 请求构造 / 响应映射、Responses API 载荷与
@@ -460,13 +463,22 @@ class OpenAIAdapterTest {
 
     // ── Chat Completions 流式 ─────────────────────────────────────────
 
-    private fun sseBody(vararg lines: String): ResponseBody =
-        (lines.joinToString("\n") + "\n").toResponseBody(null)
+    private fun sseCall(vararg lines: String): Call<ResponseBody> {
+        val body = (lines.joinToString("\n") + "\n").toResponseBody(null)
+        val call = mockk<Call<ResponseBody>>()
+        var canceled = false
+        every { call.enqueue(any()) } answers {
+            firstArg<Callback<ResponseBody>>().onResponse(call, Response.success(body))
+        }
+        every { call.cancel() } answers { canceled = true }
+        every { call.isCanceled } answers { canceled }
+        return call
+    }
 
     @Test
     fun streamChat_collectsTextAndFinal() = runTest {
         val api = api()
-        coEvery { api.streamChatCompletion(any(), any(), any(), any()) } returns sseBody(
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"content\":\"你\"},\"finish_reason\":null}]}",
             "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},\"finish_reason\":null}]}",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
@@ -489,7 +501,7 @@ class OpenAIAdapterTest {
     @Test
     fun streamChat_assemblesStreamedToolCallFragments() = runTest {
         val api = api()
-        coEvery { api.streamChatCompletion(any(), any(), any(), any()) } returns sseBody(
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"readFile\",\"arguments\":\"{\\\"pat\"}}]},\"finish_reason\":null}]}",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"h\\\":\\\"/a\\\"}\"}}]},\"finish_reason\":null}]}",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
@@ -511,7 +523,7 @@ class OpenAIAdapterTest {
     @Test
     fun streamChat_accumulatesImagesFromDelta() = runTest {
         val api = api()
-        coEvery { api.streamChatCompletion(any(), any(), any(), any()) } returns sseBody(
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"images\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgo=\"},\"index\":0}],\"role\":\"assistant\"},\"finish_reason\":null}]}",
             "data: [DONE]"
         )
@@ -525,9 +537,29 @@ class OpenAIAdapterTest {
     }
 
     @Test
+    fun streamChat_budgetExceeded_abortsWithoutFinal() = runTest {
+        val api = api()
+        val content = "x".repeat(MAX_STREAM_CHARS / 2 + 1)
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$content\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$content\"}}]}",
+            "data: [DONE]"
+        )
+        val chunks = mutableListOf<AIStreamChunk>()
+        try {
+            adapter(api).apply { maxNetworkRetries = 0 }
+                .completeStream("", emptyList()).toList(chunks)
+            org.junit.Assert.fail("Expected response_too_large")
+        } catch (e: StreamApiException) {
+            assertEquals("response_too_large", e.code)
+            assertTrue(chunks.none { it is AIStreamChunk.Final })
+        }
+    }
+
+    @Test
     fun streamChat_midStreamError_doesNotAbortWholeStream() = runTest {
         val api = api()
-        coEvery { api.streamChatCompletion(any(), any(), any(), any()) } returns sseBody(
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"content\":\"前\"},\"finish_reason\":null}]}",
             "data: {\"bogus\": true}", // 无 choices → 跳过
             "data: {\"choices\":[{\"delta\":{\"content\":\"后\"},\"finish_reason\":\"stop\"}]}",

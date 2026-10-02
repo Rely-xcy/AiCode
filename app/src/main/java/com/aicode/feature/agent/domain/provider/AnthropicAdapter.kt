@@ -192,6 +192,7 @@ class AnthropicAdapter @Inject constructor(
                     } else false
                 },
                 attemptOnce = { onContent ->
+                    withFirstContentTimeout(firstByteTimeoutMs) { firstContent ->
             val textBuilder = StringBuilder()
             val budget = StreamBudget()
             // content block index -> 累积中的 tool_use（仅 tool_use 块建条目，保序）。
@@ -207,13 +208,11 @@ class AnthropicAdapter @Inject constructor(
             // content block index -> thinking / redacted_thinking 累积；按 index 分槽，避免一轮多个思考块被合并。
             val thinkingBlocks = LinkedHashMap<Int, ThinkingBlockAcc>()
 
-            val body = api.streamMessage(url = url, apiKey = apiKey, extraHeaders = extraHeaders(), request = request)
+            val body = firstContent.awaitBody(api.streamMessage(url = url, apiKey = apiKey, extraHeaders = extraHeaders(), request = request))
 
             body.use { rb ->
-                // 首字节超时 watchdog：超时内未收到首个内容块则关闭流，触发可重试的 IOException。
-                val firstByteReceived = java.util.concurrent.atomic.AtomicBoolean(false)
-                val watchdog = launchFirstByteWatchdog(firstByteTimeoutMs, { rb.close() }) { firstByteReceived.get() }
-                val idleWatchdog = launchStreamIdleWatchdog(streamIdleTimeoutMs) { rb.close() }
+                firstContent.attach { rb.close() }
+                val idleWatchdog = launchStreamIdleWatchdog(streamIdleTimeoutMs) { firstContent.closeBody() }
                 val closeHandle = coroutineContext[Job]?.invokeOnCompletion {
                     runCatching { rb.close() }
                 }
@@ -257,6 +256,8 @@ class AnthropicAdapter @Inject constructor(
                                     val block = obj.getAsJsonObject("content_block")
                                     when (block?.get("type")?.asString) {
                                         "tool_use" -> {
+                                            firstContent.receivedContent()
+                                            onContent()
                                             val name = block.get("name")?.asString ?: ""
                                             toolBlocks[index] = ToolBlockAcc(
                                                 id = block.get("id")?.asString ?: "",
@@ -270,11 +271,19 @@ class AnthropicAdapter @Inject constructor(
                                             val initial = block.get("thinking")?.takeIf { !it.isJsonNull }?.asString ?: ""
                                             budget.add(initial)
                                             acc.thinking.append(initial)
+                                            if (initial.isNotEmpty()) {
+                                                firstContent.receivedContent()
+                                                onContent()
+                                            }
                                             acc.signature = block.get("signature")?.takeIf { !it.isJsonNull }?.asString
                                         }
                                         // redacted_thinking 的 data 在 start 事件一次性给全，没有对应 delta。
                                         "redacted_thinking" -> thinkingBlocks[index] = ThinkingBlockAcc(type = "redacted_thinking").also { acc ->
                                             acc.data = block.get("data")?.takeIf { !it.isJsonNull }?.asString
+                                            if (!acc.data.isNullOrEmpty()) {
+                                                firstContent.receivedContent()
+                                                onContent()
+                                            }
                                         }
                                     }
                                 }
@@ -286,7 +295,7 @@ class AnthropicAdapter @Inject constructor(
                                             if (t.isNotEmpty()) {
                                                 budget.add(t)
                                                 textBuilder.append(t)
-                                                if (firstByteReceived.compareAndSet(false, true)) watchdog.cancel()
+                                                firstContent.receivedContent()
                                                 onContent()
                                                 emit(AIStreamChunk.TextDelta(t))
                                             }
@@ -300,7 +309,7 @@ class AnthropicAdapter @Inject constructor(
                                                         .thinking.append(t)
                                                 }
                                                 // 思考内容不落库、可重试重流出，但收到即说明连接已活，取消首字节超时。
-                                                if (firstByteReceived.compareAndSet(false, true)) watchdog.cancel()
+                                                firstContent.receivedContent()
                                                 onContent()
                                                 emit(AIStreamChunk.ReasoningDelta(t))
                                             }
@@ -359,7 +368,6 @@ class AnthropicAdapter @Inject constructor(
                         }
                     }
                 } finally {
-                    watchdog.cancel()
                     idleWatchdog.cancel()
                     closeHandle?.dispose()
                 }
@@ -369,6 +377,7 @@ class AnthropicAdapter @Inject constructor(
                 ToolCall(id = acc.id, name = acc.name, arguments = parseArgs(acc.args.toString()))
             }
             emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = stopReason, stopDetail = stopDetail, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks.values.map { it.toBlock() }), inputTokens = totalInputTokens(streamInputTokens, streamCachedInputTokens, streamCacheCreationTokens), outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens)))
+                    }
                 },
                 onRetry = { attempt, max, error -> emit(AIStreamChunk.Retrying(attempt, max, error)) }
             )
