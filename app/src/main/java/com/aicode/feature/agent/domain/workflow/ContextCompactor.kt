@@ -506,8 +506,11 @@ class ContextCompactor @Inject constructor(
         // 拉丁 4 字符 ≈ 1 token，固定系数会把中文消息算得截不动。
         val ratio = budgetTokens.toDouble() / currentTokens
 
-        fun limitOf(text: String): Int =
-            (text.length * ratio).toInt().coerceAtLeast(MIN_TRUNCATE_CHARS)
+        fun limitOf(text: String): Int = limitOfLength(text.length)
+
+        /** 工具参数没有单一「文本」，预算按各字段正文长度之和算，故另开一个按长度的入口。 */
+        fun limitOfLength(length: Int): Int =
+            (length * ratio).toInt().coerceAtLeast(MIN_TRUNCATE_CHARS)
 
         return when (message) {
             is AgentMessage.ToolResultMessage -> {
@@ -530,7 +533,7 @@ class ContextCompactor @Inject constructor(
                     // 预算按参数正文的长度算，不能用 JsonPrimitive 的序列化形态：转义把换行算成
                     // 两个字符，总量偏大近一倍，摘录预算跟着虚高（同 [argumentText] 那个坑）。
                     val argsChars = call.arguments.values.sumOf { value -> value.argumentText().length }
-                    rebuildToolCallArguments(call, limitOf(argsChars))
+                    rebuildToolCallArguments(call, limitOfLength(argsChars))
                 }
                 if (trimmedContent == message.content && trimmedCalls == message.toolCalls) message
                 else message.copy(content = trimmedContent, toolCalls = trimmedCalls)
