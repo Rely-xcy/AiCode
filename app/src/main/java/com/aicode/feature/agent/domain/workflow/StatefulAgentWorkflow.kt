@@ -1099,7 +1099,10 @@ class StatefulAgentWorkflow @Inject constructor(
             val resp = provider.complete(
                 systemPrompt = prompt,
                 messages = listOf(AgentMessage.UserMessage(content = request)),
-                tools = emptyList()
+                tools = emptyList(),
+                // 稳定前缀 = title-generator.md（约 789 token）< 最小可缓存长度 1024，
+                // 断点建不起缓存、尾部又一次性 → 尾部断点纯浪费。
+                cacheTail = false
             )
             usage = resp
             callCompleted = true
@@ -1147,7 +1150,9 @@ class StatefulAgentWorkflow @Inject constructor(
         val resp = provider.complete(
             systemPrompt = prompt,
             messages = listOf(AgentMessage.UserMessage(content = "git diff:\n```diff\n$truncatedDiff\n```")),
-            tools = emptyList()
+            tools = emptyList(),
+            // 稳定前缀 = commit-generator.md（约 222 token）< 1024 → 尾部断点纯浪费。
+            cacheTail = false
         )
         val line = resp.content.lines().firstOrNull { it.isNotBlank() }?.trim()
             ?.removeSurrounding("`")
@@ -1180,7 +1185,11 @@ class StatefulAgentWorkflow @Inject constructor(
             val resp = provider.complete(
                 systemPrompt = prompt,
                 messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
-                tools = emptyList()
+                tools = emptyList(),
+                // 一次性独立调用：当前唯一调用方传 memory-curator.md（约 466 token）< 1024，
+                // 稳定前缀建不起缓存；即便以后换成 ≥1024 的提示词，system 断点照旧生效，
+                // 尾部这条（一次性消息）永远读不回来。
+                cacheTail = false
             )
             usage = resp
             callCompleted = true

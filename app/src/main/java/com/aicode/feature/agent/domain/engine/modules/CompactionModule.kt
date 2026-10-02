@@ -107,9 +107,10 @@ class CompactionModule @Inject constructor(
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
         val rawEstimate = TokenEstimator.estimateMessages(messages) + call.overheadTokens
-        // 增量校准：上一轮的真实 usage 与那一轮的原始估算配对，补上本地估算系统性差的那一截。
-        // 基线缺一条（该会话首轮、provider 不回传 usage、刚被 onSessionDeleted 清掉）就不校准，
-        // 判定式与加这功能之前一字不差（见 [TokenEstimator.calibrated] 的退化分支）。
+        // 增量校准：上一轮的真实 usage 与那一轮的原始估算配对，减掉已确认的高估量（只减不上加，
+        // 低估那一头由下面的 max(lastInputTokens, …) 自己兜住）。基线缺一条（该会话首轮、
+        // provider 不回传 usage、刚被 onSessionDeleted 清掉）就不校准，判定式与加这功能之前一字不差
+        // （见 [TokenEstimator.calibrated] 的退化分支）。
         val baselineEstimate = ctx.sessionId?.let { lastRawEstimates[it] }
         val estimated = if (baselineEstimate != null) {
             TokenEstimator.calibrated(rawEstimate, baselineEstimate, call.lastInputTokens)

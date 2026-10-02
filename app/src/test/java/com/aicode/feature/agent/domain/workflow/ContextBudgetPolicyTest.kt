@@ -518,6 +518,45 @@ class ContextBudgetPolicyTest {
         assertEquals("正文", (roundTrip.arguments["content"] as JsonPrimitive).content)
     }
 
+    /**
+     * 真机那一轮的回归：上一轮 真实 352,982 / 原始估算 523,798，本轮历史形状相同、估算仍是 523,798。
+     *
+     * 校准把「上一轮确认的高估 170,816」减掉 → 判定 352,982（窗口 1,000,000 的 35.3%）→ **不触发软精简**。
+     * 修复前判定 = max(352,982, 523,798) = 523,798（52.4%）≥ 软线 400,000 → 白跑一轮软精简。
+     */
+    @Test
+    fun `上一轮的高估被校准掉后不再触发软精简`() {
+        val real = 352_982
+        val estimated = 523_798
+        val calibrated = TokenEstimator.calibrated(estimated, baselineEstimate = 523_798, baselineUsage = real)
+        // 判定式与模块同源：真实 usage 与校准后的估算取较大值
+        val judged = maxOf(real, calibrated)
+        val thresholds = ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 85)
+
+        assertEquals(352_982, calibrated)
+        assertEquals(352_982, judged)
+        assertEquals(400_000, thresholds.soft)
+        assertTrue(judged < thresholds.soft)
+    }
+
+    /**
+     * 反向：上一轮低估（真实 > 估算）时校准**不做任何修正**（绝不上加），
+     * 而真实值更高的那一头由判定式的 max 自己兜住 —— 真实超线时照样触发。
+     */
+    @Test
+    fun `上一轮低估时不修正但真实超线仍然触发`() {
+        val calibrated = TokenEstimator.calibrated(
+            estimated = 300_000,
+            baselineEstimate = 300_000,
+            baselineUsage = 380_000
+        )
+        val thresholds = ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 85)
+
+        assertEquals(300_000, calibrated)
+        assertTrue(maxOf(380_000, calibrated) < thresholds.soft) // 真实 38 万仍在线下
+        assertTrue(maxOf(500_000, calibrated) >= thresholds.soft) // 真实 50 万 → 触发软精简
+    }
+
     private fun bigWriteFileCall(text: String) = AgentMessage.AssistantMessage(
         id = "m1",
         content = "",

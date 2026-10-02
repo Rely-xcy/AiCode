@@ -215,7 +215,14 @@ class ViewImageTool @Inject constructor(
         var callError: String? = null
         var usage: AIResponse? = null
         return try {
-            val response = provider.complete("", messages, emptyList())
+            val response = provider.complete(
+                "",
+                messages,
+                emptyList(),
+                // 图片分析：system 为空（0 token 稳定前缀）< 1024，
+                // 尾部断点会把整张图的 token 当缓存写入 —— 一次性调用，永远读不回来。
+                cacheTail = false
+            )
             usage = response
             callCompleted = true
             response

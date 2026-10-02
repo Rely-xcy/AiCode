@@ -56,26 +56,27 @@ object TokenEstimator {
     fun estimateMessages(messages: List<AgentMessage>): Int = messages.sumOf { estimateMessage(it) }
 
     /**
-     * 用上一次请求的真实 usage 增量校准本次估算。
+     * 用上一轮**已确认的高估量**往下修正本轮估算。
      *
-     * 为什么是「补差额」而不是按比值缩放：同一段历史，本地估算与真实值之间常差着一截固定量
-     * （本地字符加权与 provider 的 BPE 分词本就对不上），但两轮之间**新增的那部分**量得是准的。
-     * 所以只把差额搬过来：`真实 + (本次估算 − 上次估算)`，再与本次估算取大值（宁可早压不可晚压）。
-     * 按比值缩放会把「历史长度」本身也乘进去，短上下文那一头会平白多出一大截。
+     * 为什么只往下修：本地估算系统性偏高（BPE 与字符加权对不上），而判定式是
+     * `max(真实 usage, 估算)` —— 低估的那一头由真实值自己兜住，校准再往上加只会让触发更早。
+     * 所以这里只减 `baselineEstimate − baselineUsage`（上一轮确认多算的那部分），
+     * 绝不上加，也就不可能把请求顶到窗口之外。
      *
-     * 退化安全：`baselineUsage <= 0`（provider 不回传 usage、该会话首轮）时原样返回 [estimated]，
-     * 与没有这个功能完全一致。
+     * 退化安全：`baselineUsage <= 0`（provider 不回传 usage、该会话首轮）或基线无效时
+     * 原样返回 [estimated]，与没有这个功能完全一致。
      *
-     * @param baselineEstimate 上一次请求的**原始**估算（未校准值：拿校准后的值当基线，差额会被自己抵消掉）
+     * 边界：修正量大于本轮估算时收敛到 1（不会算出 0 或负数）—— 历史被折短、回退或换模型后
+     * 会有一轮基线过期，此时判定仍取 `max(真实, 校准估算)`，不会因此少算占用。
+     *
+     * @param baselineEstimate 上一次请求的**原始**估算（未校准值）
      * @param baselineUsage 与 [baselineEstimate] 同一次请求 provider 回传的真实输入 token
      */
-    fun calibrated(estimated: Int, baselineEstimate: Int, baselineUsage: Int): Int =
-        if (baselineUsage > 0) {
-            maxOf(estimated.toLong(), baselineUsage.toLong() + estimated - baselineEstimate)
-                .coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
-        } else {
-            estimated
-        }
+    fun calibrated(estimated: Int, baselineEstimate: Int, baselineUsage: Int): Int {
+        if (baselineUsage <= 0 || baselineEstimate <= 0) return estimated
+        val overEstimate = (baselineEstimate - baselineUsage).coerceAtLeast(0)
+        return (estimated - overEstimate).coerceAtLeast(1)
+    }
 
     fun estimateMessage(message: AgentMessage): Int = when (message) {
         is AgentMessage.UserMessage ->
