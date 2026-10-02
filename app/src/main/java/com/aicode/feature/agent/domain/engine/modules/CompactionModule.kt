@@ -69,6 +69,14 @@ class CompactionModule @Inject constructor(
      */
     private val foldedStillOverTokens = ConcurrentHashMap<String, Int>()
 
+    /**
+     * 上次硬折叠失败的位点：会话 id → 当时的判定 token。
+     *
+     * 失败（摘要模型报错、锚点定位不到、裁完 head 为空）不能每轮重试：一次失败就能白花一次模型调用。
+     * 但也不能因此把整个模块停掉——这里只抑制「再折一次」，判定、阈值发布、软精简与发送前兜底照跑。
+     */
+    private val foldFailedTokens = ConcurrentHashMap<String, Int>()
+
     override suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? {
         val messages = call.messages
         if (messages.isEmpty()) return null
@@ -102,17 +110,23 @@ class CompactionModule @Inject constructor(
             )
         )
         val reachedSoft = currentTokens >= softThreshold
-        // 上一轮折叠后仍在硬线以上时，只有上下文相对那个位点又长出一截才值得再折：
-        // 可折的 head 已经折掉了，原地再折只会得到同一份摘要。拦的是抖动不是兜底——
-        // 真撞窗仍由 92% 兜底线与发送前硬截断负责，本判据不碰它们。
+        // 折叠被跳过有两种来由，都只针对「再折一次」：上一轮折完仍超线（可折的 head 已经折掉了），
+        // 或上一轮硬折叠直接失败。两者都等上下文相对位点又长出 [REFOLD_GROWTH_PERCENT]% 才再试；
+        // call.force 不受抑制（用户手动点了就该干活）。判据只决定折不折，模块其余职责照跑——
+        // 真撞窗仍由 92% 兜底线与发送前硬截断负责，这里不碰它们。
         val foldedPoint = ctx.sessionId?.let { foldedStillOverTokens[it] }
-        val refoldWorthwhile = foldedPoint == null ||
-            currentTokens >= foldedPoint + foldedPoint * REFOLD_GROWTH_PERCENT / 100
-        val reachedHard = hardAllowed && (call.force || (currentTokens >= hardThreshold && refoldWorthwhile))
-        if (hardAllowed && !call.force && !refoldWorthwhile && currentTokens >= hardThreshold) {
+        val failedPoint = ctx.sessionId?.let { foldFailedTokens[it] }
+        val foldDeferred = foldedPoint != null &&
+            currentTokens < foldedPoint + foldedPoint * REFOLD_GROWTH_PERCENT / 100
+        val retryDeferred = failedPoint != null &&
+            currentTokens < failedPoint + failedPoint * REFOLD_GROWTH_PERCENT / 100
+        val reachedHard = hardAllowed &&
+            (call.force || (currentTokens >= hardThreshold && !foldDeferred && !retryDeferred))
+        if (hardAllowed && !call.force && currentTokens >= hardThreshold && (foldDeferred || retryDeferred)) {
             FileLogger.i(
                 TAG,
-                "会话 ${ctx.sessionId ?: "-"} 折叠后仍超线（上次折叠后约 $foldedPoint tokens，当前 $currentTokens " +
+                "会话 ${ctx.sessionId ?: "-"} ${if (retryDeferred) "上次硬折叠失败" else "折叠后仍超线"}" +
+                    "（位点 ${if (retryDeferred) failedPoint else foldedPoint} tokens，当前 $currentTokens " +
                     "未再长出 $REFOLD_GROWTH_PERCENT%），本轮跳过重复折叠，只做软精简与发送前兜底"
             )
         }
@@ -182,6 +196,8 @@ class CompactionModule @Inject constructor(
                     compacted = true
                     // 只有真的产出结果才报完成：失败时 compact() 已发过 CompactionFailed
                     call.onEvent(AgentEvent.CompactionFinished)
+                    // 折叠成功 → 清掉「上次失败」的位点，下次真需要时还能再折
+                    ctx.sessionId?.let { foldFailedTokens.remove(it) }
                     // 折叠腾出的空间可能当场被保留区与固定开销吃完（最近原文本身就占满窗口）。
                     // 这里如实记一笔并把位点记住：本轮不再折，接下来几轮也不在原地反复折。
                     val afterFold = TokenEstimator.estimateMessages(result) + call.overheadTokens
@@ -213,6 +229,9 @@ class CompactionModule @Inject constructor(
                     // 走到这里说明上下文已在硬线以上，而软精简在 else if 分支里永远轮不到，
                     // 不补这一步本轮就只剩兜底硬截（直接砍消息），体验与信息损失都差得多。
                     FileLogger.w(TAG, "硬压缩未产出结果，退化为软精简")
+                    // 记下失败位点：本轮与随后几轮不再原地重试硬折叠（否则每次 LLM 调用都白试一次），
+                    // 但软精简与下面的发送前兜底照跑——失败只影响「折不折」，不影响安全网。
+                    ctx.sessionId?.let { foldFailedTokens[it] = currentTokens }
                     val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
                     if (trimmed !== result) result = trimmed
                 }
@@ -248,6 +267,7 @@ class CompactionModule @Inject constructor(
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         contextUsageHolder.remove(ctx.sessionId)
         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
+        ctx.sessionId?.let { foldFailedTokens.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {

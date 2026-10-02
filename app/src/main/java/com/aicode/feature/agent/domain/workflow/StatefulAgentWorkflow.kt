@@ -584,9 +584,6 @@ class StatefulAgentWorkflow @Inject constructor(
                     TokenEstimator.estimateText(tool.description) +
                     TokenEstimator.estimateText(tool.toJsonSchema().toString())
             }
-        // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
-        var compactionAttemptFailed = false
-
         while (!state.isFinished && actionQueue.isNotEmpty()) {
             val action = actionQueue.removeFirst()
             val (newState, effects) = reduce(state, action)
@@ -599,35 +596,34 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 压缩轮：若配置了压缩专用模型，使用独立压缩模型压缩
                         val compactionProvider = resolveCompactionFallbackProvider(currentContext.sessionId) ?: providerInUse
                         var compactedMessages = state.messages
-                        if (!compactionAttemptFailed) {
-                            val sessionLastInputTokens = currentContext.sessionId?.let { sessionUseCase.getSessionById(it)?.lastInputTokens } ?: 0
-                            // 上下文预算交给引擎统一调度：CompactionModule 判档位与软/硬线，
-                            // ContextCompactor 只做消息变换（软精简、硬压缩、发送前兜底）。
-                            val call = agentEngine.beforeLlmCall(
-                                EngineContext(
-                                    sessionId = currentContext.sessionId,
-                                    projectRoot = currentContext.projectRoot,
-                                    mode = currentContext.mode,
-                                    // 子代理判定由会话行决定，这里只透传（见 AgentContext.isSubAgent）
-                                    isSubAgent = currentContext.isSubAgent
-                                ),
-                                LlmCall(
-                                    messages = state.messages,
-                                    windowProvider = aiProvider,
-                                    summaryProvider = compactionProvider,
-                                    lastInputTokens = sessionLastInputTokens,
-                                    overheadTokens = baseOverheadTokens,
-                                    onEvent = { event ->
-                                        if (event is AgentEvent.CompactionFailed) compactionAttemptFailed = true
-                                        send(event)
-                                    }
-                                )
+                        // 每轮都必须问一次压缩模块：它一手管「要不要折」，一手管「发送前兜底截断」。
+                        // 早先这里用 flag 把整段 beforeLlmCall 跳过——硬折叠失败一次，本轮后续每次
+                        // LLM 调用就同时失去软精简、阈值发布与 92% 兜底（安全网被一次失败关掉）。
+                        // 现在失败只在模块内部消化：它记下位点、不重复尝试硬折叠，其余职责照跑。
+                        val sessionLastInputTokens = currentContext.sessionId?.let { sessionUseCase.getSessionById(it)?.lastInputTokens } ?: 0
+                        // 上下文预算交给引擎统一调度：CompactionModule 判档位与软/硬线，
+                        // ContextCompactor 只做消息变换（软精简、硬压缩、发送前兜底）。
+                        val call = agentEngine.beforeLlmCall(
+                            EngineContext(
+                                sessionId = currentContext.sessionId,
+                                projectRoot = currentContext.projectRoot,
+                                mode = currentContext.mode,
+                                // 子代理判定由会话行决定，这里只透传（见 AgentContext.isSubAgent）
+                                isSubAgent = currentContext.isSubAgent
+                            ),
+                            LlmCall(
+                                messages = state.messages,
+                                windowProvider = aiProvider,
+                                summaryProvider = compactionProvider,
+                                lastInputTokens = sessionLastInputTokens,
+                                overheadTokens = baseOverheadTokens,
+                                onEvent = { event -> send(event) }
                             )
-                            compactedMessages = call.messages
-                            // 引用比较：模块未改动时原样返回同一个列表，不必白写一次状态
-                            if (call.messages !== state.messages) {
-                                state = state.copy(messages = call.messages)
-                            }
+                        )
+                        compactedMessages = call.messages
+                        // 引用比较：模块未改动时原样返回同一个列表，不必白写一次状态
+                        if (call.messages !== state.messages) {
+                            state = state.copy(messages = call.messages)
                         }
 
                         val acc = StringBuilder()
