@@ -144,6 +144,28 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
+    fun `软精简不碰最近三轮的工具内容`() {
+        // 历史（三轮以前）：一个大工具输出，应当被精简
+        val history = tool("a".repeat(40_000))
+        // 最近三轮：每轮「用户消息 + 大工具输出」，都不该被动
+        val recent = (1..3).flatMap { round ->
+            listOf(
+                AgentMessage.UserMessage(content = "第 $round 轮"),
+                tool("b".repeat(40_000))
+            )
+        }
+        val messages = listOf(history) + recent
+
+        val result = compactor().softTrim(messages, targetTokens = 1)
+
+        // 只有历史那条被精简，最近三轮的六条一律原对象不动
+        assertNotNull((result[0] as AgentMessage.ToolResultMessage).modelResult)
+        for (index in 1 until result.size) {
+            assertSame(messages[index], result[index], "最近三轮里的第 $index 条不该被软精简")
+        }
+    }
+
+    @Test
     fun `软精简幂等且不动 UI 用的完整内容`() {
         val original = tool("a".repeat(40_000))
         val compactor = compactor()

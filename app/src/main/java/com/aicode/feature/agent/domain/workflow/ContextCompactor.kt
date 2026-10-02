@@ -50,6 +50,12 @@ class ContextCompactor @Inject constructor(
         /** 软精简后追加在尾部的标记，用于幂等判断。 */
         const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
 
+        /**
+         * 软精简不动的最近轮数：这几轮里的工具调用与工具输出一律保留。
+         * 软线只有 40%，离撞窗还远，没必要为它牺牲还在用的内容。
+         */
+        const val SOFT_TRIM_PROTECTED_TURNS = 3
+
         /** 兜底截断的单条消息下限：再短就没法干活了，宁可让它超窗。 */
         const val MIN_MESSAGE_TOKENS = 64
         const val MIN_TRUNCATE_CHARS = 200
@@ -87,14 +93,19 @@ class ContextCompactor @Inject constructor(
         // 这就是工具结果那层 modelResult 的对称做法：精简结果写进 modelArguments，
         // arguments 一字不动，所以 UI / 落库 / 真正执行拿到的永远是原文。
         // 幂等靠「永远以 arguments 为输入」：重复精简只会算出同一份副本，不会越削越短。
-        // 只削「已结束的轮次」：范围是本轮起点（最后一条用户消息）之前的历史。
-        // 本轮从用户消息开始的一切——助手发出的工具调用、以及它们的工具输出——一律不动：
+        // 只削「已结束的轮次」：范围是最近 SOFT_TRIM_PROTECTED_TURNS 轮之前的历史。
+        // 最近几轮从用户消息开始的一切——助手发出的工具调用、以及它们的工具输出——一律不动：
         // 1. 它们是模型此刻正在用的内容。刚写进去的文件正文往往体积最大，只看体量会把它排在
         //    第一个削掉，而下一次调用最需要的恰恰是它（“占位符被拄回磁盘”那个 bug 的根源）；
         // 2. 40% 是软线，离窗口上限还远，没理由为此牺牲正在用的内容。真逼近窗口时由硬压缩
-        //    （85% / 92%）与 enforceWindowLimit 兑底，那才是该动本轮的时候。
-        val lastUserIndex = messages.indexOfLast { it is AgentMessage.UserMessage }
-        val historyEnd = if (lastUserIndex < 0) messages.size else lastUserIndex
+        //    （85% / 92%）与 enforceWindowLimit 兑底，那才是该动近几轮的时机。
+        val userIndices = messages.indices.filter { messages[it] is AgentMessage.UserMessage }
+        val historyEnd = when {
+            userIndices.size > SOFT_TRIM_PROTECTED_TURNS ->
+                userIndices[userIndices.size - SOFT_TRIM_PROTECTED_TURNS]
+            userIndices.isNotEmpty() -> userIndices.first()
+            else -> messages.size
+        }
         if (historyEnd <= 0) return messages
 
         val argCandidates = (0 until historyEnd)
