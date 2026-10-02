@@ -41,7 +41,7 @@
 
 AiCode is a universal AI coding agent that runs on Android, packing a full Linux development environment into your phone: it bundles an Alpine Linux container and terminal, and the AI agent can read and write files, run shell commands and run build tools, so writing, debugging and building all happen on-device. A remote SSH server can also serve as the execution backend, turning your phone into a mobile workstation for remote projects.
 
-There is nothing to set up beforehand: install the app, configure a model under AI Providers, and you can start coding — no computer, no environment to build yourself. AiCode ships no models and locks you into no vendor: it supports the OpenAI / Anthropic / Gemini protocols plus custom providers, with models, keys and endpoints all configured by you.
+There is nothing to set up beforehand: install the app, configure a model under AI Vendors, and you can start coding — no computer, no environment to build yourself. AiCode ships no models and locks you into no vendor: it supports the OpenAI / Anthropic / Gemini protocols plus custom providers, with models, keys and endpoints all configured by you.
 
 ## Sponsors
 
@@ -97,9 +97,9 @@ There is nothing to set up beforehand: install the app, configure a model under 
 |------|-------------|
 | System requirements | Android 8.0+ (API 26), arm64-v8a / x86_64 |
 | Download | [GitHub Releases](https://github.com/jieapi/aicode/releases/latest): pick `armsolo` for real devices, `x86solo` for emulators, `universal` for both |
-| Quick start | Settings → AI Providers to add a model → Container & Image to pick local or SSH → new session and chat |
+| Quick start | Settings → AI Vendors to add a model → Container & Images to pick local or SSH → new session and chat |
 | Changelog | [Releases](https://github.com/jieapi/aicode/releases) (all versions & notes) |
-| User guide | [Online docs](https://aicode.murk.top): quick start, feature manual and advanced guides (same content as the in-app docs) |
+| User guide | [Online docs](https://aicode.murk.top): quick start, user manual and advanced guides (same content as the in-app docs) |
 
 ## Star
 

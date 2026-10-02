@@ -50,11 +50,11 @@ class SearchCodeTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         return try {
             val rawArgs = args["args"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            if (rawArgs.isEmpty()) return ToolResult.Error("缺少搜索参数 args", "MISSING_ARGS")
+            if (rawArgs.isEmpty()) return ToolResult.Error("缺少必需参数：args", "MISSING_ARGS")
 
             val tokens = parseShellWords(rawArgs)
                 ?: return ToolResult.Error("args 中存在未闭合的引号", "INVALID_ARGS")
-            if (tokens.isEmpty()) return ToolResult.Error("缺少搜索参数 args", "MISSING_ARGS")
+            if (tokens.isEmpty()) return ToolResult.Error("缺少必需参数：args", "MISSING_ARGS")
 
             val command = buildSearchCommand(tokens, pathHomeResolver.home())
                 ?: return ToolResult.Error("search 仅支持 | head [-n N] 截断输出，不支持其它管道命令", "INVALID_PIPE")

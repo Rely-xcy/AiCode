@@ -61,7 +61,7 @@ class ListFilesTool @Inject constructor(
                     ?: return ToolResult.Error("list 仅支持 | head [-n N] 截断输出，不支持其它管道命令", "INVALID_PIPE")
             }
             val options = parseLsOptions(lsTokens)
-                ?: return ToolResult.Error("不支持的 ls 参数。支持：-a, -A, -l, -R, -d, -1, -h, -r, -t, -f, --", "UNSUPPORTED_OPTION")
+                ?: return ToolResult.Error("不支持的 ls 参数，支持：-a, -A, -l, -R, -d, -1, -h, -r, -t, -f, --", "UNSUPPORTED_OPTION")
             options.maxLines = headLimits.minOrNull()
 
             FileLogger.d(TAG, "list args=$rawArgs paths=${options.paths}")

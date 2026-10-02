@@ -40,13 +40,13 @@ class ReadFileTool @Inject constructor(
         return try {
             val path = args["path"]?.jsonPrimitive?.contentOrNull ?: run {
                 FileLogger.w(TAG, "read_file 缺少 path 参数")
-                return ToolResult.Error("路径参数缺失", "MISSING_PATH")
+                return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
             }
             FileLogger.d(TAG, "read_file path=$path")
 
             if (!fileAccess.exists(path)) {
                 FileLogger.w(TAG, "read_file 文件不存在: $path")
-                return ToolResult.Error("文件不存在: $path", "FILE_NOT_FOUND")
+                return ToolResult.Error("文件不存在：$path", "FILE_NOT_FOUND")
             }
 
             val startLine = args["start_line"]?.jsonPrimitive?.intOrNull?.coerceAtLeast(1) ?: 1
@@ -94,8 +94,8 @@ class ReadFileTool @Inject constructor(
             val truncated = emittedLines > 0 && lastEmittedLine < wantedEnd
             val note = when {
                 !truncated -> null
-                truncatedByBytes -> "已达 ${MAX_BYTES / 1024}KB 上限被截断；从第 ${lastEmittedLine + 1} 行起用 start_line 继续读取。"
-                else -> "已达 $MAX_LINES 行上限被截断；从第 ${lastEmittedLine + 1} 行起用 start_line 继续读取。"
+                truncatedByBytes -> "内容超过 ${MAX_BYTES / 1024}KB 上限已截断，可从第 ${lastEmittedLine + 1} 行起用 start_line 继续读取。"
+                else -> "内容超过 $MAX_LINES 行上限已截断，可从第 ${lastEmittedLine + 1} 行起用 start_line 继续读取。"
             }
 
             FileLogger.v(TAG, "read_file 成功 path=$path total=$totalLines emitted=$emittedLines bytes=$byteCount truncated=$truncated")
@@ -164,7 +164,7 @@ class WriteFileTool @Inject constructor(
         return try {
             val path = args["path"]?.jsonPrimitive?.contentOrNull ?: run {
                 FileLogger.w(TAG, "write_file 缺少 path 参数")
-                return ToolResult.Error("路径参数缺失", "MISSING_PATH")
+                return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
             }
             val content = args["content"]?.jsonPrimitive?.contentOrNull ?: ""
             val overwrite = args["overwrite"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -173,7 +173,7 @@ class WriteFileTool @Inject constructor(
             val existed = fileAccess.exists(path)
             if (existed && !overwrite) {
                 FileLogger.w(TAG, "write_file 文件已存在且 overwrite=false: $path")
-                return ToolResult.Error("文件已存在: $path（overwrite=false）", "FILE_EXISTS")
+                return ToolResult.Error("文件已存在：$path（overwrite=false）", "FILE_EXISTS")
             }
 
             // 写前留存旧内容，供生成「旧→新」差异（与 edit_file 同构，UI 据此渲染彩色 diff）。

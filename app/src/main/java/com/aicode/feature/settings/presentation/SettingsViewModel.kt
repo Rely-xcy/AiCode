@@ -251,6 +251,7 @@ data class SubAgentUiEntry(
 /** 技能编辑页的保存结果：UI 据此决定是退回列表还是就地报错。 */
 sealed interface SkillSaveState {
     data object Idle : SkillSaveState
+    data object Saving : SkillSaveState
     data object Saved : SkillSaveState
     data class Failed(val error: SkillSaveError) : SkillSaveState
 }
@@ -265,6 +266,7 @@ sealed interface SkillImportState {
 /** 子代理编辑页的保存结果：UI 据此决定是退回列表还是就地报错。 */
 sealed interface SubAgentSaveState {
     data object Idle : SubAgentSaveState
+    data object Saving : SubAgentSaveState
     data object Saved : SubAgentSaveState
     data class Failed(val error: AgentSaveError) : SubAgentSaveState
 }
@@ -604,11 +606,19 @@ class SettingsViewModel @Inject constructor(
     private val _skillImportState = MutableStateFlow<SkillImportState>(SkillImportState.Idle)
     val skillImportState: StateFlow<SkillImportState> = _skillImportState.asStateFlow()
 
+    /** 正在删除的技能名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
+    private val _skillDeleting = MutableStateFlow<String?>(null)
+    val skillDeleting: StateFlow<String?> = _skillDeleting.asStateFlow()
+
     private val _subAgents = MutableStateFlow<List<SubAgentUiEntry>>(emptyList())
     val subAgents: StateFlow<List<SubAgentUiEntry>> = _subAgents.asStateFlow()
 
     private val _subAgentSaveState = MutableStateFlow<SubAgentSaveState>(SubAgentSaveState.Idle)
     val subAgentSaveState: StateFlow<SubAgentSaveState> = _subAgentSaveState.asStateFlow()
+
+    /** 正在删除的子代理名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
+    private val _subAgentDeleting = MutableStateFlow<String?>(null)
+    val subAgentDeleting: StateFlow<String?> = _subAgentDeleting.asStateFlow()
 
     val mcpStatuses: StateFlow<List<McpServerStatus>> = mcpManager.statuses
 
@@ -630,6 +640,10 @@ class SettingsViewModel @Inject constructor(
 
     private val _dashboardTestState = MutableStateFlow<ProviderDashboardState>(ProviderDashboardState.Idle)
     val dashboardTestState: StateFlow<ProviderDashboardState> = _dashboardTestState.asStateFlow()
+
+    private val _dashboardScripts = MutableStateFlow<List<String>>(emptyList())
+    /** 可用面板脚本文件名（打开脚本选择器时经 [loadDashboardScripts] 异步加载）。 */
+    val dashboardScripts: StateFlow<List<String>> = _dashboardScripts.asStateFlow()
 
     private val _providerDashboards = MutableStateFlow<Map<String, ProviderDashboardState>>(emptyMap())
     val providerDashboards: StateFlow<Map<String, ProviderDashboardState>> = _providerDashboards.asStateFlow()
@@ -997,6 +1011,24 @@ class SettingsViewModel @Inject constructor(
                 refreshSkills()
             }
 
+            // 全局技能/子代理在远程模式下以远端为源，本地目录监听（skills.changes）不会触发；
+            // 执行模式切换或远程连接就绪后需重扫，否则列表停留在旧环境的内容。
+            launch {
+                executionMode.collectLatest {
+                    refreshSkills()
+                    refreshSubAgents()
+                }
+            }
+
+            launch {
+                connectionState.collectLatest { state ->
+                    if (state == ConnectionState.CONNECTED) {
+                        refreshSkills()
+                        refreshSubAgents()
+                    }
+                }
+            }
+
             launch {
                 permissionRulesRepository.globalRulesFlow.collectLatest {
                     _globalRules.value = it
@@ -1224,11 +1256,20 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 删除指定作用域的技能（删除其目录，不可恢复），随后立即刷新列表。 */
+    /**
+     * 删除指定作用域的技能（删除其目录，不可恢复），完成后刷新列表。
+     * 删除本体在 IO 线程跑（远程模式经 SFTP 递归删，不能在主线程）；期间 [skillDeleting] 置名供 UI 转圈。
+     */
     fun deleteSkill(name: String, scope: SkillScope) {
+        if (_skillDeleting.value != null) return
+        _skillDeleting.value = name
         viewModelScope.launch {
-            skillRepository.deleteSkill(name, scope)
-            refreshSkills()
+            try {
+                withContext(Dispatchers.IO) { skillRepository.deleteSkill(name, scope) }
+                refreshSkills()
+            } finally {
+                _skillDeleting.value = null
+            }
         }
     }
 
@@ -1237,6 +1278,8 @@ class SettingsViewModel @Inject constructor(
      * 结果转成 [skillSaveState]，编辑页据此退回列表或就地报错。
      */
     fun saveSkill(form: SkillForm, scope: SkillScope, originalName: String? = null) {
+        if (_skillSaveState.value is SkillSaveState.Saving) return
+        _skillSaveState.value = SkillSaveState.Saving
         viewModelScope.launch {
             val error = withContext(Dispatchers.IO) {
                 skillRepository.save(form, scope, originalName)
@@ -1362,6 +1405,8 @@ class SettingsViewModel @Inject constructor(
         scope: AgentDefinitionScope,
         originalName: String? = null
     ) {
+        if (_subAgentSaveState.value is SubAgentSaveState.Saving) return
+        _subAgentSaveState.value = SubAgentSaveState.Saving
         viewModelScope.launch {
             val error = withContext(Dispatchers.IO) {
                 agentDefinitionRepository.save(form, scope, originalName)
@@ -1383,9 +1428,15 @@ class SettingsViewModel @Inject constructor(
     fun availableToolNames(): List<String> = toolRegistry.getAvailableTools().map { it.name }
 
     fun deleteSubAgent(name: String, scope: AgentDefinitionScope) {
+        if (_subAgentDeleting.value != null) return
+        _subAgentDeleting.value = name
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { agentDefinitionRepository.delete(name, scope) }
-            refreshSubAgents()
+            try {
+                withContext(Dispatchers.IO) { agentDefinitionRepository.delete(name, scope) }
+                refreshSubAgents()
+            } finally {
+                _subAgentDeleting.value = null
+            }
         }
     }
 
@@ -1466,6 +1517,17 @@ class SettingsViewModel @Inject constructor(
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }.getOrDefault("unknown")
 
+    /**
+     * 判断日志行是否属于某个 MCP server：只认 MCP 组件写下的日志（tag 以 `Mcp` 开头，
+     * 如 McpManager/McpClient/McpStdioTransport/McpTool），且消息里引用了该 server——
+     * 要么是消息前缀 `[名字]`，要么是命名空间工具名 `mcp__名字__`。
+     * 不能只按 server 名做子串匹配：那会把任何恰好提到该名字的无关日志一并捞进来。
+     */
+    private fun isMcpServerLogLine(line: String, serverName: String): Boolean {
+        if (!line.contains("[Mcp")) return false
+        return line.contains("[$serverName]") || line.contains("mcp__${serverName}__")
+    }
+
     fun refreshLogs(filterServerName: String? = _logViewerState.value.filterServerName, silent: Boolean = false) {
         loadLogs(
             filterServerName = filterServerName?.takeIf { it.isNotBlank() },
@@ -1510,10 +1572,7 @@ class SettingsViewModel @Inject constructor(
                     val filteredLines = if (filterServerName.isNullOrBlank()) {
                         rawLines
                     } else {
-                        rawLines.filter { line ->
-                            line.contains("[$filterServerName]") ||
-                                line.contains(filterServerName, ignoreCase = true)
-                        }
+                        rawLines.filter { line -> isMcpServerLogLine(line, filterServerName) }
                     }
                     val visibleLines = filteredLines.takeLast(MAX_LOG_LINES)
 
@@ -2296,8 +2355,16 @@ class SettingsViewModel @Inject constructor(
         _testing.value = emptySet()
     }
 
-    fun listAvailableDashboardScripts(): List<String> {
-        return providerDashboardRunner.listAvailableScripts()
+    /**
+     * 加载可用面板脚本列表（打开脚本选择器时调用）。经引擎在 IO 线程枚举，
+     * 远程模式下即远端 `~/.aicode/scripts`，避免在主线程上做 SFTP 枚举。
+     */
+    fun loadDashboardScripts() {
+        viewModelScope.launch {
+            _dashboardScripts.value = withContext(Dispatchers.IO) {
+                providerDashboardRunner.listAvailableScripts()
+            }
+        }
     }
 
     fun testDashboardScript(provider: AIProviderConfig, scriptPath: String) {

@@ -33,7 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import com.aicode.core.ui.ChevronRotationStyle
+import com.aicode.core.ui.ExpandableChevronIcon
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -289,13 +290,11 @@ private fun CategoryRow(
         )
         if (expandable) {
             Spacer(Modifier.width(Spacing.xs))
-            Icon(
-                imageVector = FeatherIcons.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier
-                    .size(18.dp)
-                    .rotate(if (expanded) 90f else 0f)
+            ExpandableChevronIcon(
+                expanded = expanded,
+                style = ChevronRotationStyle.RIGHT_DOWN,
+                size = 18.dp,
+                tint = MaterialTheme.semanticColors.subtleText
             )
         }
     }

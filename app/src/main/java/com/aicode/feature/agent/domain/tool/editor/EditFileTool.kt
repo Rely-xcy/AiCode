@@ -106,15 +106,15 @@ class EditFileTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         return try {
             val path = args["path"]?.jsonPrimitive?.contentOrNull
-                ?: return ToolResult.Error("路径参数缺失", "MISSING_PATH")
+                ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
 
             val edits = parseEdits(args)
-                ?: return ToolResult.Error("edits 参数缺失或为空：请在 edits 数组里给出至少一个 {old_string,new_string} 编辑", "MISSING_EDITS")
+                ?: return ToolResult.Error("缺少必需参数：edits", "MISSING_EDITS")
 
             // 逐个校验编辑本身的合法性（空 old_string / 无变化），避免无意义改动。
             edits.forEachIndexed { i, e ->
                 if (e.oldString.isEmpty()) {
-                    return ToolResult.Error("第 ${i + 1} 个编辑的 old_string 不能为空；创建文件请用 writeFile。", "EMPTY_OLD_STRING")
+                    return ToolResult.Error("第 ${i + 1} 个编辑的 old_string 不能为空，创建文件请用 writeFile", "EMPTY_OLD_STRING")
                 }
                 if (e.oldString == e.newString) {
                     return ToolResult.Error("第 ${i + 1} 个编辑的 old_string 与 new_string 相同，无需修改", "NO_OP")
@@ -124,7 +124,7 @@ class EditFileTool @Inject constructor(
             FileLogger.d(TAG, "edit_file path=$path (edits=${edits.size})")
             if (!fileAccess.exists(path)) {
                 FileLogger.w(TAG, "edit_file 文件不存在: $path")
-                return ToolResult.Error("文件不存在: $path", "FILE_NOT_FOUND")
+                return ToolResult.Error("文件不存在：$path", "FILE_NOT_FOUND")
             }
 
             // 先在内存里顺序应用所有编辑；任一失败立刻返回、绝不写盘（全有或全无）。

@@ -98,7 +98,7 @@ class ExecuteCommandTool @Inject constructor(
 
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val command = args["command"]?.jsonPrimitive?.contentOrNull
-            ?: return ToolResult.Error("缺少必需参数: command")
+            ?: return ToolResult.Error("缺少必需参数：command")
 
         return try {
             // 在当前工作区目录内执行，与文件工具保持同一根目录
@@ -127,7 +127,7 @@ class ExecuteCommandTool @Inject constructor(
     ): Flow<ToolStreamEvent> = flow {
         val command = args["command"]?.jsonPrimitive?.contentOrNull
         if (command == null) {
-            emit(ToolStreamEvent.Completed(ToolResult.Error("缺少必需参数: command")))
+            emit(ToolStreamEvent.Completed(ToolResult.Error("缺少必需参数：command")))
             return@flow
         }
 
@@ -159,7 +159,7 @@ class ExecuteCommandTool @Inject constructor(
             val result = if (saved.isNotEmpty()) {
                 ToolResult.Success(JsonPrimitive(saved))
             } else {
-                ToolResult.Error("执行命令失败: ${e.message}")
+                ToolResult.Error("执行命令失败：${e.message}")
             }
             emit(ToolStreamEvent.Completed(result))
         }

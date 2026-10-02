@@ -3,7 +3,6 @@ package com.aicode.feature.agent.domain.subagent
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
-import com.aicode.feature.workspace.domain.LocalFileAccess
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -12,15 +11,14 @@ import javax.inject.Singleton
  * 启停状态由 [AgentDefinitionConfigRepository] 持有：被禁用的定义仍出现在设置页列表里，
  * 但不进主代理的可派发清单、也不能被 [find] 派发出去。
  *
- * 全局定义固定在 App 私有目录（始终本地），项目级定义随工作区（本地宿主目录或远程 SSH 工作区），
- * 读写都经 [FileAccessProvider] 以容器路径完成。
+ * 全局定义 `~/.aicode/agents`、项目级定义 `<workspace>/.aicode/agents`，两者都经 [FileAccessProvider]
+ * 以容器路径读写，跟随当前执行环境（本地宿主目录或远程 SSH 工作区）。
  */
 @Singleton
 class AgentDefinitionRepository @Inject constructor(
-    private val localSource: LocalDirectoryAgentSource,
+    private val globalSource: GlobalDirectoryAgentSource,
     private val projectSource: ProjectDirectoryAgentSource,
     private val configRepository: AgentDefinitionConfigRepository,
-    private val localFileAccess: LocalFileAccess,
     private val fileAccess: FileAccessProvider,
     private val listOrderStore: ListOrderStore
 ) {
@@ -29,7 +27,7 @@ class AgentDefinitionRepository @Inject constructor(
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
      */
     fun listAll(): List<AgentDefinitionEntry> {
-        val merged = mergeAll(localSource.listDefinitions(), projectSource.listDefinitions())
+        val merged = mergeAll(globalSource.listDefinitions(), projectSource.listDefinitions())
         return listOrderStore.sort(
             merged.filter { it.scope == AgentDefinitionScope.GLOBAL },
             ListOrderStore.KEY_SUB_AGENTS_GLOBAL
@@ -90,7 +88,7 @@ class AgentDefinitionRepository @Inject constructor(
             }?.definition?.filePath
         }
 
-        val provider = providerFor(scope)
+        val provider = fileAccess
         val root = agentsRoot(scope)
         val text = AgentDefinitionParser.serialize(
             name = name,
@@ -130,18 +128,14 @@ class AgentDefinitionRepository @Inject constructor(
             it.definition.name.equals(name, ignoreCase = true) && it.scope == scope
         } ?: return false
         val filePath = entry.definition.filePath ?: return false
-        val provider = providerFor(scope)
+        val provider = fileAccess
         if (!provider.isFile(filePath)) return false
         return runCatching { provider.delete(filePath); true }.getOrDefault(false)
     }
 
     /** 指定作用域的定义目录（容器路径）。 */
     fun agentsRoot(scope: AgentDefinitionScope): String =
-        if (scope == AgentDefinitionScope.GLOBAL) localSource.agentsRoot else projectSource.agentsRoot
-
-    /** 全局定义固定在本地私有目录，项目级定义跟随工作区（可能是远程）。 */
-    private fun providerFor(scope: AgentDefinitionScope): FileAccessProvider =
-        if (scope == AgentDefinitionScope.GLOBAL) localFileAccess else fileAccess
+        if (scope == AgentDefinitionScope.GLOBAL) globalSource.agentsRoot else projectSource.agentsRoot
 
     companion object {
         private const val TAG = "AgentDefinitionRepository"

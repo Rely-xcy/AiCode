@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +72,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.presentation.AgentUIMessage
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
@@ -278,11 +282,11 @@ internal fun ToolMessageBody(
                 Spacer(Modifier.width(Spacing.sm))
             }
             if (expandable) {
-                Icon(
-                    if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = effectiveExpanded,
                     contentDescription = if (effectiveExpanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
                     tint = Brand.IconGray,
-                    modifier = Modifier.size(18.dp)
+                    size = 18.dp
                 )
             }
         }
@@ -302,7 +306,7 @@ internal fun ToolMessageBody(
                     if (hasLiveOutput) {
                         val truncated = remember(liveOutput) { liveOutput.takeLastLines(TOOL_SECTION_LINE_LIMIT) }
                         Spacer(Modifier.height(Spacing.sm))
-                        ToolSection(label = stringResource(R.string.tool_result), content = truncated)
+                        ToolSection(label = stringResource(R.string.tool_result), content = truncated, live = true)
                     }
                 }
             }
@@ -610,18 +614,18 @@ internal fun ToolCallGroupHeader(
                 highlight = if (running) Color.White else null
             )
         }
-        Icon(
-            imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+        ExpandableChevronIcon(
+            expanded = expanded,
             contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
             tint = Brand.IconGray,
-            modifier = Modifier.size(18.dp)
+            size = 18.dp
         )
     }
 }
 
 /** 展开区的一段带小标题的内容块（如「指令」「结果」）：弱底等宽小面板，超出限高后在窗口内滚动。 */
 @Composable
-internal fun ToolSection(label: String, content: String) {
+internal fun ToolSection(label: String, content: String, live: Boolean = false) {
     Text(
         text = label,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -631,17 +635,35 @@ internal fun ToolSection(label: String, content: String) {
     Spacer(Modifier.height(2.dp))
 
     val scrollState = rememberScrollState()
+    var followLive by remember { mutableStateOf(true) }
+    var displayedContent by remember { mutableStateOf(content) }
+    LaunchedEffect(scrollState, live) {
+        if (!live) return@LaunchedEffect
+        scrollState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followLive = false
+        }
+    }
+    LaunchedEffect(scrollState, live) {
+        if (!live) return@LaunchedEffect
+        snapshotFlow { scrollState.isScrollInProgress to scrollState.canScrollForward }
+            .collect { (scrolling, canScrollForward) ->
+                if (!scrolling && !canScrollForward) followLive = true
+            }
+    }
+    LaunchedEffect(content, live, followLive, scrollState.isScrollInProgress) {
+        if (!live || (followLive && !scrollState.isScrollInProgress)) displayedContent = content
+    }
     val fadeColor = MaterialTheme.colorScheme.background
     Box {
         ChatMonoPanel(
             modifier = Modifier
                 .heightIn(max = ToolSectionMaxHeight)
-                .nestedScroll(InnerScrollConsumeRemainder)
+                .nestedScroll(rememberBoundNestedScrollConnection(scrollState))
                 .verticalScroll(scrollState)
         ) {
             SelectionContainer {
                 Text(
-                    text = content,
+                    text = if (live) displayedContent else content,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace
@@ -775,11 +797,11 @@ internal fun DiffExpandToggle(expanded: Boolean, hiddenCount: Int, onToggle: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        Icon(
-            if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+        ExpandableChevronIcon(
+            expanded = expanded,
             contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
             tint = Brand.IconGray,
-            modifier = Modifier.size(16.dp)
+            size = 16.dp
         )
         Spacer(Modifier.width(Spacing.xs))
         Text(

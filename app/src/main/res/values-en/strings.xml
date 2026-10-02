@@ -88,7 +88,7 @@
     <string name="settings_token_stats_requests">Requests</string>
     <string name="settings_token_stats_cost">Cost</string>
     <string name="settings_token_stats_cache_hit_rate">Cache hit rate</string>
-    <string name="settings_token_stats_cached">Cached %1$s</string>
+    <string name="settings_token_stats_cache_read_write">Read %1$s / Write %2$s</string>
     <string name="settings_token_stats_trend">Usage trend</string>
     <string name="settings_token_stats_legend_input">Input</string>
     <string name="settings_token_stats_legend_output">Output</string>
@@ -106,7 +106,8 @@
     <string name="settings_token_stats_col_provider">Vendor</string>
     <string name="settings_token_stats_col_input">Input</string>
     <string name="settings_token_stats_col_output">Output</string>
-    <string name="settings_token_stats_col_cached">Cached</string>
+    <string name="settings_token_stats_col_cached_read">Cache read</string>
+    <string name="settings_token_stats_col_cached_write">Cache write</string>
     <string name="settings_token_stats_col_cache_hit_rate">Hit rate</string>
     <string name="settings_token_stats_col_ttfb">TTFB</string>
     <string name="settings_token_stats_col_duration">Duration</string>
@@ -645,8 +646,8 @@
     <string name="retry_error_unknown">Network error</string>
     <string name="retry_error_with_code">%1$s (%2$d)</string>
     <string name="chat_thinking_process">Thinking process</string>
-    <string name="chat_thinking_running_time">Thinking (%1$ds)</string>
-    <string name="chat_thinking_done_time">Thought for %1$ds</string>
+    <string name="chat_thinking_running_time">Thinking (%1$ss)</string>
+    <string name="chat_thinking_done_time">Thought for %1$ss</string>
     <string name="chat_thinking_done">Thought</string>
 
     <!-- Container Settings -->
@@ -1252,6 +1253,7 @@
     <string name="provider_model_price_input">Input Price (USD/1M tokens)</string>
     <string name="provider_model_price_output">Output Price (USD/1M tokens)</string>
     <string name="provider_model_price_cache_read">Cache Read Price (USD/1M tokens)</string>
+    <string name="provider_model_price_cache_write">Cache Write Price (USD/1M tokens)</string>
     <string name="provider_model_cap_vision">Image Input</string>
     <string name="provider_model_cap_image_output">Image Output</string>
     <string name="provider_model_capabilities">Capabilities</string>
@@ -1360,8 +1362,22 @@
     <string name="ssh_host_key_tab_fingerprints">Fingerprints</string>
     <string name="ssh_login_key_add">Add key</string>
     <string name="ssh_login_key_empty">No saved login keys</string>
-    <string name="ssh_login_key_fingerprint_value">Public key fingerprint: %1$s</string>
+    <string name="ssh_login_key_fingerprint_label">Public key fingerprint</string>
     <string name="ssh_login_key_encrypted">Encrypted (passphrase required)</string>
+    <string name="ssh_login_key_add_method_title">Add login key</string>
+    <string name="ssh_login_key_add_from_file">Import from file</string>
+    <string name="ssh_login_key_add_from_file_desc">Pick a private key file on this device</string>
+    <string name="ssh_login_key_add_from_paste">Paste key</string>
+    <string name="ssh_login_key_add_from_paste_desc">Paste the private key content directly</string>
+    <string name="ssh_login_key_paste_title">Paste key</string>
+    <string name="ssh_login_key_paste_name_placeholder">Leave blank to name automatically</string>
+    <string name="ssh_login_key_paste_content_placeholder">-----BEGIN OPENSSH PRIVATE KEY-----</string>
+    <string name="ssh_login_key_paste_invalid">Invalid private key content, please check and retry</string>
+    <string name="ssh_login_key_edit_title">Edit key</string>
+    <string name="ssh_login_key_name_label">Name</string>
+    <string name="ssh_login_key_content_label">Private key</string>
+    <string name="ssh_login_key_passphrase_placeholder">Leave blank if the key is not encrypted</string>
+    <string name="ssh_login_key_toggle_content">Show or hide the private key</string>
     <string name="ssh_host_key_confirm_title">Confirm SSH Host Key</string>
     <string name="ssh_host_key_changed_title">SSH Host Key Changed</string>
     <string name="ssh_host_key_trust">Trust and connect</string>
@@ -1382,6 +1398,7 @@
     <string name="sync_batch_size_desc">Operations exceeding this limit are queued and processed in batches to avoid disconnects.</string>
     <string name="sync_max_batch_count">Max Count</string>
     <string name="sync_path_mapping">%1$s → %2$s</string>
+    <string name="status_reconnecting">Reconnecting</string>
     <string name="status_connected">Connected</string>
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connection_failed">Connection Failed</string>    <string name="sync_disconnect">Disconnect</string>
@@ -1508,6 +1525,7 @@
     <string name="crash_report_log">Log files: %1$s</string>
     <string name="crash_report_screen">Screen: %1$s</string>
     <string name="crash_report_mode">Workspace Mode: %1$s</string>
+    <string name="crash_report_memory">Memory: %1$s</string>
     <string name="crash_mode_local">Local PRoot Container</string>
     <string name="crash_mode_remote">Remote SSH</string>
     <string name="crash_mode_unknown">Unknown</string>
@@ -1524,6 +1542,7 @@
     <string name="crash_field_version">App Version</string>
     <string name="crash_field_device">Device</string>
     <string name="crash_field_thread">Thread</string>
+    <string name="crash_field_memory">Memory Usage</string>
     <string name="crash_field_time">Time</string>
 
     <!-- Custom dashboard bar -->

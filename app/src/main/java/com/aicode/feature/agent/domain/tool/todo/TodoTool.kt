@@ -160,7 +160,7 @@ class TodoTool @Inject constructor(
             }
         } catch (e: Exception) {
             FileLogger.e(TAG, "todo 工具执行失败: ${e.message}", e)
-            ToolResult.Error("待办操作失败: ${e.message}")
+            ToolResult.Error("待办操作失败：${e.message}")
         }
     }
 
@@ -179,7 +179,7 @@ class TodoTool @Inject constructor(
         existing: List<TodoItemEntity>
     ): ToolResult {
         val itemElements = args["items"] as? JsonArray
-            ?: return ToolResult.Error("replace 需要 items 数组（当前完整清单）", "MISSING_ITEMS")
+            ?: return ToolResult.Error("缺少必需参数：items（当前完整清单）", "MISSING_ITEMS")
         if (itemElements.size > MAX_ITEMS) {
             return ToolResult.Error("清单最多 $MAX_ITEMS 项，当前提交了 ${itemElements.size} 项", "TOO_MANY_ITEMS")
         }

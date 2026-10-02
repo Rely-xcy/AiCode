@@ -44,6 +44,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.domain.model.TodoStatus
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.ChevronDown
@@ -153,15 +154,15 @@ fun TodoDashboardBar(
                     Spacer(Modifier.weight(1f))
                 }
 
-                Icon(
-                    imageVector = if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = effectiveExpanded,
                     contentDescription = if (effectiveExpanded) {
                         stringResource(R.string.common_collapse_action)
                     } else {
                         stringResource(R.string.common_expand)
                     },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    size = 16.dp
                 )
             }
 

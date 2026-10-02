@@ -137,10 +137,24 @@ class SyncEngineIgnoreTest {
         assertFalse(client.uploaded.any { it.endsWith("junk.bak") || it.endsWith("debug.bak") })
     }
 
+    @Test
+    fun upload_rejected_file_does_not_reconnect_or_block_other_files() = runTest {
+        tempFolder.newFile("rejected.txt").writeText("bad")
+        tempFolder.newFile("normal.txt").writeText("ok")
+        val client = FakeSyncClient(rejectedUpload = "$remoteRoot/rejected.txt")
+
+        newEngine(tempFolder.root, client = client).uploadWorkspace()
+
+        assertEquals(listOf("$remoteRoot/normal.txt"), client.uploaded)
+        assertEquals(0, client.reconnects)
+    }
+
     /** 记录调用轨迹的假客户端，不触网。 */
     private class FakeSyncClient(
-        private val remoteFiles: Map<String, List<RemoteFileInfo>> = emptyMap()
+        private val remoteFiles: Map<String, List<RemoteFileInfo>> = emptyMap(),
+        private val rejectedUpload: String? = null
     ) : RemoteSyncClient {
+        var reconnects = 0
         val downloaded = mutableListOf<String>()
         val uploaded = mutableListOf<String>()
         val createdDirs = mutableListOf<String>()
@@ -153,6 +167,7 @@ class SyncEngineIgnoreTest {
             downloaded += remotePath
         }
         override suspend fun uploadFile(localPath: String, remotePath: String) {
+            if (remotePath == rejectedUpload) throw RemoteFileRejectedException("rejected")
             uploaded += remotePath
         }
         override suspend fun createDirectory(remotePath: String) {
@@ -160,5 +175,8 @@ class SyncEngineIgnoreTest {
         }
         override suspend fun delete(remotePath: String) = Unit
         override suspend fun isConnected(): Boolean = true
+        override suspend fun reconnect(host: String, port: Int, username: String, auth: RemoteAuth) {
+            reconnects++
+        }
     }
 }

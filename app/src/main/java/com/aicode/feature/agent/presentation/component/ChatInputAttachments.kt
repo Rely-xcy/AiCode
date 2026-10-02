@@ -68,6 +68,7 @@ import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.THUMBNAIL_MAX_EDGE
 import com.aicode.core.ui.decodeSampledBitmap
 import com.aicode.feature.agent.presentation.QueuedRequest
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Camera
 import compose.icons.feathericons.ChevronDown
@@ -136,15 +137,15 @@ internal fun QueuedRequestPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.weight(1f))
-                Icon(
-                    imageVector = if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = effectiveExpanded,
                     contentDescription = if (effectiveExpanded) {
                         stringResource(R.string.common_collapse_action)
                     } else {
                         stringResource(R.string.common_expand)
                     },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    size = 16.dp
                 )
             }
             AnimatedVisibility(

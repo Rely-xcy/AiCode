@@ -158,13 +158,13 @@ class GenerateImageTool @Inject constructor(
     ): ToolResult = withContext(Dispatchers.IO) {
         val prompt = args["prompt"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
         if (prompt.isEmpty()) {
-            return@withContext ToolResult.Error("缺少 prompt 参数：请描述想生成的图片内容。", "MISSING_PROMPT")
+            return@withContext ToolResult.Error("缺少必需参数：prompt", "MISSING_PROMPT")
         }
         val size = args["size"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { null }
             ?: DEFAULT_SIZE
         val n = args["n"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
         if (n !in 1..MAX_IMAGES) {
-            return@withContext ToolResult.Error("n 取值必须在 1 到 $MAX_IMAGES 之间，当前为 $n。", "INVALID_PARAMS")
+            return@withContext ToolResult.Error("n 取值必须在 1 到 $MAX_IMAGES 之间，当前为 $n", "INVALID_PARAMS")
         }
         val quality = args["quality"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()?.ifBlank { null }
         val background = args["background"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()?.ifBlank { null }
@@ -260,7 +260,7 @@ class GenerateImageTool @Inject constructor(
         model: String
     ): ToolResult {
         if (response.data.isEmpty()) {
-            return ToolResult.Error("生图服务未返回任何图片数据", "EMPTY_RESULT")
+            return ToolResult.Error("生图服务未返回图片数据", "EMPTY_RESULT")
         }
         val effectiveBasePath = outputPath ?: createDefaultBasePath()
         val overwrite = outputPath != null
@@ -297,7 +297,7 @@ class GenerateImageTool @Inject constructor(
         }
 
         if (agentImages.isEmpty()) {
-            return ToolResult.Error("未能获取到生成的图片内容（图片无效、过大或下载失败）", "EMPTY_RESULT")
+            return ToolResult.Error("未能获取生成的图片内容（图片无效、过大或下载失败）", "EMPTY_RESULT")
         }
         return buildImageResult(
             agentImages, savedDisplayPaths, filesList, model, requestedN,
@@ -604,7 +604,7 @@ class GenerateImageTool @Inject constructor(
         val req = Request.Builder().url(url).build()
         httpClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("下载图片失败 HTTP ${resp.code}: $url")
-            val body = resp.body ?: throw IOException("图片响应体为空: $url")
+            val body = resp.body ?: throw IOException("图片响应体为空：$url")
             val contentLength = body.contentLength()
             if (contentLength > MAX_IMAGE_BYTES) {
                 throw IOException("图片超过 ${MAX_IMAGE_BYTES / 1024 / 1024}MB 限制")

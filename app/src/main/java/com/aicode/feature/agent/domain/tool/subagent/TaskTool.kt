@@ -139,7 +139,7 @@ class TaskTool @Inject constructor(
             "stop" -> stopSubagent(args, context)
             "del" -> deleteSubagent(args, context)
             "list" -> listSubagents(context)
-            else -> ToolResult.Error("未知 action: $action，支持：create / send / read / stop / del / list", "INVALID_ARGS")
+            else -> ToolResult.Error("未知的 action：$action，支持：create / send / read / stop / del / list", "INVALID_ARGS")
         }
     }
 
@@ -175,7 +175,7 @@ class TaskTool @Inject constructor(
             if (definition == null) {
                 val available = agentDefinitionRepository.listEnabled().map { it.definition.name }
                 val hint = if (available.isEmpty()) "当前未定义任何自定义子代理" else "可用：${available.joinToString(", ")}"
-                return ToolResult.Error("子代理定义不存在: $agentName（$hint）", "AGENT_NOT_FOUND")
+                return ToolResult.Error("子代理定义不存在：$agentName（$hint）", "AGENT_NOT_FOUND")
             }
         }
 
@@ -240,7 +240,7 @@ class TaskTool @Inject constructor(
                     put("writeScope", JsonArray(requestedScope.map { JsonPrimitive(it) }))
                 }
                 put("message", buildString {
-                    append("子代理已创建并开始执行，任务完成后会通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
+                    append("子代理已创建并开始执行，任务完成后会收到通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
                     when {
                         readOnly && requestedScope.isNotEmpty() ->
                             append("该子代理是只读的，writeScope 已忽略。")
@@ -271,7 +271,7 @@ class TaskTool @Inject constructor(
             return ToolResult.Error("参数无效：message 不能为空", "INVALID_ARGS")
         }
         val sub = sessionUseCase.getSessionById(subSessionId)
-            ?: return ToolResult.Error("子会话不存在: $subSessionId", "SESSION_NOT_FOUND")
+            ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
         if (sub.parentId != parentSessionId) {
             return ToolResult.Error("只能向当前会话派生的子代理发消息", "NOT_YOUR_SUBAGENT")
         }
@@ -289,7 +289,7 @@ class TaskTool @Inject constructor(
             buildJsonObject {
                 put("id", subSessionId)
                 put("state", "delivered")
-                put("message", "消息已投递给子代理。运行中的会在下一批工具结果里收到，已完成的会被重新唤醒；可继续用 send 追加。")
+                put("message", "消息已投递给子代理，运行中的将在下一批工具结果里收到，已完成的将被重新唤醒，可继续用 send 追加。")
             }
         )
     }
@@ -326,7 +326,7 @@ class TaskTool @Inject constructor(
             return ToolResult.Error("参数无效：id 不能为空", "INVALID_ARGS")
         }
         val sub = sessionUseCase.getSessionById(subSessionId)
-            ?: return ToolResult.Error("子会话不存在: $subSessionId", "SESSION_NOT_FOUND")
+            ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
         if (sub.parentId != context.sessionId) {
             return ToolResult.Error("只能读取当前会话派生的子代理", "NOT_YOUR_SUBAGENT")
         }
@@ -360,7 +360,7 @@ class TaskTool @Inject constructor(
             return ToolResult.Error("参数无效：id 不能为空", "INVALID_ARGS")
         }
         val sub = sessionUseCase.getSessionById(subSessionId)
-            ?: return ToolResult.Error("子会话不存在: $subSessionId", "SESSION_NOT_FOUND")
+            ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
         if (sub.parentId != context.sessionId) {
             return ToolResult.Error("只能关闭当前会话派生的子代理", "NOT_YOUR_SUBAGENT")
         }
@@ -388,7 +388,7 @@ class TaskTool @Inject constructor(
             return ToolResult.Error("参数无效：id 不能为空", "INVALID_ARGS")
         }
         val sub = sessionUseCase.getSessionById(subSessionId)
-            ?: return ToolResult.Error("子会话不存在: $subSessionId", "SESSION_NOT_FOUND")
+            ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
         if (sub.parentId != context.sessionId) {
             return ToolResult.Error("只能删除当前会话派生的子代理", "NOT_YOUR_SUBAGENT")
         }

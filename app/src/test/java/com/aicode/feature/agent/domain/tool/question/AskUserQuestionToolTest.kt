@@ -207,6 +207,6 @@ class AskUserQuestionToolTest {
         val result = deferredResult.await()
         assertTrue(result is ToolResult.Success)
         val text = (result as ToolResult.Success).data.jsonPrimitive.content
-        assertEquals("用户未在预设选项中做出选择，想补充说明。请根据用户后续补充的内容继续，或换一种方式提问。", text)
+        assertEquals("用户未选择预设选项，将补充说明。请根据用户后续补充的内容继续。", text)
     }
 }

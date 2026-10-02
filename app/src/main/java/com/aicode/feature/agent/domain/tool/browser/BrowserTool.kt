@@ -98,7 +98,7 @@ class BrowserTool @Inject constructor(
 
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val action = args["action"]?.jsonPrimitive?.contentOrNull?.trim()
-            ?: return ToolResult.Error("缺少 action 参数", "MISSING_ACTION")
+            ?: return ToolResult.Error("缺少必需参数：action", "MISSING_ACTION")
         val tabId = args["tabId"]?.jsonPrimitive?.contentOrNull?.trim()
 
         return try {
@@ -109,10 +109,10 @@ class BrowserTool @Inject constructor(
         } catch (e: IllegalArgumentException) {
             ToolResult.Error(e.message ?: "参数错误", "INVALID_ARGUMENT")
         } catch (e: TimeoutCancellationException) {
-            ToolResult.Error("操作超时: $action", "TIMEOUT")
+            ToolResult.Error("操作超时：$action", "TIMEOUT")
         } catch (e: Exception) {
             FileLogger.e(TAG, "浏览器操作异常: $action", e)
-            ToolResult.Error("操作失败: ${e.message}", "BROWSER_ERROR")
+            ToolResult.Error("操作失败：${e.message}", "BROWSER_ERROR")
         }
     }
 
@@ -144,7 +144,7 @@ class BrowserTool @Inject constructor(
 
             "selectTab" -> {
                 val targetTabId = tabId
-                    ?: return ToolResult.Error("selectTab 需要 tabId 参数", "MISSING_TAB_ID")
+                    ?: return ToolResult.Error("selectTab 缺少必需参数：tabId", "MISSING_TAB_ID")
                 FileLogger.i(TAG, "selectTab: targetTabId=$targetTabId")
                 val selected = browserManager.selectTab(targetTabId)
                 buildOk(action, mapOf(
@@ -174,7 +174,7 @@ class BrowserTool @Inject constructor(
 
             "navigate" -> {
                 val url = args["url"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("navigate 需要 url 参数", "MISSING_URL")
+                    ?: return ToolResult.Error("navigate 缺少必需参数：url", "MISSING_URL")
                 FileLogger.i(TAG, "navigate: $url (tabId=$tabId)")
                 val finalUrl = browserManager.navigate(url, tabId)
                 val targetTabId = tabId ?: browserManager.getActiveTabId()
@@ -187,7 +187,7 @@ class BrowserTool @Inject constructor(
 
             "evaluate" -> {
                 val script = args["script"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("evaluate 需要 script 参数", "MISSING_SCRIPT")
+                    ?: return ToolResult.Error("evaluate 缺少必需参数：script", "MISSING_SCRIPT")
                 FileLogger.i(TAG, "evaluate: ${script.take(100)} (tabId=$tabId)")
                 val result = browserManager.evaluateJavaScript(script, tabId)
                 val value = browserManager.parseEvalResult(result)
@@ -196,7 +196,7 @@ class BrowserTool @Inject constructor(
 
             "click" -> {
                 val selector = args["selector"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("click 需要 selector 参数", "MISSING_SELECTOR")
+                    ?: return ToolResult.Error("click 缺少必需参数：selector", "MISSING_SELECTOR")
                 FileLogger.i(TAG, "click: $selector (tabId=$tabId)")
                 val json = browserManager.clickElement(selector, tabId)
                 buildFromJson(action, json, tabId)
@@ -204,9 +204,9 @@ class BrowserTool @Inject constructor(
 
             "fill" -> {
                 val selector = args["selector"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("fill 需要 selector 参数", "MISSING_SELECTOR")
+                    ?: return ToolResult.Error("fill 缺少必需参数：selector", "MISSING_SELECTOR")
                 val value = args["value"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("fill 需要 value 参数", "MISSING_VALUE")
+                    ?: return ToolResult.Error("fill 缺少必需参数：value", "MISSING_VALUE")
                 FileLogger.i(TAG, "fill: $selector (tabId=$tabId)")
                 val json = browserManager.fillElement(selector, value, tabId)
                 buildFromJson(action, json, tabId)
@@ -214,7 +214,7 @@ class BrowserTool @Inject constructor(
 
             "hover" -> {
                 val selector = args["selector"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("hover 需要 selector 参数", "MISSING_SELECTOR")
+                    ?: return ToolResult.Error("hover 缺少必需参数：selector", "MISSING_SELECTOR")
                 FileLogger.i(TAG, "hover: $selector (tabId=$tabId)")
                 val json = browserManager.hoverElement(selector, tabId)
                 buildFromJson(action, json, tabId)
@@ -222,7 +222,7 @@ class BrowserTool @Inject constructor(
 
             "press" -> {
                 val key = args["key"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("press 需要 key 参数", "MISSING_KEY")
+                    ?: return ToolResult.Error("press 缺少必需参数：key", "MISSING_KEY")
                 FileLogger.i(TAG, "press: $key (tabId=$tabId)")
                 browserManager.pressKey(key, tabId)
                 buildOk(action, mapOf("key" to JsonPrimitive(key)), tabId = tabId)
@@ -232,7 +232,7 @@ class BrowserTool @Inject constructor(
                 val selector = args["selector"]?.jsonPrimitive?.contentOrNull
                 val text = browserManager.getText(selector, tabId)
                 val truncated = text.take(50_000)
-                val resultText = if (text.length > 50_000) "$truncated\n\n[超长截断...]" else truncated
+                val resultText = if (text.length > 50_000) "$truncated\n\n[内容超长，已截断]" else truncated
                 buildOk(action, mapOf(
                     "text" to JsonPrimitive(resultText),
                     "selector" to JsonPrimitive(selector ?: "body")
@@ -288,7 +288,7 @@ class BrowserTool @Inject constructor(
 
             "wait" -> {
                 val condition = args["condition"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("wait 需要 condition 参数", "MISSING_CONDITION")
+                    ?: return ToolResult.Error("wait 缺少必需参数：condition", "MISSING_CONDITION")
                 val timeout = args["timeout"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: DEFAULT_WAIT_TIMEOUT_MS
                 FileLogger.i(TAG, "wait: $condition, timeout=$timeout (tabId=$tabId)")
                 val met = try {
@@ -303,9 +303,9 @@ class BrowserTool @Inject constructor(
 
             "select" -> {
                 val selector = args["selector"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("select 需要 selector 参数", "MISSING_SELECTOR")
+                    ?: return ToolResult.Error("select 缺少必需参数：selector", "MISSING_SELECTOR")
                 val value = args["value"]?.jsonPrimitive?.contentOrNull
-                    ?: return ToolResult.Error("select 需要 value 参数", "MISSING_VALUE")
+                    ?: return ToolResult.Error("select 缺少必需参数：value", "MISSING_VALUE")
                 FileLogger.i(TAG, "select: $selector -> $value (tabId=$tabId)")
                 val json = browserManager.selectOption(selector, value, tabId)
                 buildFromJson(action, json, tabId)
@@ -361,7 +361,7 @@ class BrowserTool @Inject constructor(
                 ), tabId = targetTabId)
             }
 
-            else -> ToolResult.Error("未知 action: $action", "UNKNOWN_ACTION")
+            else -> ToolResult.Error("未知的 action：$action", "UNKNOWN_ACTION")
         }
     }
 

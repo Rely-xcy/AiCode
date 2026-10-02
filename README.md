@@ -81,7 +81,7 @@ AiCode 是运行在 Android 上的通用 AI Coding Agent，把一套完整的 Li
 - **远程 SSH 模式** — 把远程服务器作为执行后端，命令、文件与终端都作用于远端项目
 - **文件树与代码编辑器** — 缩进式文件树点开即进全屏编辑器，支持主流语言语法高亮与 Markdown 预览；AI 回复里的 `文件:行号` 链接可直接跳转到对应行，本地与远程 SSH 工作区都支持
 - **Git 集成** — 可视化管理状态、分支、提交历史、差异与标签，支持暂存与回退改动、署名与凭据配置
-- **工作区同步** — 支持 SFTP / FTP 同步，内置 FTP 服务器方便电脑端管理文件
+- **工作区同步** — 支持 SFTP / FTP 同步，内置 FTP 服务端方便电脑端管理文件
 
 ### 使用体验
 
@@ -99,7 +99,7 @@ AiCode 是运行在 Android 上的通用 AI Coding Agent，把一套完整的 Li
 | 下载地址 | [GitHub Releases](https://github.com/jieapi/aicode/releases/latest)：真机选 `armsolo`、模拟器选 `x86solo`、通用选 `universal` 包 |
 | 快速上手 | 「设置 → AI 供应商」配模型 →「容器与镜像」选本地或 SSH → 新建会话开始对话 |
 | 更新记录 | [Releases](https://github.com/jieapi/aicode/releases)（历史版本与更新说明） |
-| 使用指南 | [在线文档](https://aicode.murk.top)：快速上手、功能手册与进阶教程（与 App 内置文档同源） |
+| 使用指南 | [在线文档](https://aicode.murk.top)：快速上手、使用手册与进阶教程（与 App 内置文档同源） |
 
 ## Star
 

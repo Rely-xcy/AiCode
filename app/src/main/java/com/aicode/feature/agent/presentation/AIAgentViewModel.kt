@@ -315,6 +315,9 @@ class AIAgentViewModel @Inject constructor(
         reasoningExpansionOverrides[messageId] = expanded
     }
 
+    /** 思考过程耗时（毫秒）：key = 助手消息 id。记录流式思考的实际耗时，供落库后的卡片展示一位小数秒数。 */
+    val reasoningDurations = mutableStateMapOf<String, Long>()
+
     fun loadMoreMessages() {
         val sid = _currentSessionId.value ?: return
         val currentLimit = _messageLimit.value[sid] ?: defaultLimit
@@ -865,6 +868,13 @@ class AIAgentViewModel @Inject constructor(
         _streamingTexts.value = if (text == null) _streamingTexts.value - sessionId else _streamingTexts.value + (sessionId to text)
     }
 
+    private val _reasoningTimings = MutableStateFlow<Map<String, Pair<Long, Long?>>>(emptyMap())
+    val reasoningTiming: StateFlow<Pair<Long, Long?>?> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(null) else _reasoningTimings.map { it[id] }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _streamingReasonings = MutableStateFlow<Map<String, String?>>(emptyMap())
     val streamingReasoning: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
@@ -874,6 +884,7 @@ class AIAgentViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private fun setStreamingReasoning(sessionId: String, text: String?) {
+        if (text == null) _reasoningTimings.value = _reasoningTimings.value - sessionId
         _streamingReasonings.value = if (text == null) _streamingReasonings.value - sessionId else _streamingReasonings.value + (sessionId to text)
     }
 
@@ -1552,6 +1563,16 @@ class AIAgentViewModel @Inject constructor(
                 else -> allTools.filterNot { it.name == AgentDefinition.PARENT_MESSAGE_TOOL }
             }
 
+            var currentReasoningStart: Long? = null
+            var currentReasoningEnd: Long? = null
+            fun finishReasoning() {
+                val start = currentReasoningStart ?: return
+                if (currentReasoningEnd == null) {
+                    val end = System.currentTimeMillis()
+                    currentReasoningEnd = end
+                    _reasoningTimings.value = _reasoningTimings.value + (sessionId to (start to end))
+                }
+            }
             agentWorkflow.executeEvents(
                 userRequest = modelRequest,
                 context = agentContext,
@@ -1559,6 +1580,7 @@ class AIAgentViewModel @Inject constructor(
             ).collect { event ->
                 when (event) {
                     is AgentEvent.AssistantDelta -> {
+                        if (event.accumulated.hasVisibleContent()) finishReasoning()
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setStreamingText(sessionId, event.accumulated)
@@ -1566,14 +1588,23 @@ class AIAgentViewModel @Inject constructor(
                     is AgentEvent.ReasoningDelta -> {
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
+                        if (currentReasoningStart == null) {
+                            currentReasoningStart = System.currentTimeMillis()
+                            currentReasoningEnd = null
+                        }
+                        _reasoningTimings.value = _reasoningTimings.value +
+                            (sessionId to (currentReasoningStart!! to currentReasoningEnd))
                         setStreamingReasoning(sessionId, event.accumulated)
                     }
                     is AgentEvent.ToolCallPreparing -> {
+                        finishReasoning()
                         // 工具名先于参数到达：让 UI 把「正在思考」换成具体场景（「正在编辑文件」）。
                         // 参数流完、工具真正开始执行后由 ToolCallStarted 清掉，改由工具行表达。
                         setPreparingTool(sessionId, event.toolName)
                     }
                     is AgentEvent.Retrying -> {
+                        currentReasoningStart = null
+                        currentReasoningEnd = null
                         setRetryState(sessionId, RetryState(event.attempt, event.maxRetries, event.error))
                         // 重试会从头重新流式输出：清掉已展示的正文/思维链气泡，
                         // 否则重连后思维链重新生成而旧正文残留（workflow 已同步清空累积器）。
@@ -1582,11 +1613,15 @@ class AIAgentViewModel @Inject constructor(
                         setKeySwitchState(sessionId, null)
                     }
                     is AgentEvent.KeySwitched -> {
+                        currentReasoningStart = null
+                        currentReasoningEnd = null
                         setKeySwitchState(sessionId, KeySwitchState(event.newIndex, event.total))
                         setStreamingText(sessionId, null)
                         setStreamingReasoning(sessionId, null)
                     }
                     is AgentEvent.CompactionStarted -> {
+                        currentReasoningStart = null
+                        currentReasoningEnd = null
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setStreamingText(sessionId, null)
@@ -1608,6 +1643,13 @@ class AIAgentViewModel @Inject constructor(
                         )
                     }
                     is AgentEvent.AssistantText -> {
+                        finishReasoning()
+                        val reasoningDuration = currentReasoningStart?.let { start ->
+                            currentReasoningEnd?.minus(start)
+                        }
+                        currentReasoningStart = null
+                        currentReasoningEnd = null
+
                         // 流式收尾：在落库并触发 UI messages 更新之前，先同步清空流式状态，
                         // 避免落库消息先行发射导致 UI 出现「落库消息与流式气泡同屏并存」的时差。
                         setStreamingReasoning(sessionId, null)
@@ -1618,10 +1660,15 @@ class AIAgentViewModel @Inject constructor(
 
                         val normalized = if (event.content.hasVisibleContent()) event.content else ""
                         val reasoning = event.reasoning.takeIf { it.hasVisibleContent() }
+                        val msgId = java.util.UUID.randomUUID().toString()
+                        if (reasoningDuration != null && reasoningDuration > 0) {
+                            reasoningDurations[msgId] = reasoningDuration
+                        }
                         messagePersistenceUseCase.persist(
                             sessionId,
                             MessageRole.ASSISTANT,
                             normalized,
+                            id = msgId,
                             toolCalls = event.toolCalls,
                             reasoning = reasoning,
                             signature = event.signature.ifEmpty { null },
@@ -1846,6 +1893,7 @@ class AIAgentViewModel @Inject constructor(
         _agentStates.value = _agentStates.value.mapValues { AgentUIState.Idle }
         _streamingTexts.value = emptyMap()
         _streamingReasonings.value = emptyMap()
+        _reasoningTimings.value = emptyMap()
         _runningTools.value = emptyMap()
         _retryStates.value = emptyMap()
         releaseKeepalive()
@@ -2204,7 +2252,7 @@ class AIAgentViewModel @Inject constructor(
             sessionJobs.remove(sid)
             _agentStates.value = _agentStates.value - sid
             _streamingTexts.value = _streamingTexts.value - sid
-            _streamingReasonings.value = _streamingReasonings.value - sid
+            setStreamingReasoning(sid, null)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
             _queuedRequests.value = _queuedRequests.value - sid
@@ -2243,7 +2291,7 @@ class AIAgentViewModel @Inject constructor(
             sessionJobs.remove(sid)
             _agentStates.value = _agentStates.value - sid
             _streamingTexts.value = _streamingTexts.value - sid
-            _streamingReasonings.value = _streamingReasonings.value - sid
+            setStreamingReasoning(sid, null)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
             _queuedRequests.value = _queuedRequests.value - sid

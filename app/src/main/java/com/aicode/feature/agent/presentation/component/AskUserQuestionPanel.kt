@@ -56,6 +56,7 @@ import com.aicode.feature.agent.domain.tool.question.SingleAnswer
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import androidx.compose.ui.res.stringResource
 import com.aicode.R
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
@@ -138,11 +139,11 @@ fun AskUserQuestionPanel(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.width(Spacing.xs))
-                Icon(
-                    if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = expanded,
                     contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                    size = 18.dp
                 )
             }
 

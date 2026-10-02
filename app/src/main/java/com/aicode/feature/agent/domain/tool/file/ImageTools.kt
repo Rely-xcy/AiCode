@@ -108,10 +108,10 @@ class ViewImageTool @Inject constructor(
             ?.takeIf { it in SUPPORTED_DETAILS } ?: "high"
 
         if (images.isNotEmpty() && id.isNotEmpty()) {
-            return ToolResult.Error("images 与 id 二选一：传 images 开启新的识图会话，传 id 继续之前的会话。", "INVALID_ARGS")
+            return ToolResult.Error("images 与 id 只能二选一：传 images 开启新的识图会话，传 id 继续已有会话。", "INVALID_ARGS")
         }
         if (images.isEmpty() && id.isEmpty()) {
-            return ToolResult.Error("缺少参数：首次识图需传 images（1~5 张图片路径），继续追问需传 id 与 prompt。", "MISSING_ARGS")
+            return ToolResult.Error("缺少参数：开启识图会话需传 images（1~5 张图片路径），继续追问需传 id 与 prompt。", "MISSING_ARGS")
         }
         if (images.size > MAX_IMAGES) {
             return ToolResult.Error("一次最多传 $MAX_IMAGES 张图片，当前 ${images.size} 张。", "TOO_MANY_IMAGES")
@@ -139,7 +139,7 @@ class ViewImageTool @Inject constructor(
             }
         }
         val promptNotice = if (prompt.isNotBlank()) "（关注点/提问：$prompt）" else ""
-        val content = "已将 ${encoded.size} 张图片加载至当前对话上下文$promptNotice，你可以直接查看并分析图片内容。"
+        val content = "已将 ${encoded.size} 张图片加载至当前对话上下文$promptNotice，可直接查看并分析。"
         return ToolResult.Success(
             data = JsonObject(
                 mapOf(
@@ -185,10 +185,10 @@ class ViewImageTool @Inject constructor(
 
     private suspend fun continueSession(id: String, prompt: String, sessionId: String?): ToolResult {
         if (prompt.isBlank()) {
-            return ToolResult.Error("继续识图会话需要 prompt 提问内容。", "MISSING_PROMPT")
+            return ToolResult.Error("继续识图会话需提供 prompt。", "MISSING_PROMPT")
         }
         val history = visionSessionStore.load(id)
-            ?: return ToolResult.Error("识图会话不存在或已过期: $id", "SESSION_NOT_FOUND")
+            ?: return ToolResult.Error("识图会话不存在或已过期：$id", "SESSION_NOT_FOUND")
         val messages = history + AgentMessage.UserMessage(content = prompt)
         return try {
             val provider = resolveVisionProvider(sessionId)
@@ -350,16 +350,16 @@ class ViewImageTool @Inject constructor(
         return try {
             val file = fileAccess.copyToLocal(path)
             FileLogger.d(TAG, "viewImage path=$path -> ${file.absolutePath}, detail=$detail")
-            if (!fileAccess.exists(path)) return EncodeOutcome.Fail("文件不存在: $path", "FILE_NOT_FOUND")
-            if (!fileAccess.isFile(path)) return EncodeOutcome.Fail("路径不是文件: $path", "NOT_A_FILE")
+            if (!fileAccess.exists(path)) return EncodeOutcome.Fail("文件不存在：$path", "FILE_NOT_FOUND")
+            if (!fileAccess.isFile(path)) return EncodeOutcome.Fail("路径不是文件：$path", "NOT_A_FILE")
             val fileSize = fileAccess.fileSize(path)
-            if (fileSize <= 0L) return EncodeOutcome.Fail("图片文件为空: $path", "EMPTY_FILE")
+            if (fileSize <= 0L) return EncodeOutcome.Fail("图片文件为空：$path", "EMPTY_FILE")
 
             val bounds = decodeBounds(file)
-                ?: return EncodeOutcome.Fail("无法识别图片格式: $path", "UNSUPPORTED_IMAGE")
+                ?: return EncodeOutcome.Fail("无法识别图片格式：$path", "UNSUPPORTED_IMAGE")
             val sourceMime = guessMimeType(file)
             if (!sourceMime.startsWith("image/")) {
-                return EncodeOutcome.Fail("不是支持的图片文件: $path", "UNSUPPORTED_IMAGE")
+                return EncodeOutcome.Fail("不是支持的图片文件：$path", "UNSUPPORTED_IMAGE")
             }
 
             val originalOk = sourceMime in ORIGINAL_MIME_TYPES
@@ -407,7 +407,7 @@ class ViewImageTool @Inject constructor(
             inSampleSize = calculateInSampleSize(bounds.width, bounds.height, maxEdge)
         }
         val decoded = BitmapFactory.decodeFile(file.absolutePath, options)
-            ?: throw IllegalArgumentException("无法解码图片: ${file.name}")
+            ?: throw IllegalArgumentException("无法解码图片：${file.name}")
 
         try {
             val scaled = scaleToMaxEdge(decoded, maxEdge)

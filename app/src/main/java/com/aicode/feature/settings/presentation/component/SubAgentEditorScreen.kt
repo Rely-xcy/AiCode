@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -137,7 +138,7 @@ internal fun SubAgentEditorScreen(
                 },
                 actions = {
                     TextButton(
-                        enabled = canSave,
+                        enabled = canSave && saveState !is SubAgentSaveState.Saving,
                         onClick = {
                             onSave(
                                 AgentDefinitionForm(
@@ -156,7 +157,11 @@ internal fun SubAgentEditorScreen(
                             )
                         }
                     ) {
-                        Text(stringResource(R.string.common_save))
+                        if (saveState is SubAgentSaveState.Saving) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(stringResource(R.string.common_save))
+                        }
                     }
                 }
             )

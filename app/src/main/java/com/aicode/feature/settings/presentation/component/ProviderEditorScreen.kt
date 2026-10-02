@@ -138,6 +138,7 @@ import com.aicode.feature.settings.presentation.SettingsViewModel
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowLeft
@@ -270,6 +271,7 @@ fun ProviderEditorScreen(
     val testing by viewModel.testing.collectAsStateWithLifecycle()
     val proxyTestState by viewModel.proxyTestState.collectAsStateWithLifecycle()
     val dashboardTestState by viewModel.dashboardTestState.collectAsStateWithLifecycle()
+    val dashboardScripts by viewModel.dashboardScripts.collectAsStateWithLifecycle()
     val modelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
     val modelIdSet by remember {
         derivedStateOf { models.toSet() }
@@ -666,7 +668,10 @@ fun ProviderEditorScreen(
                                         }
                                     }
                                     IconButton(
-                                        onClick = { showScriptPickerSheet = true },
+                                        onClick = {
+                                            showScriptPickerSheet = true
+                                            viewModel.loadDashboardScripts()
+                                        },
                                         modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
@@ -1041,7 +1046,7 @@ fun ProviderEditorScreen(
 
     if (showScriptPickerSheet) {
         ScriptPickerBottomSheet(
-            scripts = viewModel.listAvailableDashboardScripts(),
+            scripts = dashboardScripts,
             onSelect = { selectedScript ->
                 dashboardScriptPath = selectedScript
                 showScriptPickerSheet = false
@@ -1197,6 +1202,7 @@ private fun AddModelSheet(
     var inputPrice by remember { mutableStateOf(initial?.inputCostUsdPerM?.toString() ?: "") }
     var outputPrice by remember { mutableStateOf(initial?.outputCostUsdPerM?.toString() ?: "") }
     var cacheReadPrice by remember { mutableStateOf(initial?.cacheReadCostUsdPerM?.toString() ?: "") }
+    var cacheWritePrice by remember { mutableStateOf(initial?.cacheWriteCostUsdPerM?.toString() ?: "") }
     val trimmedModel = modelName.trim()
     val duplicate = existingModels.any { it == trimmedModel && it != initial?.id }
     val canSave = trimmedModel.isNotEmpty() && !duplicate
@@ -1288,6 +1294,12 @@ private fun AddModelSheet(
                     onValueChange = { cacheReadPrice = it },
                     keyboardType = KeyboardType.Decimal
                 )
+                ModelSheetTextField(
+                    label = stringResource(R.string.provider_model_price_cache_write),
+                    value = cacheWritePrice,
+                    onValueChange = { cacheWritePrice = it },
+                    keyboardType = KeyboardType.Decimal
+                )
 
                 SectionLabel(stringResource(R.string.provider_model_capabilities))
                 Card(
@@ -1350,6 +1362,7 @@ private fun AddModelSheet(
                             inputCostUsdPerM = inputPrice.trim().toDoubleOrNull(),
                             outputCostUsdPerM = outputPrice.trim().toDoubleOrNull(),
                             cacheReadCostUsdPerM = cacheReadPrice.trim().toDoubleOrNull(),
+                            cacheWriteCostUsdPerM = cacheWritePrice.trim().toDoubleOrNull(),
                             supportsVision = supportsVision,
                             supportsImageOutput = supportsImageOutput,
                             supportsTools = supportsTools,
@@ -2229,11 +2242,11 @@ private fun ProviderKeyCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Icon(
-                imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+            ExpandableChevronIcon(
+                expanded = expanded,
                 contentDescription = null,
                 tint = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier.size(18.dp)
+                size = 18.dp
             )
         }
 

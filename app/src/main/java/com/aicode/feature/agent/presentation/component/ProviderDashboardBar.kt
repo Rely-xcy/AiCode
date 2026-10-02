@@ -50,6 +50,7 @@ import com.aicode.R
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.AdaptiveCardAction
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ChevronDown
@@ -220,16 +221,14 @@ fun ProviderDashboardBar(
 
                         Spacer(Modifier.width(Spacing.sm))
 
-                        Icon(
-                            imageVector = if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                        ExpandableChevronIcon(
+                            expanded = effectiveExpanded,
                             contentDescription = if (effectiveExpanded) {
                                 stringResource(R.string.common_collapse)
                             } else {
                                 stringResource(R.string.common_expand)
                             },
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(CircleShape),
+                            size = 18.dp,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

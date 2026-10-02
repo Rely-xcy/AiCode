@@ -3,7 +3,6 @@ package com.aicode.feature.agent.domain.skill
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
-import com.aicode.feature.workspace.domain.LocalFileAccess
 import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -12,15 +11,14 @@ import javax.inject.Singleton
  * Skill 仓库，聚合各 [SkillSource]（全局目录 + 项目目录）提供的技能，
  * 并按 [SkillConfigRepository] 的禁用名单过滤注入清单。
  *
- * 全局技能固定在 App 私有目录（始终本地），项目级技能随工作区（本地宿主目录或远程 SSH 工作区），
- * 读写都经 [FileAccessProvider] 以容器路径完成。
+ * 全局技能 `~/.aicode/skills`、项目级技能 `<workspace>/.aicode/skills`，两者都经 [FileAccessProvider]
+ * 以容器路径读写，跟随当前执行环境（本地宿主目录或远程 SSH 工作区）。
  */
 @Singleton
 class SkillRepository @Inject constructor(
-    private val localDirectorySkillSource: LocalDirectorySkillSource,
+    private val globalDirectorySkillSource: GlobalDirectorySkillSource,
     private val projectDirectorySkillSource: ProjectDirectorySkillSource,
     private val skillConfigRepository: SkillConfigRepository,
-    private val localFileAccess: LocalFileAccess,
     private val fileAccess: FileAccessProvider,
     private val listOrderStore: ListOrderStore
 ) {
@@ -29,7 +27,7 @@ class SkillRepository @Inject constructor(
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
      */
     fun listAllSkills(): List<SkillEntry> {
-        val merged = mergeAll(localDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
+        val merged = mergeAll(globalDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
         return listOrderStore.sort(
             merged.filter { it.scope == SkillScope.GLOBAL },
             ListOrderStore.KEY_SKILLS_GLOBAL
@@ -46,7 +44,7 @@ class SkillRepository @Inject constructor(
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
     fun loadInstructions(name: String): String? {
         if (name.lowercase() in skillConfigRepository.disabledNames()) return null
-        return localDirectorySkillSource.loadInstructions(name)
+        return globalDirectorySkillSource.loadInstructions(name)
             ?: projectDirectorySkillSource.loadInstructions(name)
     }
 
@@ -89,7 +87,7 @@ class SkillRepository @Inject constructor(
             instructions = form.instructions
         )
 
-        val provider = providerFor(scope)
+        val provider = fileAccess
         return try {
             val dir = existingDir?.takeIf { provider.isDirectory(it) } ?: "${skillsRoot(scope)}/$name"
             provider.mkdirs(dir)
@@ -105,7 +103,7 @@ class SkillRepository @Inject constructor(
     /** 指定作用域的技能根目录（容器路径）。 */
     fun skillsRoot(scope: SkillScope): String =
         if (scope == SkillScope.GLOBAL) {
-            localDirectorySkillSource.skillsRoot
+            globalDirectorySkillSource.skillsRoot
         } else {
             projectDirectorySkillSource.skillsRoot
         }
@@ -115,11 +113,11 @@ class SkillRepository @Inject constructor(
      * 名称非法 / 同名冲突 / 正文为空时整体失败，不落盘。
      */
     fun importMarkdown(text: String, fallbackName: String, scope: SkillScope): SkillImportReport =
-        SkillImporter.importMarkdown(providerFor(scope), skillsRoot(scope), existingNamesIn(scope), text, fallbackName)
+        SkillImporter.importMarkdown(fileAccess, skillsRoot(scope), existingNamesIn(scope), text, fallbackName)
 
     /** 从 zip 输入流导入技能（可含多个技能目录）到指定作用域。 */
     fun importZip(input: InputStream, fallbackName: String, scope: SkillScope): SkillImportReport =
-        SkillImporter.importArchive(providerFor(scope), skillsRoot(scope), existingNamesIn(scope), input, fallbackName)
+        SkillImporter.importArchive(fileAccess, skillsRoot(scope), existingNamesIn(scope), input, fallbackName)
 
     /** 指定作用域下已有技能名（小写），供导入查重。 */
     private fun existingNamesIn(scope: SkillScope): Set<String> =
@@ -131,12 +129,8 @@ class SkillRepository @Inject constructor(
             it.skill.name.equals(name, ignoreCase = true) && it.scope == scope
         } ?: return false
         val dirPath = entry.skill.dirPath ?: return false
-        return safeDeleteSkillDir(providerFor(scope), dirPath)
+        return safeDeleteSkillDir(fileAccess, dirPath)
     }
-
-    /** 全局技能固定在本地私有目录，项目级技能跟随工作区（可能是远程）。 */
-    private fun providerFor(scope: SkillScope): FileAccessProvider =
-        if (scope == SkillScope.GLOBAL) localFileAccess else fileAccess
 
     companion object {
         private const val TAG = "SkillRepository"

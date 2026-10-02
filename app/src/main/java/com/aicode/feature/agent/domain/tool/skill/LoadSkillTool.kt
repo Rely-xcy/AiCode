@@ -17,8 +17,8 @@ import javax.inject.Inject
  * 让 AI 按需加载一个技能的完整指令正文。
  *
  * 系统提示里只注入了各 skill 的 name+description 清单；AI 判断某个 skill 适用时，调用本工具拿到
- * SKILL.md 正文（可能含「先 apk add python3，再 python /root/.aicode/skills/<name>/x.py」之类的执行步骤），
- * 随后用 read_file/execute_command 等工具按正文行事。skill 目录在容器内为 `/root/.aicode/skills/<name>/`。
+ * SKILL.md 正文（可能含「先 apk add python3，再 python ~/.aicode/skills/<name>/x.py」之类的执行步骤），
+ * 随后用 read_file/execute_command 等工具按正文行事。skill 目录在当前执行环境为 `~/.aicode/skills/<name>/`。
  */
 class LoadSkillTool @Inject constructor(
     private val skillRepository: SkillRepository
@@ -44,7 +44,7 @@ class LoadSkillTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val skillName = args["skill_name"]?.jsonPrimitive?.contentOrNull?.trim()
         if (skillName.isNullOrEmpty()) {
-            return ToolResult.Error("缺少必需参数: skill_name", "MISSING_SKILL_NAME")
+            return ToolResult.Error("缺少必需参数：skill_name", "MISSING_SKILL_NAME")
         }
 
         val instructions = skillRepository.loadInstructions(skillName)
@@ -52,7 +52,7 @@ class LoadSkillTool @Inject constructor(
             val available = skillRepository.listSkills().joinToString(", ") { it.name }
             FileLogger.w(TAG, "load_skill 未找到: $skillName，可用: $available")
             return ToolResult.Error(
-                "未找到技能「$skillName」。可用技能: ${available.ifEmpty { "（无）" }}",
+                "未找到技能「$skillName」。可用技能：${available.ifEmpty { "（无）" }}",
                 "SKILL_NOT_FOUND"
             )
         }

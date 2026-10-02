@@ -1,6 +1,6 @@
 # 内置浏览器
 
-App 内置了一个 WebView 浏览器，支持 AI 自动化操作网页。AI 可在后台操作浏览器，截图也能在后台完成（不需要先打开面板）。
+App 内置了一个 WebView 浏览器，支持 AI 自动化操作网页。AI 可在后台操作浏览器，截图也能在后台完成（无需先打开面板）。
 
 ## 打开浏览器
 
@@ -27,8 +27,8 @@ AI 也可通过 `browser` 工具的 `navigate` 打开本地页面并截图分析
 ## 开发者工具
 
 点击地址栏右侧的 `</>`（代码图标）可随时开启或收起移动端开发者工具（基于 Eruda）：
-- **全功能控制台**：包含 Console（查看日志与执行 JavaScript 代码）、Elements（查看与实时编辑 DOM 树和 CSS 样式）、Network（抓包网络请求与响应）、Resources（查看 LocalStorage、Cookie 等数据）、Sources 等。
-- **即点即用**：开启后页面右下角显示浮动齿轮图标，点击即可展开完整控制台面板；再次点击地址栏的开发工具按钮可彻底关闭并移除悬浮球。
+- **全功能控制台**：包含 Console（查看日志与执行 JavaScript 代码）、Elements（查看与实时编辑 DOM 树和 CSS 样式）、Network（查看网络请求与响应）、Resources（查看 LocalStorage、Cookie 等数据）、Sources 等。
+- **即时可用**：开启后页面右下角显示浮动齿轮图标，点击即可展开完整控制台面板；再次点击地址栏的开发工具按钮可彻底关闭并移除悬浮球。
 - **电脑端调试联动**：开启时同步启用 Chromium 的 `WebContentsDebugging`，支持通过 USB 连接电脑并在 Chrome 浏览器访问 `chrome://inspect` 进行桌面级远程审查。
 
 ## 夜间模式
@@ -63,8 +63,6 @@ AI 可通过 `browser` 工具控制浏览器执行以下操作：
 | `dialog` | 处理挂起的 `confirm`/`prompt` 对话框（接受或取消） |
 | `back` / `forward` / `reload` | 浏览器导航控制，back/forward 会等待导航完成 |
 
-常规操作不会自动附加截图；需要查看页面视觉内容时，请显式调用 `screenshot`。
-
 页面弹出 `confirm`/`prompt` 时会被挂起，工具响应里会出现 `pendingDialog` 字段，用 `dialog` action 接受或取消（30 秒未处理会自动取消）。
 
 ## 选择器格式
@@ -79,10 +77,6 @@ AI 可通过 `browser` 工具控制浏览器执行以下操作：
 - `xpath=//a[@href]`：XPath 表达式
 
 `getBackbone` 返回无障碍树：每个节点形如 `{role,name,ref,url,value,children}`，`role` 是按标签/`role` 属性推导的可访问角色（`link`/`button`/`textbox`/`heading`/`navigation`…），`name` 是可访问名称（`aria-label`/`aria-labelledby`/`alt`/`placeholder`/关联 `label`/内容文本），`ref` 只分配给可交互元素。已过滤 `script`/`style` 与不可见元素，超出 `maxDepth` 的节点以 `truncated:true` 标记。
-
-## 后台运行
-
-AI 可在后台操作浏览器，无需先打开面板。WebView 由 BrowserManager 管理，独立于 UI 生命周期；截图同样可在后台完成。
 
 ## 与 websearch / webfetch 的区别
 

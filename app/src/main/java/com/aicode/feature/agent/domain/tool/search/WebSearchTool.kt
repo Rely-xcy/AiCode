@@ -57,7 +57,7 @@ class WebSearchTool @Inject constructor() : AgentTool() {
 
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val query = args["query"]?.jsonPrimitive?.contentOrNull 
-            ?: return ToolResult.Error("缺少 query 参数")
+            ?: return ToolResult.Error("缺少必需参数：query")
 
         return withContext(Dispatchers.IO) {
             try {
@@ -95,7 +95,7 @@ class WebSearchTool @Inject constructor() : AgentTool() {
                     if (responseCode !in 200..299) {
                         val errorStr = resp.body?.string()
                         FileLogger.e(TAG, "WebSearch 失败: HTTP $responseCode, $errorStr")
-                        return@withContext ToolResult.Error("网络搜索失败 (HTTP $responseCode)")
+                        return@withContext ToolResult.Error("网络搜索失败（HTTP $responseCode）")
                     }
 
                     // 尝试直接读取普通 JSON 或解析 Event-Stream (SSE) 格式
@@ -105,14 +105,14 @@ class WebSearchTool @Inject constructor() : AgentTool() {
                     val rawResultText = parseMcpResponse(responseBody)
 
                     if (rawResultText.isNullOrBlank()) {
-                        ToolResult.Success(kotlinx.serialization.json.JsonPrimitive("未能找到关于 '$query' 的搜索结果，请换个关键词重试。"))
+                        ToolResult.Success(kotlinx.serialization.json.JsonPrimitive("未找到关于「$query」的搜索结果，请更换关键词重试。"))
                     } else {
                         ToolResult.Success(parseSearchResultPayload(rawResultText) ?: JsonPrimitive(rawResultText))
                     }
                 }
             } catch (e: Exception) {
                 FileLogger.e(TAG, "WebSearch 发生异常", e)
-                ToolResult.Error("搜索时发生异常: ${e.message}")
+                ToolResult.Error("搜索失败：${e.message}")
             }
         }
     }

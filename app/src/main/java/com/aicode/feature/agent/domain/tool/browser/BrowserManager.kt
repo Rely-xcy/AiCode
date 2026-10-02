@@ -1234,7 +1234,7 @@ class BrowserManager @Inject constructor(
         }
         val result = wv.evaluateJavascriptSync(js)
         val raw = unescapeJsString(result)
-        if (raw.length > MAX_CONTENT_CHARS) raw.take(MAX_CONTENT_CHARS) + "\n\n[网页内容超长，已截断...]" else raw
+        if (raw.length > MAX_CONTENT_CHARS) raw.take(MAX_CONTENT_CHARS) + "\n\n[网页内容超长，已截断]" else raw
     }
 
     suspend fun getBackbone(maxDepth: Int = 15, tabId: String? = null): String = withContext(Dispatchers.Main) {

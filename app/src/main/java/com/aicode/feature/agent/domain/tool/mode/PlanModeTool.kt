@@ -49,15 +49,15 @@ class PlanModeTool @Inject constructor(
         context: AgentContext
     ): ToolResult {
         val action = args["action"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()
-            ?: return ToolResult.Error("缺少必需参数: action", "MISSING_ACTION")
+            ?: return ToolResult.Error("缺少必需参数：action", "MISSING_ACTION")
 
         val reason = args["reason"]?.jsonPrimitive?.contentOrNull?.trim()
-            ?: return ToolResult.Error("缺少必需参数: reason", "MISSING_REASON")
+            ?: return ToolResult.Error("缺少必需参数：reason", "MISSING_REASON")
 
         val entering = when (action) {
             "enter" -> true
             "exit" -> false
-            else -> return ToolResult.Error("无效的 action: $action，只能是 'enter' 或 'exit'", "INVALID_ACTION")
+            else -> return ToolResult.Error("无效的 action：$action，只能是 'enter' 或 'exit'", "INVALID_ACTION")
         }
 
         if (entering && context.mode == AgentMode.PLAN) {

@@ -1,6 +1,6 @@
 # 安装 Playwright 浏览器自动化
 
-在容器内安装 Chromium 并注册 Playwright MCP 服务器，AI 即可打开网页、点击元素、填写表单、抓取页面内容与截图。
+在容器内安装 Chromium 并注册 Playwright MCP 服务器后，AI 即可打开网页、点击元素、填写表单、抓取页面内容与截图。
 
 ::: tip 需要 Debian / Ubuntu 容器
 Chrome for Testing 的二进制依赖 glibc，内置 Alpine 镜像使用 musl libc，无法运行。请先参照 [容器与镜像](/guide/container) 导入自定义 Debian 或 Ubuntu 镜像。

@@ -6,6 +6,8 @@ import com.aicode.feature.agent.data.remote.openai.Choice
 import com.aicode.feature.agent.data.remote.openai.OpenAIApi
 import com.aicode.feature.agent.data.remote.openai.OpenAIChatMessage
 import com.aicode.feature.agent.data.remote.openai.OpenAIFunctionCall
+import com.aicode.feature.agent.data.remote.openai.OpenAIImagePart
+import com.aicode.feature.agent.data.remote.openai.OpenAIImageUrl
 import com.aicode.feature.agent.data.remote.openai.OpenAIToolCall
 import com.aicode.feature.agent.data.remote.openai.PromptTokensDetails
 import com.aicode.feature.agent.data.remote.openai.Usage
@@ -47,6 +49,7 @@ class OpenAIAdapterTest {
         toolCalls: List<OpenAIToolCall>? = null,
         finishReason: String? = "stop",
         reasoningContent: String? = null,
+        images: List<OpenAIImagePart>? = null,
         usage: Usage = Usage(10, 5, 15, PromptTokensDetails(cached_tokens = 3))
     ): ChatCompletionResponse = ChatCompletionResponse(
         id = "id1",
@@ -60,7 +63,8 @@ class OpenAIAdapterTest {
                     role = "assistant",
                     content = content,
                     tool_calls = toolCalls,
-                    reasoning_content = reasoningContent
+                    reasoning_content = reasoningContent,
+                    images = images
                 ),
                 delta = null,
                 finish_reason = finishReason
@@ -243,6 +247,26 @@ class OpenAIAdapterTest {
         assertTrue(result.content.contains("正文"))
         assertTrue(result.content.contains("图片已省略"))
         assertTrue(!result.content.contains("iVBORw0KGgo"))
+    }
+
+    @Test
+    fun complete_mapsImagesFromMessage() = runTest {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            content = null,
+            images = listOf(
+                OpenAIImagePart(
+                    type = "image_url",
+                    image_url = OpenAIImageUrl(url = "data:image/jpeg;base64,QUJD")
+                )
+            )
+        )
+
+        val result = adapter(api).complete("", emptyList())
+
+        assertEquals(1, result.images.size)
+        assertEquals("image/jpeg", result.images.single().mimeType)
+        assertEquals("QUJD", result.images.single().base64Data)
     }
 
     // ── Chat Completions：历史消息清洗 ─────────────────────────────────
@@ -482,6 +506,22 @@ class OpenAIAdapterTest {
         assertTrue(args.containsKey("path"))
         assertEquals(JsonPrimitive("/a"), args["path"])
         assertEquals("tool_calls", final.response.stopReason)
+    }
+
+    @Test
+    fun streamChat_accumulatesImagesFromDelta() = runTest {
+        val api = api()
+        coEvery { api.streamChatCompletion(any(), any(), any(), any()) } returns sseBody(
+            "data: {\"choices\":[{\"delta\":{\"images\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgo=\"},\"index\":0}],\"role\":\"assistant\"},\"finish_reason\":null}]}",
+            "data: [DONE]"
+        )
+
+        val chunks = adapter(api).completeStream("", emptyList()).toList()
+
+        val final = chunks.filterIsInstance<AIStreamChunk.Final>().single()
+        assertEquals(1, final.response.images.size)
+        assertEquals("image/png", final.response.images.single().mimeType)
+        assertEquals("iVBORw0KGgo=", final.response.images.single().base64Data)
     }
 
     @Test

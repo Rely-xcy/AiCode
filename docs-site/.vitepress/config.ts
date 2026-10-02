@@ -135,8 +135,7 @@ export default defineConfig({
             { text: '容器与镜像', link: '/guide/container' },
             { text: '远程 SSH 模式', link: '/guide/remote-ssh' },
             { text: '工作区同步', link: '/guide/sync' },
-            { text: '网络代理', link: '/guide/proxy' },
-            { text: 'Shizuku 执行后端', link: '/guide/shizuku' }
+            { text: '网络代理', link: '/guide/proxy' }
           ]
         },
         {
@@ -145,6 +144,7 @@ export default defineConfig({
             { text: 'MCP 服务器', link: '/guide/mcp' },
             { text: '技能', link: '/guide/skills' },
             { text: '子代理', link: '/guide/subagent' },
+            { text: 'Shizuku 工具', link: '/guide/shizuku' },
             { text: '自定义提示词', link: '/guide/custom-prompts' },
             { text: '记忆与项目规则', link: '/guide/memory' }
           ]

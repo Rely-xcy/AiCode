@@ -81,7 +81,7 @@ class SendFileTool @Inject constructor(
                 ?.filter { it.isNotBlank() }
                 .orEmpty()
             if (paths.isEmpty()) {
-                return ToolResult.Error("paths 参数缺失或为空", "MISSING_PATHS")
+                return ToolResult.Error("缺少必需参数：paths", "MISSING_PATHS")
             }
             if (paths.size > MAX_FILES) {
                 return ToolResult.Error("一次最多发送 $MAX_FILES 个文件，当前 ${paths.size} 个", "TOO_MANY_FILES")
@@ -99,11 +99,11 @@ class SendFileTool @Inject constructor(
             val failures = mutableListOf<String>()
             paths.forEachIndexed { index, path ->
                 when {
-                    !fileAccess.exists(path) -> failures.add("文件不存在: $path")
-                    !fileAccess.isFile(path) -> failures.add("路径不是文件: $path")
+                    !fileAccess.exists(path) -> failures.add("文件不存在：$path")
+                    !fileAccess.isFile(path) -> failures.add("路径不是文件：$path")
                     fileAccess.fileSize(path) > maxSizeBytes -> {
                         val sizeMb = fileAccess.fileSize(path) / (1024 * 1024)
-                        failures.add("文件超过 ${maxSizeMb}MB 限制: $path（${sizeMb}MB）")
+                        failures.add("文件超过 ${maxSizeMb}MB 限制：$path（${sizeMb}MB）")
                     }
                 }
             }

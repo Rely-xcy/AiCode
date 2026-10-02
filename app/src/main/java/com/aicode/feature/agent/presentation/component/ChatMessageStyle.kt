@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,8 +28,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.painterResource
@@ -232,12 +235,25 @@ internal fun ChatMonoPanel(
 }
 
 /**
- * 内层滚动窗口（工具输出 / 思考正文）的嵌套滚动拦截：窗口快速滑到顶 / 底后，**惯性（fling）**不再
- * 传给外层消息列表——否则在窗口里甩一下到底，整个聊天列表会跟着一起滑走。
- *
- * 只拦惯性、不拦拖动（onPostFling 消费掉剩余速度；onPostScroll 保持默认）：内容没超出窗口、
- * 或已经滚到顶 / 底后继续拖动，仍会正常带动外层列表——这正是用户想要的。
+ * 手指拖动允许在边界接力外层；松手后的惯性不得越过内层窗口。
  */
+@Composable
+internal fun rememberBoundNestedScrollConnection(scrollState: ScrollState): NestedScrollConnection {
+    return remember(scrollState) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset = if (source == NestedScrollSource.SideEffect) Offset(0f, available.y) else Offset.Zero
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+                Velocity(0f, available.y)
+        }
+    }
+}
+
+/** 兼容旧引用的兜底。 */
 internal val InnerScrollConsumeRemainder = object : NestedScrollConnection {
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = available
 }

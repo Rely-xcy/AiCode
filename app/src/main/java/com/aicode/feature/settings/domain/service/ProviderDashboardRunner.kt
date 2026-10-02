@@ -2,7 +2,6 @@ package com.aicode.feature.settings.domain.service
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.CommandEngine
-import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.AdaptiveCardAction
@@ -37,6 +36,8 @@ import com.aicode.feature.settings.domain.model.TextBlockElement
 import com.aicode.feature.settings.domain.model.TextSize
 import com.aicode.feature.settings.domain.model.TextWeight
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.PathHomeResolver
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -45,16 +46,16 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
-import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ProviderDashboardRunner @Inject constructor(
     private val commandEngine: CommandEngine,
-    private val containerInstaller: ContainerInstaller,
     private val keyRotator: ProviderKeyRotator,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val fileAccess: FileAccessProvider,
+    private val pathHomeResolver: PathHomeResolver
 ) {
     companion object {
         private const val TAG = "ProviderDashboardRunner"
@@ -642,16 +643,16 @@ class ProviderDashboardRunner @Inject constructor(
     }
 
     /**
-     * 获取 ~/.aicode/scripts 目录下的所有可用脚本文件名列表。
+     * 获取脚本目录 `~/.aicode/scripts` 下的所有可用脚本文件名列表。经 [FileAccessProvider] 访问，
+     * 跟随当前执行环境（本地落 App 私有目录，远程落服务器 home 下的 `.aicode/scripts`）。
      */
     fun listAvailableScripts(): List<String> {
-        val scriptsDir = File(containerInstaller.aicodeDir, "scripts")
-        if (!scriptsDir.exists()) {
-            scriptsDir.mkdirs()
-        }
-        return scriptsDir.listFiles { file ->
-            file.isFile && !file.name.startsWith(".")
-        }?.map { it.name }?.sorted() ?: emptyList()
+        val scriptsDir = "${pathHomeResolver.aicodeRoot()}/scripts"
+        fileAccess.mkdirs(scriptsDir)
+        return fileAccess.listFiles(scriptsDir)
+            .filter { !it.isDirectory && !it.name.startsWith(".") }
+            .map { it.name }
+            .sorted()
     }
 
     /**
@@ -693,13 +694,15 @@ class ProviderDashboardRunner @Inject constructor(
         parseDashboardJson(output)
     }
 
+    /** 把用户/列表给的脚本路径解析为当前执行环境下的绝对路径（home 随本地/远程而变，不写死 /root）。 */
     private fun resolveContainerScriptPath(path: String): String {
+        val root = pathHomeResolver.aicodeRoot()
         return when {
             path.startsWith("/") -> path
-            path.startsWith("~/") -> path.replaceFirst("~", "/root")
-            path.startsWith(".aicode/scripts/") -> "/root/$path"
-            path.startsWith("scripts/") -> "/root/.aicode/$path"
-            else -> "/root/.aicode/scripts/$path"
+            path.startsWith("~/") -> pathHomeResolver.expandHome(path)
+            path.startsWith(".aicode/scripts/") -> "$root/${path.removePrefix(".aicode/")}"
+            path.startsWith("scripts/") -> "$root/$path"
+            else -> "$root/scripts/$path"
         }
     }
 

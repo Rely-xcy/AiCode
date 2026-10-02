@@ -1,9 +1,9 @@
 # 在容器中编译 Android 应用
 
-在 AiCode 的 Linux 容器里搭好 JDK 与 Android SDK，就能直接从源码编译 Android 应用。本文以 Debian 12 (bookworm) aarch64 为例，Ubuntu、Arch 等发行版同样适用。
+在 AiCode 的 Linux 容器里配置好 JDK 与 Android SDK，即可直接从源码编译 Android 应用。本文以 Debian 12 (bookworm) aarch64 为例，Ubuntu、Arch 等发行版同样适用。
 
 ::: tip 建议使用自定义 Debian / Ubuntu 镜像
-内置的 Alpine 容器用的是 musl libc，与 PRoot 交互时编译 Android 应用需要额外处理（见文末补充）。导入自定义镜像的方法见「自定义容器镜像」。
+内置的 Alpine 容器使用 musl libc，在 PRoot 下编译 Android 应用需要额外处理（见文末补充）。导入自定义镜像的方法见「自定义容器镜像」。
 :::
 
 ## 环境基线
@@ -110,9 +110,9 @@ ls ~/android/sdk   # 应看到 build-tools/ platforms/ platform-tools/ 三个目
 
 ## 3. 替换 ARM64 原生二进制
 
-Google 官方的 `aapt2`、`adb` 等工具是 x86_64 编译的，在 aarch64 上跑不起来，需要换成社区维护的 ARM64 静态编译版本。
+Google 官方的 `aapt2`、`adb` 等工具是 x86_64 编译的，在 aarch64 上无法运行，需要换成社区维护的 ARM64 静态编译版本。
 
-从 `https://github.com/lzhiyong/android-sdk-tools/releases/download/35.0.2/android-sdk-tools-static-aarch64.zip` 下载。下载慢或失败时，可以在原链接前加 GitHub 代理前缀（实测可用，2026-08）：
+从 `https://github.com/lzhiyong/android-sdk-tools/releases/download/35.0.2/android-sdk-tools-static-aarch64.zip` 下载。下载缓慢或失败时，可以在原链接前加 GitHub 代理前缀（实测可用，2026-08）：
 
 | 加速服务 | 用法 |
 | --- | --- |
@@ -153,7 +153,7 @@ echo "sdk.dir=/root/android/sdk" > /workspace/local.properties
 
 ### 全局 Gradle 配置
 
-aapt2 覆盖配置写到全局文件，不要写进项目的 `gradle.properties`：
+aapt2 覆盖配置写入全局文件，不要写进项目的 `gradle.properties`：
 
 ```bash
 mkdir -p ~/.gradle
@@ -171,7 +171,7 @@ URIs: http://mirrors.ustc.edu.cn/debian-security
 
 ### 下载 Gradle 发行版（可选）
 
-项目用 Gradle wrapper 时不需要系统 Gradle，但从零搭建新项目时要先有一个发行版。官方源 `https://services.gradle.org/distributions/gradle-8.11.1-bin.zip` 慢的话可用镜像：
+项目使用 Gradle wrapper 时不需要系统 Gradle，但从零搭建新项目时要先有一个发行版。官方源 `https://services.gradle.org/distributions/gradle-8.11.1-bin.zip` 下载缓慢时可用镜像：
 
 - 华为云：`https://mirrors.huaweicloud.com/gradle/gradle-8.11.1-bin.zip`
 - 腾讯云：`https://mirrors.cloud.tencent.com/gradle/gradle-8.11.1-bin.zip`
@@ -179,7 +179,7 @@ URIs: http://mirrors.ustc.edu.cn/debian-security
 ```bash
 curl -L -o /workspace/gradle.zip https://mirrors.huaweicloud.com/gradle/gradle-8.11.1-bin.zip
 unzip gradle.zip -d /workspace/tools
-/workspace/tools/gradle-8.11.1/bin/gradle --version   # 用它跑构建或生成 wrapper
+/workspace/tools/gradle-8.11.1/bin/gradle --version   # 用它执行构建或生成 wrapper
 ```
 
 ## 5. 编译

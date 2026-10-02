@@ -97,12 +97,12 @@ class AskUserQuestionTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val questionsJson = args["questions"]?.jsonArray
         if (questionsJson == null || questionsJson.isEmpty()) {
-            return ToolResult.Error("缺少必需参数: questions（至少包含一个问题）", "MISSING_QUESTIONS")
+            return ToolResult.Error("缺少必需参数：questions（至少包含一个问题）", "MISSING_QUESTIONS")
         }
 
         if (questionsJson.size > MAX_QUESTIONS) {
             return ToolResult.Error(
-                "最多只能同时提问 $MAX_QUESTIONS 个问题，当前传入了 ${questionsJson.size} 个",
+                "一次最多提问 $MAX_QUESTIONS 个问题，当前为 ${questionsJson.size} 个",
                 "TOO_MANY_QUESTIONS"
             )
         }
@@ -143,7 +143,7 @@ class AskUserQuestionTool @Inject constructor(
 
             if (options.size < MIN_OPTIONS) {
                 return ToolResult.Error(
-                    "第 ${idx + 1} 个问题解析后有效选项不足 $MIN_OPTIONS 个",
+                    "第 ${idx + 1} 个问题有效选项不足 $MIN_OPTIONS 个",
                     "INVALID_OPTIONS"
                 )
             }
@@ -175,7 +175,7 @@ class AskUserQuestionTool @Inject constructor(
         // 将用户回答序列化为文本，喂回给模型
         val resultText = buildString {
             if (answer.answers.isEmpty()) {
-                append("用户未在预设选项中做出选择，想补充说明。请根据用户后续补充的内容继续，或换一种方式提问。")
+                append("用户未选择预设选项，将补充说明。请根据用户后续补充的内容继续。")
             } else {
                 for (a in answer.answers) {
                     append("「${a.question}」= ")

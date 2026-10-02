@@ -56,6 +56,22 @@ class PathHomeResolverTest {
         assertEquals("/home/dev", resolver.home())
     }
 
+    // ---------- aicodeRoot()：执行环境 AI 配置根 ----------
+
+    @Test
+    fun aicodeRoot_localMode() {
+        val resolver = newResolver(ExecutionMode.LOCAL_PROOT)
+        resolver.containerHome = "/root"
+        assertEquals("/root/.aicode", resolver.aicodeRoot())
+    }
+
+    @Test
+    fun aicodeRoot_remoteMode_usesRemoteHome() {
+        val resolver = newResolver(ExecutionMode.REMOTE_SSH)
+        every { remoteSshConnection.remoteHome } returns "/home/dev/"
+        assertEquals("/home/dev/.aicode", resolver.aicodeRoot())
+    }
+
     // ---------- expandHome()：~ 展开 ----------
 
     @Test

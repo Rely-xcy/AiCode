@@ -219,7 +219,7 @@ class ModelApiService @Inject constructor(
                     if (useResponseApi) {
                         u to """{"model":${model.jsonStr()},"input":[{"role":"user","content":"hi"}]}"""
                     } else {
-                        u to """{"model":${model.jsonStr()},"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"""
+                        u to """{"model":${model.jsonStr()},"max_completion_tokens":1,"messages":[{"role":"user","content":"hi"}]}"""
                     }
                 }
             }

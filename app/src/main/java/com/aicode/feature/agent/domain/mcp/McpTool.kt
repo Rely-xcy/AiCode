@@ -95,10 +95,10 @@ class McpTool(
             }
         } catch (e: McpException) {
             FileLogger.e(TAG, "MCP 工具调用失败: $name", e)
-            ToolResult.Error("MCP 工具执行失败: ${e.message}")
+            ToolResult.Error("MCP 工具执行失败：${e.message}")
         } catch (e: Exception) {
             FileLogger.e(TAG, "MCP 工具调用异常: $name", e)
-            ToolResult.Error("MCP 工具执行异常: ${e.message}")
+            ToolResult.Error("MCP 工具执行异常：${e.message}")
         }
     }
 

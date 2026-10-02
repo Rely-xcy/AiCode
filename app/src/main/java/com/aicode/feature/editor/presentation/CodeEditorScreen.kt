@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -121,6 +122,7 @@ fun CodeEditorScreen(
     }
     var editorBackground by remember { mutableStateOf<Color?>(null) }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val saving by viewModel.saving.collectAsStateWithLifecycle()
 
     // 切换文件时重置编辑态，避免旧文件的撤销/脏标记残留到新文件。
     LaunchedEffect(path) {
@@ -227,12 +229,16 @@ fun CodeEditorScreen(
                         }
                         IconButton(
                             onClick = { requestSave() },
-                            enabled = editable && dirty
+                            enabled = editable && dirty && !saving
                         ) {
-                            Icon(
-                                FeatherIcons.Save,
-                                contentDescription = stringResource(R.string.common_save)
-                            )
+                            if (saving) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(
+                                    FeatherIcons.Save,
+                                    contentDescription = stringResource(R.string.common_save)
+                                )
+                            }
                         }
                         IconButton(
                             onClick = { showSettings = true },

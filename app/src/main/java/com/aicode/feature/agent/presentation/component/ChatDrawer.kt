@@ -1,6 +1,13 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -94,6 +101,8 @@ import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
 import com.aicode.feature.workspace.domain.isValidFileEntryName
+import com.aicode.core.ui.ChevronRotationStyle
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -633,35 +642,41 @@ private fun SessionListContent(
                             }
                         }
                     )
-                    if (expanded) {
-                        subSessions.forEach { sub ->
-                            val subState = agentStates[sub.id]
-                            Row(modifier = Modifier.padding(start = Spacing.lg)) {
-                                ChatSessionRow(
-                                    session = sub,
-                                    selected = if (selectionMode) false else sub.id == currentSessionId,
-                                    isExecuting = subState is AgentUIState.Loading ||
-                                        subState is AgentUIState.Streaming,
-                                    awaitingPermission = sub.id in awaitingPermissionSessionIds,
-                                    pinned = false,
-                                    selectionMode = selectionMode,
-                                    checked = sub.id in selectedSessionIds,
-                                    onCheckedChange = { onToggleSelectSession(sub) },
-                                    onClick = {
-                                        if (selectionMode) {
-                                            onToggleSelectSession(sub)
-                                        } else {
-                                            onSelect(sub)
+                    AnimatedVisibility(
+                        visible = expanded,
+                        enter = expandVertically(expandFrom = androidx.compose.ui.Alignment.Top) + fadeIn(),
+                        exit = shrinkVertically(shrinkTowards = androidx.compose.ui.Alignment.Top) + fadeOut()
+                    ) {
+                        Column {
+                            subSessions.forEach { sub ->
+                                val subState = agentStates[sub.id]
+                                Row(modifier = Modifier.padding(start = Spacing.lg)) {
+                                    ChatSessionRow(
+                                        session = sub,
+                                        selected = if (selectionMode) false else sub.id == currentSessionId,
+                                        isExecuting = subState is AgentUIState.Loading ||
+                                            subState is AgentUIState.Streaming,
+                                        awaitingPermission = sub.id in awaitingPermissionSessionIds,
+                                        pinned = false,
+                                        selectionMode = selectionMode,
+                                        checked = sub.id in selectedSessionIds,
+                                        onCheckedChange = { onToggleSelectSession(sub) },
+                                        onClick = {
+                                            if (selectionMode) {
+                                                onToggleSelectSession(sub)
+                                            } else {
+                                                onSelect(sub)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (selectionMode) {
+                                                onToggleSelectSession(sub)
+                                            } else {
+                                                onLongClick(sub)
+                                            }
                                         }
-                                    },
-                                    onLongClick = {
-                                        if (selectionMode) {
-                                            onToggleSelectSession(sub)
-                                        } else {
-                                            onLongClick(sub)
-                                        }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
@@ -811,12 +826,13 @@ private fun SubAgentExpandToggle(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Icon(
-            imageVector = if (expanded) FeatherIcons.ChevronDown else FeatherIcons.ChevronRight,
+        ExpandableChevronIcon(
+            expanded = expanded,
+            style = ChevronRotationStyle.RIGHT_DOWN,
             contentDescription = stringResource(
                 if (expanded) R.string.drawer_collapse_subagents else R.string.drawer_expand_subagents
             ),
-            modifier = Modifier.size(16.dp),
+            size = 16.dp,
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -913,7 +929,12 @@ private fun FileBrowserTab(
                                     if (node.entry.isDirectory) onToggleExpand(node.path)
                                     else onOpenFile(node.path)
                                 },
-                                onLongClick = { menuNode = node }
+                                onLongClick = { menuNode = node },
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                    fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                                    placementSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                                )
                             )
                         }
                     }
@@ -1218,7 +1239,8 @@ private fun FileTreeRow(
     expanding: Boolean,
     busy: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // 展开加载态加最小延迟：本地模式列目录极快，避免每次展开都闪一下转圈。
     var showExpanding by remember { mutableStateOf(false) }
@@ -1238,7 +1260,7 @@ private fun FileTreeRow(
         else -> null
     }
     Row(
-        modifier = Modifier
+        modifier = modifier
             .width(rowWidth)
             .clip(RoundedCornerShape(10.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -1255,12 +1277,13 @@ private fun FileTreeRow(
                     color = MaterialTheme.colorScheme.primary
                 )
             } else {
-                Icon(
-                    imageVector = if (node.isExpanded) FeatherIcons.ChevronDown else FeatherIcons.ChevronRight,
+                ExpandableChevronIcon(
+                    expanded = node.isExpanded,
+                    style = ChevronRotationStyle.RIGHT_DOWN,
                     contentDescription = stringResource(
                         if (node.isExpanded) R.string.file_browser_collapse else R.string.file_browser_expand
                     ),
-                    modifier = Modifier.size(16.dp),
+                    size = 16.dp,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

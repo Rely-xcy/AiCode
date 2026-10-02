@@ -58,7 +58,9 @@ import com.aicode.R
 import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ContentWidth
+import com.aicode.core.ui.ExpandableChevronIcon
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.hasVisibleContent
 import com.aicode.feature.agent.presentation.MessageRole
@@ -224,6 +226,8 @@ internal fun AgentMessageItem(
     isChunkHeader: Boolean = true,
     /** 是否渲染本条消息自带的思考块。默认 true；整轮折叠把思考抽出为独立过程项时传 false，避免重复。 */
     reasoningVisible: Boolean = true,
+    /** 思考过程耗时（ms）：由上层记录的思考实际耗时。 */
+    reasoningDurationMs: Long? = null,
     /** 是否为分块的末块（渲染操作行、底部圆角、与下一条列表 item 的间距）；非分块消息恒为 true。 */
     isChunkFooter: Boolean = true,
 ) {
@@ -306,7 +310,11 @@ internal fun AgentMessageItem(
         }
         if (hasReasoning && isChunkHeader && reasoningVisible) {
             // 思考默认收起：折叠行只占一行（显示思考的第一行），要看全文手动点开
-            ReasoningBubble(text = message.reasoning.orEmpty(), cache = markdownCache)
+            ReasoningBubble(
+                text = message.reasoning.orEmpty(),
+                cache = markdownCache,
+                durationMs = reasoningDurationMs
+            )
         }
         if (hasContent || hasAttachments || message.role != MessageRole.ASSISTANT) {
             Column(
@@ -540,14 +548,15 @@ internal fun TurnCollapseHeader(
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
+            overflow = TextOverflow.Ellipsis
         )
-        Icon(
-            imageVector = if (expanded) FeatherIcons.ChevronDown else FeatherIcons.ChevronRight,
+        Spacer(Modifier.width(Spacing.xs))
+        ExpandableChevronIcon(
+            expanded = expanded,
+            style = ChevronRotationStyle.RIGHT_DOWN,
             contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
             tint = Brand.IconGray,
-            modifier = Modifier.size(18.dp)
+            size = 18.dp
         )
     }
 }
@@ -692,11 +701,11 @@ private fun CompactionSummaryCard(message: AgentUIMessage, markdownCache: Markdo
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = expanded,
                     contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
                     tint = Brand.IconGray,
-                    modifier = Modifier.size(16.dp)
+                    size = 16.dp
                 )
             }
             if (expanded && message.content.hasVisibleContent()) {
@@ -757,11 +766,11 @@ private fun CompactionFailureCard(message: AgentUIMessage) {
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
-                Icon(
-                    if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = expanded,
                     contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
                     tint = Brand.IconGray,
-                    modifier = Modifier.size(16.dp)
+                    size = 16.dp
                 )
             }
             if (expanded && reason.isNotBlank()) {

@@ -86,7 +86,7 @@ class ShizukuTool @Inject constructor(
 
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val command = args["command"]?.jsonPrimitive?.contentOrNull
-            ?: return ToolResult.Error("缺少必需参数: command")
+            ?: return ToolResult.Error("缺少必需参数：command")
 
         val state = shizukuManager.state.value
         if (state != ShizukuState.READY) {
@@ -104,7 +104,7 @@ class ShizukuTool @Inject constructor(
             throw e
         } catch (e: Exception) {
             FileLogger.e(TAG, "Shizuku exec 失败: $command", e)
-            ToolResult.Error("执行 Shizuku 命令失败: ${e.message}")
+            ToolResult.Error("执行 Shizuku 命令失败：${e.message}")
         }
     }
 

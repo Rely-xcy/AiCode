@@ -248,7 +248,7 @@ class AnthropicAdapter @Inject constructor(
                                     val usage = obj.get("message")?.takeIf { it.isJsonObject }?.asJsonObject
                                         ?.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject
                                     streamInputTokens = usage?.get("input_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: 0
-                                    // 缓存命中数在 message_start 的 usage 里返回（message_delta 的 usage 只有 output_tokens）
+                                    // 缓存命中/写入数在 message_start 的 usage 里返回；部分上游会在 message_delta 补全，见该分支的覆盖逻辑。
                                     streamCachedInputTokens = usage?.get("cache_read_input_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: 0
                                     streamCacheCreationTokens = usage?.get("cache_creation_input_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: 0
                                 }
@@ -334,6 +334,12 @@ class AnthropicAdapter @Inject constructor(
                                             stopDetail = it
                                         }
                                     val usage = obj.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject
+                                    // 官方协议 message_delta 的 usage 只有 output_tokens，但部分上游（如 New API 中转）
+                                    // 会在此携带完整 usage，且这里的 input_tokens 才是终态值、与 message_start 可能不同，
+                                    // 故存在即覆盖，避免总输入少算未缓存的那部分。
+                                    usage?.get("input_tokens")?.takeIf { !it.isJsonNull }?.asInt?.let {
+                                        streamInputTokens = it
+                                    }
                                     usage?.get("output_tokens")?.takeIf { !it.isJsonNull }?.asInt?.let {
                                         streamOutputTokens = it
                                     }

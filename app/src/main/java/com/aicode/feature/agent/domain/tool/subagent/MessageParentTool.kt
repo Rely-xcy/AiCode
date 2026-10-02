@@ -70,7 +70,7 @@ class MessageParentTool @Inject constructor(
         return ToolResult.Success(
             buildJsonObject {
                 put("state", "sent")
-                put("message", "消息已发送给主会话，可继续手头工作；主会话的回复会稍后送达。")
+                put("message", "消息已发送给主会话，可继续手头工作，主会话的回复会稍后送达。")
             }
         )
     }

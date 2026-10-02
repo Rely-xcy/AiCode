@@ -105,6 +105,7 @@ import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import com.aicode.feature.workspace.presentation.component.WorkspaceIconButton
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowUp
@@ -868,11 +869,11 @@ internal fun ToolPermissionPanel(
                     onClick = { expanded = !expanded },
                     modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(
-                        imageVector = if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                    ExpandableChevronIcon(
+                        expanded = effectiveExpanded,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        size = 18.dp
                     )
                 }
             }
@@ -1028,11 +1029,11 @@ private fun ErrorBubble(message: String) {
                         modifier = Modifier.size(16.dp)
                     )
                 }
-                Icon(
-                    if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = expanded,
                     contentDescription = if (expanded) stringResource(R.string.common_collapse) else stringResource(R.string.common_expand),
                     tint = Brand.IconGray,
-                    modifier = Modifier.size(18.dp)
+                    size = 18.dp
                 )
             }
             AnimatedVisibility(
@@ -1106,11 +1107,11 @@ internal fun PlanApprovalPanel(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    imageVector = if (effectiveExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                ExpandableChevronIcon(
+                    expanded = effectiveExpanded,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                    size = 18.dp
                 )
             }
 

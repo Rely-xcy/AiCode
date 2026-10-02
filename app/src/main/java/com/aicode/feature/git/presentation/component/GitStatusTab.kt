@@ -65,6 +65,8 @@ import com.aicode.feature.git.domain.model.GitFileChange
 import com.aicode.feature.git.domain.model.GitStash
 import com.aicode.feature.git.domain.model.GitStatus
 import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.core.ui.ChevronRotationStyle
+import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Archive
 import compose.icons.feathericons.Check
@@ -928,11 +930,12 @@ private fun UntrackedDirRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Icon(
-                if (expanded) FeatherIcons.ChevronDown else FeatherIcons.ChevronRight,
+            ExpandableChevronIcon(
+                expanded = expanded,
+                style = ChevronRotationStyle.RIGHT_DOWN,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
+                size = 16.dp
             )
         }
         IconButton(onClick = onStage, enabled = enabled) {

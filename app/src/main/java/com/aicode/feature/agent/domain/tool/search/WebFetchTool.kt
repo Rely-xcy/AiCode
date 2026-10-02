@@ -45,11 +45,11 @@ class WebFetchTool @Inject constructor() : AgentTool() {
     )
 
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
-        val url = args["url"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("缺少 url 参数")
+        val url = args["url"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("缺少必需参数：url")
         val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "text"
 
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            return ToolResult.Error("URL 必须以 http:// 或 https:// 开头")
+            return ToolResult.Error("url 必须以 http:// 或 https:// 开头")
         }
 
         return withContext(Dispatchers.IO) {
@@ -70,7 +70,7 @@ class WebFetchTool @Inject constructor() : AgentTool() {
                 }
                 
                 val finalOutput = if (resultText.length > MAX_LENGTH) {
-                    resultText.take(MAX_LENGTH) + "\n\n[网页内容超长，已截断...]"
+                    resultText.take(MAX_LENGTH) + "\n\n[网页内容超长，已截断]"
                 } else {
                     resultText
                 }
@@ -78,7 +78,7 @@ class WebFetchTool @Inject constructor() : AgentTool() {
                 ToolResult.Success(kotlinx.serialization.json.JsonPrimitive(finalOutput))
             } catch (e: Exception) {
                 FileLogger.e(TAG, "抓取网页时发生异常", e)
-                ToolResult.Error("抓取失败: ${e.message}")
+                ToolResult.Error("抓取失败：${e.message}")
             }
         }
     }
@@ -108,13 +108,13 @@ class WebFetchTool @Inject constructor() : AgentTool() {
         } catch (e: org.jsoup.HttpStatusException) {
             FileLogger.e(TAG, "HTTP 状态码异常: ${e.statusCode} - ${e.getUrl()}", e)
             // 把真实状态码和原始异常描述回传给 AI，不做任何模糊化处理
-            throw FetchException("HTTP ${e.statusCode}: ${e.message ?: "无状态描述"}")
+            throw FetchException("HTTP ${e.statusCode}：${e.message ?: "无状态描述"}")
         } catch (e: org.jsoup.UnsupportedMimeTypeException) {
             FileLogger.e(TAG, "不支持的响应类型: ${e.getMimeType()} - ${e.getUrl()}", e)
-            throw FetchException("不支持的响应 MIME 类型: ${e.getMimeType()}")
+            throw FetchException("不支持的响应 MIME 类型：${e.getMimeType()}")
         } catch (e: java.net.SocketTimeoutException) {
             FileLogger.e(TAG, "请求超时: $url", e)
-            throw FetchException("请求超时（15 秒内未响应）")
+            throw FetchException("请求超时（15 秒内无响应）")
         } catch (e: java.net.UnknownHostException) {
             FileLogger.e(TAG, "DNS 解析失败: $url", e)
             throw FetchException("无法解析主机名：${url}")
