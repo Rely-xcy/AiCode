@@ -167,6 +167,11 @@ internal fun ChatInputBar(
     onEditQueued: (QueuedRequest) -> Unit = {},
     onInterjectQueued: (String) -> Unit = {},
     tokenProgress: Float = 0f,
+    /**
+     * 判定输入里真实 usage 那部分占窗口的比例（与 [tokenProgress] 同分母）。
+     * 只有两者对不上（估算把判定值顶上去）时才画内圈，让用户分得清环长里多少是真发出去过的。
+     */
+    reportedTokenProgress: Float = 0f,
     /** 该百分比是估算值（本地估算）还是真实值（provider 回传的 usage）：只影响读屏与弧线样式，不改变数字。 */
     tokenUsageEstimated: Boolean = false,
     dashboardState: ProviderDashboardState = ProviderDashboardState.Idle,
@@ -522,7 +527,7 @@ internal fun ChatInputBar(
                         contentDescription = stringResource(R.string.chat_add_attachment),
                         onClick = { showAttachmentSheet = true }
                     )
-                    SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, tokenUsageEstimated = tokenUsageEstimated, onSend = onSend, onStop = onStop)
+                    SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, reportedTokenProgress = reportedTokenProgress, tokenUsageEstimated = tokenUsageEstimated, onSend = onSend, onStop = onStop)
                 }
             }
         }
@@ -681,6 +686,7 @@ internal fun SendButton(
     hasContent: Boolean,
     isBusy: Boolean,
     tokenProgress: Float,
+    reportedTokenProgress: Float = 0f,
     tokenUsageEstimated: Boolean = false,
     onSend: () -> Unit,
     onStop: () -> Unit
@@ -744,6 +750,28 @@ internal fun SendButton(
                         }
                     )
                 )
+                // 外圈是判定值（含估算），内圈是其中真实 usage：只画外圈的话，
+                // 本轮新塞入的内容把估算顶上去会被读成「真实已经用了这么多」。两者相等时内圈重合，不必画。
+                val clampedReported = reportedTokenProgress.coerceIn(0f, 1f)
+                if (tokenUsageEstimated && clampedReported > 0f) {
+                    val innerInset = stroke
+                    val innerSize = arcSize - innerInset * 2
+                    // 内圈尺寸由外圈推出来：笔画一旦粗到吃满半径会算成负数，drawArc 会直接抛。
+                    if (innerSize > 0f) {
+                        drawArc(
+                            color = arcColor,
+                            startAngle = -90f,
+                            sweepAngle = 360f * clampedReported,
+                            useCenter = false,
+                            topLeft = androidx.compose.ui.geometry.Offset(
+                                stroke / 2f + innerInset,
+                                stroke / 2f + innerInset
+                            ),
+                            size = androidx.compose.ui.geometry.Size(innerSize, innerSize),
+                            style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
+                }
             }
         }
         Box(

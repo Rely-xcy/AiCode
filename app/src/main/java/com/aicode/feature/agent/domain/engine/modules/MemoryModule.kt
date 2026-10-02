@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.engine.modules
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
+import com.aicode.feature.agent.domain.engine.MemoryListGroups
 import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryCurator
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
@@ -30,8 +31,8 @@ import javax.inject.Singleton
  *    开关关着时注入里没有这条规则）；按治理周期归纳去重（只看周期，周期为 0 才不跑）。
  *    压缩历史前的抽取不受任何开关控制（属上下文管理，见 CompactionModule）。
  *
- * 缓存策略沿用迁移前的实现：按 (sessionId, projectRoot) 会话级缓存，同一会话内只读一次盘，
- * 保持 system prompt 稳定以命中 KV 缓存；空结果用 "" 占位以区分「未缓存」。
+ * 缓存分两层：清单（读盘结果 + 分组字符串）按 (sessionId, projectRoot) 缓存，两个入口共用；
+ * 注入块在它之上再按开关与话题缓存，保持 system prompt 稳定以命中 KV 缓存；空结果用 "" 占位以区分「未缓存」。
  */
 @Singleton
 class MemoryModule @Inject constructor(
@@ -61,6 +62,19 @@ class MemoryModule @Inject constructor(
     private val cachedByKey = ConcurrentHashMap<CacheKey, String>()
 
     /**
+     * 清单缓存的 key：只有会话 + 工作区。
+     *
+     * 不能像 [CacheKey] 那样带上开关与话题指纹：那份缓存是「读盘得到的原始清单」，
+     * 按话题分裂成多份就等于同一轮里读两次盘、把同一批记忆记两次账。
+     */
+    private data class ListCacheKey(val sessionId: String?, val projectRoot: String)
+
+    /** 一次读盘的成果：注入块与两个纯列表变量共用（注入块还会在其上按当轮话题排序与裁预算）。 */
+    private data class ListSnapshot(val memories: List<Memory>, val groups: MemoryListGroups)
+
+    private val listSnapshotByKey = ConcurrentHashMap<ListCacheKey, ListSnapshot>()
+
+    /**
      * 治理锁是**全局**的，不按会话。
      *
      * 治理处理的是同一批记忆文件（全局 + 当前项目），而治理由引擎并发分发：
@@ -73,10 +87,14 @@ class MemoryModule @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 记忆被外部改动（如模型主动调 memory 工具写入）时丢掉注入缓存，
+        // 记忆被外部改动（如模型主动调 memory 工具写入）时丢掉缓存，
         // 否则新记忆要等到换会话才生效——主动记忆就白写了。
+        // 清单缓存同样要丢：它按会话缓存读盘结果，留着就会漏掉刚写进来的那条。
         scope.launch {
-            memoryRepository.changes.collect { cachedByKey.clear() }
+            memoryRepository.changes.collect {
+                cachedByKey.clear()
+                listSnapshotByKey.clear()
+            }
         }
     }
 
@@ -91,7 +109,7 @@ class MemoryModule @Inject constructor(
         val content = listOfNotNull(
             // 子代理不拿主动记忆规则：写用户画像是主代理的事，子代理只管干活
             ACTIVE_MEMORY_RULE.takeIf { activeMemory && !ctx.isSubAgent },
-            buildMemoryList(ctx)
+            buildMemoryList(ctx, listSnapshot(ctx).memories)
         ).joinToString("\n\n")
 
         cachedByKey[key] = content
@@ -99,26 +117,56 @@ class MemoryModule @Inject constructor(
         return content.ifEmpty { null }
     }
 
-    private fun buildMemoryList(ctx: EngineContext): String? {
+    /**
+     * `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 两个变量的数据：按范围分组的完整清单。
+     *
+     * 与 [promptFragment] 走同一个 [listSnapshot]：同一轮里两个入口都会进来，
+     * 共用缓存才能保证读盘与命中记账只发生一次。
+     */
+    override fun memoryListGroups(ctx: EngineContext): MemoryListGroups = listSnapshot(ctx).groups
+
+    /**
+     * 清单快照：会话内只读一次盘，两个入口共用。
+     *
+     * 读盘成功就记账，是因为「被用上」的判据是读到的内容被注入或列进变量；
+     * 失败不缓存，否则一次瞬时 I/O 错误会让整会话都没记忆。
+     */
+    private fun listSnapshot(ctx: EngineContext): ListSnapshot {
+        val key = ListCacheKey(ctx.sessionId, ctx.projectRoot)
+        listSnapshotByKey[key]?.let { return it }
         val memories = try {
             memoryRepository.listMemories(ctx.projectRoot)
         } catch (e: Exception) {
-            return null
+            return ListSnapshot(emptyList(), MemoryListGroups(null, null))
         }
+        // 记账异步做：注入路径上不能卡 I/O。同一会话同一记忆只记一次（仓库内部去重）。
+        val listed = listedFrom(ctx, memories)
+        scope.launch { runCatching { memoryRepository.recordHits(listed, ctx.sessionId) } }
+        val snapshot = ListSnapshot(memories, groupsOf(memories))
+        listSnapshotByKey[key] = snapshot
+        trimSnapshotCacheIfNeeded()
+        return snapshot
+    }
+
+    /** 按范围分组的纯列表原样交给变量，格式与迁移前一致（便于用户按变量组织自己的片段）。 */
+    private fun groupsOf(memories: List<Memory>): MemoryListGroups {
+        fun lines(scope: MemoryScope): String? = memories.filter { it.scope == scope }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
+        return MemoryListGroups(lines(MemoryScope.GLOBAL), lines(MemoryScope.PROJECT))
+    }
+
+    private fun buildMemoryList(ctx: EngineContext, memories: List<Memory>): String? {
         if (memories.isEmpty()) return null
 
         // 注入有上限：记忆多了反而干扰决策（实测 10 条已开始干扰）。
         // 挑哪几条不能按名字序——名字是写入时随手起的 slug，与「这轮该用哪条」无关，
         // 所以先按与当前话题的重合度粗排，再按「描述长度预算」裁：至少 3 条（实测的甜点值，
         // 3 条以内不可能干扰），之后只在描述够短时才继续放——真正吃窗口的是描述长度，不是条数。
-        val listed = withinDescriptionBudget(
-            MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES)
-        )
+        val listed = listedFrom(ctx, memories)
         if (listed.isNotEmpty()) {
             FileLogger.d(TAG, "注入记忆 ${listed.size}/${memories.size} 条: ${listed.joinToString { it.name }}")
         }
-        // 记账异步做：注入路径上不能卡 I/O。同一会话同一记忆只记一次（仓库内部去重）。
-        scope.launch { runCatching { memoryRepository.recordHits(listed, ctx.sessionId) } }
         val globalMemories = listed.filter { it.scope == MemoryScope.GLOBAL }
         val projectMemories = listed.filter { it.scope == MemoryScope.PROJECT }
 
@@ -151,6 +199,10 @@ class MemoryModule @Inject constructor(
 
         return content
     }
+
+    /** 按当轮话题从清单里挑出要注入的那些（召回排序 + 描述长度预算）。 */
+    private fun listedFrom(ctx: EngineContext, memories: List<Memory>): List<Memory> =
+        withinDescriptionBudget(MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES))
 
     /**
      * 按描述长度预算裁剪已排序的记忆：前 [MIN_INJECTED_MEMORIES] 条无条件保留，
@@ -229,11 +281,17 @@ class MemoryModule @Inject constructor(
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         cachedByKey.keys.removeAll { it.sessionId == ctx.sessionId }
+        listSnapshotByKey.keys.removeAll { it.sessionId == ctx.sessionId }
     }
 
     /** 注入缓存上限：会话多了不能让缓存无限长大。 */
     private fun trimIfNeeded() {
         if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+    }
+
+    /** 清单缓存上限：同上，防会话多了长期累积。 */
+    private fun trimSnapshotCacheIfNeeded() {
+        if (listSnapshotByKey.size > SOURCE_CACHE_LIMIT) listSnapshotByKey.clear()
     }
 
     private companion object {

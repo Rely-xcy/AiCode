@@ -5,8 +5,6 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.engine.EngineContext
-import com.aicode.feature.agent.domain.memory.MemoryRepository
-import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
@@ -35,9 +33,6 @@ import javax.inject.Singleton
 class SystemPromptProvider @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val skillRepository: SkillRepository,
-    // 只为 `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 两个「纯列表」变量读盘；
-    // 内置提示词里的记忆走引擎（EngineFragmentSource → MemoryModule，含排序与条数预算）。
-    private val memoryRepository: MemoryRepository,
     private val agentEngine: AgentEngine,
     private val promptFragmentCatalog: PromptFragmentCatalog,
     private val containerInstaller: ContainerInstaller,
@@ -178,42 +173,6 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /**
-     * 记忆清单拆分为全局/项目两组纯列表，供 `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 变量使用。
-     *
-     * 内置 `99-runtime-context.md` 用的是 [EngineFragmentSource]（含主动记忆规则、按话题召回排序与条数预算）；
-     * 这两个变量是给自定义片段的「纯数据」入口，内容是未排序的完整清单。
-     */
-    private data class MemoryLists(val global: String?, val project: String?)
-
-    private inner class MemoryListSource {
-        // 会话级缓存：同一 (sessionId, projectRoot) 内只读一次盘，保持 system prompt 稳定以命中 KV 缓存；
-        // 新开会话 / 切换工作区 / 重启 App 时缓存自然失效重建。空组用 null 字段表示。
-        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, MemoryLists>()
-
-        fun build(ctx: AgentContext): MemoryLists {
-            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
-            cachedByKey[key]?.let { return it }
-            val memories = try { memoryRepository.listMemories(ctx.projectRoot) } catch (e: Exception) {
-                return MemoryLists(null, null)
-            }
-            val global = memories.filter { it.scope == MemoryScope.GLOBAL }
-                .takeIf { it.isNotEmpty() }
-                ?.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
-            val project = memories.filter { it.scope == MemoryScope.PROJECT }
-                .takeIf { it.isNotEmpty() }
-                ?.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
-            val result = MemoryLists(global, project)
-            cachedByKey[key] = result
-            trimIfNeeded()
-            return result
-        }
-
-        private fun trimIfNeeded() {
-            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
-        }
-    }
-
-    /**
      * 引擎聚合片段：由 [AgentEngine] 按模块 order 调度各模块本轮的片段。
      * 记忆清单原本在这里读盘，现已迁进 MemoryModule（连同它的会话级缓存与召回排序）。
      */
@@ -230,7 +189,7 @@ class SystemPromptProvider @Inject constructor(
         override fun build(ctx: AgentContext): String? = agentEngine.subAgentRules(engineContextOf(ctx))
     }
 
-    /** 两处引擎调用共用的上下文快照。 */
+    /** 引擎调用（片段、纪律段、记忆分组）共用的上下文快照。 */
     private fun engineContextOf(ctx: AgentContext): EngineContext = EngineContext(
         sessionId = ctx.sessionId,
         projectRoot = ctx.projectRoot,
@@ -273,10 +232,10 @@ class SystemPromptProvider @Inject constructor(
         val rawStatic = staticRuleSource.build(agentContext)
         val skillsContent = activeSkillsSource.build(agentContext)
         val subAgentsContent = subAgentListSource.build(agentContext)
-        // 记忆内容由引擎承载（主动记忆规则 + 按当前话题召回排序的清单）；
-        // `memories` 是上游拆出的全局/项目纯列表，只服务那两个「按作用域分节」的变量。
+        // 记忆内容全来自引擎：内置片段用的整块走 `{{AICODE_MEMORY}}`，两个按作用域分节的纯列表
+        // 变量取同一模块的分组结果——同一轮里读盘与命中记账只发生一次。
         val memoryContent = engineFragmentSource.build(agentContext)
-        val memories = memoryListSource.build(agentContext)
+        val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
         val projectRules = projectRuleSource.build(agentContext)
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
@@ -286,8 +245,8 @@ class SystemPromptProvider @Inject constructor(
             rawStatic,
             skillsContent,
             memoryContent,
-            memories.global,
-            memories.project,
+            memories?.global,
+            memories?.project,
             subAgentsContent,
             projectRules,
             workspaceContent,
@@ -316,13 +275,13 @@ class SystemPromptProvider @Inject constructor(
             )
             return ""
         }
-        val memories = memoryListSource.build(ctx)
+        val memories = agentEngine.memoryListGroups(engineContextOf(ctx))
         return renderVariables(
             content,
             activeSkillsSource.build(ctx),
             engineFragmentSource.build(ctx),
-            memories.global,
-            memories.project,
+            memories?.global,
+            memories?.project,
             subAgentListSource.build(ctx),
             projectRuleSource.build(ctx),
             workspaceSource.build(ctx),
@@ -360,14 +319,14 @@ class SystemPromptProvider @Inject constructor(
         // 下方不再按 inject 追加同一段内容。判据必须取 rawPrompt——展开后的文本里占位符已消失，
         // 用它判会永远为真。（主代理 build() 把运行期内容全放在片段变量位上，没有这条追加路径。）
         val rawPrompt = definition.prompt
-        val memories = memoryListSource.build(agentContext)
+        val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
         append(
             renderVariables(
                 rawPrompt,
                 activeSkillsSource.build(agentContext),
                 engineFragmentSource.build(agentContext),
-                memories.global,
-                memories.project,
+                memories?.global,
+                memories?.project,
                 subAgentListSource.build(agentContext),
                 projectRuleSource.build(agentContext),
                 workspaceSource.build(agentContext),
@@ -424,7 +383,8 @@ class SystemPromptProvider @Inject constructor(
     /**
      * 把片段里的 `{{AICODE_*}}` 占位符替换为真实内容；未出现的占位符保持原样，不影响 `{{INSTRUCTION}}` 等其它占位符。
      *
-     * 记忆有两个来源：[memory] 是引擎聚合块（内置片段用它），[memoryGlobal] / [memoryProject] 是上游拆出的纯列表。
+     * 记忆的三个变量全来自引擎：[memory] 是聚合块（内置片段用它），[memoryGlobal] / [memoryProject]
+     * 是同一模块的按范围分组清单，供自定义片段取「纯数据」。
      */
     private fun renderVariables(
         text: String,

@@ -68,17 +68,42 @@ class ContextUsageTest {
     }
 
     @Test
-    fun `holder 只保留最后一次发布的快照`() {
+    fun `判定值与真实值分开读，界面能分清环长里多少是真发出去过的`() {
+        val usage = ContextUsage.of("s1", realTokens = 200_000, estimatedTokens = 900_000, thresholds = thresholds)
+
+        assertEquals(900_000, usage.currentTokens)
+        assertEquals(200_000, usage.reportedTokens)
+        assertEquals(0.9f, usage.progress)
+        assertEquals(0.2f, usage.reportedProgress)
+        assertTrue(usage.isEstimated)
+    }
+
+    @Test
+    fun `holder 按会话各留一份快照，互不覆盖`() {
         val holder = ContextUsageHolder()
-        assertNull(holder.usage.value)
+        assertTrue(holder.usage.value.isEmpty())
 
         val first = ContextUsage.of("s1", realTokens = 1, estimatedTokens = 1, thresholds = thresholds)
         holder.publish(first)
-        assertEquals(first, holder.usage.value)
+        assertEquals(first, holder.usage.value["s1"])
 
-        // 子代理等其它会话不发布（由调用方判断），发布哪个就是哪个；界面按 sessionId 取
+        // 并行跑的其它会话（子代理、后台会话）各存各的：界面按当前会话取，不会被别的会话顶掉
         val second = ContextUsage.of("s2", realTokens = 2, estimatedTokens = 2, thresholds = thresholds)
         holder.publish(second)
-        assertEquals(second, holder.usage.value)
+        assertEquals(second, holder.usage.value["s2"])
+        assertEquals(first, holder.usage.value["s1"])
+
+        // 会话删除后清掉，表里不留已不存在会话的数
+        holder.remove("s1")
+        assertNull(holder.usage.value["s1"])
+        assertEquals(second, holder.usage.value["s2"])
+    }
+
+    @Test
+    fun `没有会话 id 的判定不进快照表，避免所有会话都取到同一份数`() {
+        val holder = ContextUsageHolder()
+        holder.publish(ContextUsage.of(null, realTokens = 1, estimatedTokens = 1, thresholds = thresholds))
+
+        assertTrue(holder.usage.value.isEmpty())
     }
 }

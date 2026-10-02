@@ -13,7 +13,8 @@ import javax.inject.Singleton
  *
  * 三件事：
  * 1. 片段聚合——按 [EngineModule.order] 取各模块本轮的系统提示词片段，拼成一段
- *    （[subAgentRules] 同理，但它只给子代理会话、且不受 `inject` 门禁）；
+ *    （[subAgentRules] 同理，但它只给子代理会话、且不受 `inject` 门禁；
+ *    [memoryListGroups] 是同一段里的另一个取数口子，取第一个非空结果而不是拼接）；
  * 2. 工具聚合——收集各模块额外提供的工具（同名以内置/先注册者为准，由调用方去重）；
  * 3. 钩子分发——轮次结束、会话删除这类「一次触发、多个模块响应」的动作，并发分发。
  *
@@ -52,6 +53,19 @@ class AgentEngine @Inject constructor(
                 ?.takeIf { it.isNotBlank() }
         }
         return pieces.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
+    }
+
+    /**
+     * 记忆清单的按范围分组，取第一个非空结果；无模块提供时返回 null。
+     *
+     * 不拼接的原因：记忆只有一个来源（MemoryModule），拼接会把同一份清单展开多遍；
+     * 取第一个与 [promptFragment] 的拼接不同，是因为这里要的是一份纯数据，不是多个片段的和。
+     */
+    fun memoryListGroups(ctx: EngineContext): MemoryListGroups? {
+        sortedModules().forEach { module ->
+            runModule(module, "memoryListGroups") { it.memoryListGroups(ctx) }?.let { return it }
+        }
+        return null
     }
 
     /** 一轮对话正常结束：并发分发给所有模块，调用方不等待。 */

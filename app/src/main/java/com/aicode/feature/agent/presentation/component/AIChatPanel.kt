@@ -82,6 +82,7 @@ import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.readableContentMaxWidth
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.AgentUIState
@@ -560,11 +561,17 @@ fun AIChatPanel(
     val sessionTitle = currentSession?.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.chat_new_session_btn)
     val sessionInputTokens = currentSession?.totalInputTokens ?: 0
     val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
-    val sessionLastInputTokens = currentSession?.lastInputTokens ?: 0
-    // 压缩判定发布的占用快照（含实际生效阈值）。切会话时它还是上一个会话的数，按 id 过滤掉，
-    // 否则会把别的会话的百分比显示到当前会话上。
-    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
-    val sessionContextUsage = contextUsage?.takeIf { it.sessionId == currentSessionId }
+    // 压缩判定发布的占用快照（含实际生效阈值），按会话分开存：取不到就说明本会话还没判定过。
+    val contextUsages by viewModel.contextUsage.collectAsStateWithLifecycle()
+    val sessionContextUsage = contextUsages[currentSessionId]
+    // 取不到快照时（表现为「没有环」）必须能自证原因：是本会话还没判定过，还是判定发的是别的会话。
+    // 后者曾是「已触发压缩、环却只显示一小截」的根因，只在会话或快照归属变化时记一条。
+    LaunchedEffect(currentSessionId, sessionContextUsage?.sessionId) {
+        FileLogger.i(
+            "AIChatPanel",
+            "上下文环 当前会话=${currentSessionId ?: "-"} 快照会话=${sessionContextUsage?.sessionId ?: "无"}"
+        )
+    }
     val messagesReady = messagesState.loaded && messagesState.sessionId == currentSessionId
     val runningTool by viewModel.runningTool.collectAsStateWithLifecycle()
     val isCompacting by viewModel.isCompacting.collectAsStateWithLifecycle()
@@ -1671,13 +1678,12 @@ fun AIChatPanel(
                     }
                 },
                 tokenProgress = run {
-                    // 优先用压缩判定发布的快照：同一个数既决定显示百分比也决定是否触发压缩。
-                    // 本次运行还没判定过（刚启动 / 刚切会话）时退到上次请求的真实 usage。
-                    sessionContextUsage?.progress ?: run {
-                        val contextLimit = activeModelMetadata?.contextTokens ?: 0
-                        if (contextLimit > 0) sessionLastInputTokens.toFloat() / contextLimit else 0f
-                    }
+                    // 快照就是判定输入本身：环长 = 判定值占窗口，与是否触发压缩同源。
+                    // 本会话还没判定过时不画弧——退到上次请求的真实 usage 会系统性偏小
+                    // （本轮新塞入的内容还没发出去过），比没有更糟：它会把「已经触发压缩」显示成一小截。
+                    sessionContextUsage?.progress ?: 0f
                 },
+                reportedTokenProgress = sessionContextUsage?.reportedProgress ?: 0f,
                 tokenUsageEstimated = sessionContextUsage?.isEstimated ?: false,
                 isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,

@@ -163,9 +163,10 @@ class AIAgentViewModel @Inject constructor(
 
     /**
      * 上下文占用快照：压缩判定算出的那套数（占用 / 窗口 / 实际生效阈值）原样给界面，
-     * 避免界面自己再算一遍导致「显示没到线、压缩却已触发」。未判定过时为 null，界面退到真实 usage。
+     * 避免界面自己再算一遍导致「显示没到线、压缩却已触发」。按会话存，本会话从未判定过时取不到，
+     * 界面此时不画弧（宁可没有，也不画一个与判定不同源的数）。
      */
-    val contextUsage: StateFlow<ContextUsage?> = contextUsageHolder.usage
+    val contextUsage: StateFlow<Map<String?, ContextUsage>> = contextUsageHolder.usage
 
     private val sessionJobs = mutableMapOf<String, Job>()
 

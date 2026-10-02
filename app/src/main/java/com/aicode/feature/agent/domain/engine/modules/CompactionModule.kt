@@ -81,19 +81,28 @@ class CompactionModule @Inject constructor(
         val estimated = TokenEstimator.estimateMessages(messages) + call.overheadTokens
         val currentTokens = maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0, estimated)
         // 判定算完立即发布给界面：同一个数既决定显示百分比也决定是否触发压缩。
-        // 子代理会话不发布，否则会顶掉前台会话指示器的数（两者并行跑）。
-        if (!ctx.isSubAgent) {
-            contextUsageHolder.publish(
-                ContextUsage.of(
-                    sessionId = ctx.sessionId,
-                    realTokens = call.lastInputTokens,
-                    estimatedTokens = estimated,
-                    thresholds = thresholds
-                )
+        // 快照按会话分开存，并行跑的子代理各存各的，不会再把前台会话的数顶掉。
+        contextUsageHolder.publish(
+            ContextUsage.of(
+                sessionId = ctx.sessionId,
+                realTokens = call.lastInputTokens,
+                estimatedTokens = estimated,
+                thresholds = thresholds
             )
-        }
+        )
         val reachedHard = hardAllowed && (call.force || currentTokens >= hardThreshold)
         val reachedSoft = currentTokens >= softThreshold
+        // 判定输入与发布结果必须能对上账：环显示偏小时，靠这条日志分清是「估算顶上来的」
+        // 还是「界面取错了会话」。只在线以上打，否则每次工具调用都写一条，日志会被判定刷屏。
+        if (reachedSoft || reachedHard) {
+            FileLogger.i(
+                TAG,
+                "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
+                    "真实=${call.lastInputTokens} 估算=$estimated（含固定开销 ${call.overheadTokens}）" +
+                    "判定=$currentTokens 窗口=$contextLimit 软线=$softThreshold " +
+                    "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}"
+            )
+        }
 
         // 单条消息也可能本身就超窗：只有估算还没逼近窗口时才允许按条数早退。
         if (!call.force && messages.size <= 2 && currentTokens < contextLimit) return null
@@ -184,6 +193,11 @@ class CompactionModule @Inject constructor(
             .contextTokens
             .takeIf { it > 0 }
             ?: ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
+
+    /** 会话删除后丢掉它的占用快照，避免表里留着已不存在会话的数。 */
+    override suspend fun onSessionDeleted(ctx: EngineContext) {
+        contextUsageHolder.remove(ctx.sessionId)
+    }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
         val className = provider::class.simpleName.orEmpty()

@@ -60,6 +60,9 @@ data class LlmCall(
     val onEvent: suspend (AgentEvent) -> Unit = {}
 )
 
+/** 记忆清单按范围的原始分组（`{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 变量的数据）。 */
+data class MemoryListGroups(val global: String?, val project: String?)
+
 /**
  * 引擎模块：一个功能以模块为单位接入引擎，由 [AgentEngine] 统一调度。
  *
@@ -92,6 +95,18 @@ interface EngineModule {
      * 需要改内容时改提示词文件（可用 `prompts.custom/agent/` 同名覆盖），不要把规则写回代码字符串。
      */
     fun subAgentRules(ctx: EngineContext): String? = null
+
+    /**
+     * 记忆清单的原始分组，供 `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 两个变量取值。
+     *
+     * 与 [promptFragment] 分开的原因：后者是渲染好的整块（含使用规则、按当轮话题召回排序与条数预算），
+     * 而这两个变量要的是「每行一项、不排序」的完整清单；合成一份会让变量连规则文本一起拿走。
+     * 由 [AgentEngine] 取第一个非空结果（不是拼接），SystemPromptProvider 渲染变量时调用。
+     *
+     * 实现方必须与 [promptFragment] 共用同一份读取缓存：同一轮里两个入口都会进来，
+     * 各读一次盘会把同一批记忆的命中记账重复一遍。
+     */
+    fun memoryListGroups(ctx: EngineContext): MemoryListGroups? = null
 
     /** 本轮额外提供的工具；与内置工具合并时同名以内置为准。 */
     fun tools(ctx: EngineContext): List<AgentTool> = emptyList()
