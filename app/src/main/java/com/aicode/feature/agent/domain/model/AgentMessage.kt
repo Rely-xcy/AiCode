@@ -99,8 +99,16 @@ data class AgentContext(
     /** 思考强度（"low"/"medium"/"high"），随每次 LLM 请求传给支持的 provider。 */
     val reasoningEffort: String? = null,
     /**
-     * 本会话绑定的自定义子代理定义；非空表示这是一个按定义运行的子代理会话，
-     * 系统提示词与工具集都按其配置组装（见 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider]）。
+     * 本会话是不是子代理会话：会话行里有 `parentId` 才算，这是结构性事实。
+     *
+     * 与 [agentDefinition] 必须分开：那一个是「本轮按某个自定义定义运行」，是配置性事实。
+     * 默认子代理（`task` 没写 `agent` 参数派发的）有 parentId 但没有定义；反过来主对话也能挂定义。
+     * 由 ViewModel 从会话行算一次往下传，下层只读它，不再各自推导。
+     */
+    val isSubAgent: Boolean = false,
+    /**
+     * 本会话绑定的自定义子代理定义；非空表示本轮按定义组装提示词与工具集，
+     * 与「是不是子代理会话」无关（见 [isSubAgent]）。
      */
     val agentDefinition: AgentDefinition? = null
 )

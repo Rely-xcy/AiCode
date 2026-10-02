@@ -76,7 +76,10 @@ class ContextCompactor @Inject constructor(
      *    40% 是软线，真逼近窗口时由硬压缩与 enforceWindowLimit 兑底。
      * 3. 每一轮里先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
      *    同一类按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
-     * 4. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
+     * 4. 近期引用只降优先级：最近几轮用过同一文件/同一调用 id 的历史内容排到最后（见
+     *    [isRecentlyReferenced]）。它是「模型现在还在对着它干活」的弱证据，不够格免死（软线
+     *    本就是该省的地方），但能让体积排序不再拿正在用的内容开刀；跳过哪几条会写进日志；
+     * 5. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
      *
      * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
      */
@@ -108,13 +111,24 @@ class ContextCompactor @Inject constructor(
         }
         if (historyEnd <= 0) return messages
 
+        // 近期引用：最近几轮还在操作的文件与用过的本地调用 id。命中的历史内容只降级（排到最后），
+        // 不做豁免：预算真不够时仍要削得动，否则软精简就失去意义。
+        val callPaths = toolCallPathsById(messages)
+        val recent = collectRecentReferences(messages, historyEnd)
         val argCandidates = (0 until historyEnd)
             .filter { index ->
                 val message = messages[index]
                 message is AgentMessage.AssistantMessage && message.toolCalls.isNotEmpty()
             }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
-        for (index in argCandidates) {
+        val argDeferred = argCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
+        val resultCandidates = (0 until historyEnd)
+            .filter { messages[it] is AgentMessage.ToolResultMessage }
+            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+        val resultDeferred = resultCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
+
+        val trimmedIndices = mutableSetOf<Int>()
+        for (index in argCandidates.filterNot { it in argDeferred } + argDeferred) {
             if (estimate <= targetTokens) break
             val message = result[index] as AgentMessage.AssistantMessage
             val rebuilt = message.toolCalls.map { call -> rebuildToolCallArguments(call, SOFT_TRIM_TOOL_CHARS) }
@@ -122,14 +136,11 @@ class ContextCompactor @Inject constructor(
             val trimmed = message.copy(toolCalls = rebuilt)
             estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
             result[index] = trimmed
+            trimmedIndices.add(index)
             changed = true
         }
 
-        val resultCandidates = (0 until historyEnd)
-            .filter { result[it] is AgentMessage.ToolResultMessage }
-            .sortedByDescending { TokenEstimator.estimateMessage(result[it]) }
-
-        for (index in resultCandidates) {
+        for (index in resultCandidates.filterNot { it in resultDeferred } + resultDeferred) {
             if (estimate <= targetTokens) break
             val message = result[index] as AgentMessage.ToolResultMessage
             val current = message.modelResult ?: message.result
@@ -137,9 +148,88 @@ class ContextCompactor @Inject constructor(
             val trimmed = message.copy(modelResult = headTailTrim(current, SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
             estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
             result[index] = trimmed
+            trimmedIndices.add(index)
             changed = true
         }
+
+        // 不动的理由要能让人查得下去：只说“有 N 条被保护”没法核，得把工具名、
+        // 路径/调用 id 一并打出来。
+        val deferred = argDeferred + resultDeferred
+        if (changed && deferred.isNotEmpty()) {
+            val skipped = deferred.count { it !in trimmedIndices }
+            FileLogger.i(
+                TAG,
+                "软精简把 ${deferred.size} 条近期被引用的历史工具内容排到最后（最近 $SOFT_TRIM_PROTECTED_TURNS 轮用到同一文件或同一调用 id），" +
+                    "本次跳过 $skipped 条（估算 $estimate / 目标 $targetTokens）：" +
+                    deferred.joinToString("、", limit = 8) { describeToolMessage(messages[it]) }
+            )
+        }
         return if (changed) result else messages
+    }
+
+    /**
+     * 最近几轮引用到的文件路径与工具调用 id。
+     *
+     * 判据只看工具调用参数：它是「模型此刻在操作什么」最直接的证据，不猜语义、不读自然语言，
+     * 所以结果确定、可解释。ids 里也收下工具结果自带的 id：同一段历史被重复回放时
+     * （压缩失败重试、存档回读）历史消息会与近轮拿到同一个 id，那一份同样属于「还在用」。
+     */
+    private data class RecentReferences(val paths: Set<String>, val ids: Set<String>)
+
+    private fun collectRecentReferences(messages: List<AgentMessage>, from: Int): RecentReferences {
+        val paths = mutableSetOf<String>()
+        val ids = mutableSetOf<String>()
+        for (index in from until messages.size) {
+            when (val message = messages[index]) {
+                is AgentMessage.AssistantMessage -> message.toolCalls.forEach { call ->
+                    ids.add(call.id)
+                    toolArgumentPathOf(call.arguments)?.let(paths::add)
+                }
+
+                is AgentMessage.ToolResultMessage -> ids.add(message.id)
+                is AgentMessage.UserMessage -> {}
+            }
+        }
+        return RecentReferences(paths, ids)
+    }
+
+    /** 全部历史里「工具调用 id → 目标路径」：工具结果自身不带路径，靠它的 id 反查回那次调用。 */
+    private fun toolCallPathsById(messages: List<AgentMessage>): Map<String, String> {
+        val paths = mutableMapOf<String, String>()
+        messages.forEach { message ->
+            if (message is AgentMessage.AssistantMessage) {
+                message.toolCalls.forEach { call ->
+                    toolArgumentPathOf(call.arguments)?.let { paths[call.id] = it }
+                }
+            }
+        }
+        return paths
+    }
+
+    /** 这条历史内容是不是「最近几轮还在引用」的：碰过同一文件，或带同一个工具调用 id。 */
+    private fun isRecentlyReferenced(
+        message: AgentMessage,
+        recent: RecentReferences,
+        callPaths: Map<String, String>
+    ): Boolean = when (message) {
+        is AgentMessage.AssistantMessage ->
+            message.id in recent.ids || message.toolCalls.any { call ->
+                call.id in recent.ids || toolArgumentPathOf(call.arguments)?.let { it in recent.paths } == true
+            }
+
+        is AgentMessage.ToolResultMessage ->
+            message.id in recent.ids || callPaths[message.id]?.let { it in recent.paths } == true
+
+        is AgentMessage.UserMessage -> false
+    }
+
+    /** 日志里的身份描述：工具名 + 调用 id，够定位是哪一条，不打印正文。 */
+    private fun describeToolMessage(message: AgentMessage): String = when (message) {
+        is AgentMessage.AssistantMessage ->
+            message.toolCalls.joinToString("+") { "${it.name}#${it.id}" }.ifEmpty { "助手消息#${message.id}" }
+
+        is AgentMessage.ToolResultMessage -> "${message.toolName}#${message.id}"
+        is AgentMessage.UserMessage -> "用户消息#${message.id}"
     }
 
     /**
@@ -444,26 +534,27 @@ class ContextCompactor @Inject constructor(
     }
 
     /**
-     * 工具参数按字段重建：把「能重新读回来」的大块正文换成一句说明，其它超长值头尾截断，
-     * 小字段（路径、命令开头这类定位信息）原样保留。
+     * 工具参数按字段重建：把「能重新读回来」的大块正文换成可读摘录（头尾逐字 + 省略说明 +
+     * readFile 回读指针），其它超长值头尾截断，小字段（路径、命令开头这类定位信息）原样保留。
      *
      * 结果写进 `modelArguments`，`arguments` 保持原文——执行、UI、落库都读 arguments。
      * 每次都以 `arguments`（原文）为输入重算，所以重复精简是幂等的（不会拿上一次的副本再削）。
      *
-     * 为什么不做头尾截断：截出来的是一段**残缺代码**，模型容易把它当成「文件当时就是这个内容」，
-     * 进而以为里面没有某个函数、又写一遍。换成占位说明说的是真话——我写过这个文件，
-     * 正文在磁盘上，需要时 read 回来；文案里另带一句禁令，阻止模型把占位说明本身当成正文回写
-     * （执行边界还有一道整串识别兜底，见 [omittedBulkArgumentKeyOf]）。
+     * 为什么给摘录而不是整段占位说明：占位说明把「我写过什么」从模型视野里整个抹掉——
+     * 模型看不到文件当时的结构与收尾状态，只能整份重新 read 才敢接着改，也更容易把占位文字
+     * 当成正文抄回去。摘录留开头与结尾的逐字内容，中段的大头照旧省下；首行另带一句禁令
+     * （执行边界还有一道前缀识别兜底，见 [isOmittedArgumentValue]）。
      *
      * id 与 name 一律不动：tool call 与 tool result 的配对靠 id，动了就成孤儿消息，API 直接 400。
      */
     private fun rebuildToolCallArguments(call: ToolCall, budgetChars: Int): ToolCall {
         if (call.arguments.isEmpty()) return call
         var changed = false
+        val path = toolArgumentPathOf(call.arguments)
         val rebuilt = call.arguments.mapValues { (key, value) ->
             val text = value.toString()
             val limit = if (BULK_ARG_KEYS.contains(key.lowercase())) {
-                // 大块正文类：不需要「保留一点看看」，直接给占位说明
+                // 大块正文类：与其它字段同一套预算口径，另受 BULK_ARG_LIMIT_CHARS 封顶
                 minOf(budgetChars, BULK_ARG_LIMIT_CHARS)
             } else {
                 budgetChars
@@ -471,9 +562,12 @@ class ContextCompactor @Inject constructor(
             when {
                 text.length <= limit -> value
 
+                // 大块正文：换成可读摘录；摘录省不下内容时退回占位说明
                 BULK_ARG_KEYS.contains(key.lowercase()) -> {
                     changed = true
-                    JsonPrimitive(omittedContentPlaceholder(text.length))
+                    JsonPrimitive(
+                        bulkArgumentExcerptOf(text, path, limit) ?: omittedContentPlaceholder(text.length)
+                    )
                 }
 
                 // 其它字段（命令、路径等）保留头尾，让模型能认出是哪一条
@@ -485,6 +579,13 @@ class ContextCompactor @Inject constructor(
         }
         return if (changed) call.copy(modelArguments = rebuilt) else call
     }
+
+    /** 参数里的目标文件路径：摘录的回读指针与「近期引用」判据共用它，口径只有这一处。 */
+    private fun toolArgumentPathOf(arguments: Map<String, JsonElement>): String? =
+        arguments.entries
+            .firstOrNull { it.key.lowercase() in PATH_ARG_KEYS }
+            ?.let { (it.value as? JsonPrimitive)?.contentOrNull }
+            ?.takeIf { it.isNotBlank() }
 
     /**
      * 大块正文的硬上限：超过它就整段换成占位说明（文件已在磁盘上，需要时 read 回来）。
@@ -657,20 +758,26 @@ class ContextCompactor @Inject constructor(
 }
 
 /**
- * 大块正文类参数：这些字段「能重新读回来」，超限时直接给占位说明。
+ * 大块正文类参数：这些字段「能重新读回来」，超限时换成本地摘录（省不下时退回占位说明）。
  *
- * 与 [omittedBulkArgumentKeyOf]（执行边界的整串识别）共用同一份清单，避免两处漂移。
+ * 与 [isOmittedArgumentValue]（执行边界的前缀识别）共用同一份清单，避免两处漂移。
  */
 internal val BULK_ARG_KEYS = setOf(
     "content", "old_string", "new_string", "oldstring", "newstring", "text", "newtext"
 )
 
 /**
- * 软精简留下的占位说明。
+ * 参数里的目标文件路径字段：write / edit 类工具的入参就叫这两个名字，各家的别名一并收进。
+ * 摘录的回读指针与「近期引用」判据都按它取值，保证两处指向同一个文件。
+ */
+private val PATH_ARG_KEYS = setOf("path", "file_path", "filepath", "file")
+
+/**
+ * 软精简留下的占位说明（整段替换体）。
  *
  * 文案里必须带那句禁令：模型看到占位说明后，可能把它当成「文件正文」抄进新的 writeFile 调用，
  * 照抄执行就会把占位文字写进磁盘（已实际发生过）。禁令只是降低概率，真正兜底的是执行边界的
- * 整串识别 [omittedBulkArgumentKeyOf]。
+ * 前缀识别 [isOmittedArgumentValue]。
  */
 internal fun omittedContentPlaceholder(length: Int): String =
     "[已省略 $length 字符，正文不在上下文中，需要时用 read 工具读回；" +
@@ -683,18 +790,114 @@ internal fun omittedContentPlaceholder(length: Int): String =
  * 不能因为出现子串就拦下调用。容错范围限定在模型改写占位说明的常见变体——丢掉方括号、漏掉
  * 「中」、尾部换措辞、末尾多一个句号；尾部不允许换行也不允许出现 `]`，所以「占位说明后面还跟着
  * 真正文」与多行文件都进不了这个模式。
+ *
+ * 大块正文现在改产摘录（见 [bulkArgumentExcerptOf]），但历史消息与库里仍有这种整段替换的形态，
+ * 识别不能丢。
  */
 internal val OMITTED_CONTENT_PLACEHOLDER = Regex(
     "^\\[?已省略 \\d+ 字符，正文不在上下文(?:中)?[^\\]\\n]{0,80}\\]?[。.!！]?$"
 )
 
 /**
- * 挑出「值整串就是占位说明」的大块正文字段名；没有则返回 null。
+ * 摘录首行的哨兵。
  *
- * 只查 [BULK_ARG_KEYS]：占位说明只会出现在这些字段上，收窄范围避免误伤其它字段。
+ * 执行边界的守卫靠「值的第一个字符就是它」认出「模型把摘录当正文回写」（见 [isOmittedArgumentValue]）：
+ * 整段摘录只由 [bulkArgumentExcerptOf] 产出，真实文件内容不会以它开头。
+ * 判据必须落在开头而不是「值里含这句话」——本仓库自己的源码与测试就带着这些字样，
+ * 「包含」会把对这类文件的正常编辑全拦掉。
+ */
+internal const val BULK_EXCERPT_HEAD = "[AiCode 上下文摘录·非完整正文]"
+
+/** 摘录中段省略标记的前缀；模型只抄走这一段（不含首行哨兵）时同样按占位形态拦下。 */
+internal const val BULK_EXCERPT_GAP_PREFIX = "…[AiCode 摘录省略"
+
+/** 摘录的预算上限：比一句占位说明大得多（那种约 60 字符），容得下一段可读的头尾。 */
+private const val EXCERPT_MAX_CHARS = 1_600
+
+/** 摘录的预算下限：原文刚过闸值时也要留出可读的头尾，而不是只剩一句说明。 */
+private const val EXCERPT_MIN_CHARS = 400
+
+/**
+ * 大块正文的本地摘录（纯字符串处理，不调模型）：留头留尾 + 一行省略说明 + readFile 回读指针。
+ *
+ * 为什么不是整段占位：占位把「我写过什么」从模型视野里整个抹掉，模型只能整份 read 回来才敢接着改；
+ * 摘录留出开头与结尾的逐字内容，模型能认出文件结构与收尾状态，中段大头照旧省下。
+ * 省略了多少必须写出来——不说明的省略会让模型以为文件真的短了一截。
+ *
+ * 预算按原文的 1/4 收缩（上下限收敛）：刚过闸值时不会只省下一两行，很大的正文又不会占满上下文。
+ *
+ * @param limit 调用方给出的该字段长度上限；调用方只在 `text.length > limit` 时才调进来。
+ * @return 摘录文本；省不下内容（原文本来就短，或 [limit] 太小）时返回 null，由调用方退回占位说明。
+ */
+internal fun bulkArgumentExcerptOf(text: String, path: String?, limit: Int): String? {
+    if (limit <= 0 || text.length <= limit) return null
+    val budget = minOf(EXCERPT_MAX_CHARS, limit, maxOf(EXCERPT_MIN_CHARS, text.length / 4))
+    val head = text.excerptFromStart(budget * 2 / 3)
+    val tail = text.excerptFromEnd(budget - head.length)
+    val omitted = text.substring(head.length, text.length - tail.length)
+    if (omitted.isEmpty()) return null
+    val omittedLines = omitted.count { it == '\n' }
+    val excerpt = buildString {
+        append(BULK_EXCERPT_HEAD)
+        append(" 原文共 ${text.length} 字符，中间省略 $omittedLines 行（${omitted.length} 字符）。")
+        if (!path.isNullOrBlank()) append("需要全文时用 readFile 读回 $path；")
+        append("严禁把本摘录当正文回写，它不是文件内容。")
+        append('\n')
+        append(head)
+        append('\n')
+        append(BULK_EXCERPT_GAP_PREFIX)
+        append(" $omittedLines 行（${omitted.length} 字符）]…")
+        append('\n')
+        append(tail)
+    }
+    // 摘录必须显著短于原文：调用方（软精简的估算记账、兜底截断的等比换算）都假定换过之后更短。
+    if (excerpt.length * 2 > text.length) return null
+    return excerpt
+}
+
+/** 从开头留 [maxChars] 字符，切点对齐到最后一个换行；正文是一整行（压缩过的 JSON/JS）时保持原样。 */
+private fun String.excerptFromStart(maxChars: Int): String {
+    if (maxChars <= 0) return ""
+    if (length <= maxChars) return this
+    val cut = lastIndexOf('\n', maxChars - 1)
+    return if (cut > 0) substring(0, cut) else take(maxChars)
+}
+
+/** 从结尾留 [maxChars] 字符，切点对齐到第一个换行。 */
+private fun String.excerptFromEnd(maxChars: Int): String {
+    if (maxChars <= 0) return ""
+    if (length <= maxChars) return this
+    val cut = indexOf('\n', length - maxChars)
+    return if (cut in 0 until length - 1) substring(cut + 1) else takeLast(maxChars)
+}
+
+/**
+ * 参数值是不是「压缩留下的占位说明 / 摘录」（执行边界守卫的判据）。
+ *
+ * 三种形态，都要求从值的第一个字符起成立：
+ * 1. 早期的整段占位说明（[OMITTED_CONTENT_PLACEHOLDER]）——历史消息里还在，模型可能照抄；
+ * 2. 摘录首行哨兵 [BULK_EXCERPT_HEAD]——模型把整段摘录当正文回写时，值的开头正好是它；
+ * 3. 摘录中段省略标记 [BULK_EXCERPT_GAP_PREFIX]——模型从省略处往后抄。
+ *
+ * 三条都是前缀/整串判据，不是「包含」：用户文件里恰好写上这句话（包括本仓库讲压缩实现的源码
+ * 与测试）属于正常内容，不能因为出现子串就拦下调用。代价是「只抄摘录中段且连省略标记也改写掉」
+ * 这种形态仍会漏网，但把判据放宽成「包含」会拿正常编辑去换，得不偿失。
+ */
+internal fun isOmittedArgumentValue(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return false
+    return OMITTED_CONTENT_PLACEHOLDER.matches(trimmed) ||
+        trimmed.startsWith(BULK_EXCERPT_HEAD) ||
+        trimmed.startsWith(BULK_EXCERPT_GAP_PREFIX)
+}
+
+/**
+ * 挑出「值就是占位说明 / 摘录」的大块正文字段名；没有则返回 null。
+ *
+ * 只查 [BULK_ARG_KEYS]：这类形态只会出现在这些字段上，收窄范围避免误伤其它字段。
  */
 internal fun omittedBulkArgumentKeyOf(arguments: Map<String, JsonElement>): String? =
     arguments.entries.firstOrNull { (key, value) ->
         key.lowercase() in BULK_ARG_KEYS &&
-            (value as? JsonPrimitive)?.contentOrNull?.let { OMITTED_CONTENT_PLACEHOLDER.matches(it) } == true
+            (value as? JsonPrimitive)?.contentOrNull?.let { isOmittedArgumentValue(it) } == true
     }?.key

@@ -18,11 +18,16 @@ data class EngineContext(
     val projectRoot: String = "",
     val mode: AgentMode = AgentMode.BUILD,
     val history: List<AgentMessage> = emptyList(),
-    /** 是否为子代理会话（按自定义子代理定义运行）。 */
+    /**
+     * 是否为子代理会话（会话行有 `parentId`）。
+     *
+     * 判据不在这里推导：由 ViewModel 从会话行算出、随 [com.aicode.feature.agent.domain.model.AgentContext] 传下来。
+     * 与「本轮是否有自定义 agent 定义」不是一回事——默认子代理没有定义也仍然是子代理。
+     */
     val isSubAgent: Boolean = false,
     /**
-     * 子代理定义的名称；非 null 表示本会话是子代理。
-     * 与 [isSubAgent] 的区别：这个字段带上名字，供模块在固定提示段里渲染角色行。
+     * 子代理定义的名称；没有自定义定义时（默认子代理）为 null。
+     * 与 [isSubAgent] 不同义：这个字段带上名字，只供模块在固定提示段里渲染角色行。
      */
     val subAgentName: String? = null,
     /**

@@ -231,10 +231,13 @@ class ContextBudgetPolicyTest {
         assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
         assertEquals("a.txt", (trimmedCall.arguments["path"] as JsonPrimitive).content)
 
-        // 只有模型那一份被换成占位说明
+        // 只有模型那一份被换成摘录（原文照旧能从磁盘读回来，摘录只是为了省 token）
         val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
         assertTrue(modelContent.length < text.length, "副本应该比原文短")
-        assertTrue(modelContent.startsWith("[已省略"), "大块正文应换成占位说明，实际：$modelContent")
+        assertTrue(
+            modelContent.startsWith(BULK_EXCERPT_HEAD),
+            "大块正文应换成可读摘录，实际：${modelContent.take(80)}"
+        )
         assertEquals(trimmedCall.modelArguments, trimmedCall.effectiveArguments)
 
         // 幂等：第二次仍以 arguments 为输入，算出同一份副本，不会越削越短
@@ -242,7 +245,7 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `占位说明带禁令，模型侧副本没有可回写的正文`() {
+    fun `摘录带禁令，模型侧副本没有可直接回写的正文`() {
         val text = "x".repeat(20_000)
         val original = bigWriteFileCall(text)
 
@@ -250,17 +253,143 @@ class ContextBudgetPolicyTest {
             (compactor().softTrim(listOf(original), targetTokens = 1)[0] as AgentMessage.AssistantMessage).toolCalls.single()
         val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
 
-        // 执行/落库用的原文一字不动，只有模型那一份换成占位说明
+        // 执行/落库用的原文一字不动，只有模型那一份换成摘录
         assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
-        assertTrue(modelContent.contains("严禁"), "占位说明要明确禁止回写，实际：$modelContent")
+        assertTrue(modelContent.contains("严禁"), "摘录要明确禁止回写，实际：$modelContent")
+        assertTrue(modelContent.contains("readFile") && modelContent.contains("a.txt"), "摘录必须给出把全文读回来的指针")
 
-        // 软精简产出的占位说明，必须正好是执行边界守卫认得的形态（否则守卫漏拦）
+        // 软精简产出的摘录，必须正好是执行边界守卫认得的形态（否则守卫漏拦）
         assertEquals(
             "content",
             omittedBulkArgumentKeyOf(
                 mapOf("path" to JsonPrimitive("a.txt"), "content" to JsonPrimitive(modelContent))
             )
         )
+    }
+
+    @Test
+    fun `大块参数换成可读摘录：头尾逐字保留，并写明省略与回读指针`() {
+        val first = "fun main() {"
+        val last = "// 文件结束"
+        val text = buildString {
+            appendLine(first)
+            repeat(600) { appendLine("    val value$it = \"${ "x".repeat(30) }\"") }
+            append(last)
+        }
+        assertTrue(text.length > 4_000)
+
+        val once = compactor().softTrim(listOf(bigWriteFileCall(text)), targetTokens = 1)
+        val trimmedCall = (once[0] as AgentMessage.AssistantMessage).toolCalls.single()
+        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
+
+        assertTrue(modelContent.startsWith(BULK_EXCERPT_HEAD), modelContent.take(80))
+        assertTrue(modelContent.contains(first), "开头应逐字保留")
+        assertTrue(modelContent.trimEnd().endsWith(last), "结尾应逐字保留")
+        assertTrue(modelContent.contains("省略"), "必须写明省略了多少行/字符")
+        // 摘录要显著短于原文（调用方的估算记账都假定换过之后更短），但比一句占位说明有信息量得多
+        assertTrue(modelContent.length * 2 <= text.length, "摘录 ${modelContent.length} / 原文 ${text.length}")
+        assertTrue(modelContent.length > omittedContentPlaceholder(text.length).length * 5)
+
+        // 幂等：重复精简仍以 arguments 为输入，算出同一份摘录
+        assertEquals(once, compactor().softTrim(once, targetTokens = 1))
+    }
+
+    @Test
+    fun `摘录省不下内容时退回占位说明`() {
+        // 原文刚过调用方给的上限：摘录自己的头尾预算被 limit 压得很小，算出来反而更长
+        assertNull(bulkArgumentExcerptOf("a".repeat(260), "a.txt", limit = 200))
+        // 正常情况（原文远大于上限）必须给出摘录，否则大块正文就白白丢了可读信息
+        assertNotNull(bulkArgumentExcerptOf("a".repeat(20_000), "a.txt", limit = 4_000))
+    }
+
+    @Test
+    fun `守卫拦得住照抄的摘录，也认得旧的整串占位说明`() {
+        val excerpt = assertNotNull(bulkArgumentExcerptOf(longFileText(), "src/Main.kt", limit = 4_000))
+
+        // 模型把整段摘录当正文回写 → 拦
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(excerpt))))
+        // 前后顺手加了空白/缩进，仍是照抄
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("  $excerpt\n"))))
+        // 摘录后面又接了自己的话：值的开头就是哨兵，照样是「拿摘录当正文」
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("$excerpt\nfun extra() = 1"))))
+        // 只抄走中段省略标记（没带首行哨兵）
+        val gap = excerpt.lines().single { it.startsWith(BULK_EXCERPT_GAP_PREFIX) }
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(gap))))
+        // editFile 的正文类字段同样覆盖
+        assertEquals("old_string", omittedBulkArgumentKeyOf(mapOf("old_string" to JsonPrimitive(excerpt))))
+        // 历史消息里还在的整段占位说明不能因为改产摘录就认不出
+        assertEquals("content", omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(omittedContentPlaceholder(9_999)))))
+    }
+
+    @Test
+    fun `守卫不误伤正常正文：哨兵与省略标记只是出现在正文里`() {
+        // 本仓库自己的源码与测试就写着这些字样，改这类文件必须能过
+        val source = buildString {
+            appendLine("package com.aicode.feature.agent.domain.workflow")
+            appendLine()
+            appendLine("// $BULK_EXCERPT_HEAD 是执行边界守卫认的形态")
+            appendLine("internal const val BULK_EXCERPT_GAP_PREFIX = \"$BULK_EXCERPT_GAP_PREFIX\"")
+            appendLine("fun main() = Unit")
+        }
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(source))))
+        assertNull(
+            omittedArgumentRejectionOf(
+                ToolCall(
+                    id = "c9",
+                    name = "writeFile",
+                    arguments = mapOf("path" to JsonPrimitive("src/Main.kt"), "content" to JsonPrimitive(source))
+                )
+            )
+        )
+
+        // 正文里引用一句占位说明（夹在多行文档中间）
+        val doc = "# 压缩说明\n\n参数被精简后会出现 `${omittedContentPlaceholder(655)}` 这样的文本。\n"
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive(doc))))
+
+        // 普通正文、非 bulk 字段
+        assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("fun main() { println(1) }"))))
+        assertNull(omittedBulkArgumentKeyOf(mapOf("path" to JsonPrimitive(BULK_EXCERPT_HEAD))))
+    }
+
+    @Test
+    fun `近期被引用的历史工具内容不按体量优先削`() {
+        // 历史里两条体积接近的大块参数：legacy.txt 没人再用，Main.kt 最近三轮还在改
+        val legacyCall = bigCall("c-legacy", "legacy.txt", "x".repeat(40_000))
+        val pinnedCall = bigCall("c-pinned", "Main.kt", "y".repeat(41_000))
+        val messages = listOf(legacyCall, pinnedCall) + recentRoundsTouching("Main.kt")
+
+        // 目标只需要削掉其中一条就能落回：近期引用保护把 legacy 推到前面，Main.kt 那份不该被动
+        val result = compactor().softTrim(messages, targetTokens = 12_500)
+
+        assertNotNull(
+            (result[0] as AgentMessage.AssistantMessage).toolCalls.single().modelArguments,
+            "没人再用的历史大块参数应当先被削"
+        )
+        assertSame(messages[1], result[1], "最近三轮还在改的同一文件，不该排在体积前面被削")
+
+        // 只降级不豁免：预算真的不够时，受保护的那些仍要削得动，否则软精简不再收敛
+        val squeezed = compactor().softTrim(messages, targetTokens = 1)
+        assertNotNull((squeezed[1] as AgentMessage.AssistantMessage).toolCalls.single().modelArguments)
+    }
+
+    @Test
+    fun `近期被引用的工具结果同样降级到最后`() {
+        // 工具结果自身不带路径，靠它的调用 id 反查回当初读写的文件
+        val messages = listOf(
+            readCall("c-legacy", "legacy.txt"),
+            tool("x".repeat(40_000), id = "c-legacy", toolName = "readFile"),
+            readCall("c-other", "other.txt"),
+            tool("z".repeat(40_000), id = "c-other", toolName = "readFile"),
+            readCall("c-pinned", "Main.kt"),
+            tool("y".repeat(41_000), id = "c-pinned", toolName = "readFile")
+        ) + recentRoundsTouching("Main.kt")
+
+        // 两条没人再用的结果就够落回目标：Main.kt 那条属于近期引用，应当留着
+        val result = compactor().softTrim(messages, targetTokens = 15_000)
+
+        assertNotNull((result[1] as AgentMessage.ToolResultMessage).modelResult, "没人再用的历史工具输出应当先被削")
+        assertNotNull((result[3] as AgentMessage.ToolResultMessage).modelResult, "第二条没人再用的也该被削")
+        assertSame(messages[5], result[5], "近期还在用的文件那条结果不该抢先被削")
     }
 
     @Test
@@ -378,7 +507,48 @@ class ContextBudgetPolicyTest {
         )
     )
 
-    private fun tool(text: String) = AgentMessage.ToolResultMessage(toolName = "read", result = text)
+    private fun bigCall(id: String, path: String, text: String) = AgentMessage.AssistantMessage(
+        id = "a-$id",
+        content = "",
+        toolCalls = listOf(
+            ToolCall(
+                id = id,
+                name = "writeFile",
+                arguments = mapOf("path" to JsonPrimitive(path), "content" to JsonPrimitive(text))
+            )
+        )
+    )
+
+    private fun readCall(id: String, path: String) = AgentMessage.AssistantMessage(
+        id = "a-$id",
+        content = "",
+        toolCalls = listOf(ToolCall(id = id, name = "readFile", arguments = mapOf("path" to JsonPrimitive(path))))
+    )
+
+    /** 最近三轮：每轮一个「用户消息 + 改 [path] 的工具调用 + 结果」，足够撑出近期引用。 */
+    private fun recentRoundsTouching(path: String) = (1..3).flatMap { round ->
+        listOf(
+            AgentMessage.UserMessage(content = "第 $round 轮"),
+            AgentMessage.AssistantMessage(
+                id = "recent-$round",
+                content = "",
+                toolCalls = listOf(
+                    ToolCall(id = "recent-call-$round", name = "editFile", arguments = mapOf("path" to JsonPrimitive(path)))
+                )
+            ),
+            tool("ok", id = "recent-call-$round", toolName = "editFile")
+        )
+    }
+
+    /** 多行正文：摘录切点按行对齐，给守卫测试用一份头尾可辨认的文本。 */
+    private fun longFileText(): String = buildString {
+        appendLine("fun main() {")
+        repeat(400) { appendLine("    val value$it = \"${ "x".repeat(30) }\"") }
+        append("// 文件结束")
+    }
+
+    private fun tool(text: String, id: String = "", toolName: String = "read") =
+        AgentMessage.ToolResultMessage(id = id, toolName = toolName, result = text)
 
     private fun compactor() = ContextCompactor(
         agentMessageDao = mockk(relaxed = true),

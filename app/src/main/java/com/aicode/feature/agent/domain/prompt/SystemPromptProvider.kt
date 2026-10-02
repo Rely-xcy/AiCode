@@ -189,13 +189,17 @@ class SystemPromptProvider @Inject constructor(
         override fun build(ctx: AgentContext): String? = agentEngine.subAgentRules(engineContextOf(ctx))
     }
 
-    /** 引擎调用（片段、纪律段、记忆分组）共用的上下文快照。 */
+    /**
+     * 引擎调用（片段、纪律段、记忆分组）共用的上下文快照。
+     *
+     * 子代理判定直接透传 [AgentContext.isSubAgent]，不在这里拿定义近似——两者不是同一件事。
+     */
     private fun engineContextOf(ctx: AgentContext): EngineContext = EngineContext(
         sessionId = ctx.sessionId,
         projectRoot = ctx.projectRoot,
         mode = ctx.mode,
         history = ctx.history,
-        isSubAgent = ctx.agentDefinition != null,
+        isSubAgent = ctx.isSubAgent,
         subAgentName = ctx.agentDefinition?.name
     )
 
@@ -222,6 +226,8 @@ class SystemPromptProvider @Inject constructor(
     }
 
     fun build(agentContext: AgentContext): String {
+        // 这里的判据是「本轮有没有自定义定义」（配置性事实，下面还要用定义本体拼注入片段），
+        // 不是「是不是子代理会话」；子代理会话的固定纪律段见下方 build 尾部与 [buildForSubAgent]。
         agentContext.agentDefinition?.let { return buildForSubAgent(it, agentContext) }
 
         if (PromptFragmentResolver.isBuiltinDisabled(customDir)) {
@@ -259,7 +265,13 @@ class SystemPromptProvider @Inject constructor(
         // 这里不再做「就地展开 + 末尾追加」两路兜底：内置 99-runtime-context.md 已把技能、子代理、记忆、
         // 项目规则、工作区、运行环境与时间全写在变量位上，展开即到位；再追加一遍就是逐字重复
         // （审计修掉的重复注入 bug）。变量缺位时对应内容不出现，与自定义片段文档描述的行为一致。
-        return collapseBlankLines(staticContent)
+        val rendered = collapseBlankLines(staticContent)
+        // 没有自定义定义的子代理（`task` 没写 `agent` 参数派发的默认子代理）走的就是上面这条通用路径，
+        // 但它仍然是子代理会话，固定纪律段必须照样注入——所以判据取 isSubAgent，不取「有没有定义」，
+        // 而且必须走 [SubAgentRulesSource] 而不是片段变量：纪律段不受 `inject` 门禁。
+        if (!agentContext.isSubAgent) return rendered
+        val rules = subAgentRulesSource.build(agentContext) ?: return rendered
+        return if (rendered.isEmpty()) rules else "$rendered\n\n$rules"
     }
 
     /**

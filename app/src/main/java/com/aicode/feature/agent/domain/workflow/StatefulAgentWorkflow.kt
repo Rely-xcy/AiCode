@@ -550,8 +550,9 @@ class StatefulAgentWorkflow @Inject constructor(
             runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, modeReminder) }
                 .onFailure { FileLogger.w(TAG, "写入模式提醒失败，本轮提醒只在内存态生效", it) }
         }
-        // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，开关关着时规则都没注入，不必兜。
-        val memoryGuardEnabled = currentContext.agentDefinition == null &&
+        // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，主动记忆规则在 MemoryModule 就没给它注入，
+        // 兜底也无从谈起。判据必须与那道门禁同源（都是 isSubAgent），不能再用「有没有自定义定义」近似。
+        val memoryGuardEnabled = !currentContext.isSubAgent &&
             runCatching { memorySettingsRepository.activeMemoryEnabled() }.getOrDefault(false)
         actionQueue.addLast(
             AgentAction.InitRequest(
@@ -607,7 +608,8 @@ class StatefulAgentWorkflow @Inject constructor(
                                     sessionId = currentContext.sessionId,
                                     projectRoot = currentContext.projectRoot,
                                     mode = currentContext.mode,
-                                    isSubAgent = currentContext.agentDefinition != null
+                                    // 子代理判定由会话行决定，这里只透传（见 AgentContext.isSubAgent）
+                                    isSubAgent = currentContext.isSubAgent
                                 ),
                                 LlmCall(
                                     messages = state.messages,

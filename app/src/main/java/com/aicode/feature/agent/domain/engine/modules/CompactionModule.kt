@@ -18,6 +18,8 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.settings.domain.model.ProviderType
 import dagger.Lazy
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,6 +60,15 @@ class CompactionModule @Inject constructor(
     // 最先跑：先把上下文瘦下来，后续模块与提示词注入看到的才是最终形态。
     override val order = 10
 
+    /**
+     * 「折叠后仍超线」的位点：会话 id → 那次折叠后的估算 token。
+     *
+     * 存在的理由：折叠腾出的是 head，而保留区（最近原文）与固定开销有可能把它填满，
+     * 此时下一轮再折只会产出一份同样的摘要（同一段 head 早就不在上下文里了），白花一次模型调用、
+     * 界面还会反复闪「压缩中」。记下位点就能等上下文真的又长起来再折。
+     */
+    private val foldedStillOverTokens = ConcurrentHashMap<String, Int>()
+
     override suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? {
         val messages = call.messages
         if (messages.isEmpty()) return null
@@ -90,8 +101,21 @@ class CompactionModule @Inject constructor(
                 thresholds = thresholds
             )
         )
-        val reachedHard = hardAllowed && (call.force || currentTokens >= hardThreshold)
         val reachedSoft = currentTokens >= softThreshold
+        // 上一轮折叠后仍在硬线以上时，只有上下文相对那个位点又长出一截才值得再折：
+        // 可折的 head 已经折掉了，原地再折只会得到同一份摘要。拦的是抖动不是兜底——
+        // 真撞窗仍由 92% 兜底线与发送前硬截断负责，本判据不碰它们。
+        val foldedPoint = ctx.sessionId?.let { foldedStillOverTokens[it] }
+        val refoldWorthwhile = foldedPoint == null ||
+            currentTokens >= foldedPoint + foldedPoint * REFOLD_GROWTH_PERCENT / 100
+        val reachedHard = hardAllowed && (call.force || (currentTokens >= hardThreshold && refoldWorthwhile))
+        if (hardAllowed && !call.force && !refoldWorthwhile && currentTokens >= hardThreshold) {
+            FileLogger.i(
+                TAG,
+                "会话 ${ctx.sessionId ?: "-"} 折叠后仍超线（上次折叠后约 $foldedPoint tokens，当前 $currentTokens " +
+                    "未再长出 $REFOLD_GROWTH_PERCENT%），本轮跳过重复折叠，只做软精简与发送前兜底"
+            )
+        }
         // 判定输入与发布结果必须能对上账：环显示偏小时，靠这条日志分清是「估算顶上来的」
         // 还是「界面取错了会话」。只在线以上打，否则每次工具调用都写一条，日志会被判定刷屏。
         if (reachedSoft || reachedHard) {
@@ -158,6 +182,32 @@ class CompactionModule @Inject constructor(
                     compacted = true
                     // 只有真的产出结果才报完成：失败时 compact() 已发过 CompactionFailed
                     call.onEvent(AgentEvent.CompactionFinished)
+                    // 折叠腾出的空间可能当场被保留区与固定开销吃完（最近原文本身就占满窗口）。
+                    // 这里如实记一笔并把位点记住：本轮不再折，接下来几轮也不在原地反复折。
+                    val afterFold = TokenEstimator.estimateMessages(result) + call.overheadTokens
+                    if (afterFold >= hardThreshold) {
+                        FileLogger.w(
+                            TAG,
+                            "会话 ${ctx.sessionId ?: "-"} 折叠后仍超线：折叠后约 $afterFold tokens" +
+                                "（折叠前判定 $currentTokens，硬线 $hardThreshold，窗口 $contextLimit），" +
+                                "保留区与固定开销已占满可回收空间，不再重复折叠"
+                        )
+                        ctx.sessionId?.let { foldedStillOverTokens[it] = afterFold }
+                        // 给界面的信号：复用已有的工具卡片通道（无配对的工具行会在回放时被丢掉，
+                        // 不进模型上下文，也不会像 CompactionFailed 那样关掉本轮后续所有压缩）。
+                        call.onEvent(
+                            AgentEvent.ToolCallFinished(
+                                id = "compaction-over-line-${UUID.randomUUID()}",
+                                toolName = OVER_LINE_TOOL_NAME,
+                                result = "折叠后仍超硬线：折叠后约 $afterFold tokens（硬线 $hardThreshold，窗口 $contextLimit）。" +
+                                    "最近原文保留区与固定开销已占满可回收空间，不再重复折叠；" +
+                                    "继续增长时到达 92% 兜底线会按条硬截断，保证请求不超窗。",
+                                isError = false
+                            )
+                        )
+                    } else {
+                        ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
+                    }
                 } else {
                     // 硬压缩没产出结果（摘要模型报错、锚点定位不到、裁剪后 head 为空）时不能就此罢手：
                     // 走到这里说明上下文已在硬线以上，而软精简在 else if 分支里永远轮不到，
@@ -197,6 +247,7 @@ class CompactionModule @Inject constructor(
     /** 会话删除后丢掉它的占用快照，避免表里留着已不存在会话的数。 */
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         contextUsageHolder.remove(ctx.sessionId)
+        ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
@@ -211,5 +262,19 @@ class CompactionModule @Inject constructor(
     private companion object {
         const val MODULE_ID = "compaction"
         const val TAG = "CompactionModule"
+
+        /**
+         * 折叠没换来空间后，上下文要比那次折叠后的位点再长出这么多百分比才值得再折一次。
+         * 按比例而不是固定值：小窗口与大窗口的「一折」量级差很远，比例跟得上。
+         */
+        const val REFOLD_GROWTH_PERCENT = 5
+
+        /**
+         * 「折叠后仍超线」在界面上的卡片名。
+         *
+         * 不能与 COMPACTION_FAILURE_TOOL_NAME 同值——那是红色失败卡片的识别依据，而这次折叠
+         * 本身是成功的（只是没把上下文压到线下）。
+         */
+        const val OVER_LINE_TOOL_NAME = "上下文压缩提示"
     }
 }

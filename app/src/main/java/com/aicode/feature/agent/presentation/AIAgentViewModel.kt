@@ -1525,9 +1525,13 @@ class AIAgentViewModel @Inject constructor(
             val sessionEntity = sessionUseCase.getSessionById(sessionId)
             val sessionDomain = sessionEntity?.toDomain()
             val mode = sessionDomain?.mode ?: AgentMode.BUILD
+            // 「是不是子代理会话」只在这里判一次：结构性事实（会话行有 parentId），下面的所有入口都读它。
+            // 以前各处分别拿「有没有自定义定义」近似，默认子代理（没有同名定义）就被当成主对话了。
+            val isSubAgent = sessionEntity?.parentId != null
             // 子会话的 subagentType 存的是自定义 agent 名；能查到定义时提示词与工具集都按它组装。
-            val agentDefinition = sessionEntity?.takeIf { it.parentId != null }
-                ?.subagentType
+            // 定义是配置性事实，与子代理判定无关，不能拿它兼任。
+            val agentDefinition = sessionEntity?.subagentType
+                ?.takeIf { isSubAgent }
                 ?.let { agentDefinitionRepository.findIncludingDisabled(it) }
 
             val agentContext = AgentContext(
@@ -1542,6 +1546,7 @@ class AIAgentViewModel @Inject constructor(
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,
+                isSubAgent = isSubAgent,
                 agentDefinition = agentDefinition
             )
 
@@ -1551,16 +1556,15 @@ class AIAgentViewModel @Inject constructor(
                     projectRoot = projectRoot,
                     mode = mode,
                     history = history,
-                    isSubAgent = sessionEntity?.parentId != null
+                    isSubAgent = isSubAgent
                 )
             )).distinctBy { it.name }
-            val isSub = sessionEntity?.parentId != null
             val tools = when {
                 agentDefinition != null -> {
                     val allowed = agentDefinition.filterToolNames(allTools.map { it.name }).toSet()
                     allTools.filter { it.name in allowed }
                 }
-                isSub -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL }
+                isSubAgent -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL }
                 else -> allTools.filterNot { it.name == AgentDefinition.PARENT_MESSAGE_TOOL }
             }
 
@@ -1738,7 +1742,7 @@ class AIAgentViewModel @Inject constructor(
                         setCompacting(sessionId, false)
                         setAgentState(sessionId, AgentUIState.Error(describeFailure(event)))
                         // 子代理会话失败时通知父会话
-                        if (isSub) {
+                        if (isSubAgent) {
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
                                 subAgentEventBus.emit(
                                     SubAgentEvent(
@@ -1756,7 +1760,7 @@ class AIAgentViewModel @Inject constructor(
                         setKeySwitchState(sessionId, null)
                         setCompacting(sessionId, false)
                         // 子代理会话完成时通知父会话（异步回调）
-                        if (isSub) {
+                        if (isSubAgent) {
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
                                 subAgentEventBus.emit(
                                     SubAgentEvent(
@@ -1805,7 +1809,7 @@ class AIAgentViewModel @Inject constructor(
                         projectRoot = projectRoot,
                         mode = mode,
                         history = turnHistory,
-                        isSubAgent = sessionEntity?.parentId != null,
+                        isSubAgent = isSubAgent,
                         // 模块做归纳时的一次性模型调用：走独立 provider，不占主对话
                         oneShot = { promptFile, userPrompt ->
                             agentWorkflow.oneShotComplete(sessionId, promptFile, userPrompt, "memory-distill")
