@@ -105,6 +105,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 
 /**
@@ -635,6 +637,9 @@ fun AIChatPanel(
     }
     var pendingAttachments by remember { mutableStateOf<List<PendingUploadAttachment>>(emptyList()) }
     var uploadingCount by remember { mutableStateOf(0) }
+    // 附件上传串行化：连续两次选取时两次上传会并发跑，槽位判断与 pendingAttachments 的读-改-写
+    // 必须同处一个临界区，否则按同一份旧计数各自放行（超发）并在写回时互相覆盖（先选附件预览丢失）。
+    val attachmentUploadMutex = remember { Mutex() }
     var messageForMenu by remember { mutableStateOf<AgentUIMessage?>(null) }
     var editingMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
     var queuedEditing by remember { mutableStateOf<QueuedRequest?>(null) }
@@ -877,31 +882,42 @@ fun AIChatPanel(
             Toast.makeText(context, emptyWorkspaceMessage(context), Toast.LENGTH_SHORT).show()
             return
         }
-        if (!hasAttachmentSlots(pendingAttachments.size)) {
-            Toast.makeText(context, maxAttachmentMessage(context, MAX_PENDING_ATTACHMENTS), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val selected = selectedAttachments(uris, pendingAttachments.size)
         scope.launch {
             var successCount = 0
+            var skipped = 0
             val failures = mutableListOf<String>()
-            uploadingCount = selected.size
-            try {
-                selected.forEach { uri ->
-                    runCatching {
-                        copyUriToWorkspace(context, uri, viewModel.fileAccess, includeImageData = images)
-                    }.onSuccess { uploaded ->
-                        pendingAttachments = pendingAttachments + uploaded.toPendingAttachment()
-                        successCount += 1
-                    }.onFailure { error ->
-                        failures += (error.message ?: uploadFallbackError(context))
+            // 槽位判断、截断与写回在同一临界区：锁外判断会让两次选取读到同一份旧计数各自放行，
+            // 上传结果又都是「读 pendingAttachments → 追加 → 写回」，并发时互相覆盖。
+            val started = attachmentUploadMutex.withLock {
+                if (!hasAttachmentSlots(pendingAttachments.size)) {
+                    false
+                } else {
+                    val selected = selectedAttachments(uris, pendingAttachments.size)
+                    skipped = uris.size - selected.size
+                    uploadingCount = selected.size
+                    try {
+                        selected.forEach { uri ->
+                            runCatching {
+                                copyUriToWorkspace(context, uri, viewModel.fileAccess, includeImageData = images)
+                            }.onSuccess { uploaded ->
+                                pendingAttachments = pendingAttachments + uploaded.toPendingAttachment()
+                                successCount += 1
+                            }.onFailure { error ->
+                                failures += (error.message ?: uploadFallbackError(context))
+                            }
+                        }
+                    } finally {
+                        uploadingCount = 0
                     }
+                    true
                 }
-            } finally {
-                uploadingCount = 0
+            }
+            // Toast 放在锁外，避免持锁期间做与临界区无关的事。
+            if (!started) {
+                Toast.makeText(context, maxAttachmentMessage(context, MAX_PENDING_ATTACHMENTS), Toast.LENGTH_SHORT).show()
+                return@launch
             }
             // 结果提示：全失败展示首个错误；有文件被上限截断或上传失败时用 partial 文案；全成功用 success 文案。
-            val skipped = uris.size - selected.size
             when {
                 successCount == 0 && failures.isNotEmpty() ->
                     Toast.makeText(context, failures.first(), Toast.LENGTH_LONG).show()
