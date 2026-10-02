@@ -526,7 +526,10 @@ class ContextCompactor @Inject constructor(
                     else headTailTrim(message.content, limitOf(message.content))
                 // 工具参数按字段重建。只削正文不动 reasoning：reasoning / signature /
                 // thinkingBlocksJson 必须原样回传，动了 DeepSeek 思考模式与 Anthropic thinking 直接 400。
-                val trimmedCalls = message.toolCalls.map { call -> rebuildToolCallArguments(call, limitOf(call.arguments.toString())) }
+                // 预算按参数正文的长度算，不能用 JsonPrimitive 的序列化形态：转义把换行算成两个
+                // 字符，总量偏大近一倍，摘录预算跟着虚高（同 [argumentText] 那个坑）。
+                val argsChars = call.arguments.values.sumOf { value -> value.argumentText().length }
+                val trimmedCalls = message.toolCalls.map { call -> rebuildToolCallArguments(call, limitOf(argsChars)) }
                 if (trimmedContent == message.content && trimmedCalls == message.toolCalls) message
                 else message.copy(content = trimmedContent, toolCalls = trimmedCalls)
             }
