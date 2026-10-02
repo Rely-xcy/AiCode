@@ -552,7 +552,7 @@ class ContextCompactor @Inject constructor(
         var changed = false
         val path = toolArgumentPathOf(call.arguments)
         val rebuilt = call.arguments.mapValues { (key, value) ->
-            val text = value.toString()
+            val text = value.argumentText()
             val limit = if (BULK_ARG_KEYS.contains(key.lowercase())) {
                 // 大块正文类：与其它字段同一套预算口径，另受 BULK_ARG_LIMIT_CHARS 封顶
                 minOf(budgetChars, BULK_ARG_LIMIT_CHARS)
@@ -586,6 +586,16 @@ class ContextCompactor @Inject constructor(
             .firstOrNull { it.key.lowercase() in PATH_ARG_KEYS }
             ?.let { (it.value as? JsonPrimitive)?.contentOrNull }
             ?.takeIf { it.isNotBlank() }
+
+    /**
+     * 参数值的文本形态：JSON 字符串取内容本身，其余（数字/布尔/null）取字面量。
+     *
+     * 不能直接用 `toString()`：JsonPrimitive 的 toString 是 **JSON 序列化**形态——字符串会带上首尾引号，
+     * 内部的换行还被打成两个字符 `\n`。摘录要展示的是文件正文，用序列化形态得到的是「一整行 + 首尾各一个
+     * 引号」：模型看不出文件结构，省略行数也会算成 0（那串文本里一个真换行都没有）。
+     */
+    private fun JsonElement.argumentText(): String =
+        (this as? JsonPrimitive)?.contentOrNull ?: toString()
 
     /**
      * 大块正文的硬上限：超过它就整段换成占位说明（文件已在磁盘上，需要时 read 回来）。

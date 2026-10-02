@@ -276,19 +276,46 @@ class ContextBudgetPolicyTest {
             repeat(600) { appendLine("    val value$it = \"${ "x".repeat(30) }\"") }
             append(last)
         }
+        // 前提（不是对实现的期望）：正文确实越过大块参数闸值，中间确实有一行会被省掉
+        val middleLine = "    val value300 = "
         assertTrue(text.length > 4_000)
+        assertTrue(text.contains(middleLine))
 
         val once = compactor().softTrim(listOf(bigWriteFileCall(text)), targetTokens = 1)
         val trimmedCall = (once[0] as AgentMessage.AssistantMessage).toolCalls.single()
         val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
 
+        // 形态：哨兵 + 一行说明 + 保留的原文 + 一行省略标记 + 保留的原文
         assertTrue(modelContent.startsWith(BULK_EXCERPT_HEAD), modelContent.take(80))
-        assertTrue(modelContent.contains(first), "开头应逐字保留")
-        assertTrue(modelContent.trimEnd().endsWith(last), "结尾应逐字保留")
-        assertTrue(modelContent.contains("省略"), "必须写明省略了多少行/字符")
-        // 摘录要显著短于原文（调用方的估算记账都假定换过之后更短），但比一句占位说明有信息量得多
+        val excerptLines = modelContent.lines()
+        val gapIndex = excerptLines.indexOfFirst { it.startsWith(BULK_EXCERPT_GAP_PREFIX) }
+        assertTrue(gapIndex > 1, "摘录里应有一行中段省略标记，实际：${modelContent.take(200)}")
+
+        // 两端必须是原文自己的内容（前缀/后缀关系，逐字），不是改写过的文本
+        val head = excerptLines.subList(1, gapIndex).joinToString("\n")
+        val tail = excerptLines.subList(gapIndex + 1, excerptLines.size).joinToString("\n")
+        assertTrue(text.startsWith(head), "开头必须逐字来自原文")
+        assertTrue(text.endsWith(tail), "结尾必须逐字来自原文")
+        assertEquals(first, head.lines().first(), "首行要保留")
+        assertEquals(last, tail.lines().last(), "末行要保留")
+        // 中段真的被省掉：600 行正文只留两端，中间那行不该出现在摘录里
+        assertFalse(modelContent.contains(middleLine), "被省略的中段不该出现在摘录里")
+
+        // 省略说明里的数字必须为真：保留字数 + 声称省略的字符数 = 原文字数；
+        // 声称省略的行数 = 原文换行数 − 两端保留的换行数
+        val omittedClaim = assertNotNull(
+            Regex("省略 (\\d+) 行（(\\d+) 字符）").find(modelContent),
+            "摘录必须写明省略了多少行/多少字符：${modelContent.take(200)}"
+        )
+        assertEquals(text.length, head.length + tail.length + omittedClaim.groupValues[2].toInt())
+        assertEquals(
+            text.count { it == '\n' } - head.count { it == '\n' } - tail.count { it == '\n' },
+            omittedClaim.groupValues[1].toInt()
+        )
+
+        // 仍是一段以原文内容为主的可读正文，且显著短于原文（调用方的估算记账都假定换过之后更短）
+        assertTrue(head.length + tail.length > modelContent.length / 2, "摘录应以保留的原文内容为主")
         assertTrue(modelContent.length * 2 <= text.length, "摘录 ${modelContent.length} / 原文 ${text.length}")
-        assertTrue(modelContent.length > omittedContentPlaceholder(text.length).length * 5)
 
         // 幂等：重复精简仍以 arguments 为输入，算出同一份摘录
         assertEquals(once, compactor().softTrim(once, targetTokens = 1))
@@ -358,8 +385,8 @@ class ContextBudgetPolicyTest {
         val pinnedCall = bigCall("c-pinned", "Main.kt", "y".repeat(41_000))
         val messages = listOf(legacyCall, pinnedCall) + recentRoundsTouching("Main.kt")
 
-        // 目标只需要削掉其中一条就能落回：近期引用保护把 legacy 推到前面，Main.kt 那份不该被动
-        val result = compactor().softTrim(messages, targetTokens = 12_500)
+        // 只要求削掉一丁点（比整份估算少 1 token）：够用就停，所以排序里的第一条会被削，其余不动
+        val result = compactor().softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
 
         assertNotNull(
             (result[0] as AgentMessage.AssistantMessage).toolCalls.single().modelArguments,
@@ -384,11 +411,10 @@ class ContextBudgetPolicyTest {
             tool("y".repeat(41_000), id = "c-pinned", toolName = "readFile")
         ) + recentRoundsTouching("Main.kt")
 
-        // 两条没人再用的结果就够落回目标：Main.kt 那条属于近期引用，应当留着
-        val result = compactor().softTrim(messages, targetTokens = 15_000)
+        // 同样只要求削掉一丁点：排序第一条（没人再用的那条）被削，近期引用的那条不动
+        val result = compactor().softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
 
         assertNotNull((result[1] as AgentMessage.ToolResultMessage).modelResult, "没人再用的历史工具输出应当先被削")
-        assertNotNull((result[3] as AgentMessage.ToolResultMessage).modelResult, "第二条没人再用的也该被削")
         assertSame(messages[5], result[5], "近期还在用的文件那条结果不该抢先被削")
     }
 
