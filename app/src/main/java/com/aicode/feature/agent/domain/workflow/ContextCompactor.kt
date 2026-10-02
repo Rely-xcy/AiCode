@@ -64,8 +64,12 @@ class ContextCompactor @Inject constructor(
      * 四个要点：
      * 1. 只改喂模型的那一份，不动落库/UI 的内容：工具输出改 `modelResult`（`result` 保持完整），
      *    工具参数改 `modelArguments`（`arguments` 保持完整），两者都是 copy() 出新对象，原对象不动；
-     * 2. 先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
-     * 3. 按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
+     * 2. **只削已结束的轮次**：范围是本轮起点（最后一条用户消息）之前的历史；本轮的工具调用
+     *    与工具输出一律不动——刚写进去的文件正文体积最大，只看体量会把它排在第一个削掉，
+     *    而下一次调用最需要的恰恰是它（也是"占位符被拄回磁盘"那个 bug 的根源）。
+     *    40% 是软线，真逼近窗口时由硬压缩与 enforceWindowLimit 兑底。
+     * 3. 每一轮里先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
+     *    同一类按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
      * 4. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
      *
      * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
@@ -83,9 +87,19 @@ class ContextCompactor @Inject constructor(
         // 这就是工具结果那层 modelResult 的对称做法：精简结果写进 modelArguments，
         // arguments 一字不动，所以 UI / 落库 / 真正执行拿到的永远是原文。
         // 幂等靠「永远以 arguments 为输入」：重复精简只会算出同一份副本，不会越削越短。
-        val argCandidates = messages.indices
-            .filter {
-                val message = messages[it]
+        // 只削「已结束的轮次」：范围是本轮起点（最后一条用户消息）之前的历史。
+        // 本轮从用户消息开始的一切——助手发出的工具调用、以及它们的工具输出——一律不动：
+        // 1. 它们是模型此刻正在用的内容。刚写进去的文件正文往往体积最大，只看体量会把它排在
+        //    第一个削掉，而下一次调用最需要的恰恰是它（“占位符被拄回磁盘”那个 bug 的根源）；
+        // 2. 40% 是软线，离窗口上限还远，没理由为此牺牲正在用的内容。真逼近窗口时由硬压缩
+        //    （85% / 92%）与 enforceWindowLimit 兑底，那才是该动本轮的时候。
+        val lastUserIndex = messages.indexOfLast { it is AgentMessage.UserMessage }
+        val historyEnd = if (lastUserIndex < 0) messages.size else lastUserIndex
+        if (historyEnd <= 0) return messages
+
+        val argCandidates = (0 until historyEnd)
+            .filter { index ->
+                val message = messages[index]
                 message is AgentMessage.AssistantMessage && message.toolCalls.isNotEmpty()
             }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
@@ -100,11 +114,11 @@ class ContextCompactor @Inject constructor(
             changed = true
         }
 
-        val candidates = result.indices
+        val resultCandidates = (0 until historyEnd)
             .filter { result[it] is AgentMessage.ToolResultMessage }
             .sortedByDescending { TokenEstimator.estimateMessage(result[it]) }
 
-        for (index in candidates) {
+        for (index in resultCandidates) {
             if (estimate <= targetTokens) break
             val message = result[index] as AgentMessage.ToolResultMessage
             val current = message.modelResult ?: message.result
