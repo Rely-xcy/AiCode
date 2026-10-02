@@ -389,6 +389,22 @@ fun AppNavigation(
         scope.launch { drawerState.close() }
     }
 
+    // 返回栈兑底：栈里只剩当前目的地、且当前不在聊天页时，返回键改为回聊天页，
+    // 而不是让系统把栈弹空（白屏）。
+    // 背景：历史上终端/Git/设置都用裸 navigate 压栈，任何一处状态错乱都可能让用户
+    // 站在一个「栈根不是 chat」的怪状态里；逐个修入口永远有漏网的（predictive back
+    // 的边缘手势还能把人带进设置），所以在最外层兑底，保证白屏不可能再出现。
+    // 注意 enabled 条件里排除 chat：在聊天页返回就该退出应用，不能被兑底拦截。
+    val canFallbackToChat = currentRoute != null && currentRoute != "chat" &&
+        navController.currentBackStackEntry?.lifecycle?.currentState == androidx.lifecycle.Lifecycle.State.RESUMED &&
+        navController.previousBackStackEntry == null   // 再弹就空了（没有上一层）
+    BackHandler(enabled = canFallbackToChat) {
+        navController.navigate("chat") {
+            popUpTo(navController.graph.startDestinationRoute ?: "chat") { inclusive = true }
+            launchSingleTop = true
+        }
+    }
+
     // 侧边栏需要的数据。
     val currentWorkspace by workspaceViewModel.current.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(currentWorkspace) {
