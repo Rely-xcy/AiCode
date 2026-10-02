@@ -11,14 +11,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -120,11 +119,11 @@ class ModelMetadataService @Inject constructor(
     companion object {
         /** 从 models.dev 的 reasoning_options 数组中提取 effort 类型的档位 values；无 effort 档位时返回空列表。 */
         fun parseReasoningOptions(reasoningOptions: JsonElement?): List<String> =
-            reasoningOptions?.takeIf { it !is JsonNull }?.jsonArray
-                ?.mapNotNull { it.jsonObject }
-                ?.firstOrNull { it["type"]?.jsonPrimitive?.content == "effort" }
-                ?.get("values")?.jsonArray
-                ?.mapNotNull { it.jsonPrimitive.content }
+            (reasoningOptions as? JsonArray)
+                ?.mapNotNull { it as? JsonObject }
+                ?.firstOrNull { (it["type"] as? JsonPrimitive)?.content == "effort" }
+                ?.let { it["values"] as? JsonArray }
+                ?.mapNotNull { (it as? JsonPrimitive)?.content }
                 .orEmpty()
 
         /**
@@ -137,43 +136,46 @@ class ModelMetadataService @Inject constructor(
         )
 
         internal fun parseCatalog(root: JsonElement): Catalog {
-            val byProvider = root.jsonObject.mapValues { (providerId, providerEl) ->
-                val models = providerEl.jsonObject["models"]?.jsonObject.orEmpty()
-                models.mapValues { (_, modelEl) ->
-                    val model = modelEl.jsonObject
-                    val limit = model["limit"]?.jsonObject
-                    val modalities = model["modalities"]?.jsonObject
-                    val inputModalities = modalities?.get("input")?.jsonArray
-                        ?.mapNotNull { it.jsonPrimitive.content }
+            val rootObj: Map<String, JsonElement> = (root as? JsonObject).orEmpty()
+            val byProvider = rootObj.mapValues { (providerId, providerEl) ->
+                val models: Map<String, JsonElement> =
+                    ((providerEl as? JsonObject)?.get("models") as? JsonObject).orEmpty()
+                models.mapNotNull { (catalogKey, modelEl) ->
+                    val model = modelEl as? JsonObject ?: return@mapNotNull null
+                    val limit = model["limit"] as? JsonObject
+                    val modalities = model["modalities"] as? JsonObject
+                    val inputModalities = (modalities?.get("input") as? JsonArray)
+                        ?.mapNotNull { (it as? JsonPrimitive)?.content }
                         .orEmpty()
-                    val outputModalities = modalities?.get("output")?.jsonArray
-                        ?.mapNotNull { it.jsonPrimitive.content }
+                    val outputModalities = (modalities?.get("output") as? JsonArray)
+                        ?.mapNotNull { (it as? JsonPrimitive)?.content }
                         .orEmpty()
-                    val cost = model["cost"]?.jsonObject
+                    val cost = model["cost"] as? JsonObject
                     val reasoningOptions = parseReasoningOptions(model["reasoning_options"])
-                    ModelMetadata(
-                        id = model["id"]?.jsonPrimitive?.content ?: "",
+                    catalogKey to ModelMetadata(
+                        id = (model["id"] as? JsonPrimitive)?.content ?: "",
                         providerId = providerId,
-                        displayName = model["name"]?.jsonPrimitive?.content ?: model["id"]?.jsonPrimitive?.content.orEmpty(),
-                        contextTokens = limit?.get("context")?.jsonPrimitive?.intOrNull ?: 0,
-                        inputTokens = limit?.get("input")?.jsonPrimitive?.intOrNull,
-                        outputTokens = limit?.get("output")?.jsonPrimitive?.intOrNull,
-                        supportsTools = model["tool_call"]?.jsonPrimitive?.booleanOrNull == true,
+                        displayName = (model["name"] as? JsonPrimitive)?.content
+                            ?: (model["id"] as? JsonPrimitive)?.content.orEmpty(),
+                        contextTokens = (limit?.get("context") as? JsonPrimitive)?.intOrNull ?: 0,
+                        inputTokens = (limit?.get("input") as? JsonPrimitive)?.intOrNull,
+                        outputTokens = (limit?.get("output") as? JsonPrimitive)?.intOrNull,
+                        supportsTools = (model["tool_call"] as? JsonPrimitive)?.booleanOrNull == true,
                         supportsVision = "image" in inputModalities || "video" in inputModalities || "pdf" in inputModalities,
                         // 图像输出能力：models.dev 的 modalities.output 标注，或 Nano Banana 系 id 后缀兜底
                         // （内置快照缺 output 模态时也能识别 gemini-*-image 模型）。
                         supportsImageOutput = "image" in outputModalities ||
-                            (model["id"]?.jsonPrimitive?.content.orEmpty().endsWith("-image")),
-                        supportsReasoning = model["reasoning"]?.jsonPrimitive?.booleanOrNull == true,
-                        supportsCustomTemperature = model["temperature"]?.jsonPrimitive?.booleanOrNull == true,
+                            ((model["id"] as? JsonPrimitive)?.content.orEmpty().endsWith("-image")),
+                        supportsReasoning = (model["reasoning"] as? JsonPrimitive)?.booleanOrNull == true,
+                        supportsCustomTemperature = (model["temperature"] as? JsonPrimitive)?.booleanOrNull == true,
                         reasoningEffortOptions = reasoningOptions.takeIf { it.isNotEmpty() },
-                        inputCostUsdPerM = cost?.get("input")?.jsonPrimitive?.doubleOrNull,
-                        outputCostUsdPerM = cost?.get("output")?.jsonPrimitive?.doubleOrNull,
-                        cacheReadCostUsdPerM = cost?.get("cache_read")?.jsonPrimitive?.doubleOrNull,
-                        cacheWriteCostUsdPerM = cost?.get("cache_write")?.jsonPrimitive?.doubleOrNull,
+                        inputCostUsdPerM = (cost?.get("input") as? JsonPrimitive)?.doubleOrNull,
+                        outputCostUsdPerM = (cost?.get("output") as? JsonPrimitive)?.doubleOrNull,
+                        cacheReadCostUsdPerM = (cost?.get("cache_read") as? JsonPrimitive)?.doubleOrNull,
+                        cacheWriteCostUsdPerM = (cost?.get("cache_write") as? JsonPrimitive)?.doubleOrNull,
                         source = ModelMetadata.Source.MODELS_DEV
                     )
-                }
+                }.toMap()
             }
             return Catalog(
                 byProvider = byProvider,

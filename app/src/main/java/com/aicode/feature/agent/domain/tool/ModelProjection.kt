@@ -1,12 +1,11 @@
 package com.aicode.feature.agent.domain.tool
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 private val projectionJson = Json { ignoreUnknownKeys = true }
 
@@ -29,14 +28,18 @@ fun modelToolResultText(toolName: String, transportJson: String): String? {
     // 带通知时必须回退完整结果：通知挂在 transport JSON 顶层，投影会把整段吃掉；
     // 而通知在注入后就被 ack，模型这一份丢了就真丢了（用户插话到不了模型，且不会重发）。
     if (obj.containsKey("notifications")) return null
-    if (obj["status"]?.jsonPrimitive?.contentOrNull != "success") return null
+    if ((obj["status"] as? JsonPrimitive)?.contentOrNull != "success") return null
     val data = obj["data"] as? JsonObject ?: return null
-    return when (toolName) {
-        "editFile" -> editProjection(data)
-        "writeFile" -> writeProjection(data)
-        "todo" -> todoProjection(data)
-        else -> null
-    }
+    // 兜底：调用方（TokenEstimator）没有 try/catch，投影报错会顺估算链路把 app 带崩；
+    // 投影失败只损失这一份精简文本，返回 null 即回退完整 result（调用方 `?: message.result`）。
+    return runCatching {
+        when (toolName) {
+            "editFile" -> editProjection(data)
+            "writeFile" -> writeProjection(data)
+            "todo" -> todoProjection(data)
+            else -> null
+        }
+    }.getOrNull()
 }
 
 /**
@@ -46,17 +49,17 @@ fun modelToolResultText(toolName: String, transportJson: String): String? {
  * 增量更新的意义就在这里：完成一步只花几十个 token。
  */
 private fun todoProjection(data: JsonObject): String? {
-    val message = data["message"]?.jsonPrimitive?.contentOrNull
-    val text = data["text"]?.jsonPrimitive?.contentOrNull
+    val message = (data["message"] as? JsonPrimitive)?.contentOrNull
+    val text = (data["text"] as? JsonPrimitive)?.contentOrNull
     if (message.isNullOrBlank() && text.isNullOrBlank()) return null
     return listOf(message.orEmpty(), text.orEmpty()).filter { it.isNotBlank() }.joinToString("\n")
 }
 
 private fun editProjection(data: JsonObject): String? {
-    val path = data["path"]?.jsonPrimitive?.contentOrNull ?: return null
-    val replacements = data["replacements"]?.jsonPrimitive?.intOrNull ?: 0
-    val added = data["added_lines"]?.jsonPrimitive?.intOrNull ?: 0
-    val removed = data["removed_lines"]?.jsonPrimitive?.intOrNull ?: 0
+    val path = (data["path"] as? JsonPrimitive)?.contentOrNull ?: return null
+    val replacements = (data["replacements"] as? JsonPrimitive)?.intOrNull ?: 0
+    val added = (data["added_lines"] as? JsonPrimitive)?.intOrNull ?: 0
+    val removed = (data["removed_lines"] as? JsonPrimitive)?.intOrNull ?: 0
     val lines = buildList {
         add("Edited file successfully: $path")
         add("Replacements: $replacements")
@@ -67,11 +70,12 @@ private fun editProjection(data: JsonObject): String? {
 }
 
 private fun writeProjection(data: JsonObject): String? {
-    val path = data["path"]?.jsonPrimitive?.contentOrNull ?: return null
-    val created = data["created"]?.jsonPrimitive?.contentOrNull == "true"
-    val added = data["added_lines"]?.jsonPrimitive?.intOrNull ?: 0
-    val removed = data["removed_lines"]?.jsonPrimitive?.intOrNull ?: 0
-    val total = data["lines_written"]?.jsonPrimitive?.intOrNull ?: data["total_lines"]?.jsonPrimitive?.intOrNull
+    val path = (data["path"] as? JsonPrimitive)?.contentOrNull ?: return null
+    val created = (data["created"] as? JsonPrimitive)?.contentOrNull == "true"
+    val added = (data["added_lines"] as? JsonPrimitive)?.intOrNull ?: 0
+    val removed = (data["removed_lines"] as? JsonPrimitive)?.intOrNull ?: 0
+    val total = (data["lines_written"] as? JsonPrimitive)?.intOrNull
+        ?: (data["total_lines"] as? JsonPrimitive)?.intOrNull
     val verb = if (created) "Created" else "Wrote"
     val lines = buildList {
         add("$verb file successfully: $path (lines: ${total ?: "?"}, +$added -$removed)")
@@ -81,11 +85,11 @@ private fun writeProjection(data: JsonObject): String? {
 
 /** 从 hunks 里取 diff 的前几行做预览，每行超长截断。hunks 为空时返回 null。 */
 private fun diffPreview(data: JsonObject): List<String>? {
-    val hunks = data["hunks"]?.jsonArray ?: return null
+    val hunks = (data["hunks"] as? JsonArray) ?: return null
     val all = buildList {
         hunks.forEach { el ->
-            val h = el.jsonObject
-            (h["diff"]?.jsonPrimitive?.contentOrNull)?.let { this += it }
+            val h = (el as? JsonObject) ?: return@forEach
+            ((h["diff"] as? JsonPrimitive)?.contentOrNull)?.let { this += it }
         }
     }
     if (all.isEmpty()) return null

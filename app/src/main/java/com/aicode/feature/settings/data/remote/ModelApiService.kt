@@ -8,10 +8,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -112,11 +111,11 @@ class ModelApiService @Inject constructor(
                     throw FetchModelsException("HTTP ${response.code}: ${body.take(200)}", debug)
                 }
 
-                val jsonObj = json.parseToJsonElement(body).jsonObject
+                val jsonObj = json.parseToJsonElement(body) as? JsonObject
                 val data = if (type == ProviderType.GEMINI) {
-                    jsonObj["models"]?.jsonArray
+                    jsonObj?.get("models") as? JsonArray
                 } else {
-                    jsonObj["data"]?.jsonArray
+                    jsonObj?.get("data") as? JsonArray
                 } ?: run {
                     val debug = ModelTestResult(
                         success = false,
@@ -133,8 +132,9 @@ class ModelApiService @Inject constructor(
                     throw FetchModelsException(context.getString(R.string.provider_fetch_missing_fields), debug)
                 }
 
-                val modelList = data.mapNotNull { 
-                        it.jsonObject[if (type == ProviderType.GEMINI) "name" else "id"]?.jsonPrimitive?.contentOrNull 
+                val modelList = data.mapNotNull {
+                        ((it as? JsonObject)?.get(if (type == ProviderType.GEMINI) "name" else "id") as? JsonPrimitive)
+                            ?.contentOrNull
                     }
                     .map { if (type == ProviderType.GEMINI) it.removePrefix("models/") else it }
                     .filter { it.isNotBlank() }
