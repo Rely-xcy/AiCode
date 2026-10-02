@@ -165,6 +165,59 @@ class ContextBudgetPolicyTest {
         }
     }
 
+    /**
+     * 粗筛（H）：阈值线上的工具结果必须仍被削 —— 粗筛不能把它当“太短”跳过。
+     *
+     * 3001 字符刚过 softTrim 自己的门限（`current.length <= SOFT_TRIM_TOOL_CHARS` 就跳过），
+     * 是历史里唯一该被削的一条。
+     */
+    @Test
+    fun `软精简不因粗筛漏掉刚过阈值的工具结果`() {
+        val borderline = tool("a".repeat(3_001))
+        val messages = listOf(borderline) + recentRounds()
+
+        val result = compactor().softTrim(messages, targetTokens = 1)
+
+        assertNotNull((result[0] as AgentMessage.ToolResultMessage).modelResult, "刚过阈值的工具结果必须仍被软精简")
+    }
+
+    /** 粗筛（H）的另一头：阈值（含）以下的工具结果本来就不该动，整体应返回原引用。 */
+    @Test
+    fun `软精简不碰阈值及以下的工具结果`() {
+        val messages = listOf(tool("a".repeat(3_000))) + recentRounds()
+
+        assertSame(messages, compactor().softTrim(messages, targetTokens = 1))
+    }
+
+    /** 粗筛（H）：工具参数的阈值与 args 裁剪预算同一口径（SOFT_TRIM_TOOL_CHARS）。 */
+    @Test
+    fun `软精简约在参数阈值线上的助手消息仍会被缩`() {
+        val borderline = bigWriteFileCall("a".repeat(3_001))
+        val messages = listOf(borderline) + recentRounds()
+
+        val result = compactor().softTrim(messages, targetTokens = 1)
+
+        val trimmed = result[0] as AgentMessage.AssistantMessage
+        assertNotNull(trimmed.toolCalls.single().modelArguments, "刚过阈值的工具参数必须仍被缩")
+        // 原文一字不动：执行、UI、落库读的都是 arguments
+        assertEquals(3_001, (trimmed.toolCalls.single().arguments["content"] as JsonPrimitive).content.length)
+    }
+
+    @Test
+    fun `软精简不碰参数阈值及以下的助手消息`() {
+        val messages = listOf(bigWriteFileCall("a".repeat(3_000))) + recentRounds()
+
+        assertSame(messages, compactor().softTrim(messages, targetTokens = 1))
+    }
+
+    /** 最近三轮的占位消息：把前面的历史挡在保护线之外，自身不会被软精简。 */
+    private fun recentRounds(): List<AgentMessage> = (1..3).flatMap { round ->
+        listOf(
+            AgentMessage.UserMessage(content = "第 $round 轮"),
+            tool("b".repeat(400))
+        )
+    }
+
     @Test
     fun `软精简幂等且不动 UI 用的完整内容`() {
         val original = tool("a".repeat(40_000))

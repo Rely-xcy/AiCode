@@ -87,7 +87,10 @@ class ContextCompactionCommitTest {
         summaryProvider = provider,
         sessionId = "s",
         preserveRecentTokens = 1,
-        summaryWindowTokens = 100_000
+        summaryWindowTokens = 100_000,
+        // 记账日志要用（不参与任何判断），取一组普通值即可
+        hardThreshold = 40_000,
+        contextLimit = 100_000
     )
 
     // ---------- 闸门一：响应完整性 ----------

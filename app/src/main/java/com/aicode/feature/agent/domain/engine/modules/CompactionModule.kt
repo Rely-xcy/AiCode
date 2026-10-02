@@ -155,7 +155,7 @@ class CompactionModule @Inject constructor(
             FileLogger.i(
                 TAG,
                 "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
-                    "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含固定开销 ${call.overheadTokens}" +
+                    "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含 system+工具开销 ${call.overheadTokens}" +
                     "${if (baselineEstimate != null) "，校准基线 $baselineEstimate" else "，未校准"}）" +
                     "判定=$currentTokens 窗口=$contextLimit 软线=$softThreshold " +
                     "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}"
@@ -192,6 +192,8 @@ class CompactionModule @Inject constructor(
                     sessionId = ctx.sessionId,
                     preserveRecentTokens = ModelContextPolicy.tierFor(contextLimit).preserveRecentTokens,
                     summaryWindowTokens = resolveContextTokens(summaryProvider),
+                    hardThreshold = hardThreshold,
+                    contextLimit = contextLimit,
                     // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
                     // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
                     // 注意：这一步**不受**「长期记忆自动沉淀」开关控制（用户 2026-09-30 明确要求保持独立）——

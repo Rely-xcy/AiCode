@@ -116,14 +116,11 @@ class ContextCompactor @Inject constructor(
         val callPaths = toolCallPathsById(messages)
         val recent = collectRecentReferences(messages, historyEnd)
         val argCandidates = (0 until historyEnd)
-            .filter { index ->
-                val message = messages[index]
-                message is AgentMessage.AssistantMessage && message.toolCalls.isNotEmpty()
-            }
+            .filter { index -> isSoftTrimArgCandidate(messages[index]) }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
         val argDeferred = argCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
         val resultCandidates = (0 until historyEnd)
-            .filter { messages[it] is AgentMessage.ToolResultMessage }
+            .filter { index -> isSoftTrimResultCandidate(messages[index]) }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
         val resultDeferred = resultCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
 
@@ -165,6 +162,38 @@ class ContextCompactor @Inject constructor(
             )
         }
         return if (changed) result else messages
+    }
+
+    /**
+     * 软精简粗筛（工具参数）：只保留**真有可能被削**的消息。
+     *
+     * 判据与 [rebuildToolCallArguments] 的跳过条件逐字对应，所以是等价改写、不是近似：
+     * 它只在「某个参数值的长度超过本次预算」时才改动调用，而 softTrim 给的预算就是
+     * [SOFT_TRIM_TOOL_CHARS]（大块正文类再受 [BULK_ARG_LIMIT_CHARS] 封顶，两个值都 ≥ 3000，
+     * 取小仍是 [SOFT_TRIM_TOOL_CHARS]）。摘录省不下时退回占位说明，同样是「值变短了」。
+     *
+     * 为什么用字符数而不是 token：[softTrim] 自己的门限就是字符数
+     * （`current.length <= SOFT_TRIM_TOOL_CHARS` 就跳过），所以两者不可能因为 CJK / 拉丁的
+     * 字符-token 比差异而分歧。
+     */
+    private fun isSoftTrimArgCandidate(message: AgentMessage): Boolean {
+        if (message !is AgentMessage.AssistantMessage || message.toolCalls.isEmpty()) return false
+        return message.toolCalls.any { call ->
+            call.arguments.values.any { value -> value.argumentText().length > SOFT_TRIM_TOOL_CHARS }
+        }
+    }
+
+    /**
+     * 软精简粗筛（工具结果）：同样对齐裁剪循环的跳过条件
+     * （`current.length <= SOFT_TRIM_TOOL_CHARS` 或已带 [SOFT_TRIM_MARKER]）。
+     *
+     * 注意这里的 `modelResult ?: result` **不是** `modelToolResultText(...)` 的投影：
+     * 软精简的门限看的就是这两个字段之一，用投影长度会偏短（投影只留一句话）→ 可能漏削。
+     */
+    private fun isSoftTrimResultCandidate(message: AgentMessage): Boolean {
+        if (message !is AgentMessage.ToolResultMessage) return false
+        val current = message.modelResult ?: message.result
+        return current.length > SOFT_TRIM_TOOL_CHARS && !current.endsWith(SOFT_TRIM_MARKER)
     }
 
     /**
@@ -280,6 +309,9 @@ class ContextCompactor @Inject constructor(
         sessionId: String?,
         preserveRecentTokens: Int,
         summaryWindowTokens: Int,
+        /** 本次折叠所处的硬线与窗口（判定在模块侧做，只透传过来记账用，不参与任何判断）。 */
+        hardThreshold: Int,
+        contextLimit: Int,
         /**
          * 折叠前的回调：拿到即将被折叠掉的那段历史（head）。
          * 给调用方一个「趁还没丢，先把长期价值捞出来」的机会（如抽取长期记忆）。
@@ -321,8 +353,9 @@ class ContextCompactor @Inject constructor(
             FileLogger.i(TAG, "裁剪孤立 tool 结果后 head 为空，跳过压缩")
             return null
         }
+        val summaryInstruction = buildSummaryInstruction(previousSummary)
         val summaryRequestMessages = trimmedHead + listOf(
-            AgentMessage.UserMessage(content = buildSummaryInstruction(previousSummary))
+            AgentMessage.UserMessage(content = summaryInstruction)
         )
 
         // 调用统计埋点：压缩也是一次真实 LLM 调用（独立于主循环，kind=compaction）。
@@ -520,6 +553,29 @@ class ContextCompactor @Inject constructor(
                 return null
             }
         }
+
+        // 折叠记账：只写数值与身份，正文一律不打。目的是给下一轮优化（摘要成本、缓存命中、
+        // 裁剪力度、折叠效果）留下可横向对比的数据，不参与任何判定。
+        // 硬线/窗口由模块透传；「折叠后是否仍超硬线」由模块那条既有日志负责（此处只给折叠后的本地估算）。
+        // `usage`（= 本次摘要调用的响应）在上面已声明，这里直接复用。
+        val usageText = if (usage == null ||
+            (usage.inputTokens == 0 && usage.outputTokens == 0 && usage.cachedInputTokens == 0)
+        ) {
+            "输入=无回报 输出=无回报 缓存=无回报"
+        } else {
+            "输入=${usage.inputTokens} 输出=${usage.outputTokens} " +
+                "缓存读取=${usage.cachedInputTokens} 缓存写入=${usage.cacheCreationTokens} " +
+                "缓存命中=${if (usage.cachedInputTokens > 0) "是" else "否"}"
+        }
+        FileLogger.i(
+            TAG,
+            "折叠记账 会话=${sessionId ?: "-"} 判定前=$estimatedTokens 折叠后=$compactedTokens " +
+                "硬线=$hardThreshold 窗口=$contextLimit " +
+                "摘要输入估算[指令=${TokenEstimator.estimateText(summaryInstruction)} " +
+                "内容=${TokenEstimator.estimateMessages(trimmedHead)}] $usageText " +
+                "耗时=${durationMillis}ms 折叠条数=${trimmedHead.size} 保留条数=${tail.size} " +
+                "摘要长度=${summaryResponse.length}"
+        )
 
         return compactedResult
     }

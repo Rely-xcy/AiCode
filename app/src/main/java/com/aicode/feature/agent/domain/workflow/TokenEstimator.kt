@@ -53,6 +53,19 @@ object TokenEstimator {
     private const val IMAGE_CACHE_LIMIT = 64
     private val imageTokenCache = ConcurrentHashMap<Int, Int>()
 
+    /**
+     * 消息估算缓存：内容键 → token。
+     *
+     * 为什么要缓存：同一批历史消息每轮要被估好几遍（判定、软精简、发送前兜底各跑一次），
+     * 而每次都要逐字符走状态机、工具结果还要先解析 JSON 投影。内容没变就不必重算。
+     *
+     * 键 = 类型 + 各字段长度签名 + 消息自身的 `hashCode()`，与 [imageTokenCache] 同一套取舍：
+     * 单 hash 碰撞概率可忽略，换来的是每轮省下整段历史的遍历。碰撞只会拿到另一条消息的估算值
+     * （偏大偏小都可能），而估算本身就是启发式数值，不影响任何硬保证。
+     */
+    private const val MESSAGE_CACHE_LIMIT = 512
+    private val messageTokenCache = ConcurrentHashMap<String, Int>()
+
     fun estimateMessages(messages: List<AgentMessage>): Int = messages.sumOf { estimateMessage(it) }
 
     /**
@@ -78,7 +91,30 @@ object TokenEstimator {
         return (estimated - overEstimate).coerceAtLeast(1)
     }
 
-    fun estimateMessage(message: AgentMessage): Int = when (message) {
+    fun estimateMessage(message: AgentMessage): Int {
+        val key = messageCacheKey(message)
+        messageTokenCache[key]?.let { return it }
+        val tokens = estimateMessageUncached(message)
+        if (messageTokenCache.size >= MESSAGE_CACHE_LIMIT) messageTokenCache.clear()
+        messageTokenCache[key] = tokens
+        return tokens
+    }
+
+    /** [estimateMessage] 的缓存键：长度签名打头，让只差内容的同形消息尽量分开。 */
+    private fun messageCacheKey(message: AgentMessage): String = when (message) {
+        is AgentMessage.UserMessage ->
+            "u:${message.modelFacingContent.length}:${message.images.size}:${message.hashCode()}"
+
+        is AgentMessage.AssistantMessage ->
+            "a:${message.content.length}:${message.reasoning.length}:${message.signature.length}:" +
+                "${message.thinkingBlocksJson?.length ?: -1}:${message.toolCalls.size}:${message.hashCode()}"
+
+        is AgentMessage.ToolResultMessage ->
+            "t:${message.toolName}:${message.result.length}:${message.modelResult?.length ?: -1}:" +
+                "${message.images.size}:${message.hashCode()}"
+    }
+
+    private fun estimateMessageUncached(message: AgentMessage): Int = when (message) {
         is AgentMessage.UserMessage ->
             // 用实际喂模型的文本（正文 + 模式提醒），否则估算与实际请求不一致。
             estimateText(message.modelFacingContent) + message.images.sumOf { estimateImageTokens(it) }
