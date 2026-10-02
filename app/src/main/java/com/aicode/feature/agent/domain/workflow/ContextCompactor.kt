@@ -287,6 +287,8 @@ class ContextCompactor @Inject constructor(
         onBeforeFold: (suspend (List<AgentMessage>) -> Unit)? = null,
         onEvent: suspend (AgentEvent) -> Unit = {}
     ): List<AgentMessage>? {
+        // 折叠前的上下文量：提交前要拿它跟折叠后的结果比（不省空间的折叠不提交）。
+        val estimatedTokens = TokenEstimator.estimateMessages(messages)
         var splitIndex = selectTailStartIndex(messages, preserveRecentTokens)
         if (splitIndex <= 0) return null
         // tail 不能以孤立的 ToolResultMessage 开头：压缩后其前面是摘要（不含 toolCalls），
@@ -370,6 +372,26 @@ class ContextCompactor @Inject constructor(
             )
         }
 
+        // 摘要响应校验一：摘要模型也会被自己的输出上限截断、被安全策略中止，
+        // 或干脆不听话去调工具（压缩请求本来就不带工具）。这类响应是「半份摘要」：
+        // 拿它换掉整段历史是负收益——原文进了存档，上下文里只留下残缺说明。
+        // 判据全部来自已有响应对象，不发额外请求。
+        val usage = callUsage
+        val summaryIssue = when {
+            summaryResponse.isBlank() -> "摘要为空"
+            usage == null -> "摘要响应未返回用量信息"
+            usage.toolCalls.isNotEmpty() ->
+                "摘要响应里带了 ${usage.toolCalls.size} 个工具调用（压缩请求不带工具）"
+            usage.isTruncated -> "摘要响应被输出上限截断（stopReason=${usage.stopReason}）"
+            usage.isAborted -> "摘要响应被服务端中止（stopReason=${usage.stopReason}）"
+            else -> null
+        }
+        if (summaryIssue != null) {
+            FileLogger.w(TAG, "摘要响应不可用，放弃本次压缩（不落库、不标记 head）：$summaryIssue")
+            onEvent(AgentEvent.CompactionFailed("摘要响应不可用：$summaryIssue"))
+            return null
+        }
+
         FileLogger.i(TAG, "上下文压缩完成，摘要长度：${summaryResponse.length}")
 
         // 摘要里附上归档路径：这是摘要之外唯一的退路（模型用文件工具就能读）
@@ -390,6 +412,25 @@ class ContextCompactor @Inject constructor(
             content = summaryContent,
             toolCalls = emptyList()
         )
+
+        // 摘要响应校验二：换上去的结果必须**真的更小**。摘要写长了（模型不听话）、或保留区
+        // 本来就占满窗口时，折完反而更大——那就白花一次模型调用、还换来一份更差的历史。
+        // 只算不算、不发请求；不省就不提交。
+        val compactedResult = listOf(markerMessage, compactedMessage) + tail
+        val compactedTokens = TokenEstimator.estimateMessages(compactedResult)
+        if (compactedTokens >= estimatedTokens) {
+            FileLogger.w(
+                TAG,
+                "压缩没换来空间，放弃本次压缩（不落库、不标记 head）：折叠前约 $estimatedTokens tokens，" +
+                    "折叠后约 $compactedTokens tokens"
+            )
+            onEvent(
+                AgentEvent.CompactionFailed(
+                    "压缩未减小上下文（$estimatedTokens → $compactedTokens tokens），已保留原历史"
+                )
+            )
+            return null
+        }
 
         if (sessionId != null) {
             // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
@@ -444,7 +485,7 @@ class ContextCompactor @Inject constructor(
                 // cutoff 必须用 markerTs 而不是 anchorTs：markerTs / summaryTs 都小于 anchorTs，
                 // 用 anchorTs 会把刚插进去的这两行自己也标成 isCompacted，
                 // 而回放时会滤掉 isCompacted 的行——摘要就只在内存态活一轮，下一个用户轮次直接消失。
-                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs) }
+                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs, compactedId) }
                     .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
 
                 // 旧摘要显式回收：上面的时间戳标记在保留区起点没有前移时（两次折叠之间新增量小于预算富余）
@@ -477,7 +518,7 @@ class ContextCompactor @Inject constructor(
             }
         }
 
-        return listOf(markerMessage, compactedMessage) + tail
+        return compactedResult
     }
 
     /**

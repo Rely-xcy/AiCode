@@ -226,7 +226,11 @@ data class AgentMessageDto(
     /** Anthropic thinking / redacted_thinking 内容块的原样快照（JSON 数组文本）。 */
     val thinkingBlocksJson: String? = null,
     /** 仅 USER 行：模式变化时注入的模式提醒（模型可见的那份），content 只存用户原话。 */
-    val modelReminder: String? = null
+    val modelReminder: String? = null,
+    /** 仅用于把「老的 /usage 行」排除出上下文（不回退恢复），与压缩归属分开记。 */
+    val isContextExcluded: Boolean = false,
+    /** 本行被哪份摘要折叠掉的（摘要行 id）；回退恢复据此判断归属，丢了它备份恢复后的回退就找不回原文。 */
+    val compactedBySummaryId: String? = null
 )
 
 @Serializable

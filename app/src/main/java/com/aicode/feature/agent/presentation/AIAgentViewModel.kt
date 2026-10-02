@@ -2140,7 +2140,16 @@ class AIAgentViewModel @Inject constructor(
                 appendLine("| 预估费用 | ${formatCostUsd(today.costUsd)} | ${formatCostUsd(allTime.costUsd)} |")
             }
             sessionUseCase.touch(sid, messagePersistenceUseCase.nextTimestamp())
-            messagePersistenceUseCase.persist(sid, MessageRole.ASSISTANT, table.trimEnd(), isCompacted = true)
+            // /usage 统计行不属于对话上下文：isContextExcluded 是它「从不进上下文」的标记
+            // （迁移 58 把已升级用户的旧行也是这么归的）；isCompacted 一并置上，免得它被
+            // 短期上下文规模统计当成活行。两者都防住后，回退恢复也不会把它放回上下文。
+            messagePersistenceUseCase.persist(
+                sid,
+                MessageRole.ASSISTANT,
+                table.trimEnd(),
+                isCompacted = true,
+                isContextExcluded = true
+            )
         }
     }
 
@@ -2381,10 +2390,12 @@ class AIAgentViewModel @Inject constructor(
                     checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
                 }
                 agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
+                restoreRewoundCompactedRows(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CONVERSATION -> {
                 agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
+                restoreRewoundCompactedRows(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CODE -> {
@@ -2392,6 +2403,22 @@ class AIAgentViewModel @Inject constructor(
                     checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
                 }
             }
+        }
+    }
+
+    /**
+     * 回退 / 删历史之后，把「归属的摘要已随之一并删掉」的原文放回上下文。
+     *
+     * 只删不恢复的话，摘要行一走，被它折叠的原文仍挂着 isCompacted=1——聊天页里看得见、
+     * 模型那边却永远看不到（“回退后模型突然忘事”的来源）。判据与边界见
+     * [AgentMessageDao.restoreCompactedRowsAfterRewind]。
+     */
+    private suspend fun restoreRewoundCompactedRows(sessionId: String) {
+        val restored = runCatching { agentMessageDao.restoreCompactedRowsAfterRewind(sessionId) }
+            .onFailure { FileLogger.w(TAG, "回退恢复原文失败，被折叠的历史仍留在上下文之外", it) }
+            .getOrDefault(0)
+        if (restored > 0) {
+            FileLogger.i(TAG, "回退时把 $restored 行被折叠的原文放回上下文（会话 $sessionId）")
         }
     }
 
@@ -2472,6 +2499,7 @@ class AIAgentViewModel @Inject constructor(
             val msg = agentMessageDao.getMessageById(messageId)
             if (msg != null && msg.role == MessageRole.USER.name) {
                 agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
+                restoreRewoundCompactedRows(msg.sessionId)
             }
             agentMessageDao.deleteMessageById(messageId)
         } catch (e: Exception) {

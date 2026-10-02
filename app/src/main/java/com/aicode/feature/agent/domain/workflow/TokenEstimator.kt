@@ -55,6 +55,28 @@ object TokenEstimator {
 
     fun estimateMessages(messages: List<AgentMessage>): Int = messages.sumOf { estimateMessage(it) }
 
+    /**
+     * 用上一次请求的真实 usage 增量校准本次估算。
+     *
+     * 为什么是「补差额」而不是按比值缩放：同一段历史，本地估算与真实值之间常差着一截固定量
+     * （本地字符加权与 provider 的 BPE 分词本就对不上），但两轮之间**新增的那部分**量得是准的。
+     * 所以只把差额搬过来：`真实 + (本次估算 − 上次估算)`，再与本次估算取大值（宁可早压不可晚压）。
+     * 按比值缩放会把「历史长度」本身也乘进去，短上下文那一头会平白多出一大截。
+     *
+     * 退化安全：`baselineUsage <= 0`（provider 不回传 usage、该会话首轮）时原样返回 [estimated]，
+     * 与没有这个功能完全一致。
+     *
+     * @param baselineEstimate 上一次请求的**原始**估算（未校准值：拿校准后的值当基线，差额会被自己抵消掉）
+     * @param baselineUsage 与 [baselineEstimate] 同一次请求 provider 回传的真实输入 token
+     */
+    fun calibrated(estimated: Int, baselineEstimate: Int, baselineUsage: Int): Int =
+        if (baselineUsage > 0) {
+            maxOf(estimated.toLong(), baselineUsage.toLong() + estimated - baselineEstimate)
+                .coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+        } else {
+            estimated
+        }
+
     fun estimateMessage(message: AgentMessage): Int = when (message) {
         is AgentMessage.UserMessage ->
             // 用实际喂模型的文本（正文 + 模式提醒），否则估算与实际请求不一致。

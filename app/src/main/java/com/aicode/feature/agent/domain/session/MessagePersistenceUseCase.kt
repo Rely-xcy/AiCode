@@ -96,7 +96,8 @@ class MessagePersistenceUseCase @Inject constructor(
         inputTokens: Int = 0,
         outputTokens: Int = 0,
         cachedInputTokens: Int = 0,
-        isCompacted: Boolean = false
+        isCompacted: Boolean = false,
+        isContextExcluded: Boolean = false
     ) {
         agentMessageDao.insert(
             AgentMessageEntity(
@@ -117,7 +118,8 @@ class MessagePersistenceUseCase @Inject constructor(
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
                 cachedInputTokens = cachedInputTokens,
-                isCompacted = isCompacted
+                isCompacted = isCompacted,
+                isContextExcluded = isContextExcluded
             )
         )
     }
@@ -209,7 +211,10 @@ class MessagePersistenceUseCase @Inject constructor(
      * 从持久化的消息重建合法的上下文历史。
      * 关键：只保留「assistant 的 tool_call」与「tool 结果」能配对成功的部分，
      * 丢弃任何一方缺失的悬挂项，避免回放出现孤儿 tool_use / tool_result 违反 API 约束。
-     * 已被上下文压缩标记的消息（isCompacted=true）不参与回放。
+     * 已被上下文压缩标记的消息（isCompacted=true）与被排除出上下文的消息（isContextExcluded=true，
+     * 如 /usage 统计行）都不参与回放。两个标志看的是两件事：前者是「折进摘要、回退时可能恢复」，
+     * 后者是「从来不属于对话」（迁移 58 把已升级用户的旧 /usage 行归入后者，这里不看它就会把
+     * 统计表格回放进上下文）。
      */
     suspend fun buildHistory(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
         // 版本化缓存：agent_messages 表无变更且 marker 相同时直接复用上次重建结果，
@@ -232,7 +237,7 @@ class MessagePersistenceUseCase @Inject constructor(
 
     private suspend fun buildHistoryUncached(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
         val entities = agentMessageDao.getMessagesBySessionOnce(sessionId)
-            .filter { !it.isCompacted }
+            .filter { !it.isCompacted && !it.isContextExcluded }
 
         // 第一遍：求 assistant 声明的 toolCallId 与 tool 结果 toolCallId 的交集。
         val declaredIds = mutableSetOf<String>()

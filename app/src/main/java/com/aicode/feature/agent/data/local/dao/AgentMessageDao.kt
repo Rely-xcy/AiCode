@@ -48,9 +48,57 @@ interface AgentMessageDao {
     @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp")
     suspend fun deleteMessagesBeforeTimestamp(sessionId: String, cutoffTimestamp: Long)
 
-    /** 将指定会话中 cutoff 时间戳之前的所有消息标记为已压缩（isCompacted=1），不再参与上下文回放。聊天页消息流不过滤 isCompacted，历史原文仍照常展示。 */
-    @Query("UPDATE agent_messages SET isCompacted = 1 WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp")
-    suspend fun markMessagesCompactedBeforeTimestamp(sessionId: String, cutoffTimestamp: Long)
+    /**
+     * 将指定会话中 cutoff 时间戳之前的所有消息标记为已压缩（isCompacted=1），不再参与上下文回放。
+     * 聊天页消息流不过滤 isCompacted，历史原文仍照常展示。
+     *
+     * 同一条语句里写上归属（compactedBySummaryId = 本次新插入的摘要行 id）：回退把摘要行删掉后，
+     * 靠它才能把这些原文找回来（见 [restoreCompactedRowsAfterRewind]）。两类行不写归属：
+     * - marker / 旧摘要行——它们不是「被这次折叠收起的历史」，回退时也不应作为原文被放回
+     *   （旧摘要已由 [markSupersededCompactionRows] 标掉）；
+     * - `isContextExcluded = 1` 的行（/usage 统计行）——它们本就不属于对话上下文，
+     *   写了归属就会在回退时被 [restoreCompactedRowsAfterRewind] 放回上下文。
+     */
+    @Query(
+        """
+        UPDATE agent_messages
+        SET isCompacted = 1, compactedBySummaryId = :summaryId
+        WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp
+          AND isContextSummary = 0 AND isCompactionMarker = 0 AND isContextExcluded = 0
+        """
+    )
+    suspend fun markMessagesCompactedBeforeTimestamp(
+        sessionId: String,
+        cutoffTimestamp: Long,
+        summaryId: String
+    )
+
+    /**
+     * 回退恢复：把「归属的摘要已经不在上下文里」的历史行放回上下文，返回恢复的行数。
+     *
+     * 回退点落在**已被折叠的那段历史**里时（聊天页不过滤 isCompacted，用户点得到那些消息），
+     * 回退会连同摘要行一起删掉——marker / 摘要的落点就在保留区之前，时戳比回退点晚。
+     * 摘要没了，被它折叠的原文却还挂着 isCompacted=1：聊天页看得见、模型那边永远看不见，
+     * 这正是「回退后模型忘事」的来源。
+     *
+     * 判据只看归属的摘要还在不在、还是不是存活的那一份：
+     * - 摘要行被本次回退删掉 → 原文放回去（补回被吞掉的历史）；
+     * - 摘要行仍在上下文里（回退点在保留区里）→ 原文继续压缩，不重复喂两份历史；
+     * - 摘要行被更新的摘要取代（isCompacted=1）→ 原文已归新摘要，也不放回。
+     */
+    @Query(
+        """
+        UPDATE agent_messages
+        SET isCompacted = 0, compactedBySummaryId = NULL
+        WHERE sessionId = :sessionId
+          AND compactedBySummaryId IS NOT NULL
+          AND compactedBySummaryId NOT IN (
+              SELECT id FROM agent_messages
+              WHERE sessionId = :sessionId AND isContextSummary = 1 AND isCompacted = 0
+          )
+        """
+    )
+    suspend fun restoreCompactedRowsAfterRewind(sessionId: String): Int
 
     /**
      * 把指定会话里除本次新插入的 marker（[keepMarkerId]）与摘要（[keepSummaryId]）之外的 compaction 行全部标为已压缩。

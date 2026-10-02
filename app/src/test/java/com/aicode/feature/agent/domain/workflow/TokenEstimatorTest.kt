@@ -124,4 +124,31 @@ class TokenEstimatorTest {
         assertTrue(TokenEstimator.estimateMessage(withImage) > TokenEstimator.estimateMessage(bare))
         assertEquals(TokenEstimator.IMAGE_FALLBACK_TOKENS, TokenEstimator.estimateImageTokens(image))
     }
+
+    // ---------- 增量校准：用上一轮的真实 usage 补本地估算的那一截偏差 ----------
+
+    @Test
+    fun `没有真实 usage 时校准原样返回估算值（退化安全）`() {
+        // 该会话首轮、或 provider 不回传 usage：行为必须与没有这个功能完全一致
+        assertEquals(12_345, TokenEstimator.calibrated(estimated = 12_345, baselineEstimate = 10_000, baselineUsage = 0))
+        assertEquals(0, TokenEstimator.calibrated(estimated = 0, baselineEstimate = 999, baselineUsage = 0))
+    }
+
+    @Test
+    fun `上一轮真实比估算多时把差额补到本轮`() {
+        // 上一轮估 10,000 / 真实 12,000（本地估算偏低 2,000），本轮估 10,500 → 校准到 12,500
+        assertEquals(12_500, TokenEstimator.calibrated(estimated = 10_500, baselineEstimate = 10_000, baselineUsage = 12_000))
+    }
+
+    @Test
+    fun `上一轮真实比估算少时不会把本轮估算压到真实值以下`() {
+        // 取大值：宁可早压不可晚压（本轮新塞入的内容本来就看不见）
+        assertEquals(30_000, TokenEstimator.calibrated(estimated = 30_000, baselineEstimate = 10_000, baselineUsage = 9_000))
+    }
+
+    @Test
+    fun `历史被折短后校准不会算出比本轮估算还小的值`() {
+        // 基线来自折叠前的大历史（100,000），真实 usage 已是折叠后的小值：差额项为负，取本轮估算
+        assertEquals(3_000, TokenEstimator.calibrated(estimated = 3_000, baselineEstimate = 100_000, baselineUsage = 5_000))
+    }
 }

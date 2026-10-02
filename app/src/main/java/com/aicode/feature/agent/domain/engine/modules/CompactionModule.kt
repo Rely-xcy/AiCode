@@ -77,6 +77,15 @@ class CompactionModule @Inject constructor(
      */
     private val foldFailedTokens = ConcurrentHashMap<String, Int>()
 
+    /**
+     * 上一次请求发出去的上下文量（**原始估算**，未校准）：会话 id → token。
+     *
+     * 与 `call.lastInputTokens`（那一次请求 provider 回传的真实输入 token）配对，才能算出本地估算
+     * 偏了多少并校准本轮判定。只用于校准：缺了这一条就是不校准（与没这功能时完全一致），
+     * 不影响任何安全网。存原始值不存校准值——拿校准值当基线，下一轮的差额会被自己抵掉。
+     */
+    private val lastRawEstimates = ConcurrentHashMap<String, Int>()
+
     override suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? {
         val messages = call.messages
         if (messages.isEmpty()) return null
@@ -97,7 +106,16 @@ class CompactionModule @Inject constructor(
 
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
-        val estimated = TokenEstimator.estimateMessages(messages) + call.overheadTokens
+        val rawEstimate = TokenEstimator.estimateMessages(messages) + call.overheadTokens
+        // 增量校准：上一轮的真实 usage 与那一轮的原始估算配对，补上本地估算系统性差的那一截。
+        // 基线缺一条（该会话首轮、provider 不回传 usage、刚被 onSessionDeleted 清掉）就不校准，
+        // 判定式与加这功能之前一字不差（见 [TokenEstimator.calibrated] 的退化分支）。
+        val baselineEstimate = ctx.sessionId?.let { lastRawEstimates[it] }
+        val estimated = if (baselineEstimate != null) {
+            TokenEstimator.calibrated(rawEstimate, baselineEstimate, call.lastInputTokens)
+        } else {
+            rawEstimate
+        }
         val currentTokens = maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0, estimated)
         // 判定算完立即发布给界面：同一个数既决定显示百分比也决定是否触发压缩。
         // 快照按会话分开存，并行跑的子代理各存各的，不会再把前台会话的数顶掉。
@@ -136,14 +154,19 @@ class CompactionModule @Inject constructor(
             FileLogger.i(
                 TAG,
                 "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
-                    "真实=${call.lastInputTokens} 估算=$estimated（含固定开销 ${call.overheadTokens}）" +
+                    "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含固定开销 ${call.overheadTokens}" +
+                    "${if (baselineEstimate != null) "，校准基线 $baselineEstimate" else "，未校准"}）" +
                     "判定=$currentTokens 窗口=$contextLimit 软线=$softThreshold " +
                     "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}"
             )
         }
 
         // 单条消息也可能本身就超窗：只有估算还没逼近窗口时才允许按条数早退。
-        if (!call.force && messages.size <= 2 && currentTokens < contextLimit) return null
+        if (!call.force && messages.size <= 2 && currentTokens < contextLimit) {
+            // 这一轮不改编排，发出去的就是 messages：记下它的量供下一轮校准配对。
+            rememberRawEstimate(ctx, rawEstimate)
+            return null
+        }
 
         var result = messages
         var compacted = false
@@ -252,8 +275,22 @@ class CompactionModule @Inject constructor(
         val guardBudget = contextLimit * ModelContextPolicy.GUARD_BUDGET_PERCENT / 100 - call.overheadTokens
         val guarded = compactor.get().enforceWindowLimit(result, budgetTokens = guardBudget)
 
-        if (!compacted && guarded === messages) return null
+        if (!compacted && guarded === messages) {
+            rememberRawEstimate(ctx, rawEstimate)
+            return null
+        }
+        rememberRawEstimate(ctx, TokenEstimator.estimateMessages(guarded) + call.overheadTokens)
         return call.copy(messages = guarded)
+    }
+
+    /**
+     * 记下本轮真正发出去的上下文量（原始估算），供下一轮用真实 usage 校准。
+     *
+     * 每个出口都要记：出口不止一个（按条数早退、无改动返回、返回缩过的消息），漏一处就会让下一轮
+     * 拿着过期的基线去算差额——那比不校准更糟（会把别人的偏差算到本轮头上）。
+     */
+    private fun rememberRawEstimate(ctx: EngineContext, rawTokens: Int) {
+        ctx.sessionId?.let { lastRawEstimates[it] = rawTokens }
     }
 
     private suspend fun resolveContextTokens(provider: AIProvider): Int =
@@ -268,6 +305,7 @@ class CompactionModule @Inject constructor(
         contextUsageHolder.remove(ctx.sessionId)
         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
         ctx.sessionId?.let { foldFailedTokens.remove(it) }
+        ctx.sessionId?.let { lastRawEstimates.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {

@@ -60,7 +60,8 @@ data class AgentMessageEntity(
     // 仅用于把「老的 /usage 行」排除出上下文（不回退恢复），与压缩归属分开记。
     @ColumnInfo(defaultValue = "0")
     val isContextExcluded: Boolean = false,
-    // 本行是被哪份摘要折叠掉的（摘要行 id）；回退恢复据此判断归属。无归属时为 null。
+    // 本行是被哪份摘要折叠掉的（摘要行 id）；折叠时写入，回退恢复据此判断归属，
+    // 见 AgentMessageDao.restoreCompactedRowsAfterRewind。无归属时为 null。
     val compactedBySummaryId: String? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
