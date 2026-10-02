@@ -97,7 +97,7 @@ class TodoProgressGuardTest {
 
         // 最近的那回合更新过清单 → 连续计数归零，不再往前数
         val lastTurnUpdated = historyOf(
-            listOf(listOf(tool("r1", "readFile"), tool("r2", "readFile")), listOf(toolMutated("t1"))),
+            listOf(listOf(tool("r1", "readFile"), tool("r2", "readFile")), listOf(todoMutated("t1"))),
             currentToolCalls = 3
         )
         assertEquals(0, TodoProgressGuard.missedStreak(lastTurnUpdated).missedTurns)
