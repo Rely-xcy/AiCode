@@ -506,11 +506,11 @@ class ContextCompactor @Inject constructor(
         // 拉丁 4 字符 ≈ 1 token，固定系数会把中文消息算得截不动。
         val ratio = budgetTokens.toDouble() / currentTokens
 
-        fun limitOf(text: String): Int = limitOfLength(text.length)
-
         /** 工具参数没有单一「文本」，预算按各字段正文长度之和算，故另开一个按长度的入口。 */
         fun limitOfLength(length: Int): Int =
             (length * ratio).toInt().coerceAtLeast(MIN_TRUNCATE_CHARS)
+
+        fun limitOf(text: String): Int = limitOfLength(text.length)
 
         return when (message) {
             is AgentMessage.ToolResultMessage -> {
