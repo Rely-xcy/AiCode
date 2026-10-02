@@ -7,6 +7,7 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.effectiveArguments
+import com.aicode.feature.agent.domain.tool.modelToolResultText
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
 import kotlin.math.max
@@ -115,8 +116,12 @@ object TokenEstimator {
         }
 
         is AgentMessage.ToolResultMessage -> {
-            // 用实际喂模型的那份文本（modelResult 优先），否则软精简后估算不会下降。
-            val text = message.modelResult ?: message.result
+            // 用实际喂模型的那份文本（modelResult 优先，其次文件类工具的投影结果）：
+            // 库里的历史行没有 modelResult，直接拿 result 估会把 editFile/writeFile 带回的整份 diff
+            // 当成模型收到的内容（实际只收到一句话投影），大文件写过一次就白涨几万 token。
+            val text = message.modelResult
+                ?: modelToolResultText(message.toolName, message.result)
+                ?: message.result
             estimateText(message.toolName) + estimateText(text) + message.images.sumOf { estimateImageTokens(it) }
         }
     }

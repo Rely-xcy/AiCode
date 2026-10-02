@@ -19,6 +19,9 @@ private val projectionJson = Json { ignoreUnknownKeys = true }
  * 注意：此文本仅喂模型，UI 与持久化仍走 result 的完整 diff。
  */
 fun modelToolResultText(toolName: String, transportJson: String): String? {
+    // 先按工具名短路：token 估算会对每条工具结果调用本函数，非文件类工具（readFile 的结果可能上百 KB）
+    // 不该为了拿一个 null 去解析整份 JSON。名字清单必须与下面的 when 分支一致。
+    if (toolName != "editFile" && toolName != "writeFile" && toolName != "todo") return null
     val raw = transportJson.trim()
     if (raw.isEmpty()) return null
     val obj = runCatching { projectionJson.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return null
