@@ -40,7 +40,10 @@ class GitRepositoryTest {
             else CommandResult(output, exitCode)
         }
         val workspace = mockk<WorkspaceRepository>()
+        // GitRepository.projectPath() 只经 suspend 的 awaitCurrentPathOrNull() 取工作区路径，strict mock 未 stub 即抛；
+        // 同步的 currentPathOrNull() 一并 stub 到同一个值，让「工作区已就绪」的语义在两处都成立。
         every { workspace.currentPathOrNull() } returns workPath
+        coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         return GitRepository(engine, workspace)
     }
 
@@ -393,6 +396,7 @@ class GitRepositoryTest {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
         every { workspace.currentPathOrNull() } returns workPath
+        coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         val slot = slot<String>()
         coEvery { engine.runCommandSyncUnbounded(capture(slot), any(), any()) } returns CommandResult("", 0)
         val repo = GitRepository(engine, workspace)
@@ -407,6 +411,7 @@ class GitRepositoryTest {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
         every { workspace.currentPathOrNull() } returns workPath
+        coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         val slot = slot<String>()
         coEvery { engine.runCommandSyncUnbounded(capture(slot), any(), any()) } returns CommandResult("", 0)
         val repo = GitRepository(engine, workspace)
