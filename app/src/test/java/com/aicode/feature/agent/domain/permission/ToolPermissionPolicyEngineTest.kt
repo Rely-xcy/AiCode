@@ -7,9 +7,7 @@ import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
-import io.mockk.runs
 import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
@@ -470,7 +468,9 @@ class ToolPermissionPolicyEngineTest {
     @Test
     fun remember_dedupesAndAddsEach() = runTest {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
-        coEvery { repo.add(any(), any()) } just runs
+        // add 现在返回 Boolean（写没写进去），默认 stub 要与返回类型一致；relaxed 不顶用在这类显式 stub 上：
+        // 旧的 `just runs` 只适用于 Unit 返回的函数。
+        coEvery { repo.add(any(), any()) } returns true
         val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true))
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
