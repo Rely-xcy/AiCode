@@ -22,7 +22,9 @@ data class VersionUpdate(
 data class UpdateInfo(
     val latestTag: String,
     val changelog: String,
-    val updates: List<VersionUpdate>
+    val updates: List<VersionUpdate>,
+    /** fork 专属：更新源给的 APK 绝对直链（GitHub 数据源不提供，恒为 null）。 */
+    val downloadUrl: String? = null
 )
 
 /** 检查更新结果。 */
