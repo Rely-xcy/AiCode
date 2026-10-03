@@ -235,6 +235,58 @@ private fun AgentUIMessage.rendersActionRow(): Boolean =
         !isCompactionMarker && !isContextSummary && !isCompactionFailure && !isBackgroundNotification &&
         (content.hasVisibleContent() || attachments.isNotEmpty())
 
+/** 流式头部指纹取样长度：拿流式内容开头这几个字符去认落库行是不是同一条。 */
+private const val STREAM_HEAD_SAMPLE_CHARS = 20
+
+/**
+ * 本轮流式输出是否已经在消息列表里正式就位（底部尾巴气泡与其跳动的点可以退休）。
+ *
+ * 判据：把当前流式正文 / 思考分别去比「列表里最后一条真正承载该项内容的助手消息」的头部，
+ * 全部吻合即认为本轮已落库渲染。
+ *
+ * 比较对象按内容种类各自取「最后一条承载者」，不能取列表末尾那条：
+ * - 末尾是工具结果行或用户消息时（纯工具调用轮的助手行 content 为空、被 messagesState 过滤掉），
+ *   末尾那条永远不比不中，尾巴就永久卡在流式态，本轮结束后点还在跳；
+ * - 末尾是「空正文 + 有思考」的助手行时，它承载的是思考不是正文，正文得继续往前找。
+ * 后台通知消息（[AgentUIMessage.isBackgroundNotification]）不是本轮输出，一律不作比较对象。
+ *
+ * 前缀比对本身不能放开：新一轮流式开始时，列表里最近的承载者还是上一轮的助手消息，
+ * 只有前缀不吻合才能把「正在写的新内容」判为尚未就位、继续留在尾巴气泡里渲染。
+ */
+internal fun isAssistantOutputSettled(
+    messages: List<AgentUIMessage>,
+    currentText: String?,
+    currentReasoning: String?
+): Boolean {
+    val textSettled = if (currentText.isNullOrBlank()) {
+        true
+    } else {
+        val anchor = messages.lastOrNull {
+            it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && it.content.hasVisibleContent()
+        }
+        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）
+        anchor != null && startsWithStreamHead(anchor.content, currentText)
+    }
+    val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
+        true
+    } else {
+        val anchor = messages.lastOrNull {
+            it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && !it.reasoning.isNullOrBlank()
+        }
+        // 思考不一定落库（provider 不回传时整轮都没有 reasoning 行）：没有承载者即视为已就位，
+        // 否则前缀永远比不中、缓冲永不退休，尾巴气泡与落库气泡同屏看起来就是同一条回复显示两遍。
+        // 正文那条不能这么放宽——正文一定落库。
+        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning)
+    }
+    return textSettled && reasoningSettled
+}
+
+/** 落库文本以「流式文本开头 [STREAM_HEAD_SAMPLE_CHARS] 个字符」开头，即认作同一条内容。 */
+private fun startsWithStreamHead(persisted: String, streaming: String): Boolean {
+    val head = streaming.trimStart().take(STREAM_HEAD_SAMPLE_CHARS)
+    return head.isEmpty() || persisted.trimStart().startsWith(head)
+}
+
 /**
  * 单条消息（非工具分组）在一次渲染中占据的 item：
  * 超长助手正文拆成多条有界 chunk，其余消息 1:1。
@@ -971,7 +1023,7 @@ fun AIChatPanel(
 
     // 缓冲流式文本与思考过程：流式期间跟随 streamingText / streamingReasoning；流式刚结束而数据库尚未完成派发期间（messages 末尾仍是 USER/TOOL 消息），
     // 持续保留本轮完整文本与思考，撑住底部气泡，彻底杜绝「字快打完了突然整段蒸发消失（空白闪回）」或「思考块突然消失又冒出」；
-    // 一旦 messages 列表末尾正式接纳了本轮助手消息，立即清空让位。
+    // 一旦本轮消息在 messages 列表中正式就位（判据见 [isAssistantOutputSettled]，不要求它在列表末尾），立即清空让位。
     var retainedStreamingText by remember { mutableStateOf<String?>(null) }
     var retainedStreamingReasoning by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(currentSessionId) {
@@ -979,30 +1031,15 @@ fun AIChatPanel(
         retainedStreamingReasoning = null
     }
 
-    val lastMsg = messages.lastOrNull()
-    // 本轮助手消息是否已经在消息列表中正式就位渲染：
-    // 只有末尾消息是 ASSISTANT 且正文与思考前缀吻合，才代表本轮输出已落库进 messages 列表
-    val isAssistantSettled = lastMsg?.role == MessageRole.ASSISTANT && run {
-        val currentText = streamingText ?: retainedStreamingText
-        val currentReasoning = streamingReasoning ?: retainedStreamingReasoning
-        val textSettled = if (currentText.isNullOrBlank()) {
-            true
-        } else {
-            val prefix = currentText.trimStart().take(20)
-            prefix.isEmpty() || lastMsg.content.trimStart().startsWith(prefix)
-        }
-        // 落库消息没有 reasoning 时也算已就位：思考过程不落库的场景下，拿前缀去比会永远不吻合，
-        // 保留缓冲就永不退休 → 尾巴气泡与已落库气泡同屏，看起来就是同一条回复显示两遍。
-        // （textSettled 那条仍要比前缀——正文一定落库；reasoning 不一定。）
-        // 同 origin/fix/chat-duplicate-reply（929d8684）的判定。
-        val reasoningSettled = if (currentReasoning.isNullOrBlank() || lastMsg.reasoning.isNullOrBlank()) {
-            true
-        } else {
-            val prefix = currentReasoning.trimStart().take(20)
-            prefix.isEmpty() || (lastMsg.reasoning?.trimStart()?.startsWith(prefix) == true)
-        }
-        textSettled && reasoningSettled
-    }
+    // 本轮助手消息是否已经在消息列表中正式就位渲染：判据见 [isAssistantOutputSettled]。
+    // 比的是「最后一条承载本轮正文 / 思考的助手消息」，不是列表末尾那条——末尾是工具行、
+    // 空正文助手行、后台通知时，末尾那条永远比不中，尾巴会永久卡在流式态（本轮结束后点还在跳）。
+    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了。
+    val isAssistantSettled = isAssistantOutputSettled(
+        messages = messages,
+        currentText = streamingText ?: retainedStreamingText,
+        currentReasoning = streamingReasoning ?: retainedStreamingReasoning
+    )
 
     LaunchedEffect(streamingText, isAssistantSettled) {
         val st = streamingText
