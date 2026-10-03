@@ -1298,7 +1298,13 @@ class AIAgentViewModel @Inject constructor(
      */
     private fun deliverSystemEvent(sessionId: String, item: PendingNotification) {
         if (sessionJobs[sessionId]?.isActive == true) {
-            agentNotificationCenter.enqueue(sessionId, item)
+            val seq = agentNotificationCenter.enqueue(sessionId, item)
+            // 只打类型/编号/条数，不打正文：插话正文是用户内容，不该进日志
+            FileLogger.d(
+                TAG,
+                "deliverSystemEvent: sid=$sessionId kind=${item.kind} seq=$seq " +
+                    "clientMsgId=${item.clientMessageId} pending=${agentNotificationCenter.pendingCount(sessionId)}"
+            )
             return
         }
         viewModelScope.launch {
@@ -1387,6 +1393,7 @@ class AIAgentViewModel @Inject constructor(
             )
             val currentList = _queuedRequests.value[sid] ?: emptyList()
             _queuedRequests.value = _queuedRequests.value + (sid to (currentList + req))
+            FileLogger.d(TAG, "enqueueAgentRequest: sid=$sid 入队 queued=${currentList.size + 1} clientMsgId=$clientMessageId")
         } else {
             executeAgentRequestStream(
                 request = request,
@@ -1460,6 +1467,7 @@ class AIAgentViewModel @Inject constructor(
         // 同 id 的行」这条既有判据退场。标作废虽然也能让气泡消失，但用户会先看到自己的话从界面上断一线
         // （气泡没了、落库行还没来）。
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
+        FileLogger.d(TAG, "interjectQueuedRequest: sid=$sid clientMsgId=${req.clientMessageId} jobActive=${sessionJobs[sid]?.isActive == true}")
         deliverSystemEvent(
             sid,
             PendingNotification(
@@ -1480,6 +1488,7 @@ class AIAgentViewModel @Inject constructor(
         val queue = _queuedRequests.value[sessionId] ?: return
         val next = queue.firstOrNull() ?: return
         _queuedRequests.value = _queuedRequests.value + (sessionId to queue.drop(1))
+        FileLogger.d(TAG, "processNextInQueue: sid=$sessionId clientMsgId=${next.clientMessageId} remaining=${queue.size - 1}")
         executeAgentRequestStream(
             request = next.request,
             modelRequest = next.modelRequest,
@@ -2061,7 +2070,15 @@ class AIAgentViewModel @Inject constructor(
         job.cancel()
         // cancel 可能已同步执行完 finally（flush 启动了新 job 并注册到 sessionJobs），
         // 此时不能再覆盖新 job 的状态；仅当无新 job 接管时才做状态清理。
-        if (sessionJobs[sessionId]?.isActive != true) {
+        val newJobTookOver = sessionJobs[sessionId]?.isActive == true
+        // 待送通知的去向就在这一行里：newJobTookOver=true 表示已交给接替的 job，
+        // 否则由本 job 的 finally 兜底发出；pendingNotifsAfter 应归零，不为零就是有通知没送达。
+        FileLogger.d(
+            TAG,
+            "stopAgent: sid=$sessionId cancelled newJobTookOver=$newJobTookOver " +
+                "pendingNotifsBefore=$pendingNotifs pendingNotifsAfter=${agentNotificationCenter.pendingCount(sessionId)}"
+        )
+        if (!newJobTookOver) {
             setAgentState(sessionId, AgentUIState.Idle)
         }
         _runningTools.value = _runningTools.value - sessionId

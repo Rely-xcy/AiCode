@@ -1072,6 +1072,16 @@ class StatefulAgentWorkflow @Inject constructor(
                                     content = text
                                 )
                             }
+                        if (notifications.isNotEmpty()) {
+                            val kinds = notifications.map { it.kind }
+                            // 只打数量与类型，不打正文：插话正文是用户内容，不进日志。
+                            // 这一行用来回答「我发的消息/后台通知到底搭车送达了没有」。
+                            FileLogger.d(
+                                TAG,
+                                "通知搭车: sid=$notifySessionId count=${notifications.size} " +
+                                    "kinds=$kinds interjections=${interjections.size}"
+                            )
+                        }
                         if (systemEvents.isNotEmpty()) {
                             val modeChange = systemEvents.lastOrNull { it.kind == AgentNotificationKind.MODE_CHANGE }
                             val newMode = modeChange?.newMode
