@@ -253,11 +253,6 @@ internal fun rememberBoundNestedScrollConnection(scrollState: ScrollState): Nest
     }
 }
 
-/** 兼容旧引用的兜底。 */
-internal val InnerScrollConsumeRemainder = object : NestedScrollConnection {
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = available
-}
-
 /**
  * 卡片头部的「复制」文字按钮：点完短暂变成「已复制」。
  *

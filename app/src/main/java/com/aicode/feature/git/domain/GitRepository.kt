@@ -286,7 +286,7 @@ class GitRepository @Inject constructor(
 
     /**
      * 一次拉取全部分支/标签及其指向的提交哈希，解析为三份切面：[AllRefs.branches] 列表、[AllRefs.tags] 列表、
-     * [AllRefs.refsByCommit] 映射。`branches()`、`listTags()`、graph 的 refs 标注共用此一次调用，
+     * [AllRefs.refsByCommit] 映射。`branches()`、graph 的 refs 标注共用此一次调用，
      * 消除原先三条独立 `for-each-ref`/`tag` 命令（大仓库各 8-20s）。
      *
      * `%(refname:short)` 短名、`%(objectname)` 指向的完整哈希、`%(HEAD)` 标记当前分支（输出 `*` 或空）。
@@ -331,7 +331,7 @@ class GitRepository @Inject constructor(
             if (isBranch) {
                 branches.add(GitBranch(name, current = isHead && !isRemote, remote = isRemote, upstream = upstream, ahead = ahead, behind = behind))
             } else {
-                // 标签：objectname 取短哈希（前 7 位）与原 listTags 行为一致。
+                // 标签：objectname 取短哈希（前 7 位）。
                 tags.add(GitTag(name, hash.take(7)))
             }
         }
@@ -479,9 +479,6 @@ class GitRepository @Inject constructor(
         renameBranch("master", "main")
         return push()
     }
-
-    /** 本地标签列表，按创建时间倒序（最新在前）。 */
-    suspend fun listTags(): List<GitTag> = loadAllRefs().tags
 
     /**
      * 创建新分支。name 为新分支名；startPoint 为基准分支名（null/空 → 从当前 HEAD）；

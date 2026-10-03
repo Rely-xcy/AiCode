@@ -27,7 +27,6 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -99,26 +98,6 @@ class FileChangeHub @Inject constructor(
 
     /** 宿主目录路径 → 该目录的观察器（多个订阅共享同一个）。 */
     private val dirWatches = ConcurrentHashMap<String, DirWatch>()
-
-    /** 两个根都订阅，递归。 */
-    fun watchAll(
-        filter: WatchFilter = WatchFilter.DEFAULT,
-        fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
-    ): Flow<FileChangeBatch> = merge(
-        watchWorkspace(
-            recursive = true,
-            filter = filter,
-            fallbackPoll = fallbackPoll,
-            batchWindowMs = batchWindowMs
-        ),
-        watchAicode(
-            recursive = true,
-            filter = filter,
-            fallbackPoll = fallbackPoll,
-            batchWindowMs = batchWindowMs
-        )
-    )
 
     /**
      * 订阅当前工作区（跟随工作区切换自动重建）。[containerSubPath] 是容器路径，默认整个工作区根。

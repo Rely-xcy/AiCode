@@ -182,8 +182,7 @@ fun exponentialDelayMillis(retryIndex: Int): Long {
  */
 class StreamApiException(
     val code: String?,
-    message: String,
-    val retryAfterMillis: Long? = null
+    message: String
 ) : Exception(message.ifBlank { code ?: "stream error" })
 
 // 对齐 Codex CLI is_retryable()：这些错误码明确不可重试。

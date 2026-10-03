@@ -14,8 +14,7 @@ data class WriteLease(
     /** 用户/模型写的原始模式，仅用于回报，不参与判定。 */
     val pattern: String,
     /** 规范化后的路径段，判定用。 */
-    val segments: List<String>,
-    val acquiredAt: Long
+    val segments: List<String>
 )
 
 /** 一次写范围冲突：请求的路径落在别人已持有的范围内。 */
@@ -294,7 +293,7 @@ class WriteLeaseRegistry @Inject constructor(
         segments: List<String>,
         now: Long
     ) {
-        val lease = WriteLease(holderId, holderLabel, pattern, segments, now)
+        val lease = WriteLease(holderId, holderLabel, pattern, segments)
         byHolder.computeIfAbsent(holderId) { ConcurrentHashMap<String, WriteLease>() }[segments.joinToString("/")] = lease
         lastActiveAt[holderId] = now
     }

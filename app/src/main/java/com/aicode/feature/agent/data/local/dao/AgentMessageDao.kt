@@ -15,9 +15,6 @@ interface AgentMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(messages: List<AgentMessageEntity>)
 
-    @Query("SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
-    fun getMessagesBySession(sessionId: String): Flow<List<AgentMessageEntity>>
-
     @Query("SELECT * FROM (SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC")
     fun getMessagesBySessionPaged(sessionId: String, limit: Int): Flow<List<AgentMessageEntity>>
 
@@ -49,9 +46,6 @@ interface AgentMessageDao {
 
     @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId")
     suspend fun deleteBySession(sessionId: String)
-
-    @Query("DELETE FROM agent_messages WHERE sessionId = :sessionId AND timestamp < :cutoffTimestamp")
-    suspend fun deleteMessagesBeforeTimestamp(sessionId: String, cutoffTimestamp: Long)
 
     /**
      * 将指定会话中 cutoff 时间戳之前的所有消息标记为已压缩（isCompacted=1），不再参与上下文回放。
@@ -134,9 +128,6 @@ interface AgentMessageDao {
         keepSummaryId: String
     ): Int
 
-    @Query("DELETE FROM agent_messages")
-    suspend fun deleteAllMessages()
-
     @Query("SELECT * FROM agent_messages WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: String): AgentMessageEntity?
 
@@ -171,9 +162,6 @@ interface AgentMessageDao {
         pendingPrefix: String,
         interruptedContent: String
     ): Int
-
-    @Query("SELECT * FROM agent_messages WHERE content LIKE '%' || :query || '%' ORDER BY timestamp ASC")
-    suspend fun searchMessages(query: String): List<AgentMessageEntity>
 
     /**
      * 跨会话搜索某工作区下的聊天记录：命中用户 / 助手正文，排除已压缩与内部摘要行。

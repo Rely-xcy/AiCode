@@ -842,12 +842,6 @@ class BrowserManager @Inject constructor(
         publishState()
     }
 
-    fun isVisible(tabId: String? = null): Boolean {
-        val tab = findTab(tabId ?: activeTabId) ?: return false
-        val wv = tab.webView
-        return wv.parent != null && wv.width > 0 && wv.height > 0
-    }
-
     // ================= 多标签页管理 API =================
 
     suspend fun newTab(url: String? = null): String = withContext(Dispatchers.Main) {
@@ -1641,9 +1635,6 @@ class BrowserManager @Inject constructor(
             // 超时兜底，直接继续绘制
         }
     }
-
-    suspend fun screenshotIfVisible(tabId: String? = null): AgentImage? =
-        if (isVisible(tabId)) screenshot(tabId) else null
 
     suspend fun getViewportInfo(tabId: String? = null): String = withContext(Dispatchers.Main) {
         val tab = resolveTab(tabId)

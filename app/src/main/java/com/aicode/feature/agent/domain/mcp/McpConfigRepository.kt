@@ -14,10 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
@@ -171,12 +169,6 @@ class McpConfigRepository @Inject constructor(
     private fun writeFile(file: File, json: String) {
         file.parentFile?.mkdirs()
         file.writeText(json)
-    }
-
-    /** 全局 MCP 配置流。 */
-    val globalServersFlow: Flow<List<McpServerConfig>> = flow {
-        ensureGlobalLoaded()
-        emitAll(globalState.filterNotNull().map { parse(it) })
     }
 
     /**

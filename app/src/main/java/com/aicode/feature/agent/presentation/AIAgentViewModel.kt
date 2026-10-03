@@ -200,13 +200,6 @@ class AIAgentViewModel @Inject constructor(
     private val _agentStates = MutableStateFlow<Map<String, AgentUIState>>(emptyMap())
     val agentStates: StateFlow<Map<String, AgentUIState>> = _agentStates.asStateFlow()
 
-    /**
-     * 各会话「最后一轮是否正常完成」：只有正常收尾（收到完成标记）才在轮末回复下挂「复制 / 更多」
-     * 按钮；主动暂停 / 出错 / 未开始都不挂，避免按钮挂在半截输出上。
-     */
-    private val _completedSessions = MutableStateFlow<Set<String>>(emptySet())
-    val completedSessions: StateFlow<Set<String>> = _completedSessions.asStateFlow()
-
     val agentState: StateFlow<AgentUIState> = _currentSessionId
         .flatMapLatest { id ->
             if (id == null) flowOf(AgentUIState.Idle)
@@ -1872,7 +1865,6 @@ class AIAgentViewModel @Inject constructor(
             val finishedState = _agentStates.value[sessionId]
             if (!failed && finishedState is AgentUIState.Streaming) {
                 setAgentState(sessionId, AgentUIState.Result)
-                _completedSessions.value = _completedSessions.value + sessionId
             }
             setStreamingText(sessionId, null)
 
@@ -1905,13 +1897,11 @@ class AIAgentViewModel @Inject constructor(
             FileLogger.d(TAG, "stream cancelled: sid=$sessionId isOwnJob=$isOwnJob state=$cancelledState")
             if (isOwnJob && cancelledState is AgentUIState.Streaming) {
                 setAgentState(sessionId, AgentUIState.Idle)
-                _completedSessions.value = _completedSessions.value - sessionId
             }
             throw e
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage()))
-             _completedSessions.value = _completedSessions.value - sessionId
         } finally {
             val isOwnJob = sessionJobs[sessionId] == coroutineContext[Job]
             FileLogger.d(TAG, "stream finally: sid=$sessionId isOwnJob=$isOwnJob state=${_agentStates.value[sessionId]}")
@@ -2110,11 +2100,6 @@ class AIAgentViewModel @Inject constructor(
         mcpManager.reconnectUnconnectedAsync()
         val sid = createAndUpsertSession(_currentWorkspace.value)
         _currentSessionId.value = sid
-    }
-
-    fun setCurrentSessionId(id: String) {
-        if (_currentSessionId.value == id) return
-        _currentSessionId.value = id
     }
 
     fun setSessionMode(mode: AgentMode) {

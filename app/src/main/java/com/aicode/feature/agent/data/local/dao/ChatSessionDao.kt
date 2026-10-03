@@ -28,10 +28,6 @@ interface ChatSessionDao {
     @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLatestRootSessionByWorkspace(workspacePath: String): ChatSessionEntity?
 
-    /** 指定父会话的全部子会话（子代理），按最近更新降序。 */
-    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId ORDER BY updatedAt DESC")
-    fun getSubSessionsByParent(parentId: String): Flow<List<ChatSessionEntity>>
-
     /** 指定父会话的全部子会话（子代理），一次性查询。 */
     @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId ORDER BY updatedAt DESC")
     suspend fun getSubSessionsByParentOnce(parentId: String): List<ChatSessionEntity>
