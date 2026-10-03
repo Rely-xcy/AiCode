@@ -456,5 +456,7 @@ private fun buildImportSummary(context: android.content.Context, stats: com.aico
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
-    append(context.getString(R.string.backup_settings_covered))
+    // 只在这份备份确实带了应用设置时才说「已覆盖」：没带的备份现在不再回写设置，
+    // 再报一句「主题、保活……已覆盖」就是把没发生的事算在用户头上。
+    if (stats.settingsRestored) append(context.getString(R.string.backup_settings_covered))
 }

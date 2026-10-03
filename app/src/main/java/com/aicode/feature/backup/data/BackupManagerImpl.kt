@@ -132,10 +132,13 @@ class BackupManagerImpl @Inject constructor(
                     GzipCompressorOutputStream(fos).use { gz ->
                         TarArchiveOutputStream(gz).use { tar ->
                             tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
+                            // 单会话导出只带会话/消息/待办，不带任何设置：写明「没带设置」，
+                            // 否则导入时会把设置字段的默认值当成真值回写一遍（见 restoreMeta）。
                             writeMetadataEntry(tar, BackupMetadata(
                                 schemaVersion = currentSchemaVersion(),
                                 appVersion = appVersionName(),
-                                createdAt = System.currentTimeMillis()
+                                createdAt = System.currentTimeMillis(),
+                                appSettingsIncluded = false
                             ))
                             writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
                                 writer.writeLine(json.encodeToString(ChatSessionDto.serializer(), session.toDto()))
@@ -341,7 +344,10 @@ class BackupManagerImpl @Inject constructor(
         compactionProviderId = if (options.appSettings) compactionModelSettingsRepository.getCompactionProviderId() else "",
         compactionModel = if (options.appSettings) compactionModelSettingsRepository.getCompactionModel() else "",
         syncSettings = if (options.appSettings) syncSettingsRepository.snapshot() else null,
-        workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList()
+        workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList(),
+        // 没勾「应用设置」时上面那一整段字段全是默认值，与「用户就是这么设的」在数据上不可区分，
+        // 所以单独记下这次带没带设置；导入侧据此决定要不要回写设置（见 restoreMeta）。
+        appSettingsIncluded = options.appSettings
     )
 
     private fun writeMetadataEntry(tar: TarArchiveOutputStream, metadata: BackupMetadata) {
@@ -581,12 +587,21 @@ class BackupManagerImpl @Inject constructor(
         )
     }
 
-    /** 元数据段还原（小表 + 应用设置），新旧格式共用。 */
+    /**
+     * 元数据段还原（小表 + 应用设置），新旧格式共用。
+     *
+     * 设置段只在备份确实带了它时才回写（[BackupMetadata.appSettingsIncluded]）：
+     * 设置字段的「没导出」与「值为默认」在数据上不可区分，无条件回写会把没带设置的备份
+     * （单会话导出、或导出时没勾应用设置）变成一次「静默重置」——保活/屏幕常亮/提示音被关、
+     * 超时与压缩阈值回到默认，而导入摘要还写着「已覆盖」。小表不靠这个标志：
+     * 它们以「列表非空」为写入条件，空列表本就不写。
+     */
     private suspend fun restoreMeta(meta: BackupMetadata): RestoreStats {
         FileLogger.i(
             TAG,
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
-                "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null}"
+                "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null} " +
+                "appSettings=${meta.appSettingsIncluded}"
         )
         if (meta.providers.isNotEmpty()) {
             aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
@@ -608,36 +623,39 @@ class BackupManagerImpl @Inject constructor(
         if (meta.globalPermissionRules.isNotEmpty()) {
             permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
         }
-        meta.themeMode?.let { themeSettingsRepository.restore(it) }
-        themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
-        keepaliveSettingsRepository.restore(meta.keepaliveEnabled)
-        screenOnSettingsRepository.restore(meta.screenOnEnabled)
-        agentSoundSettingsRepository.restore(meta.agentSoundEnabled)
-        generalSettingsRepository.restoreAutoRemoveStaleModels(meta.autoRemoveStaleModels)
-        generalSettingsRepository.restoreStartupSessionMode(meta.startupSessionMode)
-        generalSettingsRepository.restoreFirstByteTimeoutSec(meta.firstByteTimeoutSec)
-        generalSettingsRepository.restoreStreamIdleTimeoutSec(meta.streamIdleTimeoutSec)
-        generalSettingsRepository.restoreMaxNetworkRetries(meta.maxNetworkRetries)
-        generalSettingsRepository.restoreEnterToSend(meta.enterToSend)
-        generalSettingsRepository.restoreCompactionThresholdPercent(meta.compactionThresholdPercent)
-        generalSettingsRepository.restoreSoftCompactionThresholdPercent(meta.softCompactionThresholdPercent)
-        generalSettingsRepository.restoreSendFileMaxSizeMb(meta.sendFileMaxSizeMb)
-        generalSettingsRepository.restoreDeleteExternalWorkspaceSessions(meta.deleteExternalWorkspaceSessions)
-        logSettingsRepository.restore(meta.logLevel)
-        if (meta.visionProviderId.isNotBlank() || meta.visionModel.isNotBlank()) {
-            visionModelSettingsRepository.setVisionModel(meta.visionProviderId, meta.visionModel)
+        if (meta.appSettingsIncluded) {
+            meta.themeMode?.let { themeSettingsRepository.restore(it) }
+            themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
+            keepaliveSettingsRepository.restore(meta.keepaliveEnabled)
+            screenOnSettingsRepository.restore(meta.screenOnEnabled)
+            agentSoundSettingsRepository.restore(meta.agentSoundEnabled)
+            generalSettingsRepository.restoreAutoRemoveStaleModels(meta.autoRemoveStaleModels)
+            generalSettingsRepository.restoreStartupSessionMode(meta.startupSessionMode)
+            generalSettingsRepository.restoreFirstByteTimeoutSec(meta.firstByteTimeoutSec)
+            generalSettingsRepository.restoreStreamIdleTimeoutSec(meta.streamIdleTimeoutSec)
+            generalSettingsRepository.restoreMaxNetworkRetries(meta.maxNetworkRetries)
+            generalSettingsRepository.restoreEnterToSend(meta.enterToSend)
+            generalSettingsRepository.restoreCompactionThresholdPercent(meta.compactionThresholdPercent)
+            generalSettingsRepository.restoreSoftCompactionThresholdPercent(meta.softCompactionThresholdPercent)
+            generalSettingsRepository.restoreSendFileMaxSizeMb(meta.sendFileMaxSizeMb)
+            generalSettingsRepository.restoreDeleteExternalWorkspaceSessions(meta.deleteExternalWorkspaceSessions)
+            logSettingsRepository.restore(meta.logLevel)
+            if (meta.visionProviderId.isNotBlank() || meta.visionModel.isNotBlank()) {
+                visionModelSettingsRepository.setVisionModel(meta.visionProviderId, meta.visionModel)
+            }
+            if (meta.compactionProviderId.isNotBlank() || meta.compactionModel.isNotBlank()) {
+                compactionModelSettingsRepository.setCompactionModel(meta.compactionProviderId, meta.compactionModel)
+            }
+            meta.syncSettings?.let { syncSettingsRepository.restore(it) }
         }
-        if (meta.compactionProviderId.isNotBlank() || meta.compactionModel.isNotBlank()) {
-            compactionModelSettingsRepository.setCompactionModel(meta.compactionProviderId, meta.compactionModel)
-        }
-        meta.syncSettings?.let { syncSettingsRepository.restore(it) }
 
         return RestoreStats(
             providers = meta.providers.size,
             remoteConnections = meta.remoteConnections.size,
             remoteMounts = meta.remoteMounts.size,
             mcpServers = meta.mcpServers.size,
-            globalPermissionRules = meta.globalPermissionRules.size
+            globalPermissionRules = meta.globalPermissionRules.size,
+            settingsRestored = meta.appSettingsIncluded
         )
     }
 

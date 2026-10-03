@@ -72,7 +72,9 @@ data class RestoreStats(
     val todoItems: Int = 0,
     val mcpServers: Int = 0,
     val globalPermissionRules: Int = 0,
-    val workspaceFiles: Int = 0
+    val workspaceFiles: Int = 0,
+    /** 本次导入是否真的回写了应用设置段（备份没带时不回写，摘要也就不该说「已覆盖」）。 */
+    val settingsRestored: Boolean = false
 ) {
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
@@ -83,6 +85,7 @@ data class RestoreStats(
         todoItems = todoItems + other.todoItems,
         mcpServers = mcpServers + other.mcpServers,
         globalPermissionRules = globalPermissionRules + other.globalPermissionRules,
-        workspaceFiles = workspaceFiles + other.workspaceFiles
+        workspaceFiles = workspaceFiles + other.workspaceFiles,
+        settingsRestored = settingsRestored || other.settingsRestored
     )
 }

@@ -85,7 +85,15 @@ data class BackupMetadata(
     val compactionProviderId: String = "",
     val compactionModel: String = "",
     val syncSettings: SyncSettingsSnapshot? = null,
-    val workspaces: List<WorkspaceBackupMeta> = emptyList()
+    val workspaces: List<WorkspaceBackupMeta> = emptyList(),
+    /**
+     * 这份备份是否带了「应用设置」段。
+     *
+     * 设置字段的「导的时候没勾」与「用户就是这么设的」在数据上不可区分（keepaliveEnabled=false
+     * 两种情形长得一模一样），导入侧只能靠这个标志决定要不要回写设置。
+     * 默认 true：没有该字段的旧备份导出时一律带设置，按「包含」处理，行为与本字段出现之前逐字一致。
+     */
+    val appSettingsIncluded: Boolean = true
 )
 
 /** 备份元数据中的一个工作区段：名称 + 备份的文件数（用于导入摘要）。 */
@@ -125,7 +133,9 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     visionModel = visionModel,
     compactionProviderId = compactionProviderId,
     compactionModel = compactionModel,
-    syncSettings = syncSettings
+    syncSettings = syncSettings,
+    // 旧格式（单文件 snapshot.json）没有「带没带设置」这个开关：它一律含设置段
+    appSettingsIncluded = true
 )
 
 @Serializable
