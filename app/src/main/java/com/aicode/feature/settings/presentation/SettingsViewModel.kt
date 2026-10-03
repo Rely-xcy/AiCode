@@ -76,6 +76,7 @@ import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
 import com.aicode.feature.settings.data.repository.BackgroundSettingsRepository
 import com.aicode.feature.settings.data.repository.ImageGenModelSettingsRepository
 import com.aicode.feature.settings.data.repository.VisionModelSettingsRepository
+import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.repository.RemoteRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
@@ -354,6 +355,7 @@ class SettingsViewModel @Inject constructor(
     private val containerOsDetector: ContainerOsDetector,
     private val executionModeRepository: ExecutionModeRepository,
     private val executionModeHolder: ExecutionModeHolder,
+    private val workspaceRepository: WorkspaceRepository,
     private val remoteSshConnection: RemoteSshConnection,
     private val remoteRepository: RemoteRepository,
     private val llmCallRecordDao: LlmCallRecordDao,
@@ -1026,6 +1028,17 @@ class SettingsViewModel @Inject constructor(
                         refreshSkills()
                         refreshSubAgents()
                     }
+                }
+            }
+
+            // 项目级技能/子代理的目录由当前工作区解析（远程模式下是服务器上被选中的工作区）。
+            // 建连与工作区加载是两条异步链：连接就绪时工作区可能还没落定，此时 currentPath() 回退到
+            // 工作区根目录，扫出来的是空列表；工作区随后落定（或用户切换工作区）不再触发任何重扫，
+            // 列表就停在旧内容/空列表上。故工作区一变就重扫。
+            launch {
+                workspaceRepository.current.collectLatest {
+                    refreshSkills()
+                    refreshSubAgents()
                 }
             }
 
