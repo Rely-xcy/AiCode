@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -41,8 +44,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
+import com.aicode.feature.settings.presentation.component.ReorderableCardRow
 import com.aicode.feature.settings.presentation.component.SettingsDivider
 import com.aicode.feature.settings.presentation.component.SettingsGroup
+import com.aicode.feature.settings.presentation.component.itemIdOf
+import com.aicode.feature.settings.presentation.component.listItemKey
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.model.RemoteMount
@@ -56,6 +62,10 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.UploadCloud
 import kotlinx.coroutines.launch
+import sh.calvin.reorderable.rememberReorderableLazyListState
+
+/** 连接配置列表 item key 前缀：标识行身份，拖拽回调靠它反查连接 id。 */
+private const val CONNECTION_ROW_PREFIX = "remote_connection_"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,12 +82,12 @@ fun RemoteServerScreen(
     var showSyncSettingsSheet by remember { mutableStateOf(false) }
 
     // 列表滚动状态提升到页面层：滚动时底部 tab 栏淡出（同 Git 页面）。
-    val connScrollState = rememberScrollState()
+    val connListState = rememberLazyListState()
     val mountScrollState = rememberScrollState()
     val ftpScrollState = rememberScrollState()
     val tabsScrolling by remember {
         derivedStateOf {
-            connScrollState.isScrollInProgress ||
+            connListState.isScrollInProgress ||
                 mountScrollState.isScrollInProgress ||
                 ftpScrollState.isScrollInProgress
         }
@@ -147,19 +157,39 @@ fun RemoteServerScreen(
                             }
                         )
                     } else {
-                        SettingsList(scrollState = connScrollState) {
-                            uiState.connections.forEachIndexed { index, conn ->
-                                if (index > 0) {
-                                    SettingsDivider()
+                        val reorderableState = rememberReorderableLazyListState(connListState) { from, to ->
+                            val moved = itemIdOf(from.key, CONNECTION_ROW_PREFIX) ?: return@rememberReorderableLazyListState
+                            val target = itemIdOf(to.key, CONNECTION_ROW_PREFIX) ?: return@rememberReorderableLazyListState
+                            viewModel.reorderConnections(moved, target)
+                        }
+                        LazyColumn(
+                            state = connListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = Spacing.lg)
+                                .padding(bottom = 70.dp)
+                        ) {
+                            itemsIndexed(
+                                items = uiState.connections,
+                                key = { _, conn -> listItemKey(CONNECTION_ROW_PREFIX, conn.id) }
+                            ) { index, conn ->
+                                ReorderableCardRow(
+                                    state = reorderableState,
+                                    key = listItemKey(CONNECTION_ROW_PREFIX, conn.id),
+                                    isFirst = index == 0,
+                                    isLast = index == uiState.connections.lastIndex,
+                                    dragLabel = "remoteConnectionDrag"
+                                ) { dragModifier ->
+                                    RemoteConnectionCard(
+                                        conn = conn,
+                                        onEdit = {
+                                            connectionToEdit = it
+                                            showAddConnectionDialog = true
+                                        },
+                                        onDelete = { pendingDeleteConnection = it },
+                                        dragModifier = dragModifier
+                                    )
                                 }
-                                RemoteConnectionCard(
-                                    conn = conn,
-                                    onEdit = {
-                                        connectionToEdit = it
-                                        showAddConnectionDialog = true
-                                    },
-                                    onDelete = { pendingDeleteConnection = it }
-                                )
                             }
                         }
                     }

@@ -83,6 +83,7 @@ class ListOrderStore @Inject constructor(
         const val KEY_PROMPTS_GLOBAL = "prompts.global"
         const val KEY_PROMPTS_PROJECT = "prompts.project"
         const val KEY_CONTAINERS = "containers"
+        const val KEY_REMOTE_CONNECTIONS = "remote.connections"
 
         private const val PREFIX = "order_"
 
