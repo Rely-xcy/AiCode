@@ -27,15 +27,13 @@ import javax.inject.Singleton
 /** Shizuku 可用状态，供设置页展示与工具执行前判定。 */
 enum class ShizukuState {
     /**
-     * 未安装管理器。
+     * binder 未就绪：服务未启动或已停止，也可能设备上根本没有可用的管理器。
      *
-     * 状态判定改为以 binder 为准后，[ShizukuManager] 不再产出该状态：管理器包名不在官方契约内
-     * （Sui 是 Magisk 模块、没有独立管理器包；Stellar 等兼容层用各自的包名），以包名判「装没装」
-     * 必然误判。保留该常量只为让既有 UI 与工具的分支穷举继续编译。
+     * 以包名判「装没装」必然误判（管理器包名不在官方契约内：Sui 是 Magisk 模块、没有独立管理器包，
+     * Stellar 等兼容层用各自的包名），所以状态判定只看 binder；
+     * 「装没装」不进状态机，而由 UI 文案兼顾（未就绪时的提示同时交代「打开管理器」与「没装就去下载」，
+     * 点击后 [ShizukuManager.openShizukuApp] 找不到管理器就跳下载页）。
      */
-    NOT_INSTALLED,
-
-    /** binder 未就绪：服务未启动或已停止，也可能设备上根本没有可用的管理器。 */
     NOT_RUNNING,
 
     /** 服务运行中，但本应用尚未获得授权。 */
