@@ -603,6 +603,14 @@ fun SettingsScreen(
                 val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
                 val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                // 项目层保存因工作区未就绪被跳过时给一次提示：不然用户只看到编辑器关掉、列表没变
+                val promptWriteError by promptsViewModel.configWriteError.collectAsStateWithLifecycle()
+                val promptWriteErrorContext = LocalContext.current
+                LaunchedEffect(promptWriteError) {
+                    val message = promptWriteError ?: return@LaunchedEffect
+                    Toast.makeText(promptWriteErrorContext, message, Toast.LENGTH_SHORT).show()
+                    promptsViewModel.consumeConfigWriteError()
+                }
                 val number = promptEditTarget?.number
                 val fragment = number?.let { value -> promptsState.fragments.firstOrNull { it.number == value } }
                 PromptEditorScreen(

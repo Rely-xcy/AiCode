@@ -106,6 +106,22 @@ class PromptFragmentCatalogTest {
     }
 
     @Test
+    fun saveOverride_工作区未落定时项目层返回false且不写到全局层() {
+        // 窗口期（currentPathOrNull 为空 → projectRoot 为 ""）：项目层解析不到，
+        // 旧行为会兜到全局层，用户以为存的是项目级。现在一律拒写，由调用方提示。
+        assertFalse(catalog.saveOverride(12, "x", "X", projectRoot = "", target = PromptFragmentSource.PROJECT))
+        assertFalse("不应在任何层留下文件", File(globalDir, "12-x.md").exists())
+        assertFalse(File(projectDir, "12-x.md").exists())
+
+        assertFalse(catalog.saveOverride(12, "x", "X", projectRoot = null, target = PromptFragmentSource.PROJECT))
+        assertFalse(File(globalDir, "12-x.md").exists())
+
+        // 同一入口写全局层不受影响（本地模式/未选工作区仍可编辑全局提示词）
+        assertTrue(catalog.saveOverride(12, "x", "X", projectRoot = "", target = PromptFragmentSource.GLOBAL))
+        assertTrue(File(globalDir, "12-x.md").isFile)
+    }
+
+    @Test
     fun deleteOverride_删除可写覆盖() {
         write(globalDir, "12-x.md", "X")
         assertTrue(catalog.deleteOverride(12, workspaceDir.path))

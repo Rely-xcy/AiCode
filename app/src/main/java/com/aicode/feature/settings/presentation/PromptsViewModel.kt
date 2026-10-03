@@ -43,8 +43,27 @@ class PromptsViewModel @Inject constructor(
         refresh()
     }
 
-    /** 当前工作区根路径；工作区未落定时为空串（项目层不可用，UI 据 hasWorkspace 关掉项目作用域）。 */
+    /**
+     * 当前工作区根路径；工作区未落定时为空串（项目层不可用，UI 据 hasWorkspace 关掉项目作用域）。
+     */
     private fun currentProjectRoot(): String = workspaceRepository.currentPathOrNull().orEmpty()
+
+    /**
+     * 作用域写入因「工作区未就绪」被跳过时的一次性提示；UI 展示后调 [consumeConfigWriteError] 清空。
+     *
+     * 与设置页其它作用域写入同源：提示语取 [WorkspaceRepository.notReadyMessage]。不提示的话，
+     * 用户看到的只是「编辑器关掉了、列表没变」，分不清是没保存还是存错了层。
+     */
+    private val _configWriteError = MutableStateFlow<String?>(null)
+    val configWriteError: StateFlow<String?> = _configWriteError.asStateFlow()
+
+    fun consumeConfigWriteError() {
+        _configWriteError.value = null
+    }
+
+    private fun reportConfigWriteSkipped() {
+        _configWriteError.value = workspaceRepository.notReadyMessage()
+    }
 
     fun refresh() {
         viewModelScope.launch {
@@ -61,7 +80,10 @@ class PromptsViewModel @Inject constructor(
         }
     }
 
-    /** 保存某编号的覆盖（新建与编辑同一入口）：写到所选作用域层；编辑改编号时清掉旧编号。 */
+    /** 保存某编号的覆盖（新建与编辑同一入口）：写到所选作用域层；编辑改编号时清掉旧编号。
+     *
+     * 项目层写入被跳（工作区未落定）时给出可见提示，并把结果如实反映到 [configWriteError]。
+     */
     fun saveFragment(
         number: Int,
         title: String,
@@ -71,7 +93,7 @@ class PromptsViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val projectRoot = currentProjectRoot()
-            withContext(Dispatchers.IO) {
+            val saved = withContext(Dispatchers.IO) {
                 catalog.saveOverride(
                     number,
                     title,
@@ -81,6 +103,7 @@ class PromptsViewModel @Inject constructor(
                     previousNumber = previousNumber
                 )
             }
+            if (!saved) reportConfigWriteSkipped()
             refresh()
         }
     }

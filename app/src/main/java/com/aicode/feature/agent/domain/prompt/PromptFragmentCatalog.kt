@@ -117,6 +117,9 @@ class PromptFragmentCatalog @Inject constructor(
      * 保存某编号的覆盖。
      *
      * - [target] 指定写入层（项目/全局）；null 表示写到该编号当前生效的层（只读层则回落可写层）。
+     * - [target] 为 PROJECT 而没有工作区（未落定的窗口期）时**返回 false 且不写任何层**：回落到全局层
+     *   等于把用户选的作用域悄悄改掉——用户以为存到了项目，实际只有全局层多了一份，工作区就绪后
+     *   项目层仍然没有这条覆盖。由调用方提示「工作区未就绪」。
      * - [previousNumber] 编辑时若改了编号，传原编号，用于清掉旧编号的覆盖。
      * - 同一编号只保留一份：写入前清掉各可写层里的同编号旧文件。
      */
@@ -129,6 +132,10 @@ class PromptFragmentCatalog @Inject constructor(
         previousNumber: Int? = null
     ): Boolean {
         val project = projectDir(projectRoot)
+        if (target == PromptFragmentSource.PROJECT && project == null) {
+            FileLogger.w(TAG, "项目级提示词覆盖写入被跳过：工作区未落定 (#$number)")
+            return false
+        }
         val dir = when (target) {
             PromptFragmentSource.PROJECT -> project ?: globalDir
             PromptFragmentSource.GLOBAL -> globalDir
