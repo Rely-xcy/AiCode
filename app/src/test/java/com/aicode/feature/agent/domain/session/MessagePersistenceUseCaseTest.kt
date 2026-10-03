@@ -11,6 +11,9 @@ import org.junit.Test
  */
 class MessagePersistenceUseCaseTest {
 
+    /** CursorWindow 单窗口大小（AOSP 默认 2MB）；单行各文本字段上限之和必须整体留在它之下。 */
+    private val CURSOR_WINDOW_BYTES = 2 * 1024 * 1024
+
     @Test
     fun sanitizeContent_stripsInlineBase64Image() {
         val input = "这是回复。看图：![截图](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==) 结束。"
@@ -60,6 +63,24 @@ class MessagePersistenceUseCaseTest {
         val normal = "普通消息，不需要处理。".repeat(10)
 
         assertEquals(normal, MessagePersistenceUseCase.sanitizeContent(normal))
+    }
+
+    @Test
+    fun rowFieldCapsStayUnderCursorWindowBudget() {
+        // 单行最坏占用 = 正文 + 思考（各 MAX_CONTENT_BYTES）+ 工具调用快照/思考块/思考签名/模式提醒
+        // （各 MAX_SNAPSHOT_BYTES）+ 工具入参 MAX_TOOL_ARGS_BYTES + 附件 MAX_ATTACHMENTS_BYTES。
+        // 任一上限被调大都会撞上下面的断言：那时必须回头核对 MessagePersistenceUseCase 的 KDoc，
+        // 确认这一行仍放得进 CursorWindow（单窗口约 2MB，窗口会按行预填充，一行超限即读库崩溃）。
+        val worstCaseRowBytes = MessagePersistenceUseCase.MAX_CONTENT_BYTES * 2 +
+            MessagePersistenceUseCase.MAX_SNAPSHOT_BYTES * 4 +
+            MessagePersistenceUseCase.MAX_TOOL_ARGS_BYTES +
+            MessagePersistenceUseCase.MAX_ATTACHMENTS_BYTES
+
+        assertEquals(870_000, worstCaseRowBytes)
+        assertTrue(
+            "单行字段上限之和 $worstCaseRowBytes 逼近 CursorWindow 单窗口 $CURSOR_WINDOW_BYTES",
+            worstCaseRowBytes <= CURSOR_WINDOW_BYTES / 2
+        )
     }
 
     @Test

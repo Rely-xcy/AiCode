@@ -600,7 +600,7 @@ private fun SessionListContent(
                         if (group.groupKey == "pinned") Spacer(Modifier.height(Spacing.sm)) else SettingsDivider()
                     }
                     val state = agentStates[session.id]
-                    val isExecuting = state is AgentUIState.Loading || state is AgentUIState.Streaming
+                    val isExecuting = state is AgentUIState.Streaming
                     val subSessions = subSessionsByParent[session.id].orEmpty()
                     val expanded = session.id in expandedIds
                     ChatSessionRow(
@@ -654,8 +654,7 @@ private fun SessionListContent(
                                     ChatSessionRow(
                                         session = sub,
                                         selected = if (selectionMode) false else sub.id == currentSessionId,
-                                        isExecuting = subState is AgentUIState.Loading ||
-                                            subState is AgentUIState.Streaming,
+                                        isExecuting = subState is AgentUIState.Streaming,
                                         awaitingPermission = sub.id in awaitingPermissionSessionIds,
                                         pinned = false,
                                         selectionMode = selectionMode,

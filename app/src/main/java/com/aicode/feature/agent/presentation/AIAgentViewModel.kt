@@ -1870,8 +1870,8 @@ class AIAgentViewModel @Inject constructor(
             // 仅当本 job 仍持有忙状态时才置完成态：并发场景下队列/通知可能已启动新的 job
             // 并把状态改为 Streaming，不能被先结束的 job 误覆盖成 Result（按钮会提前变回发送）。
             val finishedState = _agentStates.value[sessionId]
-            if (!failed && (finishedState is AgentUIState.Loading || finishedState is AgentUIState.Streaming)) {
-                setAgentState(sessionId, AgentUIState.Result(WorkflowStatus.SUCCESS))
+            if (!failed && finishedState is AgentUIState.Streaming) {
+                setAgentState(sessionId, AgentUIState.Result)
                 _completedSessions.value = _completedSessions.value + sessionId
             }
             setStreamingText(sessionId, null)
@@ -1903,9 +1903,7 @@ class AIAgentViewModel @Inject constructor(
             val cancelledState = _agentStates.value[sessionId]
             val isOwnJob = sessionJobs[sessionId] == coroutineContext[Job]
             FileLogger.d(TAG, "stream cancelled: sid=$sessionId isOwnJob=$isOwnJob state=$cancelledState")
-            if (isOwnJob &&
-                (cancelledState is AgentUIState.Loading || cancelledState is AgentUIState.Streaming)
-            ) {
+            if (isOwnJob && cancelledState is AgentUIState.Streaming) {
                 setAgentState(sessionId, AgentUIState.Idle)
                 _completedSessions.value = _completedSessions.value - sessionId
             }
@@ -1933,10 +1931,10 @@ class AIAgentViewModel @Inject constructor(
 
             // 正常完成时先回到 Idle，再处理队列；队列若有下一轮会重新设 Streaming
             val currentState = _agentStates.value[sessionId]
-            if (currentState !is AgentUIState.Error && currentState !is AgentUIState.Loading && currentState !is AgentUIState.Streaming) {
+            if (currentState !is AgentUIState.Error && currentState !is AgentUIState.Streaming) {
                 setAgentState(sessionId, AgentUIState.Idle)
             }
-            if (currentState !is AgentUIState.Loading && currentState !is AgentUIState.Streaming) {
+            if (currentState !is AgentUIState.Streaming) {
                 processNextInQueue(sessionId)
             }
             // 放在队列处理之后：flushPendingNotifications / processNextInQueue 会同步注册接替的 job，

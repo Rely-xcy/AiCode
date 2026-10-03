@@ -144,8 +144,13 @@ class MessagePersistenceUseCase @Inject constructor(
          *
          * 按字节而非字符设限：中文等文本单字符最多占 3 字节，字符数上限约束不住真实占用。
          * 也不能只限制单个字段——同一条消息可同时带正文、思考、工具入参等多份大快照，
-         * 各字段上限之和（约 720KB）必须整体留在窗口大小之下，否则该行可能因窗口预填充
+         * 各字段上限之和（约 870KB）必须整体留在窗口大小之下，否则该行可能因窗口预填充
          * 而无处安放，读取时抛 IllegalStateException「Couldn't read row N, col 0 from CursorWindow」。
+         *
+         * 870KB 的构成：正文与思考各 [MAX_CONTENT_BYTES]（150KB × 2，截断标记再占几十字节，量级不变）
+         * + 工具调用快照/思考块/思考签名/模式提醒各 [MAX_SNAPSHOT_BYTES]（100KB × 4）
+         * + 工具入参 [MAX_TOOL_ARGS_BYTES]（150KB）+ 附件 [MAX_ATTACHMENTS_BYTES]（20KB）。
+         * 上限一旦调整，必须重算这个和并同步 MessagePersistenceUseCaseTest 里的断言。
          */
         const val MAX_CONTENT_BYTES = 150_000
         const val MAX_SNAPSHOT_BYTES = 100_000

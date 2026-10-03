@@ -38,16 +38,16 @@ data class BrowseClipboard(
     val isCut: Boolean
 )
 
-/** 单轮工作流的最终结果状态（供 [AgentUIState.Result] 使用）。 */
-enum class WorkflowStatus {
-    SUCCESS, PARTIAL_SUCCESS, FAILED, CANCELLED
-}
-
+/**
+ * AI Agent 的顶层状态机。一轮任务从 [Streaming] 开始，正常结束落 [Result]，失败落 [Error]，
+ * 被用户取消回到 [Idle]——没有独立的「非流式忙态」：[AIAgentViewModel] 在主线程准备工作做完、
+ * 用户消息已落库时才点灯，此前一律是 [Idle]。
+ */
 sealed class AgentUIState {
     object Idle : AgentUIState()
-    object Loading : AgentUIState()
     object Streaming : AgentUIState()
-    data class Result(val status: WorkflowStatus) : AgentUIState()
+    /** 一轮任务正常跑完（工具报错但本轮继续时也算跑完；失败与取消不在此态）。 */
+    object Result : AgentUIState()
     data class Error(val message: String) : AgentUIState()
 }
 

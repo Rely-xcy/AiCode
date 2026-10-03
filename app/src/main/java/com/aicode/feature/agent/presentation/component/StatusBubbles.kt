@@ -445,8 +445,8 @@ internal fun typewriterRate(lag: Float, arrivalRate: Float, drainRate: Float? = 
 internal fun typewriterDrainRate(lag: Float): Float =
     (lag / TYPEWRITER_DRAIN_SECONDS).coerceIn(TYPEWRITER_MIN_RATE, TYPEWRITER_DRAIN_MAX_RATE)
 
-/** 打字机当前渲染结果：[text] 为应渲染文本（上游全文的前缀），[settled] 表示是否已追平全文。 */
-internal data class TypewriterText(val text: String, val settled: Boolean)
+/** 打字机当前渲染结果：[text] 为应渲染文本（上游全文的前缀）。 */
+internal data class TypewriterText(val text: String)
 
 /**
  * 速率自适应打字机：显示文本滞后于上游累积文本，打字速度跟随模型吐字速度。
@@ -460,9 +460,9 @@ internal data class TypewriterText(val text: String, val settled: Boolean)
  * 新一轮 / 重试）时补全为当前全文，之后继续跟着 delta 打字。
  *
  * 上游结束（[active] 变 false）**不再一帧补全**：剩余那一小段按 [typewriterDrainRate] 匀速
- * 打完（约 0.2 秒，硬上限 [TYPEWRITER_DRAIN_HARD_MS] 兜底），期间 [TypewriterText.settled]
- * 保持 false，调用方据此把这段文字的渲染交棒给刚落库的助手消息（见 AIChatPanel），
- * 打完后再让落库消息完全接管——用户看不到「整段突然跳出」，也看不到同一段文字重复两份。
+ * 打完（约 0.2 秒，硬上限 [TYPEWRITER_DRAIN_HARD_MS] 兜底），打完即返回完整文本。
+ * 流式尾巴与落库消息之间的接力由调用方判定（AIChatPanel 的 isAssistantOutputSettled），
+ * 本函数不参与——用户看不到「整段突然跳出」，也看不到同一段文字重复两份。
  *
  * 调用方应在 LazyColumn 之外持有本状态，避免尾巴 item 滚出视口被 dispose 后
  * 重新组合导致打字进度丢失。切页（chat 整棵子树离开 NavHost 组合）无法靠持有位置规避，
@@ -591,8 +591,7 @@ internal fun rememberTypewriterStreamingText(
         // 追平后确保渲染完整文本（while 退出时 shownCodePoints 已到 available）
         if (renderText != text) commitRender(text)
     }
-    // settled 直接由「渲染文本是否已等于上游全文」给出：收尾期间调用方据此决定渲染归属
-    return TypewriterText(text = renderText, settled = renderText == text)
+    return TypewriterText(text = renderText)
 }
 
 /**
