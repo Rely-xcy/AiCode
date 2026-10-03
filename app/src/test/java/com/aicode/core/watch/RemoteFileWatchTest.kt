@@ -112,7 +112,10 @@ class RemoteFileWatchTest {
     @Test
     fun parseRemoteScanOutput_caps_window_and_flags_overflow() {
         val body = StringBuilder(dirLine("/big") + resultLine("/big", "0"))
-        repeat(REMOTE_SCAN_MAX_ENTRIES + 1) { index -> body.append(entryLine("f${"%03d".format(index)}.txt")) }
+        repeat(REMOTE_SCAN_MAX_ENTRIES + 1) { index ->
+            val name = "f%03d.txt".format(index)
+            body.append(entryLine(name))
+        }
         body.append(endLine())
 
         val scan = parseRemoteScanOutput(body.toString(), setOf("/big")).getValue("/big")
@@ -120,7 +123,7 @@ class RemoteFileWatchTest {
         assertTrue(scan.overflow)
         assertEquals(REMOTE_SCAN_MAX_ENTRIES, scan.entries.size)
         assertTrue(scan.entries.containsKey("f000.txt"))
-        assertFalse(scan.entries.containsKey("f${"%03d".format(REMOTE_SCAN_MAX_ENTRIES)}.txt"))
+        assertFalse(scan.entries.containsKey("f%03d.txt".format(REMOTE_SCAN_MAX_ENTRIES)))
     }
 
     @Test
@@ -128,6 +131,27 @@ class RemoteFileWatchTest {
         val output = dirLine("/other") + resultLine("/other", "0") + entryLine("a.txt") + endLine()
 
         assertTrue(parseRemoteScanOutput(output, setOf("/srv/p")).isEmpty())
+    }
+
+    @Test
+    fun parseRemoteScanOutput_fingerprints_drive_create_modify_delete() {
+        // 解析出来的指纹直接进 diffSnapshot，本轮新增 / 改动 / 删除都要认出来。
+        val before = parseRemoteScanOutput(
+            dirLine("/p") + resultLine("/p", "0") +
+                entryLine("a.txt", mtime = "1") + entryLine("gone.txt") + endLine(),
+            setOf("/p")
+        ).getValue("/p").entries
+        val after = parseRemoteScanOutput(
+            dirLine("/p") + resultLine("/p", "0") +
+                entryLine("a.txt", mtime = "2") + entryLine("new.txt") + endLine(),
+            setOf("/p")
+        ).getValue("/p").entries
+
+        val diff = diffSnapshot(before, after).toMap()
+
+        assertEquals(ChangeKind.MODIFIED, diff["a.txt"])
+        assertEquals(ChangeKind.CREATED, diff["new.txt"])
+        assertEquals(ChangeKind.DELETED, diff["gone.txt"])
     }
 
     @Test
