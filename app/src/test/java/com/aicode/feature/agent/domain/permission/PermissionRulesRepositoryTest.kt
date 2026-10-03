@@ -44,11 +44,15 @@ class PermissionRulesRepositoryTest {
         every { workspaceRepository.currentPathOrNull() } answers { currentPath }
         val projectAicodeRoot = mockk<ProjectAicodeRoot>()
         every { projectAicodeRoot.forPath(any()) } returns projectDir
+        // 严格 mock：本类只把 hub 交给仓库构造，startWatching() 从不会被调用，
+        // 所以 hub 上没有任何方法会被调用（严格 mock 只在「被调用却没桩」时才失败）；
+        // 与 SkillConfigRepositoryTest / AgentDefinitionTest 对同一类的用法一致。
+        val fileChangeHub = mockk<FileChangeHub>()
         repository = PermissionRulesRepository(
             context,
             workspaceRepository,
             projectAicodeRoot,
-            mockk<FileChangeHub>(relaxed = true)
+            fileChangeHub
         )
     }
 
