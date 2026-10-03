@@ -4,6 +4,7 @@ import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -92,6 +93,14 @@ data class ContextUsage(
 /**
  * 上下文占用的单一数据源：压缩模块每次判定后发布，界面按会话取。
  *
+ * **按会话分槽**：每个会话一个独立的 [MutableStateFlow]，一次发布只写自己那个槽，会话之间不共享
+ * 任何被写的数据——主会话与子会话并发判定时谁也不会把别人的快照顶掉。旧的整表实现是「整表读出来、
+ * 改完写回」，两次读之间发生的写入会被这次写回整表覆盖；压缩搬到后台线程后，这类并发写入从「不可能」
+ * 变成「常见」，丢快照就跟着变成可达。
+ *
+ * 槽位是唯一数据源：[usage] 这张全量表每次都按各槽当前值重建（见 [refreshAggregate]），它不是第二份
+ * 可写状态，因此并发的多次重建不会互相丢会话。
+ *
  * 按会话分开存，而不是只留最近一次：并行跑的子代理、后台会话、用户切走又切回的会话
  * 都会各自判定，塞进同一个槽就会互相顶掉，界面拿到的 id 与当前会话对不上，只能退化成
  * 「上次请求的真实 usage」——那正是「已经触发压缩、环却只显示一小截」的来源。
@@ -99,28 +108,66 @@ data class ContextUsage(
 @Singleton
 class ContextUsageHolder @Inject constructor() {
 
+    private val lock = Any()
+
+    /** 会话 id → 槽位。顺序 = 最近一次发布的先后（末尾最新），超上限时先丢最久没发布过的会话。 */
+    private val slots = LinkedHashMap<String, Slot>()
+
     private val _usage = MutableStateFlow<Map<String?, ContextUsage>>(emptyMap())
 
     /** 各会话最近一次判定发布的快照；从来没有判定过的会话不在表里，界面据此判断「没数可画」。 */
     val usage: StateFlow<Map<String?, ContextUsage>> = _usage.asStateFlow()
 
+    /** 一个会话的槽位：只有该会话自己的发布写它。 */
+    private class Slot {
+        val usage = MutableStateFlow<ContextUsage?>(null)
+    }
+
     fun publish(usage: ContextUsage) {
         // 没有会话 id 的判定不属于任何界面会话，收下只会让所有会话都取到这份数。
         val id = usage.sessionId ?: return
-        val next = _usage.value.toMutableMap()
-        // 先删再插：让最新判定的排在最后，超上限时先丢最久没判定过的会话。
-        next.remove(id)
-        next[id] = usage
-        while (next.size > MAX_SESSIONS) {
-            next.remove(next.keys.first())
-        }
-        _usage.value = next
+        val slot = slotOf(id)
+        // 只写自己那个槽：旧实现的「读整表 → 改 → 写整表」在这里不再存在。
+        slot.usage.value = usage
+        refreshAggregate()
     }
 
     /** 会话删除后丢掉它的快照，否则表里会攒着已不存在会话的数。 */
     fun remove(sessionId: String?) {
         val id = sessionId ?: return
-        if (id in _usage.value) _usage.value = _usage.value - id
+        val removed = synchronized(lock) { slots.remove(id) != null }
+        if (removed) refreshAggregate()
+    }
+
+    /** 取（必要时新建）某会话的槽位；锁内只动槽位表的结构，不写任何快照。 */
+    private fun slotOf(id: String): Slot = synchronized(lock) {
+        // 先删再插：让最新发布的排在最后，超上限时先丢最久没发布过的会话。
+        val slot = slots.remove(id) ?: Slot()
+        slots[id] = slot
+        while (slots.size > MAX_SESSIONS) {
+            slots.remove(slots.keys.first())
+        }
+        slot
+    }
+
+    /**
+     * 用各槽当前值重建 [usage]。
+     *
+     * 走 [MutableStateFlow.update] 的 CAS 循环而不是直接赋值：重建期间别的会话可能也在重建，
+     * 直接赋值会被「读到更旧槽值的那一次重建」覆盖掉。CAS 失败会重跑重建，重跑时再读一遍槽位，
+     * 于是最后一次成功的重建必然看到它之前的所有写入。
+     */
+    private fun refreshAggregate() {
+        _usage.update {
+            // 先取一份「槽位 → 当前快照」的平面副本（槽位值是 MutableStateFlow，读的是最新值），
+            // 再在 CAS 循环外拼表：lambda 里不放 break/continue，语义一眼可见。
+            val current = synchronized(lock) { slots.mapValues { it.value.usage.value } }
+            val next = HashMap<String?, ContextUsage>(current.size)
+            for ((id, snapshot) in current) {
+                if (snapshot != null) next[id] = snapshot
+            }
+            next
+        }
     }
 
     private companion object {
