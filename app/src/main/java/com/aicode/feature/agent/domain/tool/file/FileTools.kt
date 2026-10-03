@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LineDiff
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -130,7 +131,8 @@ class ReadFileTool @Inject constructor(
  * overwrite=false 且目标已存在时报错，可用于安全地新建文件。
  */
 class WriteFileTool @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val workspaceWriteSignal: WorkspaceWriteSignal
 ) : AgentTool() {
     override val name = "writeFile"
     override val description = "写入完整文件内容，文件不存在时自动创建（含父目录）。局部修改请用 editFile。"
@@ -197,6 +199,9 @@ class WriteFileTool @Inject constructor(
             ))
 
             FileLogger.v(TAG, "write_file 成功 path=$path created=${!existed} lines=${content.lines().size} (+$added -$removed)")
+            // 通知文件树重建：远程模式（SFTP）没有 inotify，不主动提一下的话 AI 刚建的文件不会出现。
+            // 删除是经 Bash 做的，不在工具层，因此这里只管写。
+            workspaceWriteSignal.notifyWritten()
             ToolResult.Success(
                 JsonObject(mapOf(
                     "path" to JsonPrimitive(fileAccess.toDisplayPath(path)),

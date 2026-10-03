@@ -54,6 +54,7 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.SubAgentEvent
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.core.watch.FileChangeHub
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.core.watch.asDirtySignal
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.engine.AgentEngine
@@ -157,6 +158,7 @@ class AIAgentViewModel @Inject constructor(
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
+    private val workspaceWriteSignal: WorkspaceWriteSignal,
     private val contextUsageHolder: ContextUsageHolder,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
@@ -497,7 +499,9 @@ class AIAgentViewModel @Inject constructor(
             val triggers = merge(
                 watched.map { fileChangeHub.watchWorkspace(it).asDirtySignal() }.merge().debounce(BROWSE_DEBOUNCE_MS),
                 // drop(1) 丢掉 StateFlow 重建时的当前值，否则刚展开就会多读一次
-                _browseRefresh.drop(1).map { }
+                _browseRefresh.drop(1).map { },
+                // AI 工具刚写完工作区文件：远程模式（SFTP）没有 inotify，写入方不主动提一下就不会重读
+                workspaceWriteSignal.writes
             )
             flow {
                 // 首次产出前由 stateIn 初值 Loading 占位；后续展开/折叠/刷新不再回到 Loading，

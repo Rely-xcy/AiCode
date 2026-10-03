@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LineDiff
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -40,7 +41,8 @@ private const val TAG = "EditFileTool"
  * 上下文，或对该编辑显式设置 replace_all=true 才会全部替换。
  */
 class EditFileTool @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val workspaceWriteSignal: WorkspaceWriteSignal
 ) : AgentTool() {
     override val name = "editFile"
     override val description =
@@ -178,6 +180,8 @@ class EditFileTool @Inject constructor(
             })
 
             FileLogger.v(TAG, "edit_file 成功 path=$path edits=${edits.size} replacements=$totalReplacements")
+            // 通知文件树重建：远程模式（SFTP）没有 inotify，不主动提一下的话改动不会立即反映到文件树。
+            workspaceWriteSignal.notifyWritten()
             ToolResult.Success(
                 JsonObject(mapOf(
                     "status" to JsonPrimitive("edited"),

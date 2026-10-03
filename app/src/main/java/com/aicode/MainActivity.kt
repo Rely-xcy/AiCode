@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
@@ -468,6 +469,13 @@ fun AppNavigation(
     val sidebarVisible = if (permanentDrawer) currentRoute == "chat" else drawerState.isOpen
     LaunchedEffect(sidebarVisible) {
         if (sidebarVisible) agentViewModel.refreshBrowse()
+    }
+
+    // 窗口重新获得焦点（回到前台、从编辑器/终端等页面返回）时再刷一次：
+    // 文件系统监听在远程模式根本不存在，后台期间服务端或其它客户端的改动只能靠这个时机重读。
+    LifecycleResumeEffect(Unit) {
+        agentViewModel.refreshBrowse()
+        onPauseOrDispose { }
     }
 
     // 右栏工作台：大屏下编辑器 / 终端 / Git 与聊天并排，窄窗仍走全屏路由。
