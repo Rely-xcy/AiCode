@@ -596,7 +596,7 @@ class FileChangeHub @Inject constructor(
             launchOnMain {
                 if (observer != null) {
                     onReady?.invoke()
-                    return@launch
+                    return@launchOnMain
                 }
                 @Suppress("DEPRECATION")
                 val created = object : FileObserver(path, MASK) {
