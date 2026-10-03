@@ -454,6 +454,8 @@
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
     <string name="backup_data_workspace">Workspace Files</string>
+    <string name="backup_data_skills_agents">Skills &amp; Subagents</string>
+    <string name="backup_data_panel_scripts">Panel Scripts</string>
     <string name="backup_workspace_git_hint">Workspace files are best backed up via Git; the export here is only a fallback</string>
     <string name="backup_password_label">Password (optional)</string>
     <string name="backup_processing">Processing</string>

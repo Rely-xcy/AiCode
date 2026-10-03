@@ -14,6 +14,12 @@ import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
+import com.aicode.feature.agent.domain.skill.SkillConfigRepository
+import com.aicode.feature.agent.domain.skill.SkillRepository
+import com.aicode.feature.agent.domain.skill.SkillScope
+import com.aicode.feature.agent.domain.subagent.AgentDefinitionConfigRepository
+import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.backup.domain.AgentMessageDto
 import com.aicode.feature.backup.domain.BackupCrypto
 import com.aicode.feature.backup.domain.BackupDecryptionException
@@ -27,6 +33,7 @@ import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.RemoteMountDto
 import com.aicode.feature.backup.domain.RestoreStats
+import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.toMetadata
@@ -45,6 +52,8 @@ import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
 import com.aicode.feature.workspace.data.local.entity.RemoteConnectionEntity
 import com.aicode.feature.workspace.data.local.entity.RemoteMountEntity
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.PathHomeResolver
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.Workspace
 import com.aicode.feature.workspace.domain.model.WorkspaceType
@@ -89,7 +98,13 @@ class BackupManagerImpl @Inject constructor(
     private val visionModelSettingsRepository: VisionModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val fileAccess: FileAccessProvider,
+    private val pathHomeResolver: PathHomeResolver,
+    private val skillRepository: SkillRepository,
+    private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val skillConfigRepository: SkillConfigRepository,
+    private val agentDefinitionConfigRepository: AgentDefinitionConfigRepository
 ) : BackupManager {
 
     private val json = Json {
@@ -273,6 +288,9 @@ class BackupManagerImpl @Inject constructor(
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar)
                     }
+                    if (options.skillsAndAgents || options.panelScripts) {
+                        writeAssetEntries(tar, options)
+                    }
                     if (options.chatHistory) {
                         writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
                             var lastTs = 0L
@@ -347,7 +365,15 @@ class BackupManagerImpl @Inject constructor(
         workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList(),
         // 没勾「应用设置」时上面那一整段字段全是默认值，与「用户就是这么设的」在数据上不可区分，
         // 所以单独记下这次带没带设置；导入侧据此决定要不要回写设置（见 restoreMeta）。
-        appSettingsIncluded = options.appSettings
+        appSettingsIncluded = options.appSettings,
+        // 启停配置跟技能目录同一个开关：没勾就整段为 null，导入侧据此不回写本机配置
+        // （不是「用户没有禁用项」——空名单与没禁过在数据上长得一样）。
+        skillsAgentsConfig = if (options.skillsAndAgents) SkillsAgentsConfigDto(
+            globalSkills = skillConfigRepository.rawConfig(SkillScope.GLOBAL),
+            globalAgents = agentDefinitionConfigRepository.rawConfig(AgentDefinitionScope.GLOBAL),
+            projectSkills = skillConfigRepository.rawConfig(SkillScope.PROJECT),
+            projectAgents = agentDefinitionConfigRepository.rawConfig(AgentDefinitionScope.PROJECT)
+        ) else null
     )
 
     private fun writeMetadataEntry(tar: TarArchiveOutputStream, metadata: BackupMetadata) {
@@ -452,6 +478,63 @@ class BackupManagerImpl @Inject constructor(
         tar.putArchiveEntry(entry)
         FileInputStream(file).use { it.copyTo(tar) }
         tar.closeArchiveEntry()
+    }
+
+    // ── 技能 / 子代理 / 面板脚本资产 ────────────────────────
+
+    /**
+     * 三类资产的目录清单：tar 条目前缀 → 容器路径根，[AssetKind] 决定导入摘要算到哪一类。
+     *
+     * 全局层是「当前执行环境」的 `~/.aicode/...`，项目层是当前工作区的 `~/workspace/.aicode/...`：
+     * 根路径直接取 [SkillRepository] / [AgentDefinitionRepository] 各自的根，与设置页扫描技能、
+     * 子代理时用的是同一处定义，不在这里另抄一份。面板脚本目录与
+     * ProviderDashboardRunner.listAvailableScripts 取的是同一个 `~/.aicode/scripts`。
+     *
+     * 两类都经 [FileAccessProvider] 访问，本地/远程同一套读写入口；导入侧不按导出时的勾选过滤——
+     * tar 里有什么条目就恢复什么（旧备份没有 `assets/` 条目，自然什么都不做）。
+     */
+    private fun assetRoots(): List<AssetRoot> = listOf(
+        AssetRoot(ASSET_SKILLS_GLOBAL, skillRepository.skillsRoot(SkillScope.GLOBAL), AssetKind.SKILL),
+        AssetRoot(ASSET_SKILLS_PROJECT, skillRepository.skillsRoot(SkillScope.PROJECT), AssetKind.SKILL),
+        AssetRoot(ASSET_AGENTS_GLOBAL, agentDefinitionRepository.agentsRoot(AgentDefinitionScope.GLOBAL), AssetKind.SUBAGENT),
+        AssetRoot(ASSET_AGENTS_PROJECT, agentDefinitionRepository.agentsRoot(AgentDefinitionScope.PROJECT), AssetKind.SUBAGENT),
+        AssetRoot(ASSET_SCRIPTS, "${pathHomeResolver.aicodeRoot()}/scripts", AssetKind.PANEL_SCRIPT)
+    )
+
+    /** 把勾选的资产目录下的每个文件写成一个 tar 条目（`assets/类别/层级/相对路径`）。 */
+    private fun writeAssetEntries(tar: TarArchiveOutputStream, options: BackupOptions) {
+        assetRoots()
+            .filter { if (it.kind == AssetKind.PANEL_SCRIPT) options.panelScripts else options.skillsAndAgents }
+            .forEach { root ->
+                val base = root.root.trimEnd('/')
+                // 目录不存在、远程未连接等都在这里兜住：一类资产读不到不该让整次导出失败
+                val files = runCatching { fileAccess.listFilesRecursive(base, ASSET_MAX_DEPTH) }.getOrElse { e ->
+                    FileLogger.w(TAG, "读取资产目录失败，跳过：$base（${e.message}）")
+                    emptyList()
+                }
+                files.forEach { relative ->
+                    val rel = normalizeAssetPath(relative)
+                    if (rel == null) {
+                        FileLogger.w(TAG, "跳过越界的资产路径：$base/$relative")
+                    } else {
+                        runCatching { fileAccess.readBytes("$base/$rel") }
+                            .onSuccess { writeTarEntry(tar, "${root.prefix}$rel", it) }
+                            .onFailure { FileLogger.w(TAG, "读取资产文件失败，跳过：$base/$rel（${it.message}）") }
+                    }
+                }
+            }
+    }
+
+    /**
+     * 归一化资产相对路径：反斜杠转正斜杠、去前导斜杠与 `./`；含 `..` 的越界条目返回 null。
+     * 与技能压缩包导入（SkillImporter）同一套防越界规则：导出侧先过滤，导入侧再过滤一次。
+     */
+    private fun normalizeAssetPath(raw: String): String? {
+        val path = raw.replace('\\', '/').trimStart('/').removePrefix("./")
+        val segments = path.split('/')
+        if (segments.any { it == ".." }) return null
+        val cleaned = segments.filter { it.isNotEmpty() && it != "." }
+        return if (cleaned.isEmpty()) null else cleaned.joinToString("/")
     }
 
     // ── 导入辅助 ──────────────────────────────────────────────
@@ -856,6 +939,17 @@ class BackupManagerImpl @Inject constructor(
         const val FILE_TODOS = "todoItems.jsonl"
         const val FILE_LEGACY_SNAPSHOT = "snapshot.json"
         const val WORKSPACE_PREFIX = "workspaces/"
+
+        /** 技能 / 子代理 / 面板脚本的资产条目前缀，下面按「类别/层级」细分。 */
+        const val ASSET_PREFIX = "assets/"
+        const val ASSET_SKILLS_GLOBAL = "${ASSET_PREFIX}skills/global/"
+        const val ASSET_SKILLS_PROJECT = "${ASSET_PREFIX}skills/project/"
+        const val ASSET_AGENTS_GLOBAL = "${ASSET_PREFIX}agents/global/"
+        const val ASSET_AGENTS_PROJECT = "${ASSET_PREFIX}agents/project/"
+        const val ASSET_SCRIPTS = "${ASSET_PREFIX}scripts/"
+
+        /** 资产目录遍历深度上限：够盖住技能目录里的多层子目录，同时挡住异常的深目录。 */
+        const val ASSET_MAX_DEPTH = 8
     }
 }
 
@@ -885,3 +979,9 @@ private class TarSource(
         temp?.delete()
     }
 }
+
+/** 一类可备份资产：tar 条目前缀（带结尾斜杠）、容器路径根、导入摘要计数类别。 */
+private class AssetRoot(val prefix: String, val root: String, val kind: AssetKind)
+
+/** 资产类别，决定导入摘要把它算进哪一行。 */
+private enum class AssetKind { SKILL, SUBAGENT, PANEL_SCRIPT }

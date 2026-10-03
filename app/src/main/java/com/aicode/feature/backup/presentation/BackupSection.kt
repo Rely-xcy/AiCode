@@ -171,6 +171,26 @@ internal fun BackupSection(viewModel: BackupViewModel) {
             )
             SettingsDivider()
             SettingsRow(
+                title = stringResource(R.string.backup_data_skills_agents),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.skillsAndAgents,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(skillsAndAgents = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_panel_scripts),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.panelScripts,
+                        onCheckedChange = { viewModel.updateExportOptions(exportOptions.copy(panelScripts = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
                 title = stringResource(R.string.backup_data_workspace),
                 trailing = {
                     AppSwitch(

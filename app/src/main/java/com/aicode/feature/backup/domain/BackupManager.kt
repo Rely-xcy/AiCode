@@ -60,7 +60,11 @@ data class BackupOptions(
     val mcpServers: Boolean = true,
     val permissionRules: Boolean = true,
     val appSettings: Boolean = true,
-    val workspaceFiles: Boolean = false
+    val workspaceFiles: Boolean = false,
+    /** 技能与子代理：全局 + 项目两级的技能目录、子代理目录，以及同两级的启停配置。 */
+    val skillsAndAgents: Boolean = true,
+    /** 面板脚本目录（`~/.aicode/scripts`）。 */
+    val panelScripts: Boolean = true
 )
 
 data class RestoreStats(

@@ -46,7 +46,13 @@ data class BackupSnapshot(
     val visionModel: String = "",
     val compactionProviderId: String = "",
     val compactionModel: String = "",
-    val syncSettings: SyncSettingsSnapshot? = null
+    val syncSettings: SyncSettingsSnapshot? = null,
+    /**
+     * 技能 / 子代理的启停配置原文（全局 + 项目两级）；null 表示这份备份没带（旧备份，或导出时没勾
+     * 「技能与子代理」），导入时不回写本机配置。技能目录、子代理目录与面板脚本目录里的文件不走这里，
+     * 它们按 tar 条目逐个落盘（见 BackupManagerImpl 里 `assets/` 前缀的条目）。
+     */
+    val skillsAgentsConfig: SkillsAgentsConfigDto? = null
 )
 
 /**
@@ -93,7 +99,29 @@ data class BackupMetadata(
      * 两种情形长得一模一样），导入侧只能靠这个标志决定要不要回写设置。
      * 默认 true：没有该字段的旧备份导出时一律带设置，按「包含」处理，行为与本字段出现之前逐字一致。
      */
-    val appSettingsIncluded: Boolean = true
+    val appSettingsIncluded: Boolean = true,
+    /**
+     * 技能 / 子代理启停配置原文；null 表示这份备份没带（同 [BackupSnapshot.skillsAgentsConfig]）。
+     */
+    val skillsAgentsConfig: SkillsAgentsConfigDto? = null
+)
+
+/**
+ * 技能与子代理的启停配置原文，全局与项目两级各一份。
+ *
+ * 内层为 null 表示该层本就没有配置文件；外层（引用本类的字段）为 null 表示这份备份没带启停配置。
+ * 数据上区分这两者是必须的：空名单与没禁用过任何技能长得一样，导入侧只能靠外层 null 决定要不要回写。
+ */
+@Serializable
+data class SkillsAgentsConfigDto(
+    /** 全局技能配置 `~/.aicode/skills.json` 原文。 */
+    val globalSkills: String? = null,
+    /** 全局子代理配置 `~/.aicode/agents.json` 原文。 */
+    val globalAgents: String? = null,
+    /** 项目级技能配置（当前工作区 `.aicode/skills.json`）原文。 */
+    val projectSkills: String? = null,
+    /** 项目级子代理配置（当前工作区 `.aicode/agents.json`）原文。 */
+    val projectAgents: String? = null
 )
 
 /** 备份元数据中的一个工作区段：名称 + 备份的文件数（用于导入摘要）。 */
@@ -135,7 +163,8 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     compactionModel = compactionModel,
     syncSettings = syncSettings,
     // 旧格式（单文件 snapshot.json）没有「带没带设置」这个开关：它一律含设置段
-    appSettingsIncluded = true
+    appSettingsIncluded = true,
+    skillsAgentsConfig = skillsAgentsConfig
 )
 
 @Serializable

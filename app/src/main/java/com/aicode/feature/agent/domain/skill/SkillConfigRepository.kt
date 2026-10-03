@@ -79,12 +79,24 @@ class SkillConfigRepository @Inject constructor(
         return true
     }
 
-    private fun readGlobalDisabled(): Set<String> = runCatching {
-        if (fileAccess.isFile(GLOBAL_CONFIG_PATH)) parseDisabled(fileAccess.readFile(GLOBAL_CONFIG_PATH))
-        else emptySet()
+    /**
+     * 备份导出用：该作用域配置文件的原文；文件不存在、读取失败或工作区未落定时为 null。
+     *
+     * 与 [disabledNames] 读的是同一批文件，区别在于这里要的是原文：恢复时整份写回，不重新序列化，
+     * 文件里的未知字段与原始排版都保留。
+     */
+    fun rawConfig(scope: SkillScope): String? =
+        if (scope == SkillScope.GLOBAL) readGlobalRaw()
+        else projectFile()?.let { readRaw(it) }
+
+    private fun readGlobalDisabled(): Set<String> = readGlobalRaw()?.let { parseDisabled(it) } ?: emptySet()
+
+    /** 全局配置文件原文；不存在或读取失败时为 null。 */
+    private fun readGlobalRaw(): String? = runCatching {
+        if (fileAccess.isFile(GLOBAL_CONFIG_PATH)) fileAccess.readFile(GLOBAL_CONFIG_PATH) else null
     }.getOrElse {
         FileLogger.w(TAG, "读取 $CONFIG_FILE 失败: ${it.message}")
-        emptySet()
+        null
     }
 
     // ── 外部变更监听：容器内/手工直接增删改技能目录或 skills.json 后，数秒内通知 UI 刷新 ──
@@ -146,13 +158,16 @@ class SkillConfigRepository @Inject constructor(
             return PRETTY_JSON.encodeToString(JsonObject.serializer(), root)
         }
 
-        fun readDisabled(file: File): Set<String> {
-            if (!file.isFile) return emptySet()
-            return runCatching { parseDisabled(file.readText()) }.getOrElse {
+        /** 配置文件原文；文件不存在或读取失败时返回 null。 */
+        fun readRaw(file: File): String? {
+            if (!file.isFile) return null
+            return runCatching { file.readText() }.getOrElse {
                 FileLogger.w(TAG, "读取 ${file.name} 失败: ${it.message}")
-                emptySet()
+                null
             }
         }
+
+        fun readDisabled(file: File): Set<String> = readRaw(file)?.let { parseDisabled(it) } ?: emptySet()
 
         fun writeDisabled(file: File, names: Set<String>) {
             file.parentFile?.mkdirs()
