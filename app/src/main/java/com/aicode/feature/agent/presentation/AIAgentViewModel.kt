@@ -1512,7 +1512,11 @@ class AIAgentViewModel @Inject constructor(
         try {
             var failed = false
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
-            val history = messagePersistenceUseCase.buildHistory(sessionId, SessionUseCase.PENDING_TOOL_MARKER)
+            // 全量重建历史（读整个会话 + JSON 解码工具快照 + 图片 base64）是重活且会随会话变长变慢，
+            // 留在主线程上会把这一帧的消息回显与滚动一起拖住。它是 suspend，直接切到 IO，主线程只等结果。
+            val history = withContext(Dispatchers.IO) {
+                messagePersistenceUseCase.buildHistory(sessionId, SessionUseCase.PENDING_TOOL_MARKER)
+            }
             val isFirst = history.isEmpty()
 
             // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
