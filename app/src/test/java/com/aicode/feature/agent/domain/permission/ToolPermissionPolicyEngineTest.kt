@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.permission
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCapability
@@ -23,6 +25,17 @@ import org.junit.Test
  */
 class ToolPermissionPolicyEngineTest {
 
+    /**
+     * 弹窗标题与说明取自 `strings.xml`，用例只断言「给不给弹窗、能不能记忆、什么标题」，
+     * 四个键各返回一段可区分的中文，断言非空即可。
+     */
+    private val context = mockk<Context>().apply {
+        every { getString(R.string.permission_rules_unconfirmed_project_title) } returns "项目授权规则暂不可用（测试）"
+        every { getString(R.string.permission_rules_unconfirmed_project_reason) } returns "项目级规则读不到，仅单次放行（测试）"
+        every { getString(R.string.permission_rules_unconfirmed_global_title) } returns "全局授权规则暂不可用（测试）"
+        every { getString(R.string.permission_rules_unconfirmed_global_reason) } returns "全局级规则读不到，仅单次放行（测试）"
+    }
+
     private fun engine(
         vararg rules: PermissionRule,
         safetyDisabled: Boolean = false,
@@ -37,7 +50,7 @@ class ToolPermissionPolicyEngineTest {
             EffectivePermissionRules(rules.toList(), projectRulesConfirmed, globalRulesConfirmed)
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
-        return ToolPermissionPolicyEngine(repo, safety)
+        return ToolPermissionPolicyEngine(context, repo, safety)
     }
 
     private fun tool(vararg caps: ToolCapability): AgentTool {
@@ -615,7 +628,7 @@ class ToolPermissionPolicyEngineTest {
         // add 现在返回 Boolean（写没写进去），默认 stub 要与返回类型一致；relaxed 不顶用在这类显式 stub 上：
         // 旧的 `just runs` 只适用于 Unit 返回的函数。
         coEvery { repo.add(any(), any()) } returns true
-        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true))
+        val e = ToolPermissionPolicyEngine(context, repo, mockk(relaxed = true))
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
 

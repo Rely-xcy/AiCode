@@ -585,6 +585,11 @@
     <string name="chat_perm_always_allow">Always Allow</string>
     <string name="chat_perm_session_label">Session "%1$s"</string>
     <string name="chat_perm_remember_failed">Could not save this permission: the project-level rule was not written to disk (workspace not ready or write failed). This call was allowed, but you will be asked again next time. Tool: %1$s</string>
+    <!-- Permission dialog: title and single-use note when one layer of permission rules cannot be read -->
+    <string name="permission_rules_unconfirmed_project_title">Project permission rules are unavailable</string>
+    <string name="permission_rules_unconfirmed_project_reason">The project-level permission rules cannot be read right now (workspace not ready or read failed), so a project-level DENY rule cannot be ruled out. To avoid bypassing project permissions, this call can only be allowed once and cannot be remembered</string>
+    <string name="permission_rules_unconfirmed_global_title">Global permission rules are unavailable</string>
+    <string name="permission_rules_unconfirmed_global_reason">The global permission rules cannot be read right now (file read or parse failed), so a global DENY rule cannot be ruled out. To avoid bypassing global permissions, this call can only be allowed once and cannot be remembered</string>
     <string name="chat_plan_completed">Plan completed</string>
     <string name="chat_continue_feedback">Continue feedback</string>
     <string name="chat_approve_and_implement">Approve and implement</string>
@@ -1401,6 +1406,8 @@
     <string name="terminal_no_open_tabs">No open terminal tabs</string>
     <string name="terminal_connection_dropped">Connection lost, this terminal has ended</string>
     <string name="terminal_connection_dropped_hint">This was not a normal exit: open a new tab to retry, or reopen after automatic reconnect</string>
+    <string name="terminal_unavailable_not_remote_mode">Not in remote SSH execution mode, so the terminal is unavailable: switch the execution mode in Settings first</string>
+    <string name="terminal_unavailable_disconnected">SSH is not connected, so the terminal is unavailable: test the connection on the Connections page, or wait for automatic reconnect</string>
     <string name="terminal_close_tab">Close Tab</string>
     <string name="terminal_cleaning_old_container">Cleaning up old container data…\n%1$s items removed</string>
     <string name="terminal_extracting_env">Extracting environment…\n%1$s files processed</string>

@@ -1,5 +1,7 @@
 package com.aicode.feature.terminal.domain
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
@@ -26,6 +28,12 @@ class RemoteTerminalSessionManagerTest {
 
     private val notReadyMessage = "工作区未就绪：远程已连接但工作区尚未加载完成（测试文案）"
 
+    /** 终端不可用的文案取自 `strings.xml`，与生产同源（见 remoteUnavailableReason）。 */
+    private val context = mockk<Context>().apply {
+        every { getString(R.string.terminal_unavailable_not_remote_mode) } returns "当前不是远程 SSH 执行模式（测试）"
+        every { getString(R.string.terminal_unavailable_disconnected) } returns "SSH 未连接（测试）"
+    }
+
     @Test
     fun createInteractiveTab_workspaceNotReady_throwsAndStartsNoShell() = runTest {
         val connection = mockk<RemoteSshConnection>()
@@ -37,7 +45,7 @@ class RemoteTerminalSessionManagerTest {
         coEvery { workspace.awaitCurrentPathOrNull() } returns null
         // 未落定分支会真的调用 notReadyException()，strict mock 下不 stub 直接抛 MockKException
         every { workspace.notReadyException() } returns WorkspaceNotReadyException(notReadyMessage)
-        val manager = RemoteTerminalSessionManager(connection, modeHolder, workspace)
+        val manager = RemoteTerminalSessionManager(context, connection, modeHolder, workspace)
 
         val e = runCatching { manager.createInteractiveTab() }.exceptionOrNull()
 

@@ -1,9 +1,12 @@
 package com.aicode.feature.agent.domain.permission
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -41,6 +44,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ToolPermissionPolicyEngine @Inject constructor(
+    @param:ApplicationContext private val context: Context,
     private val rulesRepo: PermissionRulesRepository,
     private val toolSafetySettings: ToolSafetySettingsRepository
 ) {
@@ -55,21 +59,6 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         const val REASON_SHIZUKU =
             "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
-
-        /**
-         * 规则读不到（项目级：工作区未落定 / 读取失败；全局级：读取或解析失败）时的弹窗标题与单次放行说明。
-         * 命中时一律 ASK、不可记忆：无法确认那一层有没有 DENY，也不能让「始终允许」写进一个
-         * 还没就绪、或解析失败后只剩空表的那一层。
-         */
-        const val ASK_TITLE_PROJECT_RULES_UNCONFIRMED = "项目授权规则暂不可用"
-        const val REASON_PROJECT_RULES_UNCONFIRMED =
-            "项目级授权规则当前读不到（工作区未就绪或读取失败），无法确认是否存在项目级 DENY 规则；" +
-                "为避免绕过项目授权，本次仅支持单次放行，不可记忆"
-
-        const val ASK_TITLE_GLOBAL_RULES_UNCONFIRMED = "全局授权规则暂不可用"
-        const val REASON_GLOBAL_RULES_UNCONFIRMED =
-            "全局级授权规则当前读不到（文件读取或解析失败），无法确认是否存在全局 DENY 规则；" +
-                "为避免绕过全局授权，本次仅支持单次放行，不可记忆"
 
         /**
          * 合并后的终端会话工具：其 `start` 动作承载 shell 命令，需走指令级前缀匹配；
@@ -321,20 +310,23 @@ class ToolPermissionPolicyEngine @Inject constructor(
      * 无法确认那一层是否存在 DENY 规则，故不放行本次调用，只给一次性授权且不可记忆
      * （此时「始终允许」写那一层也可能落不下去、或把原文件覆盖成空表）。
      * 只用于**可能造成副作用**的调用；只读调用不受影响，见 [evaluate]。
+     *
+     * 标题与说明是用户可见文案（分别落在授权弹窗标题、「始终允许」下方的标签），故取双语
+     * `strings.xml` 的 `permission_rules_unconfirmed_*` 四条，不在本文件硬编码中文。
      */
     private fun unconfirmedRulesAsk(layer: UnconfirmedLayer): EvalResult = when (layer) {
         UnconfirmedLayer.PROJECT -> EvalResult(
             verdict = Verdict.ASK,
             rememberablePatterns = emptyList(),
-            askTitle = ASK_TITLE_PROJECT_RULES_UNCONFIRMED,
-            rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED,
+            askTitle = context.getString(R.string.permission_rules_unconfirmed_project_title),
+            rememberDisabledReason = context.getString(R.string.permission_rules_unconfirmed_project_reason),
             rulesUnconfirmed = true
         )
         UnconfirmedLayer.GLOBAL -> EvalResult(
             verdict = Verdict.ASK,
             rememberablePatterns = emptyList(),
-            askTitle = ASK_TITLE_GLOBAL_RULES_UNCONFIRMED,
-            rememberDisabledReason = REASON_GLOBAL_RULES_UNCONFIRMED,
+            askTitle = context.getString(R.string.permission_rules_unconfirmed_global_title),
+            rememberDisabledReason = context.getString(R.string.permission_rules_unconfirmed_global_reason),
             rulesUnconfirmed = true
         )
     }

@@ -1,10 +1,13 @@
 package com.aicode.feature.terminal.domain
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +35,7 @@ private const val DEFAULT_ROWS = 24
  */
 @Singleton
 class RemoteTerminalSessionManager @Inject constructor(
+    @param:ApplicationContext private val context: Context,
     private val connection: RemoteSshConnection,
     private val modeHolder: ExecutionModeHolder,
     private val workspaceRepository: WorkspaceRepository
@@ -70,9 +74,9 @@ class RemoteTerminalSessionManager @Inject constructor(
      */
     private fun remoteUnavailableReason(): String? = when {
         modeHolder.currentMode() != ExecutionMode.REMOTE_SSH ->
-            "当前不是远程 SSH 执行模式，终端不可用：请先在设置里切换执行模式"
+            context.getString(R.string.terminal_unavailable_not_remote_mode)
         !connection.isConnected() ->
-            "SSH 未连接，终端不可用：请到「连接配置」页测试连通性，或等待自动重连"
+            context.getString(R.string.terminal_unavailable_disconnected)
         else -> null
     }
 
