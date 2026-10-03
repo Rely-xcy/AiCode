@@ -85,7 +85,11 @@ object FileLogger {
         if (minLevel == LogLevel.VERBOSE) {
             minLevel = if (debuggable) LogLevel.VERBOSE else LogLevel.INFO
         }
-        ioExecutor.execute { cleanupOldLogs(dir) }
+        ioExecutor.execute {
+            // cleanupOldLogs 内部有零散 runCatching，但循环体没有整体兑底（如 listFiles 在受限卷上抛）。
+            // ioExecutor 上抛会杀死线程后续任务：ScheduledThreadPoolExecutor 的任务异常会静默吞掉调度。
+            runCatching { cleanupOldLogs(dir) }.onFailure { Log.e(TAG, "清理旧日志失败", it) }
+        }
         i(TAG, "FileLogger 初始化完成，日志目录: ${dir.absolutePath}")
     }
 
@@ -157,17 +161,23 @@ object FileLogger {
     private fun write(level: String, tag: String, message: String, throwable: Throwable?) {
         val dir = logDir ?: return // 未初始化则只走 logcat，不落盘
         val now = java.time.Instant.now()
-        // 落盘前过媒体脱敏：防超大 base64（图片等）撑爆按天日志文件；logcat 仍打印原样（有系统截断保护）。
-        val redacted = MediaRedactor.redact(message)
-        val line = buildString {
-            append(timestampFormat.format(now))
-            append(" ").append(level)
-            append(" [").append(tag).append("] ")
-            append(redacted)
-            if (throwable != null) {
-                append("\n").append(stackTraceToString(throwable))
+        // 同步段（脱敏/拼行/栈展开）可能因奇异的入参抛出；落盘是可降级的旁路，失败只能降级到
+        // logcat，绝不能把异常抛回调用者线程（那里往往在关键业务路径上）。
+        val line = runCatching {
+            val redacted = MediaRedactor.redact(message)
+            buildString {
+                append(timestampFormat.format(now))
+                append(" ").append(level)
+                append(" [").append(tag).append("] ")
+                append(redacted)
+                if (throwable != null) {
+                    append("\n").append(stackTraceToString(throwable))
+                }
+                append("\n")
             }
-            append("\n")
+        }.getOrElse {
+            Log.e(TAG, "构建日志行失败，本条不落盘", it)
+            return
         }
         ioExecutor.execute {
             runCatching {
