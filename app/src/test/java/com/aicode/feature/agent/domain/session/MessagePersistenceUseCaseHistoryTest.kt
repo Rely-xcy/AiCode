@@ -80,7 +80,9 @@ class MessagePersistenceUseCaseHistoryTest {
         // 去重只跳过多余的 marker/summary 对，不碰普通消息：
         // u1(ts=150) 排在 m2(ts=200) 之前，所以它在历史里、而且位于最前。
         assertEquals(
-            listOf("中间的话", CONTEXT_COMPACTION_MARKER, "新摘要", "最新的话"),
+            // 读侧顺序来自上游 orderHistoryEntities（marker/summary 提到最前）；写侧会把
+            // marker 之前的所有行标成 isCompacted，回放时滤掉，故正常路径下与时间序等价。
+            listOf(CONTEXT_COMPACTION_MARKER, "新摘要", "中间的话", "最新的话"),
             history.map { it.text() }
         )
         // 只读：库里的行一条不少，也没有任何行被标 isCompacted
