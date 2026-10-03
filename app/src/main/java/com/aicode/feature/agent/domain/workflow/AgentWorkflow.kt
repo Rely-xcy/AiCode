@@ -60,6 +60,18 @@ sealed class AgentEvent {
     ) : AgentEvent()
 
     /**
+     * 用户在工作期间插入了一条消息（消息队列的「立即插入」）。
+     *
+     * 它按用户消息处理，不降级成系统通知：模型侧位置在当前这批工具结果之后（见
+     * [StatefulAgentWorkflow][com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），
+     * UI 与落库也按普通用户消息采（落库行 id 即 [id]，乐观气泡据此退场）。
+     *
+     * @param id 界面侧预生成的消息行 id（无界面 id 时为随序号生成的稳定 id）
+     * @param content 用户原文，不经任何包装
+     */
+    data class UserMessageAdded(val id: String, val content: String) : AgentEvent()
+
+    /**
      * 用户在授权弹窗里选了「始终允许」，但规则没能落到项目级文件（工作区在弹窗挂起期间变得未就绪，
      * 或写盘失败）。本次调用照常放行，但没记住——用户必须看得见，否则下次再被问时只会觉得莫名其妙。
      * [toolName] 为没记住授权的工具。

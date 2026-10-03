@@ -23,6 +23,8 @@ enum class NotificationOutcome { COMPLETED, FAILED, STOPPED }
  * @property fromParent [AgentNotificationKind.AGENT_MESSAGE] 的方向：true 表示发送方是主会话（收件人为子代理），
  *   false 表示发送方是子代理（收件人为主会话）。供 Formatter 生成对应的回复提示。
  * @property newMode [AgentNotificationKind.MODE_CHANGE] 的目标模式：用户在工作期间切换后的新模式。
+ * @property clientMessageId [AgentNotificationKind.USER_MESSAGE] 携带的界面侧消息 id：送达时按它落库，
+ *   界面上的乐观气泡靠「库里出现同 id 的行」退场。其他类型为 null。
  * @property seq [AgentNotificationCenter] 分配的单调序号，供 peek 后精确 ack；未入队时为 0。
  */
 data class PendingNotification(
@@ -37,6 +39,7 @@ data class PendingNotification(
     val message: String? = null,
     val fromParent: Boolean = false,
     val newMode: AgentMode? = null,
+    val clientMessageId: String? = null,
     val seq: Long = 0
 )
 
@@ -45,6 +48,8 @@ data class PendingNotification(
  *
  * - **搭车**（首选）：AI 每批工具执行完成后，[StatefulAgentWorkflow][com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]
  *   peek 出通知注入工具结果，本轮内立即送达，省掉一次「等本轮结束再起一轮」的 LLM 往返。
+ *   [AgentNotificationKind.USER_MESSAGE] 是唯一的例外：它是用户本人的输入，混进工具结果等于把它降级成
+ *   工具输出，所以那类条目改为作为一条 UserMessage 排在工具结果之后（模型侧与落库侧同时是用户消息）。
  * - **兜底**：AI 整轮没调用任何工具时，ViewModel 在本轮 finally 里 [drain] 后作为系统通知消息触发新一轮。
  *
  * 入队来自主线程（ViewModel 收 Flow 事件），peek/ack 来自工具执行的 IO 协程，故全部操作加锁。

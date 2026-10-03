@@ -954,7 +954,7 @@ class AIAgentViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
-     * 已被丢弃、确认不会再落库的用户消息 id 集合（队列删除 / 插话转通知 / 回退清空队列 /
+     * 已被丢弃、确认不会再落库的用户消息 id 集合（队列删除 / 回退清空队列 /
      * 切换工作区停止全部 / 会话被删）。
      *
      * 乐观气泡（见 AIChatPanel 的 pendingUserMessages）只有两个退场判据：这条落库了、这条还在队列里。
@@ -1291,9 +1291,10 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 统一投递一条系统事件给指定会话：忙碌则入 [agentNotificationCenter]，由本轮内工具结果搭车送达；
-     * 空闲则以一条系统通知消息触发新一轮。后台任务完成、子代理结束、代理间消息、模式切换共用此分发，
-     * 避免各处重复判断忙碌/空闲。
+     * 统一投递一条事件给指定会话：忙碌则入 [agentNotificationCenter]，由本轮内工具结果搭车送达
+     * （[AgentNotificationKind.USER_MESSAGE] 例外：它是用户本人的输入，改为作为一条用户消息在工具结果
+     * 之后进上下文）；空闲则以一条消息触发新一轮。后台任务完成、子代理结束、代理间消息、模式切换、
+     * 用户插话共用此分发，避免各处重复判断忙碌/空闲。
      */
     private fun deliverSystemEvent(sessionId: String, item: PendingNotification) {
         if (sessionJobs[sessionId]?.isActive == true) {
@@ -1304,7 +1305,9 @@ class AIAgentViewModel @Inject constructor(
             enqueueAgentRequest(
                 request = AgentNotificationFormatter.buildMessage(listOf(item)),
                 projectRoot = _currentWorkspace.value,
-                targetSessionId = sessionId
+                targetSessionId = sessionId,
+                // 用户插话按界面预生成的 id 落库，乐观气泡与落库行才是同一条；其他类型不带这个 id。
+                clientMessageId = item.clientMessageId
             )
         }
     }
@@ -1322,17 +1325,34 @@ class AIAgentViewModel @Inject constructor(
     /**
      * 本轮结束后的兜底送达：把仍留在队列里的通知合并成一条消息发送。
      * 已被工具结果搭车送达的通知此时已 ack 移除，取到空则什么都不做。
+     *
+     * 用户插话不参与合并：混在系统事件里会被统一挂上「[系统通知 - 非用户输入]」围栏，用户亲口说的话
+     * 在界面与模型两侧一起降级成提示条。故逐条按用户消息投递（带原 clientMessageId）：第一条起一轮，
+     * 余下的在忙碌判定下进队列、由队列面板承载，照样不丢。
      */
     private fun flushPendingNotifications(sessionId: String) {
         val items = agentNotificationCenter.drain(sessionId)
         if (items.isEmpty()) return
         FileLogger.d(TAG, "flushPendingNotifications: sid=$sessionId items=${items.size} state=${_agentStates.value[sessionId]}")
+        val interjections = items.filter { it.kind == AgentNotificationKind.USER_MESSAGE }
+        val systemItems = items.filterNot { it.kind == AgentNotificationKind.USER_MESSAGE }
         viewModelScope.launch {
-            enqueueAgentRequest(
-                request = AgentNotificationFormatter.buildMessage(items),
-                projectRoot = _currentWorkspace.value,
-                targetSessionId = sessionId
-            )
+            interjections.forEach { item ->
+                val text = item.message?.takeIf { it.isNotBlank() } ?: return@forEach
+                enqueueAgentRequest(
+                    request = text,
+                    projectRoot = _currentWorkspace.value,
+                    targetSessionId = sessionId,
+                    clientMessageId = item.clientMessageId
+                )
+            }
+            if (systemItems.isNotEmpty()) {
+                enqueueAgentRequest(
+                    request = AgentNotificationFormatter.buildMessage(systemItems),
+                    projectRoot = _currentWorkspace.value,
+                    targetSessionId = sessionId
+                )
+            }
         }
     }
 
@@ -1427,17 +1447,18 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 把当前会话队列中某条消息立即插入正在运行的轮次：从队列移除，转成用户插话通知交给
-     * [deliverSystemEvent]——忙碌时搭车注入本批工具结果，AI 当前轮即可感知；空闲时作为
-     * 新一轮用户消息发送。
+     * 把当前会话队列中某条消息立即插入正在运行的轮次：从队列移除，交给 [deliverSystemEvent]——忙碌时
+     * 作为一条用户消息排在本批工具结果之后（模型侧与落库侧都是用户消息，见
+     * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow] 的 interjections）；空闲时
+     * 作为新一轮用户消息发送。
      */
     fun interjectQueuedRequest(id: String) {
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
-        // 转成通知投递后，落库的是通知消息（另有随机 id），原来那条用户行的 id 再也不会落库，
-        // 记一笔让乐观气泡退场——它的一条同文本内容会以通知消息的形态出现在列表里。
-        markClientMessagesDiscarded(listOf(req))
+        // 不把这条计入 [discardedClientMessageIds]：它按原 clientMessageId 落库，乐观气泡由「库里出现
+        // 同 id 的行」这条既有判据退场。标作废虽然也能让气泡消失，但用户会先看到自己的话从界面上断一线
+        // （气泡没了、落库行还没来）。
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
         deliverSystemEvent(
             sid,
@@ -1446,7 +1467,8 @@ class AIAgentViewModel @Inject constructor(
                 sourceId = sid,
                 title = "",
                 outcome = NotificationOutcome.COMPLETED,
-                message = req.request
+                message = req.request,
+                clientMessageId = req.clientMessageId
             )
         )
     }
@@ -1804,6 +1826,17 @@ class AIAgentViewModel @Inject constructor(
                         )
                         toolArgsByMsgId.remove(msgId)
                         removeRunningTool(sessionId, msgId)
+                    }
+                    is AgentEvent.UserMessageAdded -> {
+                        // 用户插话：按普通用户消息落库，行 id 就是界面预生成的那个（乐观气泡据此退场）。
+                        // 它在事件流里紧跟在同批 ToolCallFinished 之后，库里顺序因此是「工具结果 → 用户消息」，
+                        // 不会把用户消息夹进 assistant(tool_calls) 与 tool 结果之间而破坏配对约束。
+                        messagePersistenceUseCase.persist(
+                            sessionId,
+                            MessageRole.USER,
+                            event.content,
+                            id = event.id
+                        )
                     }
                     is AgentEvent.PermissionRememberFailed -> {
                         // 用户点了「始终允许」却没记住：授权本身已放行，所以要给一条独立提示，

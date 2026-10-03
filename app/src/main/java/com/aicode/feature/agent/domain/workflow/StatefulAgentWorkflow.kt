@@ -128,6 +128,12 @@ class StatefulAgentWorkflow @Inject constructor(
         /** 写范围冲突的错误码：被拒的子代理据此识别「不是偶发错误」，派发方也能从结果里看出原因。 */
         const val WRITE_LEASE_CONFLICT_CODE = "WRITE_LEASE_CONFLICT"
 
+        /**
+         * 无界面 id 的插话落库行 id 前缀（拼接通知序号）：正常情况下插话来自队列条目、自带界面预生成的 id，
+         * 只有非界面入口才走这里。用稳定 id 而不是每次随机，重送时落的是同一行、不会出现两条。
+         */
+        const val INTERJECT_ROW_ID_PREFIX = "interject_"
+
         /** 收尾结果：被取消（用户停掉 / 停掉子代理）。 */
         const val OUTCOME_CANCELLED = "被停止或取消"
 
@@ -213,7 +219,12 @@ class StatefulAgentWorkflow @Inject constructor(
             val errorCode: String = "USER_REJECTED"
         ) : AgentAction
         data class ToolBatchFinished(
-            val results: List<ToolBatchResult>
+            val results: List<ToolBatchResult>,
+            /**
+             * 本批期间用户插话进来的消息。按用户消息落在本批工具结果之后——与模型侧上下文中的位置一致。
+             * 空列表表示本批没有插话。
+             */
+            val interjections: List<AgentMessage.UserMessage> = emptyList()
         ) : AgentAction
     }
 
@@ -534,7 +545,7 @@ class StatefulAgentWorkflow @Inject constructor(
                     )
                 }
                 newState = state.copy(
-                    messages = state.messages + appendedMessages,
+                    messages = state.messages + appendedMessages + action.interjections,
                     batchToolCalls = emptyList(),
                     pendingPermissionCalls = emptyList(),
                     approvedToolCalls = emptyList(),
@@ -1039,14 +1050,30 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 本轮内到达的后台任务/子代理完成通知：搭在本批最后一条工具结果上立即送达，
                         // AI 当轮即可感知，不必等本轮结束再起新一轮。ack 放到完成事件发出（结果已落库）之后：
                         // 中途被取消时通知仍留在队列里，由后续批次或本轮结束的兜底路径送达。
+                        //
+                        // 用户插话（USER_MESSAGE）不走搭车注入：它必须作为一条用户消息进上下文。塞进工具结果的
+                        // notifications 字段只能让模型从工具输出里读到用户的话，那就是把用户本人的输入降了级。
+                        // 这里把它挑出来，在工具结果之后单补一条 UserMessage（见下面的 interjections）。
                         val notifySessionId = currentContext.sessionId
                         val notifications = if (notifySessionId != null && batchResults.isNotEmpty()) {
                             agentNotificationCenter.peek(notifySessionId)
                         } else {
                             emptyList()
                         }
-                        if (notifications.isNotEmpty()) {
-                            val modeChange = notifications.lastOrNull { it.kind == AgentNotificationKind.MODE_CHANGE }
+                        val systemEvents = notifications.filterNot { it.kind == AgentNotificationKind.USER_MESSAGE }
+                        val interjections = notifications
+                            .filter { it.kind == AgentNotificationKind.USER_MESSAGE }
+                            .mapNotNull { item ->
+                                val text = item.message?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                                // 落库行 id 优先用界面预生成的那个：乐观气泡靠「库里出现同 id 的行」退场，
+                                // 不需要另行标记作废（标作废会让用户的话在界面上先消失一阵）。
+                                AgentMessage.UserMessage(
+                                    id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
+                                    content = text
+                                )
+                            }
+                        if (systemEvents.isNotEmpty()) {
+                            val modeChange = systemEvents.lastOrNull { it.kind == AgentNotificationKind.MODE_CHANGE }
                             val newMode = modeChange?.newMode
                             if (newMode != null) {
                                 // 用户在工作期间切换模式：本轮后续批次的权限判定立即改用新模式。
@@ -1062,7 +1089,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                 }
                             }
                             val last = batchResults.last()
-                            var injected = eventInjector.inject(last.result, notifications)
+                            var injected = eventInjector.inject(last.result, systemEvents)
                             if (newMode != null) {
                                 // 模式约束提示随工具结果落库，留在历史里供后续轮沿用。
                                 injected += buildExternalModeSwitchNotice(newMode)
@@ -1074,10 +1101,13 @@ class StatefulAgentWorkflow @Inject constructor(
                         batchResults.forEach { br ->
                             send(AgentEvent.ToolCallFinished(br.id, br.toolName, br.result, br.isError, attachments = br.attachments))
                         }
+                        // 插话紧跟在工具结果之后落库：库里与模型侧都是「工具结果 → 用户消息」。
+                        // 倒过来（用户消息挤在 assistant(tool_calls) 与 tool 结果之间）会破坏上游的配对约束。
+                        interjections.forEach { send(AgentEvent.UserMessageAdded(it.id, it.content)) }
                         if (notifySessionId != null && notifications.isNotEmpty()) {
                             agentNotificationCenter.ack(notifySessionId, notifications.map { it.seq })
                         }
-                        actionQueue.addLast(AgentAction.ToolBatchFinished(batchResults))
+                        actionQueue.addLast(AgentAction.ToolBatchFinished(batchResults, interjections))
                     }
                 }
             }
