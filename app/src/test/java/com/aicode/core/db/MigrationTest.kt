@@ -22,9 +22,9 @@ import java.io.File
  * 故用 [guardEnvironment] 在非标准 Linux 环境跳过——跳过不算失败；
  * CI（ubuntu x86_64）与普通开发机上真实执行。
  *
- * 历史版本（8~49）的 schema json 当年未导出，[MigrationTestHelper] 只能覆盖
- * 「当前版本及以后」的路径；历史路径的连续/无重复由 [MigrationFilesParseTest] 与
- * scripts/check_migrations.py 双向兜底。
+ * 历史版本（8~49、51~52）的 schema json 当年未导出（app/schemas 下只有 50 与 53 起），
+ * [MigrationTestHelper] 只能覆盖「当前版本及以后」的路径；历史路径的连续/无重复由
+ * [MigrationFilesParseTest] 与 scripts/check_migrations.py 双向兜底。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {

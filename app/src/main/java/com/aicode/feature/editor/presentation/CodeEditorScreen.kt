@@ -760,7 +760,10 @@ private val EDITOR_SYMBOLS = listOf(
 /** 内容渐显时长：给后台语法分析留出窗口，同时不致于让用户觉得打开变慢。 */
 private const val HIGHLIGHT_REVEAL_MS = 200
 
-/** 撤销合并窗口：间隔超过它的输入不再并入上一条撤销记录，撤销才是分步的。sora 默认 8000ms。 */
+/**
+ * 撤销合并窗口：连续输入的间隔不超过它时并成同一条撤销记录，超过则另起一条，撤销才是分步的。
+ * sora 默认 8000ms 会把整段输入并成一条，这里收紧到 500ms。
+ */
 private const val UNDO_MERGE_WINDOW_MS = 500L
 
 /** 行号左侧预留间距（sp）。 */

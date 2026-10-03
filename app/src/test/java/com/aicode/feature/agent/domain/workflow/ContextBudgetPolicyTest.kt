@@ -17,6 +17,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
+/**
+ * 上下文预算的测试：窗口档位、硬/软线、兜底线、保留最近原文的取值，
+ * 以及 agent 工作流侧对它们的应用（软精简、兜底截断、只写模型副本、摘录与守卫）。
+ *
+ * 被测类型是 [ModelContextPolicy]（settings 域）与 [ContextCompactor]：预算规则原先由 agent 域的
+ * ContextBudgetPolicy 承载，引擎化重构时并入了 ModelContextPolicy，本文件名沿用至今，
+ * 所以类名与被测类型不一致（不是漏改）。策略自身的取值边界由
+ * settings 域的 ModelContextPolicyTest 覆盖。
+ */
 class ContextBudgetPolicyTest {
 
     @Test
