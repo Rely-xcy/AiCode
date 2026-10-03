@@ -36,10 +36,12 @@ import kotlinx.coroutines.withTimeoutOrNull
  * App 级文件变更监听中心：监听当前活动工作区与 `~/.aicode` 两个根（也可订阅任意宿主目录），
  * 变更合并成批后广播；订阅方按需声明范围与过滤规则，没人订阅的目录不持有 inotify 句柄、不轮询。
  *
- * 事件来源两层：
+ * 事件来源三层：
  * - 每目录单层 inotify（订阅声明递归时随新目录自动补挂）；
  * - 订阅级快照轮询兜底（按订阅范围递归比对 mtime/size），覆盖 PRoot 绑定目录与外部 FUSE 目录上
- *   inotify 失效的机型，也能发现「整棵目录被移动/替换」这类 inotify 事件不完整的变更。
+ *   inotify 失效的机型，也能发现「整棵目录被移动/替换」这类 inotify 事件不完整的变更；
+ * - 远端模式（工作区在 SSH 服务器上，宿主根本没有 inotify 可挂）：交给 [RemoteFileWatchPoller]
+ *   做有界轮询，产出同一套 [FileChangeBatch]，消费方无需区分模式。
  *
  * 过滤按订阅方生效：递归剪枝与事件投递都用订阅自己的 [WatchFilter]，同一目录可以对一个订阅可见、
  * 对另一个订阅被忽略。剪枝只看父路径段，故被剪枝目录自身的增删仍会上报（父目录列表才看得到它）。
@@ -50,7 +52,8 @@ class FileChangeHub @Inject constructor(
     private val workspaceRepository: WorkspaceRepository,
     private val containerInstaller: ContainerInstaller,
     private val pathMapper: WorkspacePathMapper,
-    private val executionModeHolder: ExecutionModeHolder
+    private val executionModeHolder: ExecutionModeHolder,
+    private val remoteFileWatchPoller: RemoteFileWatchPoller
 ) {
     companion object {
         private const val TAG = "FileChangeHub"
@@ -101,8 +104,8 @@ class FileChangeHub @Inject constructor(
 
     /**
      * 订阅当前工作区（跟随工作区切换自动重建）。[containerSubPath] 是容器路径，默认整个工作区根。
-     * 远程模式下工作区在服务器上、宿主没有对应目录，订阅退化为空流；本地模式下工作区未落定时
-     * 同样不订阅（不能把工作区父目录当成工作区来观察）。
+     * 远程模式下工作区在服务器上、宿主没有对应目录，改走 [RemoteFileWatchPoller] 的远端轮询；
+     * 本地模式下工作区未落定时不订阅（不能把工作区父目录当成工作区来观察）。
      */
     fun watchWorkspace(
         containerSubPath: String = CONTAINER_ROOT,
@@ -114,8 +117,17 @@ class FileChangeHub @Inject constructor(
         .map { workspaceRepository.currentPathOrNull() }
         .distinctUntilChanged()
         .flatMapLatest { workspacePath ->
-            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH || workspacePath == null) {
-                emptyFlow()
+            if (workspacePath == null) return@flatMapLatest emptyFlow()
+            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+                // 远端：容器路径直接拼到远端工作区根上（严格用已落定的工作区路径，不回退父目录）。
+                val remoteDir = remoteDirOrNull(workspacePath, containerSubPath)
+                    ?: return@flatMapLatest emptyFlow()
+                remoteFileWatchPoller.watch(
+                    remoteDir = remoteDir,
+                    containerRoot = containerSubPath.trimEnd('/'),
+                    recursive = recursive,
+                    filter = filter
+                )
             } else {
                 // 订阅建立与订阅消费之间工作区可能又失效，映射失败则退化为空流，不让流异常终止。
                 val hostDir = runCatching { pathMapper.toHostFile(containerSubPath) }.getOrNull()
@@ -131,6 +143,23 @@ class FileChangeHub @Inject constructor(
                 )
             }
         }
+
+    /**
+     * 容器路径 → 远端绝对目录；不属于当前工作区（`~/workspace` 之外）时返回 null。
+     *
+     * 只认 [WorkspacePathMapper.CONTAINER_ROOT] 前缀（消费方给的都是这个形式）；`/root/.aicode`、
+     * rootfs 路径等既不在远端工作区里、也没有对应的远端目录，一律不订阅。
+     */
+    private fun remoteDirOrNull(workspacePath: String, containerSubPath: String): String? {
+        val sub = containerSubPath.trim().trimEnd('/')
+        val rel = when {
+            sub == CONTAINER_ROOT -> ""
+            sub.startsWith("$CONTAINER_ROOT/") -> sub.removePrefix("$CONTAINER_ROOT/")
+            else -> return null
+        }
+        val base = workspacePath.trimEnd('/')
+        return if (rel.isEmpty()) base else "$base/$rel"
+    }
 
     /** 订阅 AI 配置目录（`~/.aicode`）下的子路径，[containerSubPath] 为空表示该目录本身。 */
     fun watchAicode(
