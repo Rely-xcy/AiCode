@@ -470,6 +470,10 @@
     <string name="backup_stat_mcp_servers">· MCP Servers: %1$s</string>
     <string name="backup_stat_permission_rules">· Global Permission Rules: %1$s</string>
     <string name="backup_stat_workspace_files">· Workspace Files: %1$s</string>
+    <string name="backup_stat_skill_files">· Skill Files: %1$s</string>
+    <string name="backup_stat_subagent_files">· Subagent Files: %1$s</string>
+    <string name="backup_stat_panel_scripts">· Panel Scripts: %1$s</string>
+    <string name="backup_skills_agents_config_covered">Skill and subagent enable states covered</string>
     <string name="backup_settings_covered">Theme, keepalive, logging, vision, and sync preferences covered</string>
     <string name="backup_restore_workspaces_title">Restore workspaces</string>
     <string name="backup_restore_workspaces_warning">Files in local workspaces with the same name will be overwritten and cannot be undone. Select carefully.</string>

@@ -89,7 +89,7 @@ There is nothing to set up beforehand: install the app, configure a model under 
 - **Token stats** — Usage and cost estimates per provider and model, with a drill-down into individual calls
 - **Appearance & language** — Light/dark themes, preset color schemes, Material You colors, custom background images, and a bilingual (Chinese/English) UI
 - **Network proxy** — Configure a global proxy and per-provider proxies separately
-- **Backup & Restore** — Encrypted export/import of provider configs, credentials, chat history and workspace files
+- **Backup & Restore** — Encrypted export/import of provider configs, credentials, chat history, skills & subagents, panel scripts and workspace files
 
 ## Getting Started
 

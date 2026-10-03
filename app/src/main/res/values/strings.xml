@@ -470,6 +470,10 @@
     <string name="backup_stat_mcp_servers">· MCP 服务器 %1$s 个</string>
     <string name="backup_stat_permission_rules">· 全局授权规则 %1$s 条</string>
     <string name="backup_stat_workspace_files">· 工作区文件 %1$s 个</string>
+    <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
+    <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
+    <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>
+    <string name="backup_skills_agents_config_covered">技能与子代理的启停状态已覆盖</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
     <string name="backup_restore_workspaces_title">恢复工作区</string>
     <string name="backup_restore_workspaces_warning">将直接覆盖本地同名工作区中的文件，且无法撤销，请谨慎勾选</string>
