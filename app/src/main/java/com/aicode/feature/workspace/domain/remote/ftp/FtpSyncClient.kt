@@ -53,7 +53,7 @@ class FtpSyncClient : RemoteSyncClient {
 
     private fun doConnect(host: String, port: Int, username: String, auth: RemoteAuth) {
         if (auth !is RemoteAuth.Password) {
-            throw IllegalArgumentException("FTP only supports Password authentication")
+            throw IllegalArgumentException("FTP 只支持密码认证：请到「连接配置」把该连接的认证方式改为密码")
         }
 
         // 编码须在 connect 前设置：影响控制命令与路径的编解码（非 ASCII 路径）。
@@ -70,12 +70,12 @@ class FtpSyncClient : RemoteSyncClient {
         val reply = ftpClient.replyCode
         if (!FTPReply.isPositiveCompletion(reply)) {
             ftpClient.disconnect()
-            throw IllegalStateException("FTP server refused connection.")
+            throw IllegalStateException("FTP 服务器拒绝连接：请确认主机地址、端口与服务器状态")
         }
 
         if (!ftpClient.login(username, auth.password)) {
             ftpClient.disconnect()
-            throw IllegalStateException("FTP login failed")
+            throw IllegalStateException("FTP 登录失败：请检查用户名与密码")
         }
 
         ftpClient.enterLocalPassiveMode()

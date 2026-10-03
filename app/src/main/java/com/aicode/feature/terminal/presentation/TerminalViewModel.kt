@@ -62,6 +62,17 @@ class TerminalViewModel @Inject constructor(
     private val _creatingTab = MutableStateFlow(false)
     val creatingTab: StateFlow<Boolean> = _creatingTab.asStateFlow()
 
+    /**
+     * 新建标签失败的一次性提示（远程模式常见：SSH 未连接 / 工作区未就绪）；
+     * UI 展示后调用 [consumeTabError] 清空。原来只写日志，点了「新建」没反应、用户不知道为何。
+     */
+    private val _tabError = MutableStateFlow<String?>(null)
+    val tabError: StateFlow<String?> = _tabError.asStateFlow()
+
+    fun consumeTabError() {
+        _tabError.value = null
+    }
+
     /** 容器初始化实时进度（解压/部署/装包），Loading 阶段用它展示细粒度文案。 */
     val containerInit: StateFlow<ContainerInitState> = containerEngine.initProgress
 
@@ -117,6 +128,7 @@ class TerminalViewModel @Inject constructor(
                 if (isRemote()) remoteManager.createInteractiveTab() else localManager.createInteractiveTab()
             } catch (e: Exception) {
                 FileLogger.e(TAG, "新建标签失败", e)
+                _tabError.value = e.message ?: context.getString(R.string.terminal_prepare_error_unknown)
             } finally {
                 _creatingTab.value = false
             }

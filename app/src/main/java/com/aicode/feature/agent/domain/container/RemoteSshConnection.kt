@@ -505,6 +505,9 @@ fun friendlySshError(e: Throwable): String {
             "连接 SSH 服务器超时，请检查网络或服务器状态"
         "SSH 未连接" in msg ->
             "SSH 未连接，请等待连接恢复或在设置中检查配置"
+        // 已经是可读的中文文案（FTP/SFTP 客户端自己抛的异常、SFTP 侧包好的 IOException）：
+        // 直接透出，不再套一层「SSH 连接失败: 」——那会把「FTP 只支持密码认证」变成看不懂的句子
+        msg.any { it in '\u4e00'..'\u9fff' } -> msg
         else -> "SSH 连接失败: ${e.message ?: "未知错误"}"
     }
 }

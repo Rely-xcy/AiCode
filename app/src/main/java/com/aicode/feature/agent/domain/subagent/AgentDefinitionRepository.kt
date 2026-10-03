@@ -57,8 +57,8 @@ class AgentDefinitionRepository @Inject constructor(
     /** 该子代理是否在任一作用域中被禁用。 */
     fun isDisabled(name: String): Boolean = name.lowercase() in configRepository.disabledNames()
 
-    /** 在指定作用域启用/禁用某个子代理。 */
-    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope) =
+    /** 在指定作用域启用/禁用某个子代理。@return false 表示项目级配置因工作区未就绪被跳过。 */
+    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope): Boolean =
         configRepository.setDisabled(name, disabled, scope)
 
     /**

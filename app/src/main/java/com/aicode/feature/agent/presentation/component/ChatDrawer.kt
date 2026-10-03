@@ -162,7 +162,7 @@ fun ChatDrawerContent(
     onDeleteEntry: (String) -> Unit,
     onCopyEntry: (String, String) -> Unit,
     onCutEntry: (String, String) -> Unit,
-    onPasteEntry: (String, (Boolean) -> Unit) -> Unit,
+    onPasteEntry: (String, (Boolean, String?) -> Unit) -> Unit,
     onPasteOverwrite: () -> Unit,
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
@@ -859,7 +859,7 @@ private fun FileBrowserTab(
     onDeleteEntry: (String) -> Unit,
     onCopyEntry: (String, String) -> Unit,
     onCutEntry: (String, String) -> Unit,
-    onPasteEntry: (String, (Boolean) -> Unit) -> Unit,
+    onPasteEntry: (String, (Boolean, String?) -> Unit) -> Unit,
     onClearClipboard: () -> Unit
 ) {
     var creating by remember { mutableStateOf<CreateTarget?>(null) }
@@ -1027,7 +1027,7 @@ private fun FileBrowserTab(
             onPasteHere = {
                 val target = node.path
                 menuNode = null
-                onPasteEntry(target) { /* 结果由调用方决定是否提示，这里保持静默 */ }
+                onPasteEntry(target) { _, _ -> /* 结果由调用方决定是否提示，这里保持静默 */ }
             },
             onDismiss = { menuNode = null }
         )

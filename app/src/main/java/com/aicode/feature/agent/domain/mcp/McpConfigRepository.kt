@@ -218,17 +218,22 @@ class McpConfigRepository @Inject constructor(
         }
     }
 
-    /** 写入当前项目的 MCP 配置；工作区未落定时不写（避免落到全局层或错误项目），仅记日志。 */
-    suspend fun setProjectServers(servers: List<McpServerConfig>) {
+    /**
+     * 写入当前项目的 MCP 配置；工作区未落定时不写（避免落到全局层或错误项目），仅记日志。
+     *
+     * @return false 表示因工作区未落定被跳过，调用方必须提示用户，否则 MCP 加了不出现。
+     */
+    suspend fun setProjectServers(servers: List<McpServerConfig>): Boolean {
         val path = workspaceRepository.currentPathOrNull() ?: run {
             FileLogger.w(TAG, "工作区未就绪，忽略项目级 MCP 配置写入")
-            return
+            return false
         }
         val json = serialize(servers)
         mutex.withLock {
             withContext(Dispatchers.IO) { writeFile(projectFileForPath(path), json) }
             getProjectState(path).value = json
         }
+        return true
     }
 
     /** 当前项目生效的合并配置（项目优先覆盖同名），供 [McpManager] 连接使用。 */

@@ -55,9 +55,20 @@ class RemoteTerminalSessionManager @Inject constructor(
 
     fun tab(id: String): TerminalTab? = _tabs.value.firstOrNull { it.id == id }
 
-    /** 仅当当前模式是 REMOTE_SSH 且已连接时才可使用。 */
-    private fun ensureRemote(): Boolean =
-        modeHolder.currentMode() == ExecutionMode.REMOTE_SSH && connection.isConnected()
+    /**
+     * 远程终端不可用的原因；null 表示可用。
+     *
+     * 分两种说清楚（模式不对 / 连接断了）而不是笼统的「非远程模式或 SSH 未连接」：
+     * 前者要去设置里改执行模式，后者该等重连或去连接配置页测试连通性。
+     * 第三种「远程已连但工作区没落定」由后面的 [WorkspaceRepository.notReadyException] 单独报。
+     */
+    private fun remoteUnavailableReason(): String? = when {
+        modeHolder.currentMode() != ExecutionMode.REMOTE_SSH ->
+            "当前不是远程 SSH 执行模式，终端不可用：请先在设置里切换执行模式"
+        !connection.isConnected() ->
+            "SSH 未连接，终端不可用：请到「连接配置」页测试连通性，或等待自动重连"
+        else -> null
+    }
 
     /** 终端页进入时调用：没有任何标签则建一个交互 shell。幂等。 */
     suspend fun ensureInitialTab() {
@@ -70,7 +81,7 @@ class RemoteTerminalSessionManager @Inject constructor(
 
     /** 新建一个交互 shell 标签并设为当前。返回新标签 id。 */
     suspend fun createInteractiveTab(): String {
-        if (!ensureRemote()) throw IllegalStateException("非远程模式或 SSH 未连接")
+        remoteUnavailableReason()?.let { throw IllegalStateException(it) }
         return openShellTab(command = null, isBackground = false, notify = false, title = null, sourceSessionId = null).also { id ->
             _activeTabId.value = id
             FileLogger.i(TAG, "新建交互远程终端标签 $id")
@@ -83,7 +94,7 @@ class RemoteTerminalSessionManager @Inject constructor(
         notify: Boolean,
         sourceSessionId: String?
     ): String {
-        if (!ensureRemote()) throw IllegalStateException("非远程模式或 SSH 未连接")
+        remoteUnavailableReason()?.let { throw IllegalStateException(it) }
         val id = openShellTab(command, isBackground = true, notify = notify, title = title, sourceSessionId = sourceSessionId)
         FileLogger.i(TAG, "后台命令标签 $id: $command")
         return id

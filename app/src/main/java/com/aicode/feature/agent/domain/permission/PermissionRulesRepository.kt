@@ -223,42 +223,48 @@ class PermissionRulesRepository @Inject constructor(
         return project + global
     }
 
-    /** 按 scope 新增规则。PROJECT 写入当前项目；无当前项目或工作区未落定时忽略并告警。 */
-    suspend fun add(scope: PermissionScope, rule: PermissionRule) {
+    /**
+     * 按 scope 新增规则。PROJECT 写入当前项目；无当前项目或工作区未落定时忽略并告警
+     * （返回 false，由记忆授权调用方决定怎么提示）。
+     */
+    suspend fun add(scope: PermissionScope, rule: PermissionRule): Boolean {
+        FileLogger.i(TAG, "记忆授权规则[$scope]: ${rule.toolName} ${rule.pattern}")
         when (scope) {
             PermissionScope.GLOBAL -> editGlobal { if (rule !in it) it.add(rule) }
             PermissionScope.PROJECT -> {
-                val workspacePath = workspaceRepository.currentPathOrNull()
-                if (workspacePath == null) {
+                val workspacePath = workspaceRepository.currentPathOrNull() ?: run {
                     FileLogger.w(TAG, "工作区未就绪，无法新增项目级规则: ${rule.toolName} ${rule.pattern}")
-                    return
+                    return false
                 }
                 editProject(workspacePath) { if (rule !in it) it.add(rule) }
             }
         }
-        FileLogger.i(TAG, "记忆授权规则[$scope]: ${rule.toolName} ${rule.pattern}")
+        return true
     }
 
     suspend fun removeGlobalRule(rule: PermissionRule) = editGlobal { it.remove(rule) }
 
-    /** 删除项目级规则；工作区未落定时不写（不知道写哪个项目），仅记日志。 */
-    suspend fun removeProjectRule(projectName: String, rule: PermissionRule) {
+    /** 删除项目级规则；工作区未落定时不写（不知道写哪个项目），仅记日志。@return false 表示被跳过。 */
+    suspend fun removeProjectRule(projectName: String, rule: PermissionRule): Boolean {
         val workspacePath = workspaceRepository.currentPathOrNull() ?: run {
             FileLogger.w(TAG, "工作区未就绪，忽略项目级规则删除: ${rule.toolName} ${rule.pattern}")
-            return
+            return false
         }
         editProject(workspacePath) { it.remove(rule) }
+        return true
     }
 
-    /** 把一条项目规则提升为全局：项目删、全局加。工作区未落定时不写（避免只删到一半），仅记日志。 */
-    suspend fun promoteToGlobal(projectName: String, rule: PermissionRule) {
+    /** 把一条项目规则提升为全局：项目删、全局加。工作区未落定时不写（避免只删到一半），仅记日志。
+     *  @return false 表示被跳过（项目层没删、全局层也没加）。 */
+    suspend fun promoteToGlobal(projectName: String, rule: PermissionRule): Boolean {
         val workspacePath = workspaceRepository.currentPathOrNull() ?: run {
             FileLogger.w(TAG, "工作区未就绪，忽略提升为全局: ${rule.toolName} ${rule.pattern}")
-            return
+            return false
         }
         editProject(workspacePath) { it.remove(rule) }
         editGlobal { if (rule !in it) it.add(rule) }
         FileLogger.i(TAG, "提升为全局: ${rule.toolName} ${rule.pattern}")
+        return true
     }
 
     // ── 内部写入 ────────────────────────────────────────────────

@@ -571,23 +571,23 @@ fun AppNavigation(
             onOpenFile = openTreeEntry,
             onRefreshBrowse = { agentViewModel.refreshBrowse() },
             onCreateFile = { parent, name ->
-                agentViewModel.createBrowseFile(parent, name) { ok ->
-                    if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed)
+                agentViewModel.createBrowseFile(parent, name) { ok, reason ->
+                    if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed, reason)
                 }
             },
             onCreateFolder = { parent, name ->
-                agentViewModel.createBrowseFolder(parent, name) { ok ->
-                    if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed)
+                agentViewModel.createBrowseFolder(parent, name) { ok, reason ->
+                    if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed, reason)
                 }
             },
             onRenameEntry = { path, newName ->
-                agentViewModel.renameBrowseEntry(path, newName) { ok ->
-                    if (!ok) toastFileOpFailed(context, R.string.file_browser_rename_failed)
+                agentViewModel.renameBrowseEntry(path, newName) { ok, reason ->
+                    if (!ok) toastFileOpFailed(context, R.string.file_browser_rename_failed, reason)
                 }
             },
             onDeleteEntry = { path ->
-                agentViewModel.deleteBrowseEntry(path) { ok ->
-                    if (!ok) toastFileOpFailed(context, R.string.file_browser_delete_failed)
+                agentViewModel.deleteBrowseEntry(path) { ok, reason ->
+                    if (!ok) toastFileOpFailed(context, R.string.file_browser_delete_failed, reason)
                 }
             },
             onCopyEntry = { path, name ->
@@ -1016,9 +1016,12 @@ fun AppNavigation(
     }
 }
 
-/** 侧边栏文件页写操作失败提示（新建 / 重命名 / 删除共用）。 */
-private fun toastFileOpFailed(context: android.content.Context, messageRes: Int) {
-    Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT).show()
+/** 侧边栏文件页写操作失败提示（新建 / 重命名 / 删除共用）。
+ *  [reason] 为失败原因（IO 异常的 message），为空则只显示固定文案。 */
+private fun toastFileOpFailed(context: android.content.Context, messageRes: Int, reason: String?) {
+    val detail = reason?.trim()?.takeIf { it.isNotEmpty() }
+    val text = context.getString(messageRes) + if (detail != null) "：$detail" else ""
+    Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 }
 
 /**

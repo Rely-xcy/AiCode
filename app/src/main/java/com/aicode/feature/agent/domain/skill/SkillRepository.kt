@@ -52,8 +52,8 @@ class SkillRepository @Inject constructor(
     fun isSkillDisabled(name: String): Boolean =
         name.lowercase() in skillConfigRepository.disabledNames()
 
-    /** 在指定作用域启用/禁用某个技能。 */
-    fun setSkillDisabled(name: String, disabled: Boolean, scope: SkillScope) =
+    /** 在指定作用域启用/禁用某个技能。@return false 表示项目级配置因工作区未就绪被跳过。 */
+    fun setSkillDisabled(name: String, disabled: Boolean, scope: SkillScope): Boolean =
         skillConfigRepository.setDisabled(name, disabled, scope)
 
     /**

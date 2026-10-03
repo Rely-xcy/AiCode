@@ -74,7 +74,7 @@ class SftpSyncClient(
     override suspend fun listFiles(remotePath: String): List<RemoteFileInfo> =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP 未连接或挂载已断开：请重新连接该挂载点")
                 sftp.ls(remotePath).map {
                     RemoteFileInfo(
                         name = it.name,
@@ -89,7 +89,7 @@ class SftpSyncClient(
     override suspend fun downloadFile(remotePath: String, localPath: String) =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP 未连接或挂载已断开：请重新连接该挂载点")
                 File(localPath).parentFile?.mkdirs()
                 sftp.get(remotePath, localPath)
             }
@@ -98,7 +98,7 @@ class SftpSyncClient(
     override suspend fun uploadFile(localPath: String, remotePath: String) =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP 未连接或挂载已断开：请重新连接该挂载点")
                 if (File(localPath).exists()) {
                     sftp.put(localPath, remotePath)
                 }
@@ -108,7 +108,7 @@ class SftpSyncClient(
     override suspend fun createDirectory(remotePath: String) =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP 未连接或挂载已断开：请重新连接该挂载点")
                 sftp.mkdirs(remotePath)
             }
         }
@@ -116,7 +116,7 @@ class SftpSyncClient(
     override suspend fun delete(remotePath: String) =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                val sftp = sftpClient ?: throw IllegalStateException("SFTP Client is not connected")
+                val sftp = sftpClient ?: throw IllegalStateException("SFTP 未连接或挂载已断开：请重新连接该挂载点")
                 val attrs = sftp.statExistence(remotePath)
                 if (attrs != null) {
                     if (attrs.type == FileMode.Type.DIRECTORY) {

@@ -207,6 +207,14 @@ fun SettingsScreen(
     onOnboardingDismissFetchDialog: (() -> Unit)? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
+    // 项目级配置写入被跳过（工作区未就绪）时给一次提示：否则开关会自己弹回、MCP 加了不出现
+    val configWriteError by viewModel.configWriteError.collectAsStateWithLifecycle()
+    val configWriteErrorContext = LocalContext.current
+    LaunchedEffect(configWriteError) {
+        val message = configWriteError ?: return@LaunchedEffect
+        Toast.makeText(configWriteErrorContext, message, Toast.LENGTH_SHORT).show()
+        viewModel.consumeConfigWriteError()
+    }
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
     val logViewerState by viewModel.logViewerState.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()

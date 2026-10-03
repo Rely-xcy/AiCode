@@ -114,9 +114,15 @@ class ManageMcpTool @Inject constructor(
         suspend fun readServers(): List<McpServerConfig> =
             if (scope == McpScope.PROJECT) mcpConfigRepository.getProjectServers() else mcpConfigRepository.getGlobalServers()
 
-        suspend fun writeServers(servers: List<McpServerConfig>) {
-            if (scope == McpScope.PROJECT) mcpConfigRepository.setProjectServers(servers) else mcpConfigRepository.setGlobalServers(servers)
+        suspend fun writeServers(servers: List<McpServerConfig>): Boolean {
+            if (scope == McpScope.PROJECT) return mcpConfigRepository.setProjectServers(servers)
+            mcpConfigRepository.setGlobalServers(servers)
+            return true
         }
+
+        // 项目级写入被跳过（工作区未落定）时的失败结果：不能让 AI 以为已经写成功——
+        // 否则用户看到的就是「MCP 加了不出现」。
+        val projectWriteSkipped = ToolResult.Error("项目级 MCP 配置未写入：工作区尚未就绪，请稍后重试，或改用全局作用域（scope=global）")
 
         return try {
             when (action) {
@@ -129,7 +135,7 @@ class ManageMcpTool @Inject constructor(
                     val servers = readServers().toMutableList()
                     val removed = servers.removeIf { it.name == name }
                     if (removed) {
-                        writeServers(servers)
+                        if (!writeServers(servers)) return projectWriteSkipped
                         ToolResult.Success(JsonPrimitive("已移除 $scopeLabel MCP server：$name"))
                     } else {
                         ToolResult.Error("未找到 $scopeLabel MCP server：$name")
@@ -152,7 +158,7 @@ class ManageMcpTool @Inject constructor(
                     val servers = readServers().toMutableList()
                     servers.removeIf { it.name == name }
                     servers.add(newServer)
-                    writeServers(servers)
+                    if (!writeServers(servers)) return projectWriteSkipped
                     
                     ToolResult.Success(JsonPrimitive("已添加 $scopeLabel 本地 MCP server：$name，配置将在下一次会话生效。若命令依赖 Node/Python 等运行时，请通过命令工具在用户确认后安装。"))
                 }
@@ -171,7 +177,7 @@ class ManageMcpTool @Inject constructor(
                     val servers = readServers().toMutableList()
                     servers.removeIf { it.name == name }
                     servers.add(newServer)
-                    writeServers(servers)
+                    if (!writeServers(servers)) return projectWriteSkipped
                     
                     ToolResult.Success(JsonPrimitive("已添加 $scopeLabel HTTP MCP server：$name，配置将在下一次会话生效。"))
                 }

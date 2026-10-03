@@ -653,6 +653,24 @@ class SettingsViewModel @Inject constructor(
     private val _globalRules = MutableStateFlow<List<PermissionRule>>(emptyList())
     val globalRules: StateFlow<List<PermissionRule>> = _globalRules.asStateFlow()
 
+    /**
+     * 项目级配置写入因「工作区未就绪」被跳过时的一次性提示；UI 展示后调用 [consumeConfigWriteError] 清空。
+     *
+     * 项目级写入（技能/子代理开关、MCP、权限规则）在工作区未落定时会被有意跳过，
+     * 不提示的话用户看到的是「开关自己弹回去」「MCP 加了不出现」，分不清是 App 坏了还是没保存。
+     * 文案取 [WorkspaceRepository.notReadyMessage]，与工具/命令/终端入口的提示同源。
+     */
+    private val _configWriteError = MutableStateFlow<String?>(null)
+    val configWriteError: StateFlow<String?> = _configWriteError.asStateFlow()
+
+    fun consumeConfigWriteError() {
+        _configWriteError.value = null
+    }
+
+    private fun reportConfigWriteSkipped() {
+        _configWriteError.value = workspaceRepository.notReadyMessage()
+    }
+
     private val _projectRules = MutableStateFlow<List<PermissionRule>>(emptyList())
     val projectRules: StateFlow<List<PermissionRule>> = _projectRules.asStateFlow()
 
@@ -1163,12 +1181,15 @@ class SettingsViewModel @Inject constructor(
 
     fun upsertMcpServer(originalName: String?, initialScope: McpScope?, config: McpServerConfig, scope: McpScope) {
         viewModelScope.launch {
+            // 项目级写入在工作区未就绪时会被仓库跳过，这里记录下来统一提示（否则「MCP 加了不出现」）
+            var written = true
             // 作用域迁移：仅当保存作用域与原来不同时，从原作用域移除旧条目，
             // 避免残留条目在合并时（项目优先）继续覆盖新作用域的配置。
             if (originalName != null && initialScope != null && initialScope != scope) {
                 val oldBase = if (initialScope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
                 val oldUpdated = oldBase.filterNot { it.name == originalName }
-                if (initialScope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(oldUpdated) else mcpConfigRepository.setProjectServers(oldUpdated)
+                if (initialScope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(oldUpdated)
+                else written = mcpConfigRepository.setProjectServers(oldUpdated)
             }
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
             val ordered = LinkedHashMap<String, McpServerConfig>()
@@ -1178,7 +1199,9 @@ class SettingsViewModel @Inject constructor(
             }
             ordered[config.name] = config
             val updated = ordered.values.toList()
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
+            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated)
+            else written = mcpConfigRepository.setProjectServers(updated) && written
+            if (!written) reportConfigWriteSkipped()
             _mcpReloading.value = true
             try {
                 // 仅重连被改动的 server，其他 server 不受影响；重命名时先断开旧名。
@@ -1196,7 +1219,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
             val updated = base.filterNot { it.name == name }
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
+            val written = if (scope == McpScope.GLOBAL) {
+                mcpConfigRepository.setGlobalServers(updated)
+                true
+            } else {
+                mcpConfigRepository.setProjectServers(updated)
+            }
+            if (!written) reportConfigWriteSkipped()
             _mcpReloading.value = true
             try {
                 mcpManager.removeServer(name)
@@ -1210,7 +1239,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
             val updated = base.map { if (it.name == name) it.copy(enabled = enabled) else it }
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
+            val written = if (scope == McpScope.GLOBAL) {
+                mcpConfigRepository.setGlobalServers(updated)
+                true
+            } else {
+                mcpConfigRepository.setProjectServers(updated)
+            }
+            if (!written) reportConfigWriteSkipped()
             _mcpReloading.value = true
             try {
                 mcpManager.reloadServer(name)
@@ -1261,10 +1296,11 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 切换技能的启用/禁用状态（写入对应作用域的 skills.json）。 */
+    /** 切换技能的启用/禁用状态（写入对应作用域的 skills.json）；项目级被跳过时提示并刷新回磁盘状态。 */
     fun setSkillEnabled(name: String, enabled: Boolean, scope: SkillScope) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { skillRepository.setSkillDisabled(name, !enabled, scope) }
+            val written = withContext(Dispatchers.IO) { skillRepository.setSkillDisabled(name, !enabled, scope) }
+            if (!written) reportConfigWriteSkipped()
             refreshSkills()
         }
     }
@@ -1401,10 +1437,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
-    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；禁用后不再进主代理的可派发清单。 */
+    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；项目级被跳过时提示并刷新回磁盘状态。 */
     fun setSubAgentEnabled(name: String, enabled: Boolean, scope: AgentDefinitionScope) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { agentDefinitionRepository.setDisabled(name, !enabled, scope) }
+            val written = withContext(Dispatchers.IO) { agentDefinitionRepository.setDisabled(name, !enabled, scope) }
+            if (!written) reportConfigWriteSkipped()
             refreshSubAgents()
         }
     }
@@ -2253,7 +2290,8 @@ class SettingsViewModel @Inject constructor(
         if (scope == McpScope.GLOBAL) {
             mcpConfigRepository.setGlobalServers(next)
         } else {
-            mcpConfigRepository.setProjectServers(next)
+            val written = mcpConfigRepository.setProjectServers(next)
+            if (!written) reportConfigWriteSkipped()
         }
     }
 
@@ -2443,12 +2481,18 @@ class SettingsViewModel @Inject constructor(
 
     fun deleteProjectRule(rule: PermissionRule) {
         val name = currentProjectName.value ?: return
-        viewModelScope.launch { permissionRulesRepository.removeProjectRule(name, rule) }
+        viewModelScope.launch {
+            val written = permissionRulesRepository.removeProjectRule(name, rule)
+            if (!written) reportConfigWriteSkipped()
+        }
     }
 
     fun promoteRuleToGlobal(rule: PermissionRule) {
         val name = currentProjectName.value ?: return
-        viewModelScope.launch { permissionRulesRepository.promoteToGlobal(name, rule) }
+        viewModelScope.launch {
+            val written = permissionRulesRepository.promoteToGlobal(name, rule)
+            if (!written) reportConfigWriteSkipped()
+        }
     }
 
     fun setDisableSafetyInterception(disabled: Boolean) {

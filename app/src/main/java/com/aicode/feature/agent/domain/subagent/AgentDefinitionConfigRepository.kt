@@ -84,21 +84,27 @@ class AgentDefinitionConfigRepository @Inject constructor(
     fun disabledNames(): Set<String> =
         (readGlobalDisabled() + (projectFile()?.let { readDisabled(it) } ?: emptySet())).map { it.lowercase() }.toSet()
 
-    /** 在指定作用域的配置中启用/禁用某个子代理；工作区未落定时项目级写入被忽略，不落到全局层。 */
-    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope) {
+    /**
+     * 在指定作用域的配置中启用/禁用某个子代理；工作区未落定时项目级写入被忽略，不落到全局层。
+     *
+     * @return 是否真的写入了：false 表示项目级配置因工作区未落定被跳过，调用方必须提示用户，
+     *   否则开关会自己弹回、用户不知道发生了什么。
+     */
+    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope): Boolean {
         if (scope == AgentDefinitionScope.GLOBAL) {
             val names = readGlobalDisabled().toMutableSet()
             if (disabled) names.add(name) else names.removeAll { it.equals(name, ignoreCase = true) }
             fileAccess.writeFile(GLOBAL_CONFIG_PATH, serializeDisabled(names))
-            return
+            return true
         }
         val file = projectFile() ?: run {
             FileLogger.w(TAG, "工作区未就绪，忽略项目级子代理配置写入：$name")
-            return
+            return false
         }
         val names = readDisabled(file).toMutableSet()
         if (disabled) names.add(name) else names.removeAll { it.equals(name, ignoreCase = true) }
         writeDisabled(file, names)
+        return true
     }
 
     private fun readGlobalDisabled(): Set<String> = runCatching {

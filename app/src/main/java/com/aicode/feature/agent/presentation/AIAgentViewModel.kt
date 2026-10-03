@@ -593,22 +593,25 @@ class AIAgentViewModel @Inject constructor(
     /**
      * 文件浏览的写操作共用包装：跑 IO 调度器，成功后主动重读目录（远程模式无 inotify）。
      * [busyPaths] 为本次操作涉及的条目路径，操作期间加入 [fileOpPaths] 让 UI 显示等待动画。
-     * [block] 返回 false 表示名称非法或同名已存在，抛异常表示 IO 失败，两者均回报失败。
+     * [block] 返回 false 表示名称非法或同名已存在，抛异常表示 IO 失败。
+     *
+     * [onResult] 第二个参数是失败原因（IO 异常的 message；名称非法/同名已存在时为 null）：
+     * 只说「删除失败」而不给原因，用户无法判断是断线、权限还是文件已不在。
      */
     private fun mutateBrowse(
         busyPaths: Set<String> = emptySet(),
-        onResult: (Boolean) -> Unit,
+        onResult: (Boolean, String?) -> Unit,
         block: () -> Boolean
     ) = viewModelScope.launch {
         if (busyPaths.isNotEmpty()) _fileOpPaths.value = _fileOpPaths.value + busyPaths
         try {
-            val success = withContext(Dispatchers.IO) {
+            val outcome = withContext(Dispatchers.IO) {
                 runCatching(block)
                     .onFailure { FileLogger.w(TAG, "文件操作失败", it) }
-                    .getOrDefault(false)
             }
+            val success = outcome.getOrDefault(false)
             if (success) refreshBrowse()
-            onResult(success)
+            onResult(success, outcome.exceptionOrNull()?.message)
         } finally {
             if (busyPaths.isNotEmpty()) _fileOpPaths.value = _fileOpPaths.value - busyPaths
         }
@@ -619,7 +622,7 @@ class AIAgentViewModel @Inject constructor(
         if (isValidFileEntryName(name)) "$parent/${name.trim()}" else null
 
     /** 在 [parent] 目录新建空文件。 */
-    fun createBrowseFile(parent: String, name: String, onResult: (Boolean) -> Unit) {
+    fun createBrowseFile(parent: String, name: String, onResult: (Boolean, String?) -> Unit) {
         val target = browseChildPath(parent, name)
         mutateBrowse(busyPaths = target?.let { setOf(it) } ?: emptySet(), onResult = onResult) {
             if (target == null || fileAccess.exists(target)) {
@@ -632,7 +635,7 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /** 在 [parent] 目录新建文件夹。 */
-    fun createBrowseFolder(parent: String, name: String, onResult: (Boolean) -> Unit) {
+    fun createBrowseFolder(parent: String, name: String, onResult: (Boolean, String?) -> Unit) {
         val target = browseChildPath(parent, name)
         mutateBrowse(busyPaths = target?.let { setOf(it) } ?: emptySet(), onResult = onResult) {
             if (target == null || fileAccess.exists(target)) {
@@ -645,7 +648,7 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /** 重命名条目（仅同目录内改名，不跨目录移动）。 */
-    fun renameBrowseEntry(path: String, newName: String, onResult: (Boolean) -> Unit) =
+    fun renameBrowseEntry(path: String, newName: String, onResult: (Boolean, String?) -> Unit) =
         mutateBrowse(busyPaths = setOf(path), onResult = onResult) {
             val parent = path.substringBeforeLast('/', "")
             if (parent.isEmpty() || !isValidFileEntryName(newName)) {
@@ -657,7 +660,7 @@ class AIAgentViewModel @Inject constructor(
         }
 
     /** 删除条目；目录连同内容递归删除。 */
-    fun deleteBrowseEntry(path: String, onResult: (Boolean) -> Unit) =
+    fun deleteBrowseEntry(path: String, onResult: (Boolean, String?) -> Unit) =
         mutateBrowse(busyPaths = setOf(path), onResult = onResult) {
             fileAccess.deleteRecursively(path)
             true
@@ -690,14 +693,14 @@ class AIAgentViewModel @Inject constructor(
 
     /** 把剪切板内容粘贴到 [targetDir]。目标已存在同名项时，发 [pasteConflict] 让 UI 弹窗询问是否覆盖，
      *  不执行粘贴；否则直接粘贴。粘贴成功即清空剪切板（无论复制/剪切，一次粘贴后失效），失败保留供重试。 */
-    fun pasteBrowseEntry(targetDir: String, onResult: (Boolean) -> Unit) = viewModelScope.launch {
-        val clip = _browseClipboard.value ?: return@launch onResult(false)
-        if (clip.sourcePath == targetDir) return@launch onResult(false)
+    fun pasteBrowseEntry(targetDir: String, onResult: (Boolean, String?) -> Unit) = viewModelScope.launch {
+        val clip = _browseClipboard.value ?: return@launch onResult(false, null)
+        if (clip.sourcePath == targetDir) return@launch onResult(false, null)
         val name = clip.sourceName
-        if (!isValidFileEntryName(name)) return@launch onResult(false)
+        if (!isValidFileEntryName(name)) return@launch onResult(false, null)
         val target = "$targetDir/$name"
         if (target == clip.sourcePath || target.startsWith("${clip.sourcePath.trimEnd('/')}/")) {
-            return@launch onResult(false)
+            return@launch onResult(false, null)
         }
         if (withContext(Dispatchers.IO) { fileAccess.exists(target) }) {
             _pasteConflict.value = clip.sourcePath to target
@@ -711,7 +714,7 @@ class AIAgentViewModel @Inject constructor(
         val conflict = _pasteConflict.value ?: return
         val clip = _browseClipboard.value ?: return
         _pasteConflict.value = null
-        performPaste(clip, conflict.second, overwrite = true) {}
+        performPaste(clip, conflict.second, overwrite = true) { _, _ -> }
     }
 
     /** 清空粘贴冲突待确认状态（用户点了「取消」时）。 */
@@ -719,12 +722,12 @@ class AIAgentViewModel @Inject constructor(
         _pasteConflict.value = null
     }
 
-    private fun performPaste(clip: BrowseClipboard, target: String, overwrite: Boolean, onResult: (Boolean) -> Unit) {
+    private fun performPaste(clip: BrowseClipboard, target: String, overwrite: Boolean, onResult: (Boolean, String?) -> Unit) {
         val busyPaths = if (clip.isCut) setOf(clip.sourcePath, target) else setOf(target)
-        mutateBrowse(busyPaths = busyPaths, onResult = { success ->
+        mutateBrowse(busyPaths = busyPaths, onResult = { success, reason ->
             // 无论复制还是剪切，粘贴成功即清空剪切板，避免重复粘贴；失败保留，允许重试。
             if (success) _browseClipboard.value = null
-            onResult(success)
+            onResult(success, reason)
         }) {
             if (clip.isCut) {
                 fileAccess.move(clip.sourcePath, target, overwrite)

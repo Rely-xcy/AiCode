@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import android.widget.Toast
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -99,6 +100,13 @@ fun TerminalScreen(
     val activeTabId by viewModel.activeTabId.collectAsStateWithLifecycle()
     val revision by viewModel.revision.collectAsStateWithLifecycle()
     val creatingTab by viewModel.creatingTab.collectAsStateWithLifecycle()
+    // 新建标签失败（远程：SSH 未连接 / 工作区未就绪）给一次提示，否则点了没反应
+    val tabError by viewModel.tabError.collectAsStateWithLifecycle()
+    LaunchedEffect(tabError) {
+        val message = tabError ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        viewModel.consumeTabError()
+    }
     val terminalSettings by viewModel.terminalSettings.collectAsStateWithLifecycle()
     var showToolsSheet by remember { mutableStateOf(false) }
 
