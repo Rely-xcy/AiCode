@@ -28,6 +28,10 @@ import javax.inject.Singleton
  * 「全部段命中内置只读白名单」（第 3 步）才继续放行，非 shell 侧按 [isDangerousTool] 区分，
  * 避免出现「远程没连上就什么都干不了」。
  *
+ * 规则读不到期间的 ASK 一律不给「始终允许」（[unconfirmedProjectRulesAsk] 的 rememberablePatterns 为空）：
+ * 「始终允许」写的是项目层规则，而此时项目层要么没就绪（写入被 [PermissionRulesRepository.add] 静默跳过，
+ * 用户以为记住了、磁盘上什么都没写），要么是解析失败后拿到的空表（写进去会把原有规则覆盖掉）。
+ *
  * [SHIZUKU_TOOL]（Shizuku）按高危处理：无论内置白名单或已记忆规则，一律 ASK 且不可记忆；
  * AUTO 模式也不自动放行（除非已开启「禁用安全拦截」）。
  */
@@ -205,8 +209,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 capabilities = capabilities,
                 // 只对可能造成副作用的调用收紧：只读工具（readFile/viewImage/webfetch 等）规则读不到时
                 // 仍按已有规则判定，避免「远程没连上就什么都干不了」。
-                askForUnconfirmedProjectRules = !effective.projectRulesConfirmed &&
-                    isDangerousTool(toolName, args, capabilities)
+                dangerous = isDangerousTool(toolName, args, capabilities),
+                projectRulesConfirmed = effective.projectRulesConfirmed
             )
         }
     }
@@ -306,18 +310,21 @@ class ToolPermissionPolicyEngine @Inject constructor(
     /**
      * 非 shell 工具的整工具判定。
      *
-     * @param askForUnconfirmedProjectRules 项目级规则读不到、且本次调用可能造成副作用时为 true：
-     *   不能凭全局 ALLOW 规则放行（项目级可能有一条 DENY 覆盖它），降级为一次性授权。
-     *   无默认值——调用点必须显式表态，避免漏传后静默 fail-open。
+     * @param dangerous 本次调用是否可能造成副作用（见 [isDangerousTool]）。
+     * @param projectRulesConfirmed 项目级规则是否确认可读（见 [EffectivePermissionRules]）。为 false 时
+     *   一律不给「始终允许」：项目层写不进去，且无法确认有没有项目级 DENY 覆盖全局 ALLOW，
+     *   故只读调用按已有规则判定、危险调用降级为一次性授权，两条路都落到 [unconfirmedProjectRulesAsk]。
+     *   两个参数都无默认值——调用点必须显式表态，避免漏传后静默 fail-open。
      */
     private fun evaluateGeneric(
         rules: List<PermissionRule>,
         capabilities: Set<ToolCapability>,
-        askForUnconfirmedProjectRules: Boolean
+        dangerous: Boolean,
+        projectRulesConfirmed: Boolean
     ): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
         if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
-        if (askForUnconfirmedProjectRules) return unconfirmedProjectRulesAsk()
+        if (dangerous && !projectRulesConfirmed) return unconfirmedProjectRulesAsk()
         if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
@@ -326,6 +333,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 rememberDisabledReason = "该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行"
             )
         }
+        // 走到这里仍可能是「规则读不到」：只读工具不受上面那道收紧影响，但同样不能给「始终允许」。
+        if (!projectRulesConfirmed) return unconfirmedProjectRulesAsk()
         return EvalResult(Verdict.ASK, listOf(PermissionRule.WHOLE_TOOL))
     }
 
