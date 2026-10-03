@@ -11,6 +11,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import com.aicode.MainActivity
 import com.aicode.R
 import com.aicode.core.util.FileLogger
@@ -18,6 +19,7 @@ import com.aicode.core.util.GitIgnoreMatcher
 import com.aicode.core.util.toUserMessage
 import com.aicode.core.util.formatCostUsd
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
@@ -131,6 +133,7 @@ class AIAgentViewModel @Inject constructor(
     private val toolRegistry: ToolRegistry,
     private val agentEngine: AgentEngine,
     private val agentMessageDao: AgentMessageDao,
+    private val agentDatabase: AgentDatabase,
     private val chatSessionDao: ChatSessionDao,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val modelCostCalculator: ModelCostCalculator,
@@ -2454,14 +2457,18 @@ class AIAgentViewModel @Inject constructor(
                 if (checkpoint != null) {
                     checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
                 }
-                agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
-                restoreRewoundCompactedRows(sessionId)
+                val rewound = rewindWithRestore(sessionId) {
+                    agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
+                }
+                if (rewound == null) return@launch
                 resetSessionInputTokens(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CONVERSATION -> {
-                agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
-                restoreRewoundCompactedRows(sessionId)
+                val rewound = rewindWithRestore(sessionId) {
+                    agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
+                }
+                if (rewound == null) return@launch
                 resetSessionInputTokens(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
@@ -2474,19 +2481,35 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 回退 / 删历史之后，把「归属的摘要已随之一并删掉」的原文放回上下文。
+     * 回退 / 删历史：「删掉这段历史」与「把被它收起来的原文放回上下文」必须同生共死，故合成一个事务。
      *
-     * 只删不恢复的话，摘要行一走，被它折叠的原文仍挂着 isCompacted=1——聊天页里看得见、
-     * 模型那边却永远看不到（“回退后模型突然忘事”的来源）。判据与边界见
-     * [AgentMessageDao.restoreCompactedRowsAfterRewind]。
+     * 分开写会留半状态：回退点落在已被折叠的那段历史里时，删除会连同摘要行一起删掉，而被它
+     * 折叠的原文还挂着 isCompacted=1——两条语句中间失败（Room 抛错、进程被杀），摘要没了、
+     * 原文仍是已压缩，聊天页看得见那些原文、模型那边永远看不到（“回退后模型突然忘事”的来源）。
+     * 放进一个事务后只有两种结果：两条都生效，或都不生效（历史保持回退前的样子，用户可以重来）。
+     *
+     * 失败只记日志并把 null 交给调用方：回退没生效就别接着按「已回退」往下走（不重置 token、
+     * 不把消息回填到输入框）。判据与边界见 [AgentMessageDao.restoreCompactedRowsAfterRewind]。
+     *
+     * @param mutate 事务里执行的删除动作
+     * @return 放回上下文的原文行数（0 也算成功）；事务失败回滚时返回 null
      */
-    private suspend fun restoreRewoundCompactedRows(sessionId: String) {
-        val restored = runCatching { agentMessageDao.restoreCompactedRowsAfterRewind(sessionId) }
-            .onFailure { FileLogger.w(TAG, "回退恢复原文失败，被折叠的历史仍留在上下文之外", it) }
-            .getOrDefault(0)
+    private suspend fun rewindWithRestore(sessionId: String, mutate: suspend () -> Unit): Int? {
+        val restored = try {
+            agentDatabase.withTransaction {
+                mutate()
+                agentMessageDao.restoreCompactedRowsAfterRewind(sessionId)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "回退未生效，删除与恢复已整体回滚（会话 $sessionId）", e)
+            return null
+        }
         if (restored > 0) {
             FileLogger.i(TAG, "回退时把 $restored 行被折叠的原文放回上下文（会话 $sessionId）")
         }
+        return restored
     }
 
     /**
@@ -2581,12 +2604,17 @@ class AIAgentViewModel @Inject constructor(
         try {
             val msg = agentMessageDao.getMessageById(messageId)
             if (msg != null && msg.role == MessageRole.USER.name) {
-                agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
-                restoreRewoundCompactedRows(msg.sessionId)
+                // 删「这条及之后」+ 回填被折叠的原文 + 删掉这条本身：同一事务，不能只删一半
+                val rewound = rewindWithRestore(msg.sessionId) {
+                    agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
+                    agentMessageDao.deleteMessageById(messageId)
+                }
+                if (rewound == null) return@launch
                 // 与回退同一回事：历史被删掉后，会话行上那一轮的真实用量已经不代表现状
                 resetSessionInputTokens(msg.sessionId)
+            } else {
+                agentMessageDao.deleteMessageById(messageId)
             }
-            agentMessageDao.deleteMessageById(messageId)
         } catch (e: Exception) {
             FileLogger.e(TAG, "删除消息失败", e)
         }
