@@ -891,7 +891,15 @@ class StatefulAgentWorkflow @Inject constructor(
                     is AgentSideEffect.RequestPermission -> {
                         val tool = toolRegistry.getTool(effect.toolCall.name)
                         val argsPreview = JsonObject(effect.toolCall.arguments).toString().take(500)
-                        val checkResult = requestPermissionIfNeeded(tool, effect.toolCall.id, effect.toolCall.arguments, argsPreview, currentContext.mode, currentContext.sessionId)
+                        val checkResult = requestPermissionIfNeeded(
+                            tool = tool,
+                            callId = effect.toolCall.id,
+                            arguments = effect.toolCall.arguments,
+                            argsPreview = argsPreview,
+                            mode = currentContext.mode,
+                            sessionId = currentContext.sessionId,
+                            onEvent = { send(it) }
+                        )
 
                         if (!checkResult.approved) {
                             val rawResult = ToolResult.Error(checkResult.denyReason, checkResult.errorCode).toTransportString()
@@ -1600,7 +1608,8 @@ class StatefulAgentWorkflow @Inject constructor(
         arguments: Map<String, JsonElement>,
         argsPreview: String,
         mode: AgentMode,
-        sessionId: String?
+        sessionId: String?,
+        onEvent: suspend (AgentEvent) -> Unit
     ): PermissionCheckResult {
         if (tool == null) {
             return PermissionCheckResult(true)
@@ -1642,7 +1651,12 @@ class StatefulAgentWorkflow @Inject constructor(
                     PermissionChoice.ONCE -> PermissionCheckResult(true)
                     PermissionChoice.ALWAYS -> {
                         if (eval.rememberablePatterns.isNotEmpty()) {
-                            policyEngine.remember(tool.name, eval.rememberablePatterns, PermissionScope.PROJECT)
+                            val remembered = policyEngine.remember(tool.name, eval.rememberablePatterns, PermissionScope.PROJECT)
+                            // 用户点的是「始终允许」，没写进项目文件就必须让他知道：继续弹窗不是因为规则没生效，
+                            // 而是因为他刚才那次授权根本没落盘（工作区在弹窗挂起期间变得未就绪 / 写盘失败）。
+                            if (!remembered) {
+                                onEvent(AgentEvent.PermissionRememberFailed(tool.name))
+                            }
                         }
                         PermissionCheckResult(true)
                     }

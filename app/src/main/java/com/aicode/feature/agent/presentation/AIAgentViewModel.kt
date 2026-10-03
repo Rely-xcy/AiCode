@@ -1784,6 +1784,15 @@ class AIAgentViewModel @Inject constructor(
                         toolArgsByMsgId.remove(msgId)
                         removeRunningTool(sessionId, msgId)
                     }
+                    is AgentEvent.PermissionRememberFailed -> {
+                        // 用户点了「始终允许」却没记住：授权本身已放行，所以要给一条独立提示，
+                        // 不能沉默——否则他以为已经免打扰，下次再被问时只会觉得莫名其妙。
+                        messagePersistenceUseCase.persist(
+                            sessionId,
+                            MessageRole.ASSISTANT,
+                            context.getString(R.string.chat_perm_remember_failed, event.toolName)
+                        )
+                    }
                     is AgentEvent.Failed -> {
                         failed = true
                         setCompacting(sessionId, false)

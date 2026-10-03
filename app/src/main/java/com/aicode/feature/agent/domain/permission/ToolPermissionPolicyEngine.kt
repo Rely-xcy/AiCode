@@ -1,8 +1,10 @@
 package com.aicode.feature.agent.domain.permission
 
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import javax.inject.Inject
@@ -41,6 +43,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
     private val toolSafetySettings: ToolSafetySettingsRepository
 ) {
     private companion object {
+        const val TAG = "ToolPermission"
+
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
         val SHELL_TOOLS = setOf("Bash", SHIZUKU_TOOL)
 
@@ -300,11 +304,30 @@ class ToolPermissionPolicyEngine @Inject constructor(
         rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED
     )
 
-    /** 把「始终允许」的选择落库为 ALLOW 规则（去重交给仓库）。 */
-    suspend fun remember(toolName: String, patterns: List<String>, scope: PermissionScope) {
+    /**
+     * 把「始终允许」的选择落库为 ALLOW 规则（去重交给仓库）。
+     *
+     * @return 是否**全部**写成功。false 表示至少一条没落到项目文件里：工作区在弹窗挂起期间变得未就绪
+     *   （[PermissionRulesRepository.add] 拿不到当前工作区时会静默跳过），或者写盘本身失败。
+     *   调用方必须把这个结果告诉用户——用户点的是「始终允许」，没记住却装作记住了比直接拒绝更坑。
+     *   逐条尝试、不提前返回：一条失败不影响其余模式照常写入。
+     */
+    suspend fun remember(toolName: String, patterns: List<String>, scope: PermissionScope): Boolean {
+        var allWritten = true
         patterns.distinct().forEach { pattern ->
-            rulesRepo.add(scope, PermissionRule(toolName, pattern, PermissionDecision.ALLOW))
+            // 写盘异常（IO、序列化）不应把整轮对话带崩：本次调用已经批准，只是没记住。
+            // 取消要原样抛出，否则中途停下的这一轮会被当成「写入失败」继续往下跑。
+            val written = try {
+                rulesRepo.add(scope, PermissionRule(toolName, pattern, PermissionDecision.ALLOW))
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                FileLogger.w(TAG, "记忆授权规则失败: $toolName $pattern", error)
+                false
+            }
+            if (!written) allWritten = false
         }
+        return allWritten
     }
 
     /**

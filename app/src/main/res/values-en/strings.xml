@@ -586,6 +586,7 @@
     <string name="chat_perm_deny">Deny</string>
     <string name="chat_perm_always_allow">Always Allow</string>
     <string name="chat_perm_session_label">Session "%1$s"</string>
+    <string name="chat_perm_remember_failed">Could not save this permission: the project-level rule was not written to disk (workspace not ready or write failed). This call was allowed, but you will be asked again next time. Tool: %1$s</string>
     <string name="chat_plan_completed">Plan completed</string>
     <string name="chat_continue_feedback">Continue feedback</string>
     <string name="chat_approve_and_implement">Approve and implement</string>

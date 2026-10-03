@@ -59,6 +59,13 @@ sealed class AgentEvent {
         val attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ) : AgentEvent()
 
+    /**
+     * 用户在授权弹窗里选了「始终允许」，但规则没能落到项目级文件（工作区在弹窗挂起期间变得未就绪，
+     * 或写盘失败）。本次调用照常放行，但没记住——用户必须看得见，否则下次再被问时只会觉得莫名其妙。
+     * [toolName] 为没记住授权的工具。
+     */
+    data class PermissionRememberFailed(val toolName: String) : AgentEvent()
+
     /** 网络请求正在重试（首字节前失败触发自动重试）。仅用于 UI 实时展示，不落库。[error] 为触发重试的错误摘要。 */
     data class Retrying(val attempt: Int, val maxRetries: Int, val error: RetryErrorInfo) : AgentEvent()
 

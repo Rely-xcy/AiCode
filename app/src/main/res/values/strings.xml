@@ -586,6 +586,7 @@
     <string name="chat_perm_deny">拒绝</string>
     <string name="chat_perm_always_allow">始终允许</string>
     <string name="chat_perm_session_label">会话「%1$s」</string>
+    <string name="chat_perm_remember_failed">未能记住这次授权：项目级授权规则没有写入磁盘（工作区未就绪或写入失败）。本次调用已放行，但下次仍会重新询问。工具：%1$s</string>
     <string name="chat_plan_completed">计划已完成</string>
     <string name="chat_continue_feedback">继续反馈</string>
     <string name="chat_approve_and_implement">批准并实施</string>
