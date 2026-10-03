@@ -101,7 +101,6 @@ import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import com.aicode.feature.settings.presentation.SettingsViewModel
 import com.aicode.feature.settings.presentation.FetchState
 import com.aicode.feature.settings.presentation.UpdateCheckUiState
-import com.aicode.feature.settings.presentation.component.githubReleaseUrl
 import com.aicode.feature.settings.presentation.component.SettingsScreen
 import com.aicode.feature.settings.presentation.component.UpdateCheckDialog
 import com.aicode.feature.settings.presentation.component.decodeBackgroundBitmap
@@ -911,8 +910,8 @@ fun AppNavigation(
             state = updateCheckState,
             currentVersion = version,
             onDismiss = { settingsViewModel.dismissUpdateCheck() },
-            onOpenRelease = { tag ->
-                openUrl(context, githubReleaseUrl(tag))
+            onOpenDownload = { url ->
+                openUrl(context, url)
                 settingsViewModel.dismissUpdateCheck()
             }
         )

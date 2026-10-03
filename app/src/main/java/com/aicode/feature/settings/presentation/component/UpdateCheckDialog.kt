@@ -19,14 +19,15 @@ import com.aicode.feature.settings.presentation.UpdateCheckUiState
 
 /**
  * 检查更新结果弹窗（全局宿主渲染，自动/手动共用）。
- * 新版本弹窗直接列出从当前版本到最新版本的更新日志，可滚动。
+ * 新版本弹窗直接列出从当前版本到最新版本的更新日志，可滚动；
+ * 有直链（[UpdateCheckUiState.NewVersion.downloadUrl]，fork 专属）时按钮改为「立即更新」并交给系统下载器。
  */
 @Composable
 internal fun UpdateCheckDialog(
     state: UpdateCheckUiState,
     currentVersion: String,
     onDismiss: () -> Unit,
-    onOpenRelease: (tag: String) -> Unit
+    onOpenDownload: (url: String) -> Unit
 ) {
     when (state) {
         UpdateCheckUiState.Checking -> AlertDialog(
@@ -56,8 +57,14 @@ internal fun UpdateCheckDialog(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { onOpenRelease(state.latestTag) }) {
-                    Text(stringResource(R.string.about_download))
+                TextButton(
+                    onClick = { onOpenDownload(state.downloadUrl ?: githubReleaseUrl(state.latestTag)) }
+                ) {
+                    Text(
+                        stringResource(
+                            if (state.downloadUrl != null) R.string.fork_update_install_now else R.string.about_download
+                        )
+                    )
                 }
             },
             dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.about_later)) } }

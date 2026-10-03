@@ -48,8 +48,8 @@ import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.remote.ModelTestResult
+import com.aicode.feature.settings.data.remote.ForkUpdateCheckService
 import com.aicode.feature.settings.data.remote.UpdateCheckResult
-import com.aicode.feature.settings.data.remote.UpdateCheckService
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -159,7 +159,12 @@ sealed interface UpdateCheckUiState {
     data object Idle : UpdateCheckUiState
     data object Checking : UpdateCheckUiState
     data object UpToDate : UpdateCheckUiState
-    data class NewVersion(val latestTag: String, val changelog: String) : UpdateCheckUiState
+    data class NewVersion(
+        val latestTag: String,
+        val changelog: String,
+        /** fork 专属：自建更新源给的 APK 直链（GitHub 数据源恒为 null，弹窗回退到 Release 页面）。 */
+        val downloadUrl: String? = null
+    ) : UpdateCheckUiState
     data class Error(val message: String) : UpdateCheckUiState
 }
 
@@ -361,7 +366,8 @@ class SettingsViewModel @Inject constructor(
     private val llmCallRecordDao: LlmCallRecordDao,
     private val modelCostCalculator: ModelCostCalculator,
     private val updateCheckSettingsRepository: UpdateCheckSettingsRepository,
-    private val updateCheckService: UpdateCheckService,
+    // fork 专属：检查更新的数据源换成本 fork 站点的 id 版接口，剥离步骤见 ForkUpdateCheckService 文件头
+    private val forkUpdateCheckService: ForkUpdateCheckService,
     private val providerDashboardRunner: ProviderDashboardRunner,
     private val terminalSettingsRepository: TerminalSettingsRepository,
     private val proxySettingsRepository: ProxySettingsRepository,
@@ -1526,17 +1532,16 @@ class SettingsViewModel @Inject constructor(
             if (manual) {
                 _updateCheckState.value = UpdateCheckUiState.Checking
             }
-            val result = updateCheckService.checkForUpdate(
-                currentVersion = currentVersionName(),
-                channel = updateCheckSettingsRepository.channel
-            )
+            // fork 专属：数据源换成自建 id 版接口（首次不弹、失败静默、id 必存由该服务内部保证）
+            val result = forkUpdateCheckService.checkForUpdate()
             _updateCheckState.value = when (result) {
                 is UpdateCheckResult.UpToDate -> {
                     if (manual) UpdateCheckUiState.UpToDate else UpdateCheckUiState.Idle
                 }
                 is UpdateCheckResult.NewVersion -> UpdateCheckUiState.NewVersion(
                     latestTag = result.info.latestTag,
-                    changelog = result.info.changelog
+                    changelog = result.info.changelog,
+                    downloadUrl = result.info.downloadUrl
                 )
                 is UpdateCheckResult.Error -> {
                     if (manual) UpdateCheckUiState.Error(result.message) else UpdateCheckUiState.Idle

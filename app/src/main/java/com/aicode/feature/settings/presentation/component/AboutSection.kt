@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.feature.settings.data.remote.FORK_UPDATE_SUPPORTS_CHANNEL
 import com.aicode.feature.settings.data.repository.UpdateChannel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Book
@@ -126,26 +127,29 @@ internal fun AboutSection(
                 }
             )
             SettingsDivider()
-            // 更新通道
-            SettingsRow(
-                icon = FeatherIcons.Globe,
-                title = stringResource(R.string.about_update_channel),
-                onClick = { showChannelSheet = true },
-                trailing = {
-                    Text(
-                        text = stringResource(
-                            if (updateCheckChannel == UpdateChannel.STABLE) {
-                                R.string.update_channel_stable
-                            } else {
-                                R.string.update_channel_latest
-                            }
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText
-                    )
-                }
-            )
-            SettingsDivider()
+            // fork 专属：本 fork 的更新源没有「更新通道」概念，该行隐藏（剥离时连同上面的 import 一起删）
+            if (FORK_UPDATE_SUPPORTS_CHANNEL) {
+                // 更新通道
+                SettingsRow(
+                    icon = FeatherIcons.Globe,
+                    title = stringResource(R.string.about_update_channel),
+                    onClick = { showChannelSheet = true },
+                    trailing = {
+                        Text(
+                            text = stringResource(
+                                if (updateCheckChannel == UpdateChannel.STABLE) {
+                                    R.string.update_channel_stable
+                                } else {
+                                    R.string.update_channel_latest
+                                }
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.semanticColors.subtleText
+                        )
+                    }
+                )
+                SettingsDivider()
+            }
             // GitHub 仓库
             SettingsRow(
                 icon = FeatherIcons.Github,
