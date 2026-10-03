@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -91,6 +93,7 @@ import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Trash2
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -103,6 +106,9 @@ import kotlinx.coroutines.withContext
  * 选中某个 profile 时按其 [ContainerProfile.mode] 同步切全局执行模式——本地镜像走 PRoot 容器，
  * 远程 SSH 镜像走 SSH exec/SFTP。
  */
+
+/** 列表 item key 前缀：标识容器行身份，拖拽回调靠它反查 profile id。 */
+private const val CONTAINER_PROFILE_PREFIX = "container_profile_"
 @Composable
 internal fun ContainerSection(
     profiles: List<ContainerProfile>,
@@ -155,18 +161,32 @@ internal fun ContainerSection(
             }
         }
     } else {
-        Column(
+        val settingsViewModel = rememberSettingsViewModel()
+        val lazyListState = rememberLazyListState()
+        val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+            val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
+            val moved = itemIdOf(from.key, CONTAINER_PROFILE_PREFIX) ?: return@rememberReorderableLazyListState
+            val target = itemIdOf(to.key, CONTAINER_PROFILE_PREFIX) ?: return@rememberReorderableLazyListState
+            viewModel.reorderContainerProfiles(moved, target)
+        }
+        LazyColumn(
+            state = lazyListState,
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.lg)
                 .padding(bottom = Spacing.xl)
         ) {
-            SettingsGroup {
-                profiles.forEachIndexed { index, profile ->
-                    if (index > 0) {
-                        SettingsDivider()
-                    }
+            itemsIndexed(
+                items = profiles,
+                key = { _, profile -> listItemKey(CONTAINER_PROFILE_PREFIX, profile.id) }
+            ) { index, profile ->
+                ReorderableCardRow(
+                    state = reorderableState,
+                    key = listItemKey(CONTAINER_PROFILE_PREFIX, profile.id),
+                    isFirst = index == 0,
+                    isLast = index == profiles.lastIndex,
+                    dragLabel = "containerDrag"
+                ) { dragModifier ->
                     ContainerRow(
                         profile = profile,
                         active = profile.id == activeProfileId,
@@ -175,7 +195,8 @@ internal fun ContainerSection(
                         subtitle = profileSubtitle(context, profile, remoteConnections),
                         onSelect = { if (profile.id != activeProfileId) pendingSwitch = profile },
                         onEdit = { editingProfile = profile },
-                        onDelete = { deletingProfile = profile }
+                        onDelete = { deletingProfile = profile },
+                        dragModifier = dragModifier
                     )
                 }
             }
@@ -323,7 +344,8 @@ private fun ContainerRow(
     subtitle: String,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    dragModifier: Modifier = Modifier
 ) {
     val light = settingsLightMode()
 
@@ -334,6 +356,7 @@ private fun ContainerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(dragModifier)
                 .padding(horizontal = Spacing.lg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

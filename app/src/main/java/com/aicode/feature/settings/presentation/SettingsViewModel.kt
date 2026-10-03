@@ -1012,8 +1012,10 @@ class SettingsViewModel @Inject constructor(
 
             launch {
                 containerSettingsRepository.customProfilesFlow.collectLatest {
-                    // 按添加时间降序（新的在前）；旧数据 createdAt 同为 0 时保持存储顺序
-                    _customProfiles.value = it.sortedByDescending { profile -> profile.createdAt }
+                    // 列表顺序 = 用户拖拽顺序表（ListOrderStore，不在表里的按创建时间降序补在后面），
+                    // 没拖过则保持原行为：按添加时间降序（新的在前）；旧数据 createdAt 同为 0 时保持存储顺序
+                    val natural = it.sortedByDescending { profile -> profile.createdAt }
+                    _customProfiles.value = listOrderStore.sort(natural, ListOrderStore.KEY_CONTAINERS) { profile -> profile.id }
                 }
             }
 
@@ -2241,6 +2243,23 @@ class SettingsViewModel @Inject constructor(
         _providers.value = reordered
         debounceOrderWrite("providers") {
             repository.reorderProviders(_providers.value)
+        }
+    }
+
+    /**
+     * 容器镜像列表长按拖拽排序：同步更新内存顺序（reorderable 库要求 onMove 返回前列表已更新，
+     * 否则拖拽项闪烁），再防抖把新顺序写入 ListOrderStore 的顺序表。
+     * 容器配置本身不存数组顺序（新增的总是排最前），所以用独立顺序表覆盖。
+     * 参数用 profile id 而不是下标：onMove 的下标含分组标题等其它 item，交给 VM 在权威列表里定位。
+     */
+    fun reorderContainerProfiles(movedId: String, targetId: String) {
+        val current = _customProfiles.value
+        val fromIndex = current.indexOfFirst { it.id == movedId }
+        val toIndex = current.indexOfFirst { it.id == targetId }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        _customProfiles.value = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        debounceOrderWrite(ListOrderStore.KEY_CONTAINERS) {
+            listOrderStore.save(ListOrderStore.KEY_CONTAINERS, _customProfiles.value.map { it.id })
         }
     }
 
