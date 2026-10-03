@@ -555,6 +555,9 @@
     <string name="editor_font_size_value">%1$d sp</string>
     <string name="editor_file_too_large">文件过大（%1$d MB），暂不支持打开</string>
     <string name="editor_load_failed">文件打开失败</string>
+    <string name="editor_save_conflict_title">文件已被其他改动</string>
+    <string name="editor_save_conflict_message">该文件在打开后被其它程序或会话修改过，保存会覆盖那些改动。仍要保存吗？</string>
+    <string name="editor_save_conflict_overwrite">仍要保存</string>
     <string name="editor_binary_unsupported">二进制文件，暂不支持打开</string>
     <string name="chat_rename_session">重命名会话</string>
     <string name="chat_session_name">会话名</string>

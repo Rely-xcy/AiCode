@@ -35,6 +35,12 @@ sealed interface EditorUiState {
 sealed interface SaveResult {
     data object Success : SaveResult
     data class Error(val detail: String?) : SaveResult
+
+    /**
+     * 文件在打开之后被别的程序/会话改过（mtime 变新），本次没有写盘。
+     * 由 UI 二次确认后带 force = true 重来——只提示，不硬拦。
+     */
+    data object Conflict : SaveResult
 }
 
 @HiltViewModel
@@ -59,10 +65,15 @@ class CodeEditorViewModel @Inject constructor(
 
     private var loadedPath: String? = null
 
+    /** 打开时记录的文件修改时间（毫秒；0 表示取不到）。供保存前判断文件是否被外部改过。 */
+    private var loadedModifiedAt: Long = 0L
+
     /** 重复调用同一路径不会重复读盘，供 Compose 重组时安全调用。 */
     fun load(path: String) {
         if (loadedPath == path) return
         loadedPath = path
+        // 换文件先清掉基准：否则会拿上一个文件的时间戳去判新文件的冲突
+        loadedModifiedAt = 0L
         _uiState.value = EditorUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = runCatching {
@@ -71,6 +82,8 @@ class CodeEditorViewModel @Inject constructor(
                 if (!fileAccess.isFile(path)) {
                     return@runCatching EditorUiState.Error(null)
                 }
+                // 保存冲突检测的基准：取不到时间戳（0）时后面不做冲突判定，宁可漏报也不误报
+                loadedModifiedAt = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
                 val size = fileAccess.fileSize(path)
                 if (size > MAX_EDITABLE_BYTES) {
                     return@runCatching EditorUiState.TooLarge(size)
@@ -99,15 +112,30 @@ class CodeEditorViewModel @Inject constructor(
         }
     }
 
-    /** 把编辑器当前内容写回文件。写入在 IO 线程进行，结果通过 [saveEvents] 通知，期间 [saving] 置位。 */
-    fun save(content: String) {
+    /**
+     * 把编辑器当前内容写回文件。写入在 IO 线程进行，结果通过 [saveEvents] 通知，期间 [saving] 置位。
+     *
+     * [force] = false 时先比对 mtime：文件在打开之后被别的程序/会话改过就先发 [SaveResult.Conflict]
+     * 并且**不写盘**，由 UI 提示用户二次确认（确认后带 force = true 重来）。只提示不硬拦：
+     * SFTP v3 的 mtime 只有秒级精度、远端 FS 时间戳也未必可靠，硬拦会误报卡人。
+     */
+    fun save(content: String, force: Boolean = false) {
         val path = loadedPath ?: return
         viewModelScope.launch(Dispatchers.IO) {
             _saving.value = true
             try {
+                if (!force && hasExternalChange()) {
+                    FileLogger.w(TAG, "保存前检测到文件已被外部修改: $path")
+                    _saveEvents.send(SaveResult.Conflict)
+                    return@launch
+                }
                 val result = runCatching { fileAccess.writeFile(path, content) }
                     .fold(
-                        onSuccess = { SaveResult.Success },
+                        onSuccess = {
+                            // 自己写完就刷新基准，否则下一次保存必然把自己的写入当成外部改动
+                            loadedModifiedAt = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
+                            SaveResult.Success
+                        },
                         onFailure = { e ->
                             FileLogger.w(TAG, "保存文件失败: $path", e)
                             SaveResult.Error(e.message)
@@ -118,6 +146,14 @@ class CodeEditorViewModel @Inject constructor(
                 _saving.value = false
             }
         }
+    }
+
+    /** 文件是否在打开之后被外部改动过（mtime 变新）。基准或当前值取不到（0）时不判定冲突。 */
+    private fun hasExternalChange(): Boolean {
+        val path = loadedPath ?: return false
+        if (loadedModifiedAt <= 0L) return false
+        val current = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
+        return current > loadedModifiedAt
     }
 
     private companion object {
