@@ -18,6 +18,8 @@ import javax.inject.Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val agentMessageDao: AgentMessageDao,
+    // 会话删除要一并丢掉 [MessagePersistenceUseCase] 的历史缓存（它只增不删会一直占着整段历史）。
+    private val messagePersistenceUseCase: MessagePersistenceUseCase,
     // Lazy 断环：引擎 → 记忆模块 → MemoryRepository → ProjectAicodeRoot → WorkspaceRepository → 本类，
     // 直接注入会形成 Dagger 依赖环；钩子只在删除时用一次，延迟取即可。
     private val agentEngine: Lazy<AgentEngine>
@@ -84,6 +86,8 @@ class SessionUseCase @Inject constructor(
         }
         agentMessageDao.deleteBySession(id)
         chatSessionDao.delete(id)
+        // 历史缓存按 sessionId 存，删掉的会话不会再 buildHistory，不清就永久占着
+        deleted.forEach { sessionId -> messagePersistenceUseCase.evictHistory(sessionId) }
         // 交给引擎分发：模块自持的会话级状态（如记忆注入缓存）在这里释放
         deleted.forEach { sessionId ->
             agentEngine.get().onSessionDeleted(EngineContext(sessionId = sessionId))
@@ -97,6 +101,8 @@ class SessionUseCase @Inject constructor(
         if (sessions.isEmpty()) return 0
         sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
         chatSessionDao.deleteByWorkspace(workspacePath)
+        // 与 deleteSession 同一条清理：批量删同样会让这些 sessionId 的历史缓存永久留在内存里。
+        sessions.forEach { session -> messagePersistenceUseCase.evictHistory(session.id) }
         return sessions.size
     }
 

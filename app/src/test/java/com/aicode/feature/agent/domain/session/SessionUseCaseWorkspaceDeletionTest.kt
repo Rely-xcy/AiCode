@@ -22,6 +22,9 @@ class SessionUseCaseWorkspaceDeletionTest {
     private fun emptyEngine(): Lazy<AgentEngine> =
         Lazy { AgentEngine(emptySet(), CoroutineScope(SupervisorJob() + Dispatchers.IO)) }
 
+    /** 历史缓存与这两个用例无关：删除路径上只要求它被调用，行为由 MessagePersistenceUseCase 自测。 */
+    private fun noopPersistence(): MessagePersistenceUseCase = mockk<MessagePersistenceUseCase>(relaxed = true)
+
     private fun session(id: String, workspacePath: String, parentId: String? = null) = ChatSessionEntity(
         id = id,
         title = "t",
@@ -40,7 +43,7 @@ class SessionUseCaseWorkspaceDeletionTest {
             session("sub", "/ws/a", parentId = "root")
         )
 
-        val useCase = SessionUseCase(chatDao, messageDao, emptyEngine())
+        val useCase = SessionUseCase(chatDao, messageDao, noopPersistence(), emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/a")
 
         assertEquals(2, deleted)
@@ -55,7 +58,7 @@ class SessionUseCaseWorkspaceDeletionTest {
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/empty") } returns emptyList()
 
-        val useCase = SessionUseCase(chatDao, messageDao, emptyEngine())
+        val useCase = SessionUseCase(chatDao, messageDao, noopPersistence(), emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/empty")
 
         assertEquals(0, deleted)

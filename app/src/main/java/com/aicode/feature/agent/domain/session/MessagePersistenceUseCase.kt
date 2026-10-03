@@ -240,6 +240,18 @@ class MessagePersistenceUseCase @Inject constructor(
         return messages
     }
 
+    /**
+     * 丢掉某会话的历史缓存条目（会话被删除时调用）。
+     *
+     * [dbVersion] 只能挡住「用过期数据」，挡不住「一直占着」：会话删除后不会再 [buildHistory]，
+     * 那条目里的整段历史（含按路径重建的图片 base64）会一直留在内存里，直到进程重启。
+     * 所以删除路径要显式清理。回退（改正文、删消息）不需要：那类写入会推进 dbVersion，
+     * 下一次 [buildHistory] 用同一个 sessionId 直接覆盖旧条目。
+     */
+    fun evictHistory(sessionId: String) {
+        synchronized(historyCache) { historyCache.remove(sessionId) }
+    }
+
     private suspend fun buildHistoryUncached(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
         val entities = agentMessageDao.getMessagesBySessionOnce(sessionId)
             .filter { !it.isCompacted && !it.isContextExcluded }
