@@ -11,6 +11,7 @@ import com.aicode.feature.git.domain.model.GitTag
 import com.aicode.feature.git.domain.model.GraphCommit
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -31,6 +32,8 @@ class GitRepositoryTest {
 
     private val workPath = "/root/workspace"
 
+    private val notReadyMessage = "工作区未就绪：本地尚未初始化完成（测试文案）"
+
     /** 构造给定输出的 repo；[exitCode] 非 0 用于覆盖 gitChecked 失败路径。 */
     private fun createRepo(output: String, exitCode: Int? = 0): GitRepository {
         val engine = mockk<CommandEngine>()
@@ -45,6 +48,21 @@ class GitRepositoryTest {
         every { workspace.currentPathOrNull() } returns workPath
         coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         return GitRepository(engine, workspace)
+    }
+
+    /**
+     * 构造「工作区未落定」的 repo：等待上限内没有可用工作区（await 返回 null），
+     * [WorkspaceRepository.notReadyMessage] 给出未就绪文案。
+     *
+     * 同步的 currentPathOrNull() 不 stub —— GitRepository 只经 suspend 的 await 取路径（见 projectPath()），
+     * 多 stub 一个方法会掩盖「调用链换回同步版」的回归。返回 engine 以便断言未真正执行 git 命令。
+     */
+    private fun createNotReadyRepo(): Pair<GitRepository, CommandEngine> {
+        val engine = mockk<CommandEngine>()
+        val workspace = mockk<WorkspaceRepository>()
+        coEvery { workspace.awaitCurrentPathOrNull() } returns null
+        every { workspace.notReadyMessage() } returns notReadyMessage
+        return GitRepository(engine, workspace) to engine
     }
 
     // ── status()：porcelain v1 -b 解析 ───────────────────────────
@@ -435,5 +453,34 @@ class GitRepositoryTest {
         val e = runCatching { repo.commit("msg") }.exceptionOrNull()
         assertTrue(e is GitCommandFailureException)
         assertEquals("git 退出码 1", e?.message)
+    }
+
+    // ── 工作区未落定：每个 git 入口按 git 失败抛出，不把 git 跑在父目录上 ──
+
+    @Test
+    fun status_workspaceNotReady_throwsGitCommandFailureWithNotReadyMessage() = runTest {
+        val (repo, _) = createNotReadyRepo()
+        val e = runCatching { repo.status() }.exceptionOrNull()
+        assertTrue(e is GitCommandFailureException)
+        assertEquals(notReadyMessage, e?.message)
+        assertEquals(notReadyMessage, (e as GitCommandFailureException).output)
+    }
+
+    @Test
+    fun commit_workspaceNotReady_throwsWithoutRunningGitCommand() = runTest {
+        val (repo, engine) = createNotReadyRepo()
+        val e = runCatching { repo.commit("msg") }.exceptionOrNull()
+        assertTrue(e is GitCommandFailureException)
+        assertEquals(notReadyMessage, e?.message)
+        coVerify(exactly = 0) { engine.runCommandSyncUnbounded(any(), any(), any()) }
+    }
+
+    @Test
+    fun worktreeFileContent_workspaceNotReady_throwsInsteadOfReturningEmptyFile() = runTest {
+        // 未落定时必须报错：被 runCatching 吞掉会让 UI 把「读不到路径」误判成「文件为空」
+        val (repo, _) = createNotReadyRepo()
+        val e = runCatching { repo.worktreeFileContent("app/src/Main.kt") }.exceptionOrNull()
+        assertTrue(e is GitCommandFailureException)
+        assertEquals(notReadyMessage, e?.message)
     }
 }
