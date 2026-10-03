@@ -71,6 +71,7 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FilterOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -121,20 +122,35 @@ class BackupManagerImpl @Inject constructor(
 
     override suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream) {
         withContext(Dispatchers.IO) {
+            val pw = password?.takeIf { it.isNotEmpty() }
+            if (pw == null) {
+                writeTarGz(output, options)
+                return@withContext
+            }
             val temp = createTempFile()
             try {
-                writeTarGz(temp, options)
-                val pw = password?.takeIf { it.isNotEmpty() }
-                FileInputStream(temp).use { input ->
-                    if (pw != null) {
-                        BackupCrypto.encryptStream(input, output, pw)
-                    } else {
-                        input.copyTo(output)
-                    }
+                FileOutputStream(temp).buffered().use { writeTarGz(it, options) }
+                FileInputStream(temp).buffered().use { input ->
+                    BackupCrypto.encryptStream(input, output, pw)
                 }
             } finally {
                 temp.delete()
             }
+        }
+    }
+
+    override suspend fun prepareImport(input: InputStream, password: CharArray?): File = withContext(Dispatchers.IO) {
+        val temp = createTempFile()
+        try {
+            FileOutputStream(temp).buffered().use { output ->
+                val source = input.buffered()
+                val pw = password?.takeIf { it.isNotEmpty() }
+                if (pw == null) source.copyTo(output) else BackupCrypto.decryptStream(source, output, pw)
+            }
+            temp
+        } catch (e: Throwable) {
+            temp.delete()
+            throw e
         }
     }
 
@@ -266,9 +282,9 @@ class BackupManagerImpl @Inject constructor(
         val temp = createTempFile()
         try {
             BufferedInputStream(input).use { src ->
-                FileOutputStream(temp).use { dst -> BackupCrypto.decryptStream(src, dst, pw) }
+                FileOutputStream(temp).buffered().use { dst -> BackupCrypto.decryptStream(src, dst, pw) }
             }
-            val p = FileInputStream(temp)
+            val p = FileInputStream(temp).buffered()
             val gz = GzipCompressorInputStream(p)
             return TarSource(TarArchiveInputStream(gz), temp)
         } catch (e: Throwable) {
@@ -279,8 +295,17 @@ class BackupManagerImpl @Inject constructor(
 
     // ── 导出辅助 ──────────────────────────────────────────────
 
-    private suspend fun writeTarGz(file: File, options: BackupOptions) {
-        FileOutputStream(file).use { fos ->
+    private suspend fun writeTarGz(output: OutputStream, options: BackupOptions) {
+        val stream = object : FilterOutputStream(output) {
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                out.write(bytes, offset, length)
+            }
+
+            override fun close() {
+                flush()
+            }
+        }
+        stream.buffered().use { fos ->
             GzipCompressorOutputStream(fos).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
@@ -651,8 +676,11 @@ class BackupManagerImpl @Inject constructor(
         while (true) {
             val n = tar.read(buffer)
             if (n < 0) break
+            var start = 0
             for (i in 0 until n) {
                 if (buffer[i] == '\n'.code.toByte()) {
+                    line.write(buffer, start, i - start)
+                    start = i + 1
                     if (line.size() > 0) {
                         // 注意：ByteArrayOutputStream.toString(Charset) 是 API 33 才有的方法，
                         // 在 Android 13 以下会抛 NoSuchMethodError，必须用 String(byte[], Charset) 构造器。
@@ -666,10 +694,9 @@ class BackupManagerImpl @Inject constructor(
                     } else {
                         line.reset()
                     }
-                } else {
-                    line.write(buffer[i].toInt())
                 }
             }
+            line.write(buffer, start, n - start)
         }
         if (line.size() > 0) {
             batch.add(json.decodeFromString(serializer, String(line.toByteArray(), Charsets.UTF_8)))

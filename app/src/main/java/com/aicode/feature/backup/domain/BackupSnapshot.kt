@@ -97,9 +97,10 @@ data class BackupMetadata(
      *
      * 设置字段的「导的时候没勾」与「用户就是这么设的」在数据上不可区分（keepaliveEnabled=false
      * 两种情形长得一模一样），导入侧只能靠这个标志决定要不要回写设置。
-     * 默认 true：没有该字段的旧备份导出时一律带设置，按「包含」处理，行为与本字段出现之前逐字一致。
+     * 默认值从 [themeMode] 推断：导出带设置时它必定有值，不带设置时必为 null（见 exportMetadata）。
+     * 这样存量备份（没有本字段）也能判对——聊天-only 备份不该在导入时静默重置应用设置。
      */
-    val appSettingsIncluded: Boolean = true,
+    val appSettingsIncluded: Boolean = themeMode != null,
     /**
      * 技能 / 子代理启停配置原文；null 表示这份备份没带（同 [BackupSnapshot.skillsAgentsConfig]）。
      */
@@ -162,8 +163,8 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     compactionProviderId = compactionProviderId,
     compactionModel = compactionModel,
     syncSettings = syncSettings,
-    // 旧格式（单文件 snapshot.json）没有「带没带设置」这个开关：它一律含设置段
-    appSettingsIncluded = true,
+    // 旧格式（单文件 snapshot.json）没有「带没带设置」这个开关：它一律含设置段，
+    // 默认值由 themeMode 推断即为此意，这里不再显式覆盖。
     skillsAgentsConfig = skillsAgentsConfig
 )
 

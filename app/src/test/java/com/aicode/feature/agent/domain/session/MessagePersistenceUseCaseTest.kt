@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.session
 
+import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,6 +14,19 @@ class MessagePersistenceUseCaseTest {
 
     /** CursorWindow 单窗口大小（AOSP 默认 2MB）；单行各文本字段上限之和必须整体留在它之下。 */
     private val CURSOR_WINDOW_BYTES = 2 * 1024 * 1024
+
+    @Test
+    fun historyPlacesSummaryBeforeRetainedMessagesWithoutChangingDisplayTimestamps() {
+        val retained = AgentMessageEntity(id = "retained", sessionId = "session", role = "USER", content = "goal", timestamp = 100)
+        val marker = AgentMessageEntity(id = "marker", sessionId = "session", role = "USER", content = "marker", timestamp = 200, isCompactionMarker = true)
+        val summary = AgentMessageEntity(id = "summary", sessionId = "session", role = "ASSISTANT", content = "summary", timestamp = 201, isContextSummary = true)
+        val latest = retained.copy(id = "latest", timestamp = 300)
+        val display = listOf(retained, marker, summary, latest)
+        val history = MessagePersistenceUseCase.orderHistoryEntities(display)
+        assertEquals(listOf("marker", "summary", "retained", "latest"), history.map { it.id })
+        assertEquals(listOf(200L, 201L, 100L, 300L), history.map { it.timestamp })
+        assertEquals(listOf("retained", "marker", "summary", "latest"), display.map { it.id })
+    }
 
     @Test
     fun sanitizeContent_stripsInlineBase64Image() {
