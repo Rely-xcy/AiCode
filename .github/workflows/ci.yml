@@ -1,11 +1,12 @@
 name: CI
 
-# push 到 main 或 PR 时触发：构建 universal debug（单 flavor 冒烟）+ 跑单元测试。
+# push 到 main / fork/release 或对应 PR 时触发：构建 universal debug（单 flavor 冒烟）+ 跑单元测试。
 # 目的是合入前的兜底门禁，避免编译错误/回归推迟到打 tag 发版当天才暴露。
 # 打 v* tag 的发版构建走 android-release.yml，不在这里。
 on:
   push:
-    branches: [ main ]
+    # main 保持对上游干净需要它守；fork/release 出包（Beta）前也需要它守。
+    branches: [ main, fork/release ]
     # 纯文档/资源改动不影响构建产物，跳过 CI 省时间（public 仓库虽不扣额度，但省 11 分钟等待）。
     # 注意：只要本次 push 含任一非忽略路径的改动，CI 仍会触发。
     paths-ignore:
@@ -15,7 +16,7 @@ on:
       - 'LICENSE'
       - '.gitignore'
   pull_request:
-    branches: [ main ]
+    branches: [ main, fork/release ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
