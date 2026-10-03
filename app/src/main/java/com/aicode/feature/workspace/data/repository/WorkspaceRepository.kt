@@ -48,7 +48,7 @@ private val Context.workspaceDataStore by preferencesDataStore(
  * 窗口期不能返回「合法但错误」的兜底目录（工作区父目录或远端根）——那会让 git、写文件、
  * 命令 cwd、备份、凭据、记忆静默落到错地方；抛出本异常让调用方明确报错或降级。
  */
-class WorkspaceNotReadyException(message: String) : IllegalStateException(message)
+class WorkspaceNotReadyException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
 /**
  * 管理 App 内的"工作区/项目"。
