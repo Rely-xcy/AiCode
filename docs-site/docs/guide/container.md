@@ -156,7 +156,7 @@ AI 运行在容器内，默认只能看到工作区，无法访问手机公共�
 仅挂载需要的子目录，不要直接挂载整个 `/sdcard`——那会将手机中所有文件暴露给 AI，存在隐私泄露风险。
 :::
 
-例：如需让 AI 查看 App 日志，将本地目录 `/storage/emulated/0/Android/data/com.aicode/` 挂到容器 `/mnt/aicode`，即可读取 `/mnt/aicode/files/logs/` 下的日志。注意 `Android/data/` 下只能访问 AiCode 自身的目录，其他应用的目录受分区存储限制无法访问。
+例：如需让 AI 查看 App 日志，将本地目录 `/storage/emulated/0/Android/data/Rely.aicode/` 挂到容器 `/mnt/aicode`，即可读取 `/mnt/aicode/files/logs/` 下的日志。注意 `Android/data/` 下只能访问 AiCode 自身的目录，其他应用的目录受分区存储限制无法访问。
 
 如需处理的仅为单个文件，更简便的方式是将其复制进工作区，AI 默认即可访问。
 

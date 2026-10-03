@@ -123,4 +123,4 @@ AI 在对话中引用代码时会把路径写成可点击的链接（带下划�
 
 **交由 AI 处理**：AI 运行在容器里，你可以说“把 `~/.aicode/mcp.json` 打印出来查看”或“在 `~/.aicode/skills/` 下写一个新技能”。
 
-**Root 设备**：直接进 `/data/data/com.aicode/files/`（部分系统等价路径是 `/data/user/0/com.aicode/files/`）。其中 `projects/` 是工作区根，`aicode/` 对应 `~/.aicode`，`rootfs/` 是容器系统。注意 debug 构建的包名是 `com.aicode.debug`，两者私有目录完全隔离。
+**Root 设备**：直接进 `/data/data/Rely.aicode/files/`（部分系统等价路径是 `/data/user/0/Rely.aicode/files/`）。其中 `projects/` 是工作区根，`aicode/` 对应 `~/.aicode`，`rootfs/` 是容器系统。注意 debug 构建的包名是 `Rely.aicode.debug`，两者私有目录完全隔离。
