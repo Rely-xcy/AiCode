@@ -45,6 +45,7 @@ class RemoteServerViewModel @Inject constructor(
     private val remoteSshConnection: RemoteSshConnection,
     private val loginKeyStore: SshLoginKeyStore,
     private val privateKeyStore: SshPrivateKeyStore,
+    private val listOrderStore: com.aicode.core.datastore.ListOrderStore,
     val ftpServerManager: FtpServerManager
 ) : ViewModel() {
 
@@ -57,6 +58,9 @@ class RemoteServerViewModel @Inject constructor(
         )
     )
     val uiState: StateFlow<RemoteServerUiState> = _uiState.asStateFlow()
+
+    /** 各列表排序落盘的防抖 job（与 SettingsViewModel.debounceOrderWrite 同约定），见 [reorderConnections]。 */
+    private var connectionOrderWriteJob: kotlinx.coroutines.Job? = null
 
     val syncUseGitIgnore = syncSettingsRepository.useGitIgnore
     val maxSyncBatchSize = syncSettingsRepository.maxSyncBatchSize
@@ -79,7 +83,10 @@ class RemoteServerViewModel @Inject constructor(
                 repository.getConnections()
                     .catch { e -> _uiState.value = _uiState.value.copy(error = e.message) }
                     .collect { connections ->
-                        _uiState.value = _uiState.value.copy(connections = connections)
+                        // 列表顺序 = 用户拖拽顺序表（ListOrderStore，不在表里的按入库序补在后面）。
+                        _uiState.value = _uiState.value.copy(
+                            connections = listOrderStore.sort(connections, ListOrderStore.KEY_REMOTE_CONNECTIONS) { it.id }
+                        )
                     }
             }
             launch {
@@ -145,6 +152,26 @@ class RemoteServerViewModel @Inject constructor(
     fun deleteConnection(id: String) {
         viewModelScope.launch {
             repository.deleteConnection(id)
+        }
+    }
+
+    /**
+     * 连接配置列表长按拖拽排序：同步更新内存顺序（reorderable 库要求 onMove 返回前列表已更新，
+     * 否则拖拽项闪烁），再防抖把新顺序写入 ListOrderStore 的顺序表。
+     * 顺序只存展示层，不改数据库写入顺序：重排一旦写库，每次 emit 都会绕过顺序表回到库序，两处会 desync。
+     * 参数用连接 id 而不是下标：onMove 的下标是含其它 item 的全局下标，交给 VM 在权威列表里定位。
+     */
+    fun reorderConnections(movedId: String, targetId: String) {
+        val current = _uiState.value.connections
+        val fromIndex = current.indexOfFirst { it.id == movedId }
+        val toIndex = current.indexOfFirst { it.id == targetId }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return
+        val reordered = current.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        _uiState.value = _uiState.value.copy(connections = reordered)
+        connectionOrderWriteJob?.cancel()
+        connectionOrderWriteJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            listOrderStore.save(ListOrderStore.KEY_REMOTE_CONNECTIONS, _uiState.value.connections.map { it.id })
         }
     }
     

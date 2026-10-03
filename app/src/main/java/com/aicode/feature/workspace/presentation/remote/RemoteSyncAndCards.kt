@@ -222,7 +222,8 @@ private fun ProtocolBadge(protocol: RemoteProtocol) {
 fun RemoteConnectionCard(
     conn: RemoteConnection,
     onEdit: (RemoteConnection) -> Unit,
-    onDelete: (RemoteConnection) -> Unit
+    onDelete: (RemoteConnection) -> Unit,
+    dragModifier: Modifier = Modifier
 ) {
     SwipeToDeleteRow(
         onDelete = { onDelete(conn) },
@@ -231,6 +232,7 @@ fun RemoteConnectionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(dragModifier)
                 .padding(horizontal = Spacing.lg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
