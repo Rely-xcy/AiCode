@@ -1628,8 +1628,13 @@ fun AIChatPanel(
                         val showRetrying = retryState != null && isBusy && !isCompacting && !showStreaming && !showReasoning
                         val showKeySwitched = keySwitchState != null && isBusy && !isCompacting && !showStreaming && !showReasoning
                         val tailKind = when {
-                            showStreaming -> TailKind.STREAMING
+                            // 压缩优先于流式：折叠发生在两次 LLM 调用之间，此刻流式文本已被
+                            // CompactionStarted 清空，剩下的只可能是 retainedStreamingText（上一轮的
+                            // 旧正文 / 旧思考，因为库里的助手行还没回流到 messages 而未被退休）。
+                            // 若让 showStreaming 先命中，整段折叠（实测约 60 秒）里尾巴会停在旧正文上，
+                            // 「正在压缩上下文」一次都不亮——用户只能当作卡死。
                             isCompacting -> TailKind.COMPACTING
+                            showStreaming -> TailKind.STREAMING
                             showKeySwitched -> TailKind.KEY_SWITCHED
                             showRetrying -> TailKind.RETRYING
                             showThinking -> TailKind.THINKING
