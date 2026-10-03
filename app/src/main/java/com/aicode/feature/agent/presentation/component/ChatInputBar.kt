@@ -279,6 +279,8 @@ internal fun ChatInputBar(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(rememberScrollState())
                             .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
                     ) {
                         filteredCommands.forEach { command ->
