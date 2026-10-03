@@ -78,7 +78,15 @@ data class RestoreStats(
     val globalPermissionRules: Int = 0,
     val workspaceFiles: Int = 0,
     /** 本次导入是否真的回写了应用设置段（备份没带时不回写，摘要也就不该说「已覆盖」）。 */
-    val settingsRestored: Boolean = false
+    val settingsRestored: Boolean = false,
+    /** 本次导入实际写入的技能文件数（技能目录下的所有文件，含 SKILL.md 与附带的脚本/二进制）。 */
+    val skillFiles: Int = 0,
+    /** 本次导入实际写入的子代理定义文件数。 */
+    val subagentFiles: Int = 0,
+    /** 本次导入实际写入的面板脚本文件数。 */
+    val panelScriptFiles: Int = 0,
+    /** 本次导入是否真的回写了技能 / 子代理的启停配置（备份没带、或项目级因工作区未落定被跳过时为 false）。 */
+    val skillsAgentsConfigRestored: Boolean = false
 ) {
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
@@ -90,6 +98,10 @@ data class RestoreStats(
         mcpServers = mcpServers + other.mcpServers,
         globalPermissionRules = globalPermissionRules + other.globalPermissionRules,
         workspaceFiles = workspaceFiles + other.workspaceFiles,
-        settingsRestored = settingsRestored || other.settingsRestored
+        settingsRestored = settingsRestored || other.settingsRestored,
+        skillFiles = skillFiles + other.skillFiles,
+        subagentFiles = subagentFiles + other.subagentFiles,
+        panelScriptFiles = panelScriptFiles + other.panelScriptFiles,
+        skillsAgentsConfigRestored = skillsAgentsConfigRestored || other.skillsAgentsConfigRestored
     )
 }

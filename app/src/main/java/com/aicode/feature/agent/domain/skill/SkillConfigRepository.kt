@@ -89,6 +89,25 @@ class SkillConfigRepository @Inject constructor(
         if (scope == SkillScope.GLOBAL) readGlobalRaw()
         else projectFile()?.let { readRaw(it) }
 
+    /**
+     * 备份恢复用：整份覆盖该作用域的配置文件——备份里的名单为准，本机多出来的禁用项不删。
+     *
+     * @return false 表示项目级配置因工作区未落定被跳过（工作区未落定时 [projectFile] 为 null），
+     *   调用方不得把它算进导入摘要。
+     */
+    fun restoreConfig(raw: String, scope: SkillScope): Boolean {
+        if (scope == SkillScope.GLOBAL) {
+            fileAccess.writeFile(GLOBAL_CONFIG_PATH, raw)
+            return true
+        }
+        val file = projectFile() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略项目级技能配置写入")
+            return false
+        }
+        writeRaw(file, raw)
+        return true
+    }
+
     private fun readGlobalDisabled(): Set<String> = readGlobalRaw()?.let { parseDisabled(it) } ?: emptySet()
 
     /** 全局配置文件原文；不存在或读取失败时为 null。 */
@@ -169,16 +188,17 @@ class SkillConfigRepository @Inject constructor(
 
         fun readDisabled(file: File): Set<String> = readRaw(file)?.let { parseDisabled(it) } ?: emptySet()
 
-        fun writeDisabled(file: File, names: Set<String>) {
+        /** 整份写入配置原文（备份恢复）；临时文件 + rename 原子落盘，避免写一半崩溃损坏配置。 */
+        internal fun writeRaw(file: File, raw: String) {
             file.parentFile?.mkdirs()
-            val json = serializeDisabled(names)
-            // 临时文件 + rename 原子落盘，避免写一半崩溃损坏配置
             val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(json)
+            tmp.writeText(raw)
             if (!tmp.renameTo(file)) {
                 // rename 失败（罕见），回退直接写，避免丢配置
-                file.writeText(json)
+                file.writeText(raw)
             }
         }
+
+        fun writeDisabled(file: File, names: Set<String>) = writeRaw(file, serializeDisabled(names))
     }
 }

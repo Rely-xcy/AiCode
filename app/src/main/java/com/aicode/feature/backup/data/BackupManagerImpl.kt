@@ -537,6 +537,46 @@ class BackupManagerImpl @Inject constructor(
         return if (cleaned.isEmpty()) null else cleaned.joinToString("/")
     }
 
+    /**
+     * 还原单个资产条目：`assets/<类别>/<层级>/<相对路径>` 落到对应的容器路径根下。
+     *
+     * 覆盖同名文件，不删本机多出来的文件（与工作区文件的恢复语义一致）；项目层落到导入时的当前工作区
+     * ——导出时生效的是哪个工作区，带的就是那个工作区的项目级技能/子代理。写入失败（权限、远程断开）
+     * 只记日志跳过，不让整次导入挂掉：备份里其它段还要照常还原。
+     */
+    private fun restoreAssetEntry(tar: TarArchiveInputStream, entry: TarArchiveEntry): RestoreStats {
+        // 导出的 tar 只写文件条目；手工打的包里若有目录条目，当占位跳过，不建同名空文件
+        if (entry.isDirectory) return RestoreStats()
+        val target = resolveAssetTarget(entry.name)
+        if (target == null) {
+            FileLogger.w(TAG, "跳过无法解析的资产条目：${entry.name}")
+            return RestoreStats()
+        }
+        val bytes = tar.readBytes()
+        return runCatching { fileAccess.writeBytes(target.path, bytes, overwrite = true) }
+            .fold(
+                onSuccess = {
+                    FileLogger.i(TAG, "恢复资产文件：${target.path}（${bytes.size} 字节）")
+                    when (target.kind) {
+                        AssetKind.SKILL -> RestoreStats(skillFiles = 1)
+                        AssetKind.SUBAGENT -> RestoreStats(subagentFiles = 1)
+                        AssetKind.PANEL_SCRIPT -> RestoreStats(panelScriptFiles = 1)
+                    }
+                },
+                onFailure = { e ->
+                    FileLogger.w(TAG, "写入资产文件失败，跳过：${target.path}（${e.message}）")
+                    RestoreStats()
+                }
+            )
+    }
+
+    /** 把资产条目名解析成目标容器路径 + 类别；前缀不认识或相对路径越界时返回 null。 */
+    private fun resolveAssetTarget(entryName: String): AssetTarget? {
+        val root = assetRoots().firstOrNull { entryName.startsWith(it.prefix) } ?: return null
+        val rel = normalizeAssetPath(entryName.removePrefix(root.prefix)) ?: return null
+        return AssetTarget("${root.root.trimEnd('/')}/$rel", root.kind)
+    }
+
     // ── 导入辅助 ──────────────────────────────────────────────
 
     private suspend fun restoreFromTar(tar: TarArchiveInputStream, selectedWorkspaces: Set<String>?): RestoreStats {
@@ -585,8 +625,10 @@ class BackupManagerImpl @Inject constructor(
                     stats += RestoreStats(todoItems = count)
                 }
                 else -> {
-                    if (entry.name.startsWith(WORKSPACE_PREFIX)) {
-                        stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+                    when {
+                        entry.name.startsWith(WORKSPACE_PREFIX) ->
+                            stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+                        entry.name.startsWith(ASSET_PREFIX) -> stats += restoreAssetEntry(tar, entry)
                     }
                 }
             }
@@ -684,7 +726,7 @@ class BackupManagerImpl @Inject constructor(
             TAG,
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null} " +
-                "appSettings=${meta.appSettingsIncluded}"
+                "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null}"
         )
         if (meta.providers.isNotEmpty()) {
             aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
@@ -706,6 +748,9 @@ class BackupManagerImpl @Inject constructor(
         if (meta.globalPermissionRules.isNotEmpty()) {
             permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
         }
+        // 启停配置：备份没带（字段为 null）时一个字都不写，与本字段出现之前的导入行为逐字一致；
+        // 带了就整份覆盖两级文件（备份里的名单为准，本机多出来的禁用项不删）。
+        val skillsAgentsConfigRestored = meta.skillsAgentsConfig?.let { restoreSkillsAgentsConfig(it) } ?: false
         if (meta.appSettingsIncluded) {
             meta.themeMode?.let { themeSettingsRepository.restore(it) }
             themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
@@ -738,8 +783,24 @@ class BackupManagerImpl @Inject constructor(
             remoteMounts = meta.remoteMounts.size,
             mcpServers = meta.mcpServers.size,
             globalPermissionRules = meta.globalPermissionRules.size,
-            settingsRestored = meta.appSettingsIncluded
+            settingsRestored = meta.appSettingsIncluded,
+            skillsAgentsConfigRestored = skillsAgentsConfigRestored
         )
+    }
+
+    /**
+     * 还原技能 / 子代理的启停配置（两级各一份，整份覆盖）。
+     *
+     * @return 是否至少写成功了一份：项目级因工作区未落定被跳过时不算写成功，
+     *   否则摘要会把没发生的事算到用户头上（与 [BackupMetadata.appSettingsIncluded] 同一考量）。
+     */
+    private fun restoreSkillsAgentsConfig(config: SkillsAgentsConfigDto): Boolean {
+        var restored = false
+        config.globalSkills?.let { if (skillConfigRepository.restoreConfig(it, SkillScope.GLOBAL)) restored = true }
+        config.globalAgents?.let { if (agentDefinitionConfigRepository.restoreConfig(it, AgentDefinitionScope.GLOBAL)) restored = true }
+        config.projectSkills?.let { if (skillConfigRepository.restoreConfig(it, SkillScope.PROJECT)) restored = true }
+        config.projectAgents?.let { if (agentDefinitionConfigRepository.restoreConfig(it, AgentDefinitionScope.PROJECT)) restored = true }
+        return restored
     }
 
     /**
@@ -985,3 +1046,6 @@ private class AssetRoot(val prefix: String, val root: String, val kind: AssetKin
 
 /** 资产类别，决定导入摘要把它算进哪一行。 */
 private enum class AssetKind { SKILL, SUBAGENT, PANEL_SCRIPT }
+
+/** 资产条目的落点：目标容器路径 + 类别。 */
+private class AssetTarget(val path: String, val kind: AssetKind)
