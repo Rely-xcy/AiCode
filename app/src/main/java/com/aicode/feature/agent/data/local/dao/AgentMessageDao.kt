@@ -28,7 +28,12 @@ interface AgentMessageDao {
     /**
      * 指定会话的短期上下文统计：仍在上下文里的消息条数，以及仍在上下文里的接手摘要份数。
      *
-     * 回放上下文时会滤掉 isCompacted 的行，所以「未压缩行数」就是这轮请求实际要带的短期上下文规模；
+     * 判据必须与回放侧一字不差（见 MessagePersistenceUseCase.buildHistoryUncached 的
+     * filter { !isCompacted && !isContextExcluded }）：
+     * - `isCompacted = 1`：已折进摘要，回放不带上；
+     * - `isContextExcluded = 1`：从不属于对话（/usage 统计行，迁移 58 把历史行也是这么归的）。
+     *   漏了后者，1.12 之前用过 /usage 的会话会把统计行算进「短期上下文」，卡片比回放多算。
+     *
      * 每次折叠写入一条 isContextSummary 行，但旧摘要会被下一次折叠回收（标 isCompacted），
      * 所以 foldCount 是「当前生效的摘要份数」，不是累计折叠次数。
      */
@@ -37,7 +42,7 @@ interface AgentMessageDao {
         SELECT COUNT(*) AS retainedMessages,
                IFNULL(SUM(CASE WHEN isContextSummary = 1 THEN 1 ELSE 0 END), 0) AS foldCount
         FROM agent_messages
-        WHERE sessionId = :sessionId AND isCompacted = 0
+        WHERE sessionId = :sessionId AND isCompacted = 0 AND isContextExcluded = 0
         """
     )
     suspend fun sessionContextStats(sessionId: String): SessionContextStats

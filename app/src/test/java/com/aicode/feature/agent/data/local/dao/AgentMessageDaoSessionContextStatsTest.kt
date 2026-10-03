@@ -5,6 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
+import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.presentation.MessageRole
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -117,19 +119,60 @@ class AgentMessageDaoSessionContextStatsTest {
         assertEquals(0, stats.foldCount)
     }
 
+    @Test
+    fun excludesUsageRowsMarkedContextExcluded() = runTest {
+        dao.insertAll(
+            listOf(
+                row("u1", timestamp = 1),
+                // 迁移 58 把升级前的 /usage 统计行标成 isContextExcluded=1 且 isCompacted=0：
+                // 回放不带它，统计也不该算它，否则 1.12 前用过 /usage 的会话在这里多算
+                row("usage", timestamp = 2, contextExcluded = true),
+                row("a1", timestamp = 3)
+            )
+        )
+
+        val stats = dao.sessionContextStats(SESSION)
+
+        assertEquals(2, stats.retainedMessages)
+    }
+
+    @Test
+    fun statsMatchWhatContextReplayActuallySends() = runTest {
+        // 「两个判据同源」：统计条数必须等于回放真实带上的消息数（同一条 SQL 条件面）。
+        // 判据一旦分叉（如统计只看 isCompacted、回放还看 isContextExcluded），本用例即红。
+        dao.insertAll(
+            listOf(
+                row("u1", timestamp = 1),
+                row("a1", timestamp = 2, role = MessageRole.ASSISTANT.name),
+                row("usage", timestamp = 3, role = MessageRole.ASSISTANT.name, contextExcluded = true),
+                row("folded", timestamp = 4, compacted = true),
+                row("u2", timestamp = 5)
+            )
+        )
+
+        val stats = dao.sessionContextStats(SESSION)
+        val replayed = MessagePersistenceUseCase(dao, db)
+            .buildHistory(SESSION, SessionUseCase.PENDING_TOOL_MARKER)
+
+        assertEquals(replayed.size, stats.retainedMessages)
+    }
+
     private fun row(
         id: String,
         sessionId: String = SESSION,
         timestamp: Long,
+        role: String = MessageRole.USER.name,
         compacted: Boolean = false,
-        summary: Boolean = false
+        summary: Boolean = false,
+        contextExcluded: Boolean = false
     ) = AgentMessageEntity(
         id = id,
         sessionId = sessionId,
-        role = MessageRole.USER.name,
+        role = role,
         content = "content-$id",
         timestamp = timestamp,
         isCompacted = compacted,
-        isContextSummary = summary
+        isContextSummary = summary,
+        isContextExcluded = contextExcluded
     )
 }
