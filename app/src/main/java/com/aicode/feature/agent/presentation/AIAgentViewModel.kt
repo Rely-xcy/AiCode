@@ -2054,12 +2054,14 @@ class AIAgentViewModel @Inject constructor(
         // cancel() 在 Dispatchers.Main.immediate 上可能立即恢复挂起协程
         // （如 awaitApproval 的 CompletableDeferred.await），旧 job 的 finally →
         // flushPendingNotifications 在 cancel() 调用栈内同步执行并可能启动新 job。
-        // 不预先清除待送通知——它们应由 finally 正常 flush 给新 job 处理。
+        // 不预先清除待送通知——它们应由 finally 正常 flush 给新 job 处理；
+        // 也不在这里清：cancel() 的 finally 未必已跑完，此时清就是把待送通知凭空抹掉
+        // （用户点的是「停止任务」，不是「丢掉我的消息 / 后台完成通知」），
+        // 而 finally 里的 flushPendingNotifications 无论如何都会把它们作为消息送出去。
         job.cancel()
         // cancel 可能已同步执行完 finally（flush 启动了新 job 并注册到 sessionJobs），
-        // 此时不能再覆盖新 job 的状态；仅当无新 job 接管时才做清理。
+        // 此时不能再覆盖新 job 的状态；仅当无新 job 接管时才做状态清理。
         if (sessionJobs[sessionId]?.isActive != true) {
-            agentNotificationCenter.clear(sessionId)
             setAgentState(sessionId, AgentUIState.Idle)
         }
         _runningTools.value = _runningTools.value - sessionId
