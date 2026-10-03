@@ -161,8 +161,14 @@ fun TerminalScreen(
                         onNew = { viewModel.newTab() }
                     )
 
+                    val activeTab = tabs.firstOrNull { it.id == activeTabId }
+                    // 因连接断开而结束的会话：不单独标出来，用户看到的只是 Termux 那句「[Process completed]」
+                    if (activeTab?.droppedByDisconnect == true) {
+                        ConnectionDroppedBanner()
+                    }
+
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        val active = tabs.firstOrNull { it.id == activeTabId }
+                        val active = activeTab
                         if (active == null) {
                             StatusView(
                                 loading = creatingTab,
@@ -622,3 +628,31 @@ private fun KeyChip(
 /** 单字符按键给固定宽度，多字符按键自适应。 */
 private fun Modifier.widthChip(label: String): Modifier =
     if (label.length <= 1) this.width(36.dp) else this
+
+/**
+ * 连接断开导致会话结束的横幅。
+ *
+ * 远程 shell 的退出码无意义（SshShellBackend.waitForExit 恒返 0），断网后 Termux 只会打一句
+ * 「[Process completed]」——与用户敲 exit 长得一样，不提示会让人以为终端好好的。
+ */
+@Composable
+private fun ConnectionDroppedBanner() {
+    Surface(color = MaterialTheme.colorScheme.errorContainer) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm)
+        ) {
+            Text(
+                text = stringResource(R.string.terminal_connection_dropped),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                text = stringResource(R.string.terminal_connection_dropped_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+        }
+    }
+}

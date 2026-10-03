@@ -51,6 +51,12 @@ class RemoteTerminalSessionManager @Inject constructor(
 
     private val idCounter = AtomicInteger(0)
 
+    /**
+     * 标签 id → 它的 SSH shell backend。用于在会话结束时判断是「正常结束」还是「断线结束」：
+     * [SshShellBackend.closedByDisconnect] 只能从 backend 上读到。
+     */
+    private val backends = mutableMapOf<String, SshShellBackend>()
+
     val activeTab: TerminalTab? get() = _tabs.value.firstOrNull { it.id == _activeTabId.value }
 
     fun tab(id: String): TerminalTab? = _tabs.value.firstOrNull { it.id == id }
@@ -107,7 +113,8 @@ class RemoteTerminalSessionManager @Inject constructor(
         val shell = withContext(Dispatchers.IO) {
             connection.startShellSession().also { it.allocateDefaultPTY() }.startShell()
         }
-        val backend = SshShellBackend(shell)
+        val backend = SshShellBackend(shell) { connection.isConnected() }
+        backends[id] = backend
         val termSession = TerminalSession(TRANSCRIPT_ROWS, AppRemoteSessionClient(), backend)
         termSession.updateSize(DEFAULT_COLUMNS, DEFAULT_ROWS)
         // shell 登录后默认在 home，先 cd 到当前工作区，与命令执行链路（RemoteSshEngine.buildCdCommand）保持一致：
@@ -181,6 +188,7 @@ class RemoteTerminalSessionManager @Inject constructor(
         val tab = tab(id) ?: return false
         runCatching { tab.session.finishIfRunning() }
         tab.view = null
+        backends.remove(id)
         val remaining = _tabs.value.filterNot { it.id == id }
         _tabs.value = remaining
         if (_activeTabId.value == id) {
@@ -239,7 +247,14 @@ class RemoteTerminalSessionManager @Inject constructor(
         override fun onTitleChanged(changedSession: TerminalSession) {}
         override fun onSessionFinished(finishedSession: TerminalSession) {
             _tabs.value.firstOrNull { it.session === finishedSession }?.let { target ->
+                // 断线导致的结束：远程 shell 没有有意义的退出码，只看 Termux 的
+                // 「[Process completed]」分不出是用户敲了 exit 还是网断了，得看 backend 的标记。
+                val dropped = backends[target.id]?.closedByDisconnect == true
                 target.runState = RunState.Finished(0)
+                if (dropped) {
+                    target.droppedByDisconnect = true
+                    FileLogger.w(TAG, "远程 shell 因连接断开而结束: ${target.id}")
+                }
                 bumpRevision()
                 if (target.notifyOnExit) {
                     _tabFinishedEvents.tryEmit(
