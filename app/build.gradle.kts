@@ -55,16 +55,6 @@ fun gitVersionName(): String = try {
     "1.7.0-dev"
 }
 
-// ── fork 专属：fork/release 出包用的固定版本号（main 不得出现这一段）──────────
-// 只有 fork/release 分支用这两个值；main 必须保持 versionCode = gitCommitCount() /
-// versionName = gitVersionName() 的派生写法，否则带到上游 PR 会破坏他们的发版机制
-// （android-release.yml 有 versionCode 单调校验，靠提交数递增）。
-// 为什么在 fork 里写死：本 fork 领先上游一百多个提交，gitCommitCount() 会让 versionCode 虚高
-// （自建包看起来永远比上游新、装的包升级判定错乱），而且每推一次就自动涨一版。
-// 取值口径：versionCode = 上游 main 的提交数，versionName = 上游最新 tag；同步上游时手动更新。
-val forkVersionCode = 965
-val forkVersionName = "1.12.0-rc1"
-
 // versionCode 从 git 提交数自动生成：随每次提交单调递增，无需手动维护，
 // 杜绝"升 versionName 忘升 versionCode"导致升级判定失效。
 // 工作目录用 rootProject.projectDir（仓库根），无 git 环境（如下载 zip 构建）时 fallback 到 1。
@@ -122,9 +112,8 @@ android {
         //      保活需换 specialUse。
         // 代价：不能上 Google Play。
         targetSdk = 28
-        // fork 专属：见文件开头 forkVersionCode / forkVersionName（main 上这两行是 gitCommitCount() / gitVersionName()）。
-        versionCode = forkVersionCode
-        versionName = forkVersionName
+        versionCode = gitCommitCount()
+        versionName = gitVersionName()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
