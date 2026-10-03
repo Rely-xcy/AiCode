@@ -292,6 +292,16 @@ android {
     }
 }
 
+// 单测失败时打完整栈：默认（LIFECYCLE 级别）是 SHORT，CI 日志里只剩「异常类 at 文件:行」一行，
+// 而 kotlinx-coroutines-test 的 UncaughtExceptionsBeforeTest 把真正的异常放在 suppressed 里，
+// 测试报告又不作为产物上传——SHORT 就等于「有结论、没来源」（2026-10-03 的跨测试 NPE 就因此
+// 在日志里查不到根因）。INFO/DEBUG 级别本来就是 FULL，这里只把 LIFECYCLE 拉平。
+tasks.withType<Test> {
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
+
 // 彻底禁用 lintVital<Flavor>Release 任务（三 flavor 各一个），
 // 使其不进入 assembleRelease 的任务图——比 lint.checkReleaseBuilds=false 更省构建开销与内存。
 // 仅在 release 任务图执行前禁用，避免影响开发期 debug lint。
