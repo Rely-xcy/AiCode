@@ -1316,6 +1316,12 @@ fun AIChatPanel(
     val connectionState = settingsViewModel?.connectionState?.collectAsStateWithLifecycle()?.value
     val isRemote = executionMode == com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH
 
+    // 连接失败时的动作入口：重试走与「回到前台自动重连」同一条路径（C9）；settingsViewModel 为空
+    // （嵌入式面板不传）时不显示按钮。
+    val onRetryRemoteConnection: (() -> Unit)? = settingsViewModel?.let { vm ->
+        { vm.retryRemoteConnection() }
+    }
+
     val markdownImageTransformer = remember(viewModel.fileAccess) {
         MarkdownImageTransformer(viewModel.fileAccess)
     }
@@ -1456,6 +1462,7 @@ fun AIChatPanel(
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 connectionState = connectionState?.takeIf { isRemote },
+                onRetryConnection = onRetryRemoteConnection,
                 showMenuButton = showMenuButton,
                 terminalActive = terminalActive,
                 gitActive = gitActive,
@@ -1482,7 +1489,7 @@ fun AIChatPanel(
                 if (!messagesReady) {
                     // 远程模式连接未就绪时显示连接状态占位，避免空白或旧工作区记录闪烁
                     if (isRemote && connectionState != null && connectionState != com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED) {
-                        RemoteConnectingPlaceholder(state = connectionState)
+                        RemoteConnectingPlaceholder(state = connectionState, onRetry = onRetryRemoteConnection)
                     } else if (showMessagesLoading) {
                         // 本地模式读库偏慢时的占位：以前这里什么都不画，切会话会先闪一下空白。
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

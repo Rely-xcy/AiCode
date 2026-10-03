@@ -393,6 +393,7 @@
     <string name="chat_connecting_remote">Connecting to remote server…</string>
     <string name="chat_remote_connect_failed">Remote server connection failed, please check settings</string>
     <string name="chat_no_remote_connection">Not connected to remote server</string>
+    <string name="chat_ssh_retry">Retry connection</string>
     <string name="chat_placeholder">How can I help you?</string>
     <string name="chat_input_hint">Describe what you need, and I\'ll help you write, modify, or explain code</string>
 

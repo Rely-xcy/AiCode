@@ -66,7 +66,9 @@ class CodeEditorViewModel @Inject constructor(
         _uiState.value = EditorUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = runCatching {
-                if (!fileAccess.exists(path) || !fileAccess.isFile(path)) {
+                // isFile 为假 = 不存在或不是普通文件（目录/设备），一次 statExistence 就能判定；
+                // 原先还要先 exists 一次，远程模式下每次 stat 都是一次 SFTP 往返。
+                if (!fileAccess.isFile(path)) {
                     return@runCatching EditorUiState.Error(null)
                 }
                 val size = fileAccess.fileSize(path)

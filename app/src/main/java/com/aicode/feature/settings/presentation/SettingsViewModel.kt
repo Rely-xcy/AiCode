@@ -654,6 +654,15 @@ class SettingsViewModel @Inject constructor(
     val globalRules: StateFlow<List<PermissionRule>> = _globalRules.asStateFlow()
 
     /**
+     * 主动重试远程连接（聊天页「SSH 连接失败」提示上的「重试连接」按钮）。
+     * 与 MainActivity.onResume 的前台重连走同一条路径（[RemoteSshConnection.tryReconnectIfDisconnected]），
+     * 不新建连接流程；失败时由连接状态本身反映（继续显示 FAILED）。
+     */
+    fun retryRemoteConnection() {
+        viewModelScope.launch { runCatching { remoteSshConnection.tryReconnectIfDisconnected() } }
+    }
+
+    /**
      * 项目级配置写入因「工作区未就绪」被跳过时的一次性提示；UI 展示后调用 [consumeConfigWriteError] 清空。
      *
      * 项目级写入（技能/子代理开关、MCP、权限规则）在工作区未落定时会被有意跳过，

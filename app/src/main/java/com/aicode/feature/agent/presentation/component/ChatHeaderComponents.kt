@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -65,6 +66,7 @@ internal fun ChatHeader(
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     connectionState: com.aicode.feature.agent.domain.container.ConnectionState? = null,
+    onRetryConnection: (() -> Unit)? = null,
     showMenuButton: Boolean = true,
     terminalActive: Boolean = false,
     gitActive: Boolean = false,
@@ -150,7 +152,7 @@ internal fun ChatHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    ConnectionIndicator(state = connectionState)
+                    ConnectionIndicator(state = connectionState, onRetry = onRetryConnection)
                     TokenStats(
                         inputTokens = inputTokens,
                         outputTokens = outputTokens
@@ -199,7 +201,8 @@ private fun WorkbenchIconButton(
 
 @Composable
 private fun ConnectionIndicator(
-    state: com.aicode.feature.agent.domain.container.ConnectionState
+    state: com.aicode.feature.agent.domain.container.ConnectionState,
+    onRetry: (() -> Unit)? = null
 ) {
     val (dotColor, text) = when (state) {
         com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED ->
@@ -228,6 +231,20 @@ private fun ConnectionIndicator(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        if (state == com.aicode.feature.agent.domain.container.ConnectionState.FAILED && onRetry != null) {
+            RetryConnectionButton(onRetry)
+        }
+    }
+}
+
+/** 连接失败时的动作入口：在此之前 FAILED 态没有任何可点的东西，用户只能自己去设置里翻。 */
+@Composable
+private fun RetryConnectionButton(onRetry: () -> Unit) {
+    TextButton(onClick = onRetry) {
+        Text(
+            text = stringResource(R.string.chat_ssh_retry),
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 
@@ -244,7 +261,8 @@ private fun TokenStats(inputTokens: Int, outputTokens: Int) {
 
 @Composable
 internal fun RemoteConnectingPlaceholder(
-    state: com.aicode.feature.agent.domain.container.ConnectionState
+    state: com.aicode.feature.agent.domain.container.ConnectionState,
+    onRetry: (() -> Unit)? = null
 ) {
     val text = when (state) {
         com.aicode.feature.agent.domain.container.ConnectionState.CONNECTING -> stringResource(R.string.chat_connecting_remote)
@@ -272,6 +290,9 @@ internal fun RemoteConnectingPlaceholder(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (state == com.aicode.feature.agent.domain.container.ConnectionState.FAILED && onRetry != null) {
+                RetryConnectionButton(onRetry)
+            }
         }
     }
 }
