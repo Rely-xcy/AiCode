@@ -34,7 +34,7 @@ internal const val FORK_UPDATE_SUPPORTS_CHANNEL = false
  * 1. 删除本文件；
  * 2. SettingsViewModel：去掉 forkUpdateCheckService 构造参数与 import，恢复注入 updateCheckService，
  *    checkUpdate 里改回 updateCheckService.checkForUpdate(currentVersionName(), updateCheckSettingsRepository.channel)，
- *    并删掉 NewVersion(..., downloadUrl = ...) 的 downloadUrl 实参；
+ *    并删掉 NewVersion(..., downloadUrl = ...) 的 downloadUrl 实参，把末尾的 markCheckedToday 恢复成无条件调用（去掉 result !is Error 判断）；
  * 3. SettingsViewModel.UpdateCheckUiState.NewVersion：删掉 downloadUrl 字段；
  * 4. UpdateCheckService.UpdateInfo：删掉 downloadUrl 字段；
  * 5. UpdateCheckDialog：onOpenDownload 改回 onOpenRelease，按钮回到 githubReleaseUrl(state.latestTag) 与 R.string.about_download；

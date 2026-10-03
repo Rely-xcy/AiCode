@@ -1519,7 +1519,8 @@ class SettingsViewModel @Inject constructor(
 
     /**
      * 检查更新。手动模式（关于页点击）不受开关与每日限制；自动模式（主页启动）
-     * 需开关开启且当天未检测过，失败时静默（不弹错误窗），无论结果都记录当天已检。
+     * 需开关开启且当天未检测过，失败时静默（不弹错误窗）。检测失败不记「当天已检」，
+     * 留到下次启动再试（fork 专属，见下方注释）。
      */
     fun checkUpdate(manual: Boolean) {
         if (!manual) {
@@ -1553,7 +1554,9 @@ class SettingsViewModel @Inject constructor(
                 channel = updateCheckSettingsRepository.channel,
                 result = result
             )
-            if (!manual) {
+            // fork 专属：失败不算「今天已检」——发布服务时通时不通，失败当天不再试等于白等一天，
+            // 下次启动重试一次。代价是失败当天每次冷启动多发一次请求（单次请求，非循环重试，10s 超时兜底）。
+            if (!manual && result !is UpdateCheckResult.Error) {
                 updateCheckSettingsRepository.markCheckedToday()
             }
         }
