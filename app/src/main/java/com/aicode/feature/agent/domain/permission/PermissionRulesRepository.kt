@@ -2,8 +2,10 @@ package com.aicode.feature.agent.domain.permission
 
 import android.content.Context
 import com.aicode.core.util.FileLogger
+import com.aicode.core.watch.ChangeDomain
 import com.aicode.core.watch.FileChangeBatch
 import com.aicode.core.watch.FileChangeHub
+import com.aicode.core.watch.touches
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
@@ -106,34 +108,32 @@ class PermissionRulesRepository @Inject constructor(
         watchScope.launch {
             merge(
                 fileChangeHub.watchAicode(),
-                fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
+                fileChangeHub.watchWorkspace(
+                    "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME",
+                    domain = ChangeDomain.AICODE_CONFIG
+                )
             ).collect { batch -> refreshFromDisk(batch) }
         }
     }
 
-    /** 只处理命中的文件；内容确实变化才更新缓存（touch 不算）。 */
+    /** 只处理配置域的批次（不看路径：远端模式下事件带的是服务器路径）；内容确实变化才更新缓存（touch 不算）。 */
     private suspend fun refreshFromDisk(batch: FileChangeBatch) {
-        val globalPath = globalFile.absolutePath
-        if (batch.changes.any { it.hostPath == globalPath }) {
-            // 与项目级同一套语义：读失败写入 confirmed=false，此后不再当作「全局没有规则」。
-            val loaded = loadFromFile(globalFile)
-            if (loaded != globalState.value) {
-                globalState.value = loaded
-                FileLogger.i(TAG, "检测到全局权限配置变化，已刷新")
-            }
+        if (!batch.touches(ChangeDomain.AICODE_CONFIG)) return
+        // 与项目级同一套语义：读失败写入 confirmed=false，此后不再当作「全局没有规则」。
+        val loaded = loadFromFile(globalFile)
+        if (loaded != globalState.value) {
+            globalState.value = loaded
+            FileLogger.i(TAG, "检测到全局权限配置变化，已刷新")
         }
-        val path = workspaceRepository.currentPathOrNull()
-        if (path != null && batch.changes.any { it.hostPath == projectFileForPath(path).absolutePath }) {
-            val state = getProjectState(path)
-            // 缓存尚未加载时不处理：首次加载由 [ensureProjectLoaded] 完成，工作区切换不算外部变更。
-            if (state.value != null) {
-                // 刷新失败时写入 confirmed=false：文件刚被改成读不出来的样子，此后不再当作「没有项目规则」。
-                val loaded = loadFromFile(projectFileForPath(path))
-                if (loaded != state.value) {
-                    state.value = loaded
-                    FileLogger.i(TAG, "检测到项目权限配置变化，已刷新")
-                }
-            }
+        val path = workspaceRepository.currentPathOrNull() ?: return
+        val state = getProjectState(path)
+        // 缓存尚未加载时不处理：首次加载由 [ensureProjectLoaded] 完成，工作区切换不算外部变更。
+        if (state.value == null) return
+        // 刷新失败时写入 confirmed=false：文件刚被改成读不出来的样子，此后不再当作「没有项目规则」。
+        val projectLoaded = loadFromFile(projectFileForPath(path))
+        if (projectLoaded != state.value) {
+            state.value = projectLoaded
+            FileLogger.i(TAG, "检测到项目权限配置变化，已刷新")
         }
     }
 

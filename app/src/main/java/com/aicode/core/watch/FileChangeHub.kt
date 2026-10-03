@@ -3,6 +3,7 @@ package com.aicode.core.watch
 import android.os.FileObserver
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
@@ -21,12 +22,14 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -45,6 +48,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * 过滤按订阅方生效：递归剪枝与事件投递都用订阅自己的 [WatchFilter]，同一目录可以对一个订阅可见、
  * 对另一个订阅被忽略。剪枝只看父路径段，故被剪枝目录自身的增删仍会上报（父目录列表才看得到它）。
+ *
+ * 事件带「域」（[ChangeDomain]）：由**订阅走的是哪条路由**标注，与路径形态无关，消费方按域认领——
+ * 配置类消费方不必再拿文件路径去比对（远端模式下拿到的是服务器路径，路径比对永远命不中）。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -53,6 +59,7 @@ class FileChangeHub @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val pathMapper: WorkspacePathMapper,
     private val executionModeHolder: ExecutionModeHolder,
+    private val remoteSshConnection: RemoteSshConnection,
     private val remoteFileWatchPoller: RemoteFileWatchPoller
 ) {
     companion object {
@@ -88,6 +95,9 @@ class FileChangeHub @Inject constructor(
         /** AI 配置目录在容器内的根路径。 */
         const val AICODE_ROOT = WorkspacePathMapper.AICODE_ROOT
 
+        /** AI 配置目录在宿主/服务器上的目录名：容器内 `/root/.aicode` 与远端 `$HOME/.aicode` 都是它。 */
+        private const val AICODE_DIR_NAME = ".aicode"
+
         private const val IN_IGNORED = 0x00008000
 
         private val MASK = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MOVED_TO or
@@ -106,13 +116,17 @@ class FileChangeHub @Inject constructor(
      * 订阅当前工作区（跟随工作区切换自动重建）。[containerSubPath] 是容器路径，默认整个工作区根。
      * 远程模式下工作区在服务器上、宿主没有对应目录，改走 [RemoteFileWatchPoller] 的远端轮询；
      * 本地模式下工作区未落定时不订阅（不能把工作区父目录当成工作区来观察）。
+     *
+     * [domain] 标给本订阅产出的事件，默认 [ChangeDomain.WORKSPACE_FILE]。监听工作区内 `.aicode` 配置目录的
+     * 消费方传 [ChangeDomain.AICODE_CONFIG]，本地/远端两条分支产出的事件域一致。
      */
     fun watchWorkspace(
         containerSubPath: String = CONTAINER_ROOT,
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        domain: ChangeDomain = ChangeDomain.WORKSPACE_FILE
     ): Flow<FileChangeBatch> = workspaceRepository.current
         .map { workspaceRepository.currentPathOrNull() }
         .distinctUntilChanged()
@@ -126,7 +140,8 @@ class FileChangeHub @Inject constructor(
                     remoteDir = remoteDir,
                     containerRoot = containerSubPath.trimEnd('/'),
                     recursive = recursive,
-                    filter = filter
+                    filter = filter,
+                    domain = domain
                 )
             } else {
                 // 订阅建立与订阅消费之间工作区可能又失效，映射失败则退化为空流，不让流异常终止。
@@ -139,7 +154,8 @@ class FileChangeHub @Inject constructor(
                     recursive = recursive,
                     filter = filter,
                     fallbackPoll = fallbackPoll,
-                    batchWindowMs = batchWindowMs
+                    batchWindowMs = batchWindowMs,
+                    domain = domain
                 )
             }
         }
@@ -161,7 +177,16 @@ class FileChangeHub @Inject constructor(
         return if (rel.isEmpty()) base else "$base/$rel"
     }
 
-    /** 订阅 AI 配置目录（`~/.aicode`）下的子路径，[containerSubPath] 为空表示该目录本身。 */
+    /**
+     * 订阅 AI 配置目录（`~/.aicode`）下的子路径，[containerSubPath] 为空表示该目录本身。
+     * 产出的变更一律标 [ChangeDomain.AICODE_CONFIG]。
+     *
+     * 两条路由都听：
+     * - 宿主私有配置目录：MCP 与权限规则的全局配置一律存在这里（读写都走 java.io.File，不随执行模式切换）；
+     * - 远端模式下服务器上的 `$HOME/.aicode`：技能与子代理的全局配置按执行环境读写，就存在那里。
+     * 两条路由各自独立：宿主那条不随执行模式切换重建，远端那条跟随「模式 + 连接状态」重建
+     * （远端 home 要连上才知道，订阅比连接先建立时靠它补上）。
+     */
     fun watchAicode(
         containerSubPath: String = "",
         recursive: Boolean = false,
@@ -170,21 +195,53 @@ class FileChangeHub @Inject constructor(
         batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
     ): Flow<FileChangeBatch> {
         val sub = containerSubPath.trim('/')
-        return watchHostDir(
+        val local = watchHostDir(
             hostDir = if (sub.isEmpty()) containerInstaller.aicodeDir else File(containerInstaller.aicodeDir, sub),
             containerRootPath = if (sub.isEmpty()) AICODE_ROOT else "$AICODE_ROOT/$sub",
             root = ChangeRoot.AICODE,
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            batchWindowMs = batchWindowMs
+            batchWindowMs = batchWindowMs,
+            domain = ChangeDomain.AICODE_CONFIG
         )
+        val remote = combine(
+            executionModeHolder.mode,
+            remoteSshConnection.connectionState
+        ) { mode, _ -> mode }
+            .flatMapLatest { mode ->
+                val remoteDir = remoteAicodeDirOrNull(mode, sub) ?: return@flatMapLatest emptyFlow()
+                remoteFileWatchPoller.watch(
+                    remoteDir = remoteDir,
+                    // 容器路径用远端自身路径：`~/.aicode` 在远端模式下就是服务器上的这个目录。
+                    containerRoot = remoteDir,
+                    recursive = recursive,
+                    filter = filter,
+                    domain = ChangeDomain.AICODE_CONFIG
+                )
+            }
+        return merge(local, remote)
+    }
+
+    /**
+     * 远端模式下 AI 看到的 `~/.aicode[/sub]` 在服务器上的绝对路径；本地模式或远端 home 未探到时返回 null。
+     *
+     * home 直接拼而不是走 `pathMapper`：`~` 在远端展开成哪是服务器的事（root 是 `/root`、普通用户是 `/home/xxx`），
+     * 宿主这边只有 [RemoteSshConnection.remoteHome] 知道；拼出来的路径也不能带 `~`，远端命令会给它加单引号。
+     */
+    private fun remoteAicodeDirOrNull(mode: ExecutionMode, sub: String): String? {
+        if (mode != ExecutionMode.REMOTE_SSH) return null
+        val home = remoteSshConnection.remoteHome?.trim()?.trimEnd('/').orEmpty()
+        if (home.isEmpty()) return null
+        return if (sub.isEmpty()) "$home/$AICODE_DIR_NAME" else "$home/$AICODE_DIR_NAME/$sub"
     }
 
     /**
      * 订阅任意宿主目录（如同步引擎的本地镜像目录）。[containerRootPath] 为 null 时容器路径由
      * [WorkspacePathMapper.toContainerPath] 反推。目录尚不存在时不放弃订阅——等它出现后再挂 watch，
      * 并把「目录出现」当作一次变更上报（项目级 `.aicode/skills` 这类目录经常是后建的）。
+     *
+     * [domain] 默认 [ChangeDomain.OTHER]（未标注）：调用方如果不清楚自己属于哪个域，保持默认即可。
      */
     fun watchHostDir(
         hostDir: File,
@@ -193,7 +250,8 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        domain: ChangeDomain = ChangeDomain.OTHER
     ): Flow<FileChangeBatch> = flow {
         val subscription = Subscription(
             rootDir = hostDir,
@@ -202,7 +260,8 @@ class FileChangeHub @Inject constructor(
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            windowMs = batchWindowMs
+            windowMs = batchWindowMs,
+            domain = domain
         )
         try {
             subscription.start()
@@ -222,7 +281,9 @@ class FileChangeHub @Inject constructor(
         private val recursive: Boolean,
         private val filter: WatchFilter,
         private val fallbackPoll: Boolean,
-        private val windowMs: Int
+        private val windowMs: Int,
+        /** 本订阅产出的事件所属的域；同一目录被多个订阅监听时各自标自己的域。 */
+        private val domain: ChangeDomain
     ) {
         private val events = Channel<RawEvent>(
             capacity = MAX_PENDING_EVENTS,
@@ -433,7 +494,7 @@ class FileChangeHub @Inject constructor(
                 }
 
                 val changes = merged.map { (path, kind) ->
-                    FileChange(rootKind, path, containerPathOf(path), kind)
+                    FileChange(rootKind, path, containerPathOf(path), kind, domain)
                 }
                 batchesChannel.send(FileChangeBatch(changes, truncated))
             }

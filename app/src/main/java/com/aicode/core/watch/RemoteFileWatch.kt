@@ -123,7 +123,8 @@ class RemoteFileWatchPoller @Inject constructor(
     /** 一个订阅：自带容器根路径、过滤规则与批次通道。 */
     private inner class RemoteSubscription(
         val containerRoot: String,
-        filter: WatchFilter
+        filter: WatchFilter,
+        private val domain: ChangeDomain
     ) {
         /** 远端订阅不做 .gitignore 剪枝（要读服务器上的文件），只按订阅方的忽略名单过滤。 */
         private val rules = IgnoreRules.of(filter, emptyList())
@@ -136,17 +137,7 @@ class RemoteFileWatchPoller @Inject constructor(
         val batches: Flow<FileChangeBatch> = channel.receiveAsFlow()
 
         fun emit(dir: String, diff: List<Pair<String, ChangeKind>>, overflow: Boolean) {
-            val changes = ArrayList<FileChange>(diff.size)
-            for ((name, kind) in diff) {
-                // 与本地一致：被剪枝目录自身仍上报，只有它**下面**的东西不再报。
-                if (rules.isIgnoredDir(name.split('/').dropLast(1))) continue
-                changes += FileChange(
-                    root = ChangeRoot.WORKSPACE,
-                    hostPath = "$dir/$name",
-                    containerPath = "$containerRoot/$name",
-                    kind = kind
-                )
-            }
+            val changes = remoteChangesOf(dir, containerRoot, diff, domain, rules)
             if (changes.isEmpty()) return
             channel.trySend(FileChangeBatch(changes, overflow))
         }
@@ -159,15 +150,18 @@ class RemoteFileWatchPoller @Inject constructor(
     /**
      * 订阅一个远端目录（[remoteDir] 为远端绝对路径，[containerRoot] 为该目录对应的容器路径）。
      * 冷流：订阅开始才登记并起轮询协程，订阅取消即注销；无人订阅时全局不发任何命令。
+     *
+     * [domain] 原样标给产出的事件：远端产出的路径是服务器路径，消费方按域认领而不是靠路径比对。
      */
     fun watch(
         remoteDir: String,
         containerRoot: String,
         recursive: Boolean = false,
-        filter: WatchFilter = WatchFilter.DEFAULT
+        filter: WatchFilter = WatchFilter.DEFAULT,
+        domain: ChangeDomain = ChangeDomain.OTHER
     ): Flow<FileChangeBatch> = flow {
         val key = WatchKey(remoteDir, if (recursive) REMOTE_RECURSIVE_MAX_DEPTH else REMOTE_SHALLOW_DEPTH)
-        val subscription = RemoteSubscription(containerRoot, filter)
+        val subscription = RemoteSubscription(containerRoot, filter, domain)
         val entry = register(key, subscription) ?: return@flow
         try {
             emitAll(subscription.batches)
@@ -304,6 +298,34 @@ internal data class RemoteScanDir(val dir: String, val maxDepth: Int)
 
 /** 单目录一轮扫描结果：[entries] 为「相对路径 → 不透明指纹」，[overflow] 表示条目超过窗口上限。 */
 internal data class RemoteDirScan(val entries: Map<String, String>, val overflow: Boolean)
+
+/**
+ * 一轮远端差分 → 变更事件。
+ *
+ * 抽成纯函数是为了能直接单测「远端批次带对了域」（真轮询要连 SSH，测不动）：[domain] 由发起订阅的那条
+ * 路由给定（工作区路由 / 配置路由），一旦确定就与服务器上的路径形态无关。
+ */
+internal fun remoteChangesOf(
+    dir: String,
+    containerRoot: String,
+    diff: List<Pair<String, ChangeKind>>,
+    domain: ChangeDomain,
+    rules: IgnoreRules
+): List<FileChange> {
+    val changes = ArrayList<FileChange>(diff.size)
+    for ((name, kind) in diff) {
+        // 与本地一致：被剪枝目录自身仍上报，只有它**下面**的东西不再报。
+        if (rules.isIgnoredDir(name.split('/').dropLast(1))) continue
+        changes += FileChange(
+            root = ChangeRoot.WORKSPACE,
+            hostPath = "$dir/$name",
+            containerPath = "$containerRoot/$name",
+            kind = kind,
+            domain = domain
+        )
+    }
+    return changes
+}
 
 /**
  * 构造一条覆盖 [dirs] 的扫描命令（整轮只有这一次远端往返）。

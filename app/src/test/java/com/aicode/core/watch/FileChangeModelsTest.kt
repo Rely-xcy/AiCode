@@ -95,4 +95,37 @@ class FileChangeModelsTest {
         assertTrue(rules.isIgnoredDir(listOf("a", "x.cache")))
         assertFalse(rules.isIgnoredDir(listOf("a", "b")))
     }
+
+    /**
+     * 域与路径无关：远端模式下事件带的是服务器路径，只要域对就算命中。
+     * 配置类消费方靠它认领变更，不再拿文件路径去比（路径比对在远端必然落空）。
+     */
+    @Test
+    fun `按域认领只看域不看路径，未标注的变更默认不算配置域`() {
+        val unlabelled = FileChange(ChangeRoot.OTHER, "/h/a", "~/workspace/a", ChangeKind.MODIFIED)
+        assertEquals(ChangeDomain.OTHER, unlabelled.domain)
+
+        val remoteConfig = FileChange(
+            ChangeRoot.WORKSPACE,
+            "/srv/app/.aicode/skills.json",
+            "~/workspace/.aicode/skills.json",
+            ChangeKind.MODIFIED,
+            ChangeDomain.AICODE_CONFIG
+        )
+        val remoteWorkspace = FileChange(
+            ChangeRoot.WORKSPACE,
+            "/srv/app/main.kt",
+            "~/workspace/main.kt",
+            ChangeKind.MODIFIED,
+            ChangeDomain.WORKSPACE_FILE
+        )
+
+        assertTrue(FileChangeBatch(listOf(remoteConfig)).touches(ChangeDomain.AICODE_CONFIG))
+        assertFalse(FileChangeBatch(listOf(remoteConfig)).touches(ChangeDomain.WORKSPACE_FILE))
+        assertTrue(FileChangeBatch(listOf(remoteWorkspace)).touches(ChangeDomain.WORKSPACE_FILE))
+        assertFalse(FileChangeBatch(listOf(remoteWorkspace)).touches(ChangeDomain.AICODE_CONFIG))
+        assertFalse(FileChangeBatch(listOf(unlabelled)).touches(ChangeDomain.AICODE_CONFIG))
+        // 截断的批次只有「有变更」信号、可能没有明细：没有明细就不能算命中任何域。
+        assertFalse(FileChangeBatch(emptyList(), truncated = true).touches(ChangeDomain.AICODE_CONFIG))
+    }
 }

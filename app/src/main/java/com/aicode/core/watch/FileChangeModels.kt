@@ -12,14 +12,39 @@ enum class ChangeRoot { WORKSPACE, AICODE, OTHER }
 enum class ChangeKind { CREATED, MODIFIED, DELETED }
 
 /**
+ * 变更所属的「域」：决定谁该关心它，**与路径形态无关**。
+ *
+ * 存在的理由：同一个配置文件在本地的宿主路径与远端服务器上的路径长得完全不同，消费方按文件路径比对
+ * 命不中（远端模式下「改了配置不重载」）。改按域标注后，本地/远端两条路由对同一份配置产出同一个域，
+ * 消费方只需说「我要 [AICODE_CONFIG]」，不必知道它长什么样。
+ *
+ * 域由**订阅走的是哪条路**直接标注（见 [FileChangeHub.watchAicode] / [FileChangeHub.watchWorkspace]），
+ * 不解析事件里的路径字符串。
+ */
+enum class ChangeDomain {
+    /** AI 配置：`~/.aicode`（本地私有配置目录 / 远端 home 下的同名目录）与项目级 `.aicode` 配置、技能、子代理目录。 */
+    AICODE_CONFIG,
+
+    /** 工作区里的普通文件：文件树、工作区扫描这类消费方关心它。 */
+    WORKSPACE_FILE,
+
+    /** 其它订阅（如同步引擎的本地镜像目录）；也是未显式标注时的兜底。 */
+    OTHER
+}
+
+/**
  * 一条文件变更。[containerPath] 是容器视角路径（AI / 终端看到的），供消费方直接使用；
  * 按宿主路径匹配的消费方（如同步引擎）用 [hostPath]。
+ *
+ * [domain] 是该变更来自哪条监听路由，见 [ChangeDomain]；默认 [ChangeDomain.OTHER]（未标注），
+ * 于是新增路由忘了标注时不会误报成别的域。
  */
 data class FileChange(
     val root: ChangeRoot,
     val hostPath: String,
     val containerPath: String,
-    val kind: ChangeKind
+    val kind: ChangeKind,
+    val domain: ChangeDomain = ChangeDomain.OTHER
 )
 
 /**
@@ -30,6 +55,12 @@ data class FileChangeBatch(
     val changes: List<FileChange>,
     val truncated: Boolean = false
 )
+
+/**
+ * 这一批里是否有属于 [domain] 的变更。消费方按域认领（如配置类消费方只看 [ChangeDomain.AICODE_CONFIG]），
+ * 不再拿文件路径去比——远端模式下事件带的是服务器路径，路径比对必然落空。
+ */
+fun FileChangeBatch.touches(domain: ChangeDomain): Boolean = changes.any { it.domain == domain }
 
 /**
  * 订阅侧过滤规则：只影响「递归向下时是否进入某目录」与「该目录内事件是否上报」。

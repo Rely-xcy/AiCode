@@ -1,9 +1,9 @@
 package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.core.util.FileLogger
-import com.aicode.core.watch.FileChange
+import com.aicode.core.watch.ChangeDomain
 import com.aicode.core.watch.FileChangeHub
-import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.core.watch.touches
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import java.io.File
@@ -37,14 +37,10 @@ import kotlinx.serialization.json.putJsonArray
  */
 @Singleton
 class AgentDefinitionConfigRepository @Inject constructor(
-    private val containerInstaller: ContainerInstaller,
     private val projectAicodeRoot: ProjectAicodeRoot,
     private val fileChangeHub: FileChangeHub,
     private val fileAccess: FileAccessProvider
 ) {
-    /** 本地全局配置文件，仅用于宿主文件变更监听。 */
-    private fun globalFile(): File = File(containerInstaller.aicodeDir, CONFIG_FILE)
-
     /** 当前工作区的项目级配置文件：`workspacePath/.aicode/agents.json`；工作区未落定时为 null。 */
     private fun projectFile(): File? = projectAicodeRoot.currentOrNull()?.let { File(it, CONFIG_FILE) }
 
@@ -55,30 +51,27 @@ class AgentDefinitionConfigRepository @Inject constructor(
     /**
      * 子代理目录或配置文件被外部修改时广播一次。订阅驱动：只在有订阅者（设置页）期间才由
      * [FileChangeHub] 监听子代理目录与两个 agents.json，无人订阅时零开销。
+     *
+     * 判据是「变更域」而不是文件路径：本地模式下子代理是宿主路径、远端模式下是服务器路径（全局子代理
+     * 与全局 agents.json 都在服务器上），路径形态对不上的话远端永远不刷新。
      */
     val changes: SharedFlow<Unit> = merge(
         fileChangeHub.watchAicode(AGENTS_DIR, recursive = true),
         fileChangeHub.watchAicode(),
-        fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR/$AGENTS_DIR", recursive = true),
-        fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR")
+        fileChangeHub.watchWorkspace(
+            "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR/$AGENTS_DIR",
+            recursive = true,
+            domain = ChangeDomain.AICODE_CONFIG
+        ),
+        fileChangeHub.watchWorkspace(
+            "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR",
+            domain = ChangeDomain.AICODE_CONFIG
+        )
     ).mapNotNull { batch ->
-        if (!batch.changes.any(::isAgentChange)) return@mapNotNull null
+        if (!batch.touches(ChangeDomain.AICODE_CONFIG)) return@mapNotNull null
         FileLogger.i(TAG, "检测到子代理目录或配置变化，已通知刷新")
         Unit
     }.shareIn(watchScope, SharingStarted.WhileSubscribed(), replay = 0)
-
-    /** 子代理相关变更：两个 agents.json，或全局/项目子代理目录自身及其下的任何文件。 */
-    private fun isAgentChange(change: FileChange): Boolean {
-        val path = change.hostPath
-        if (path == globalFile().absolutePath) return true
-        if (path == projectFile()?.absolutePath) return true
-        val globalAgents = File(containerInstaller.aicodeDir, AGENTS_DIR).absolutePath
-        if (path == globalAgents || path.startsWith("$globalAgents/")) return true
-        // 工作区未落定时项目级目录未知，按「不是子代理变更」处理（订阅本身也只在工作区落定后有内容）。
-        val projectRoot = projectAicodeRoot.currentOrNull() ?: return false
-        val projectAgents = File(projectRoot, AGENTS_DIR).absolutePath
-        return path == projectAgents || path.startsWith("$projectAgents/")
-    }
 
     /** 当前生效的禁用子代理名集合（全局 + 项目并集，归一化为小写）；工作区未落定时只有全局层。 */
     fun disabledNames(): Set<String> =

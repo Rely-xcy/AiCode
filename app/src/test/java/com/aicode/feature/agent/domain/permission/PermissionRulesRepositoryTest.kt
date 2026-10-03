@@ -1,6 +1,11 @@
 package com.aicode.feature.agent.domain.permission
 
 import android.content.Context
+import com.aicode.core.watch.ChangeDomain
+import com.aicode.core.watch.ChangeKind
+import com.aicode.core.watch.ChangeRoot
+import com.aicode.core.watch.FileChange
+import com.aicode.core.watch.FileChangeBatch
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
@@ -8,7 +13,11 @@ import com.aicode.feature.workspace.domain.model.Workspace
 import io.mockk.every
 import io.mockk.mockk
 import java.io.File
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,8 +38,12 @@ class PermissionRulesRepositoryTest {
     val tempFolder = TemporaryFolder()
 
     private lateinit var repository: PermissionRulesRepository
+    private lateinit var fileChangeHub: FileChangeHub
     private lateinit var globalDir: File
     private lateinit var projectDir: File
+
+    /** 测试里手动投递给仓库的变更批次（收集发生在仓库自己的 IO 协程里）。 */
+    private val batches = MutableSharedFlow<FileChangeBatch>(replay = 1, extraBufferCapacity = 8)
 
     /** 当前工作区路径；null = 工作区未落定。 */
     private var currentPath: String? = null
@@ -50,10 +63,10 @@ class PermissionRulesRepositoryTest {
         every { workspaceRepository.current } returns MutableStateFlow<Workspace?>(null)
         val projectAicodeRoot = mockk<ProjectAicodeRoot>()
         every { projectAicodeRoot.forPath(any()) } returns projectDir
-        // 严格 mock：本类只把 hub 交给仓库构造，startWatching() 从不会被调用，
-        // 所以 hub 上没有任何方法会被调用（严格 mock 只在「被调用却没桩」时才失败）；
-        // 与 SkillConfigRepositoryTest / AgentDefinitionTest 对同一类的用法一致。
-        val fileChangeHub = mockk<FileChangeHub>()
+        // 严格 mock：本类只把 hub 交给仓库构造，只有「按域重读」那条用例会调 startWatching()。
+        fileChangeHub = mockk<FileChangeHub>()
+        every { fileChangeHub.watchAicode(any(), any(), any(), any(), any()) } returns batches
+        every { fileChangeHub.watchWorkspace(any(), any(), any(), any(), any(), any()) } returns emptyFlow()
         repository = PermissionRulesRepository(
             context,
             workspaceRepository,
@@ -149,5 +162,50 @@ class PermissionRulesRepositoryTest {
         // 未落定写不进去：这也是引擎在「项目级规则读不到」时不允许「始终允许」记忆的原因
         assertFalse(written)
         assertFalse(projectFile().exists())
+    }
+
+    /**
+     * 外部修改后按「变更域」重读，不按文件路径比对。
+     *
+     * 远端模式下事件带的是服务器路径（这里用 `/srv/app/.aicode/permissions.json` 模拟），与宿主配置路径
+     * 完全对不上：改动前那套 `hostPath == 全局/项目配置文件` 的判据在远端永远命不中，改了配置不重载。
+     * 域不对的批次（工作区里的普通文件）不得触发重读。
+     */
+    @Test
+    fun `配置域变更触发重读，工作区域变更不触发`() = runBlocking {
+        repository.setGlobalRules(listOf(globalRule))
+        repository.startWatching()
+
+        val external = PermissionRule("Bash", "git log", PermissionDecision.ALLOW)
+        globalPermissionsFile().writeText("""{"permissions":{"allow":["Bash(git log)"]}}""")
+        batches.emit(fileChanged("/srv/app/.aicode/permissions.json", ChangeDomain.AICODE_CONFIG))
+        awaitUntil("服务器路径的配置域变更没被认领") {
+            repository.loadEffectiveForCurrentProject().rules == listOf(external)
+        }
+
+        // 域不对：文件确实又变了，但缓存不得跟着变
+        globalPermissionsFile().writeText("""{"permissions":{"allow":["Bash(git status)"]}}""")
+        batches.emit(fileChanged("/srv/app/main.kt", ChangeDomain.WORKSPACE_FILE))
+        delay(200)
+        assertEquals(listOf(external), repository.loadEffectiveForCurrentProject().rules)
+    }
+
+    private fun fileChanged(hostPath: String, domain: ChangeDomain) = FileChangeBatch(
+        listOf(
+            FileChange(
+                root = ChangeRoot.WORKSPACE,
+                hostPath = hostPath,
+                containerPath = "~/workspace/.aicode/permissions.json",
+                kind = ChangeKind.MODIFIED,
+                domain = domain
+            )
+        )
+    )
+
+    /** 重读发生在仓库自己的 IO 协程里，与测试线程异步；轮询等它落到缓存上（超时即失败）。 */
+    private suspend fun awaitUntil(what: String, condition: suspend () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 3_000
+        while (!condition() && System.currentTimeMillis() < deadline) delay(20)
+        assertTrue(what, condition())
     }
 }

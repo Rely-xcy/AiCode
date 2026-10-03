@@ -1,7 +1,9 @@
 package com.aicode.feature.agent.domain.mcp
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.watch.ChangeDomain
 import com.aicode.core.watch.FileChangeHub
+import com.aicode.core.watch.touches
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
@@ -97,14 +99,16 @@ class McpConfigRepository @Inject constructor(
      */
     val externalChanges: SharedFlow<Unit> = merge(
         fileChangeHub.watchAicode(),
-        fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
+        fileChangeHub.watchWorkspace(
+            "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME",
+            domain = ChangeDomain.AICODE_CONFIG
+        )
     ).mapNotNull { batch ->
-        val globalPath = globalFile.absolutePath
-        // 工作区未落定时项目级配置位置未知，只比对全局配置。
-        val projectPath = workspaceRepository.currentPathOrNull()?.let { projectFileForPath(it).absolutePath }
-        val touched = batch.changes.any { it.hostPath == globalPath || it.hostPath == projectPath }
-        // 同目录下其它文件的变更（如 skills.json）不触发重连；内容没真变（如 touch）也不触发。
-        if (!touched) null else if (reloadFromDisk()) Unit else null
+        // 按域认领，不比对文件路径：远端模式下事件带的是服务器路径，与宿主配置路径永远对不上，
+        // 以前那套 hostPath == 全局/项目配置文件的判据在远端必然落空（改了配置不重连）。
+        if (!batch.touches(ChangeDomain.AICODE_CONFIG)) return@mapNotNull null
+        // 重读时按磁盘现状比对内容：同目录下其它文件的变更（如 skills.json）与 touch 都不触发重连。
+        if (reloadFromDisk()) Unit else null
     }.shareIn(watchScope, SharingStarted.WhileSubscribed(), replay = 0)
 
     /**

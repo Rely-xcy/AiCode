@@ -183,4 +183,56 @@ class RemoteFileWatchTest {
         // 连探测行都没有 → 停用
         assertFalse(remoteScanCapabilityOk("END\n"))
     }
+
+    /**
+     * 远端批次的域由发起订阅的那条路由给定，与服务器上的路径形态无关：
+     * 配置路由（服务器上的 `~/.aicode`）产出 [ChangeDomain.AICODE_CONFIG]，工作区路由产出
+     * [ChangeDomain.WORKSPACE_FILE]，消费方不需要知道路径长什么样。
+     */
+    @Test
+    fun `远端变更带上订阅路由的域，与服务器路径形态无关`() {
+        val rules = IgnoreRules.of(WatchFilter(), gitignorePatterns = emptyList())
+
+        val configChanges = remoteChangesOf(
+            dir = "/srv/app/.aicode",
+            containerRoot = "~/workspace/.aicode",
+            diff = listOf("skills.json" to ChangeKind.MODIFIED),
+            domain = ChangeDomain.AICODE_CONFIG,
+            rules = rules
+        )
+        val workspaceChanges = remoteChangesOf(
+            dir = "/srv/app",
+            containerRoot = "~/workspace",
+            diff = listOf("main.kt" to ChangeKind.CREATED),
+            domain = ChangeDomain.WORKSPACE_FILE,
+            rules = rules
+        )
+
+        assertEquals("/srv/app/.aicode/skills.json", configChanges.single().hostPath)
+        assertEquals("~/workspace/.aicode/skills.json", configChanges.single().containerPath)
+        assertEquals(ChangeDomain.AICODE_CONFIG, configChanges.single().domain)
+        assertEquals(ChangeDomain.WORKSPACE_FILE, workspaceChanges.single().domain)
+        assertTrue(FileChangeBatch(configChanges).touches(ChangeDomain.AICODE_CONFIG))
+        assertFalse(FileChangeBatch(workspaceChanges).touches(ChangeDomain.AICODE_CONFIG))
+    }
+
+    /** 换了域不影响剪枝：被剪枝目录自身仍上报，它下面的东西不再报。 */
+    @Test
+    fun `远端变更仍按订阅剪枝`() {
+        val rules = IgnoreRules.of(WatchFilter(ignoredNames = setOf("node_modules")), emptyList())
+
+        val changes = remoteChangesOf(
+            dir = "/p",
+            containerRoot = "~/workspace",
+            diff = listOf(
+                "node_modules/dep.js" to ChangeKind.MODIFIED,
+                "node_modules" to ChangeKind.MODIFIED,
+                "keep.txt" to ChangeKind.CREATED
+            ),
+            domain = ChangeDomain.WORKSPACE_FILE,
+            rules = rules
+        )
+
+        assertEquals(listOf("node_modules", "keep.txt"), changes.map { it.hostPath.removePrefix("/p/") })
+    }
 }
