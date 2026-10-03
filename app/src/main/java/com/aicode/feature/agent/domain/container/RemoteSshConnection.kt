@@ -297,10 +297,7 @@ class RemoteSshConnection @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 val session = client.startSession()
-                val cmd = session.exec(
-                    "if [ -d ~/workspace ] && [ ! -L ~/workspace ]; then echo skip; " +
-                        "else ln -sfn '$ws' ~/workspace 2>/dev/null; echo done; fi"
-                )
+                val cmd = session.exec(workspaceSymlinkCommand(ws))
                 val out = java.io.BufferedReader(java.io.InputStreamReader(cmd.inputStream)).readText().trim()
                 session.close()
                 if (out == "skip") {
@@ -308,6 +305,19 @@ class RemoteSshConnection @Inject constructor(
                 }
             }.onFailure { FileLogger.w(TAG, "更新 workspace 符号链接失败: $ws", it) }
         }
+    }
+
+    /**
+     * 把 `~/workspace` 指向 [workspacePath] 的 shell 片段（输出 `skip` 或 `done`）。
+     *
+     * 抽出来是为了让工作区初始化能把「建根目录 + 列子目录 + 更新符号链接」合并成一次远端往返
+     * （见 WorkspaceRepository.scanRemoteWorkspaceRoot）：这种「已是真实目录就跳过」的判断很容易
+     * 在两处写上两遍而漂移，一旦写错会把 `~/workspace` 变成自引用链接、毁掉整个工作区。
+     */
+    fun workspaceSymlinkCommand(workspacePath: String): String {
+        val ws = workspacePath.trimEnd('/')
+        return "if [ -d ~/workspace ] && [ ! -L ~/workspace ]; then echo skip; " +
+            "else ln -sfn '$ws' ~/workspace 2>/dev/null; echo done; fi"
     }
 
     /**

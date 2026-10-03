@@ -162,23 +162,49 @@ class WorkspaceRepository @Inject constructor(
 
     /** 扫描并恢复上次选中的工作区；首次启动本地模式会创建默认工作区。应在 App/ViewModel 启动时调用一次。 */
     suspend fun initialize() = withContext(Dispatchers.IO) {
+        // 符号链接候选：远程模式下「建根目录 + 列子目录 + 更新 ~/workspace 符号链接」要合并成一次远端往返，
+        // 就得在发命令前知道该指向哪个工作区。DataStore 读取不产生 SSH 往返，先读没代价。
+        // 后面选择目标时仍重新读一次（列表刷新可能刚回退过），两者不一致时按每次扫描的候选决定要不要补一次符号链接。
+        val symlinkCandidateName = context.workspaceDataStore.data.first()[currentNameKey]
+        var symlinkHandledByScan = false
         // 远程模式：等 SSH 连接就绪后再列工作区，避免启动时序竞争
         if (!isLocal()) {
             waitForConnection()
-            ensureRemoteWorkspaceRoot()
+            val wsRoot = remoteWorkspaceRootPath()
+            val scan = wsRoot?.let { root -> scanRemoteWorkspaceRoot(root, symlinkCandidateName?.let { "$root/$it" }) }
+            if (scan == null) {
+                // 未连接 / 未配置 / 根路径为空：与原来「根目录检查提前返回 + 列目录失败」一致，保持空列表
+                _workspaces.value = emptyList()
+            } else {
+                if (scan.rootExit != null && scan.rootExit != 0) {
+                    FileLogger.w(TAG, "创建远程工作区根目录失败: $wsRoot (exit=${scan.rootExit})")
+                    _initError.value = context.getString(R.string.workspace_remote_root_create_failed)
+                }
+                symlinkHandledByScan = scan.symlinkDone
+                _workspaces.value = scan.dirs.map { name ->
+                    Workspace(name = name, path = "$wsRoot/$name", type = WorkspaceType.REMOTE)
+                }
+            }
+            ensureCurrentReachable()
+        } else {
+            refreshWorkspaces()
         }
-        refreshWorkspaces()
 
         // 没有可用工作区时创建默认工作区（本地/远程一致），保证 AI 始终有可用目录；
         // 全部工作区失联（如唯一外部目录被删除）也走这里，避免 currentPath 回退到父目录。
         if (_workspaces.value.none { it.available }) {
-            val created = if (isLocal()) createLocalFallbackWorkspace() else {
+            if (isLocal()) {
+                createLocalFallbackWorkspace()
+                refreshWorkspaces()
+            } else {
+                // 刚列过且列表为空，不再 test -d、也不再重新列：一条 mkdir 后本地拼出条目
                 val fallbackName = uniqueName(DEFAULT_WORKSPACE, _workspaces.value.map { it.name }.toSet())
-                createWorkspace(fallbackName)
-            }
-            refreshWorkspaces()
-            if (!isLocal() && created == null && remoteSshConnection.isConnected()) {
-                _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                val created = createRemoteWorkspaceWithoutRelist(fallbackName)
+                if (created != null) {
+                    _workspaces.value = _workspaces.value + created
+                } else if (remoteSshConnection.isConnected()) {
+                    _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                }
             }
         }
 
@@ -196,7 +222,8 @@ class WorkspaceRepository @Inject constructor(
         val location = if (isLocal()) projectsRoot.absolutePath else remoteSshConnection.config?.remoteWorkspacePath ?: ""
         FileLogger.i(TAG, "工作区初始化完成，当前: ${target?.name}，根目录: $location")
         // 远程模式：选中工作区后更新符号链接，让 Bash 的 ~/workspace 指向当前工作区
-        if (!isLocal() && target != null) {
+        // （若本次扫描已经指向同一个工作区并执行过，就省掉这次往返）
+        if (!isLocal() && target != null && !(symlinkHandledByScan && target.name == symlinkCandidateName)) {
             remoteSshConnection.updateWorkspaceSymlink(target.path)
         }
     }
@@ -221,20 +248,74 @@ class WorkspaceRepository @Inject constructor(
         }
     }
 
-    /** 远程模式：确保 remoteWorkspacePath 存在（用户填写的路径可能尚不存在），不存在则 mkdir -p 创建。
-     *  @return 是否成功；连接不可用时不提示直接返回 false。 */
-    private suspend fun ensureRemoteWorkspaceRoot(): Boolean {
-        val cfg = remoteSshConnection.config ?: return false
-        if (!remoteSshConnection.isConnected()) return false
-        val wsRoot = pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/'))
-        if (wsRoot.isEmpty()) return false
-        val exit = execRemoteExit("mkdir -p ${shellQuote(wsRoot)}")
-        if (exit != 0) {
-            FileLogger.w(TAG, "创建远程工作区根目录失败: $wsRoot (exit=$exit)")
-            _initError.value = context.getString(R.string.workspace_remote_root_create_failed)
-            return false
+    /** 远程工作区根（remoteWorkspacePath 展开 ~ 后）的绝对路径；未配置或为空时 null。 */
+    private fun remoteWorkspaceRootPath(): String? {
+        val cfg = remoteSshConnection.config ?: return null
+        return pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/')).ifEmpty { null }
+    }
+
+    /** 单次扫描远程工作区根得到的结果，见 [scanRemoteWorkspaceRoot]。 */
+    private data class RemoteRootScan(
+        /** mkdir -p 工作区根的退出码；null 表示没拿到标记（命令没跑完/输出不全），不据此断言根目录建失败。 */
+        val rootExit: Int?,
+        /** 根下的子目录名（已按小写排序）。 */
+        val dirs: List<String>,
+        /** 本次是否已把 ~/workspace 指向候选工作区（用于省掉随后单独的一次符号链接往返）。 */
+        val symlinkDone: Boolean
+    )
+
+    /**
+     * 一次远端往返完成「建工作区根 + 列子目录 + 按需更新 ~/workspace 符号链接」。
+     *
+     * 合并的理由：这三步串行时是 2 次往返，每次都要新建一个 exec session，跨洋 VPS 上累计是秒级。
+     * 退出码按 `MK:` / `LN:` 分段落回，失败依旧能归因成「根目录没建出来」，不会退化成一个笼统的「没列到目录」。
+     *
+     * @param symlinkCandidate 候选工作区真实路径；已存在时顺手把 ~/workspace 指过去（不存在则不碰，
+     *   避免留下悬空链接——目录不存在时目标选择还会走后面单独一次更新）。
+     * @return null 表示连接不可用/未配置，调用方保持空列表。
+     */
+    private suspend fun scanRemoteWorkspaceRoot(wsRoot: String, symlinkCandidate: String?): RemoteRootScan? {
+        if (!remoteSshConnection.isConnected()) return null
+        val root = shellQuote(wsRoot)
+        val linkPart = if (symlinkCandidate == null) {
+            "echo LN:skip"
+        } else {
+            // 不自行判断符号链接规则：复用 RemoteSshConnection 里那一份（~/workspace 已是真实目录时
+            // 必须跳过，否则会建成自引用链接）；它自己输出 skip/done，前缀 LN: 后当作标记回传。
+            "if [ -d ${shellQuote(symlinkCandidate)} ]; then printf 'LN:'; " +
+                "{ ${remoteSshConnection.workspaceSymlinkCommand(symlinkCandidate)} ; } 2>/dev/null; " +
+                "else echo LN:skip; fi"
         }
-        return true
+        val command = "mkdir -p $root; echo \"MK:\$?\"; $linkPart; " +
+            "for d in $root/*/; do [ -d \"\$d\" ] && basename \"\$d\"; done; echo \"LS:done\""
+        val output = runCatching { execRemote(command) }.getOrElse {
+            FileLogger.w(TAG, "扫描远程工作区失败: $wsRoot", it)
+            return null
+        }
+        val lines = output.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        return RemoteRootScan(
+            rootExit = lines.firstOrNull { it.startsWith("MK:") }?.removePrefix("MK:")?.toIntOrNull(),
+            dirs = lines
+                .filterNot { it.startsWith("MK:") || it.startsWith("LN:") || it.startsWith("LS:") }
+                .sortedBy { it.lowercase() },
+            symlinkDone = lines.any { it == "LN:done" }
+        )
+    }
+
+    /**
+     * 初始化时「远程工作区列表为空」而建的默认工作区：只发一条 `mkdir -p`，不再 test -d、不再重新列目录
+     * ——列表刚列过且为空是已知事实，条目直接本地拼（`mkdir -p` 本身幂等，名字被别的客户端抢先建出也无害）。
+     */
+    private suspend fun createRemoteWorkspaceWithoutRelist(name: String): Workspace? {
+        val wsRoot = remoteWorkspaceRootPath() ?: return null
+        val path = "$wsRoot/$name"
+        val exit = execRemoteExit("mkdir -p ${shellQuote(path)}")
+        if (exit != 0) {
+            FileLogger.e(TAG, "远程新建默认工作区失败: $path (exit=$exit)")
+            return null
+        }
+        FileLogger.i(TAG, "新建工作区(远程, 初始化默认): $name")
+        return Workspace(name = name, path = path, type = WorkspaceType.REMOTE)
     }
 
     /** 重新扫描工作区可用性（打开面板、拔插存储后调用），失联项置灰并在必要时回退当前工作区。 */
