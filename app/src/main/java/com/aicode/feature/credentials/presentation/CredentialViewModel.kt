@@ -178,9 +178,13 @@ class CredentialViewModel @Inject constructor(
             return
         }
         val creds = credentialRepository.getAll().first()
-        val workspaceRoot = workspaceRepository.currentPath()
-            .takeIf { it.isNotBlank() && it != "/" }
-            ?: remoteSshConnection.config?.remoteWorkspacePath.orEmpty()
+        // 工作区未落定时不退回 remoteWorkspacePath：那是所有工作区的父目录，includeIf 会指向公共父级。
+        // 宁可本次不上传（开关已持久化，后续同步会补上），也不写错作用域。
+        val workspaceRoot = workspaceRepository.currentPathOrNull()?.takeIf { it.isNotBlank() }
+        if (workspaceRoot == null) {
+            FileLogger.w(TAG, "工作区未就绪，跳过 git 凭据注入配置上传")
+            return
+        }
         remoteSshConnection.uploadGitCredentialConfig(creds, workspaceRoot)
     }
 

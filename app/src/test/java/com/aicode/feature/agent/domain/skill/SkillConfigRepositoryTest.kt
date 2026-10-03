@@ -36,7 +36,7 @@ class SkillConfigRepositoryTest {
         val installer = mockk<ContainerInstaller>()
         every { installer.aicodeDir } returns localGlobalRoot
         val projectAicodeRoot = mockk<ProjectAicodeRoot>()
-        every { projectAicodeRoot.current() } returns projectRoot
+        every { projectAicodeRoot.currentOrNull() } returns projectRoot
         val hub = mockk<FileChangeHub>()
         every { hub.watchAicode(any(), any(), any(), any(), any()) } returns emptyFlow()
         every { hub.watchWorkspace(any(), any(), any(), any(), any()) } returns emptyFlow()

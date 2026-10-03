@@ -68,8 +68,8 @@ class WorkspacePathMapper @Inject constructor(
             ?: ContainerProfile.BUILTIN_ALPINE
     }
 
-    /** 当前工作区在宿主上的根目录。 */
-    private fun hostRoot(): File = File(workspaceRepository.currentPath())
+    /** 当前工作区在宿主上的根目录；工作区未落定时为 null。 */
+    private fun hostRootOrNull(): File? = workspaceRepository.currentPathOrNull()?.let { File(it) }
 
     /** [CONTAINER_ROOT] 展开后的绝对路径（`$HOME/workspace`），供路径匹配使用。home 未就绪时回退 `/root`。 */
     private fun resolvedContainerRoot(): String =
@@ -91,20 +91,26 @@ class WorkspacePathMapper @Inject constructor(
      * `/root/.aicode` 必须先于通用 `/`→rootfs 规则匹配，否则会落到 rootfs 内的临时副本（升级即丢）。
      */
     fun toHostFile(path: String): File {
-        val root = hostRoot()
+        // 工作区未落定时不猜测根目录（否则 ~/workspace/... 会落到工作区父目录，即所有工作区的公共父级）。
+        // 仅对确实要挂在工作区根下的路径报错；`~/.aicode` 与容器 rootfs 路径不依赖工作区，照常解析。
+        val root = hostRootOrNull()
         val wsRoot = resolvedContainerRoot()
         val p = pathHomeResolver.expandHome(path.trim())
         val file = when {
-            p == wsRoot || p == "$wsRoot/" || p == CONTAINER_ROOT || p == "$CONTAINER_ROOT/" -> root
-            p.startsWith("$wsRoot/") -> File(root, p.removePrefix("$wsRoot/"))
+            p == wsRoot || p == "$wsRoot/" || p == CONTAINER_ROOT || p == "$CONTAINER_ROOT/" -> requireWorkspaceRoot(root)
+            p.startsWith("$wsRoot/") -> File(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
             p == AICODE_ROOT || p == "$AICODE_ROOT/" -> aicodeRoot()
             p.startsWith("$AICODE_ROOT/") -> File(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"))
             else -> mountedHostFile(p)
-                ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/")) else File(root, p)
+                ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/"))
+                else File(requireWorkspaceRoot(root), p)
         }
         FileLogger.v(TAG, "toHostFile '$path' -> ${file.absolutePath}")
         return file
     }
+
+    /** 需要工作区根的路径在未落定时直接报错，而不是落到工作区父目录。 */
+    private fun requireWorkspaceRoot(root: File?): File = root ?: throw workspaceRepository.notReadyException()
 
     /**
      * 把宿主路径还原为容器路径：
@@ -115,21 +121,26 @@ class WorkspacePathMapper @Inject constructor(
      *
      * 工作区在 `filesDir/projects`、AI 配置在 `filesDir/aicode`、rootfs 在 `filesDir/rootfs`，三者互不重叠，
      * 判断顺序无歧义。
+     *
+     * 工作区未落定时不做「在工作区内」的判定，但也不报错：本函数用于把宿主路径回显成容器路径，
+     * 文件变更订阅流里也会调用，窗口期返回值会随后被刷新。
      */
     fun toContainerPath(hostPath: String): String {
-        val rootPath = hostRoot().absolutePath.replace('\\', '/')
+        val rootPath = hostRootOrNull()?.absolutePath?.replace('\\', '/')
+        val wsPrefix = rootPath?.let { "$it/" }
         val aicodePath = aicodeRoot().absolutePath.replace('\\', '/')
         val rootfsPath = rootfsRoot().absolutePath.replace('\\', '/')
         val abs = File(hostPath).absolutePath.replace('\\', '/')
         val raw = hostPath.trim().replace('\\', '/')
         val resolvedWs = resolvedContainerRoot().replace('\\', '/')
+        val resolvedWsPrefix = "$resolvedWs/"
         return when {
-            abs == rootPath -> CONTAINER_ROOT
-            abs.startsWith("$rootPath/") -> CONTAINER_ROOT + "/" + abs.removePrefix("$rootPath/")
+            rootPath != null && abs == rootPath -> CONTAINER_ROOT
+            wsPrefix != null && abs.startsWith(wsPrefix) -> CONTAINER_ROOT + "/" + abs.removePrefix(wsPrefix)
             // 展开后的 $HOME/workspace 形式也还原为 ~/workspace（bind mount 路径可能以绝对形式出现）
             raw == resolvedWs || abs == resolvedWs -> CONTAINER_ROOT
-            raw.startsWith("$resolvedWs/") -> CONTAINER_ROOT + "/" + raw.removePrefix("$resolvedWs/")
-            abs.startsWith("$resolvedWs/") -> CONTAINER_ROOT + "/" + abs.removePrefix("$resolvedWs/")
+            raw.startsWith(resolvedWsPrefix) -> CONTAINER_ROOT + "/" + raw.removePrefix(resolvedWsPrefix)
+            abs.startsWith(resolvedWsPrefix) -> CONTAINER_ROOT + "/" + abs.removePrefix(resolvedWsPrefix)
             abs == aicodePath -> AICODE_ROOT
             abs.startsWith("$aicodePath/") -> AICODE_ROOT + "/" + abs.removePrefix("$aicodePath/")
             abs == rootfsPath -> "/"

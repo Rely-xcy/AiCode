@@ -41,6 +41,14 @@ private val Context.workspaceDataStore by preferencesDataStore(
 )
 
 /**
+ * 当前工作区尚未落定（连接中 / 初始化未完成 / 无可用工作区）时的路径访问错误。
+ *
+ * 窗口期不能返回「合法但错误」的兜底目录（工作区父目录或远端根）——那会让 git、写文件、
+ * 命令 cwd、备份、凭据、记忆静默落到错地方；抛出本异常让调用方明确报错或降级。
+ */
+class WorkspaceNotReadyException(message: String) : IllegalStateException(message)
+
+/**
  * 管理 App 内的"工作区/项目"。
  *
  * **本地模式**：所有项目放在内部私有目录 `filesDir/projects/<name>` 下——ext4 真实路径，
@@ -492,19 +500,31 @@ class WorkspaceRepository @Inject constructor(
     /** 单引号转义，保证 shell 命令安全。 */
     private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
+    /** 当前工作区路径；**未落定时为 null**，不猜测兜底目录。供能自然处理「暂无工作区」的调用方使用。 */
+    fun currentPathOrNull(): String? = _current.value?.path
+
+    /**
+     * 未落定原因的提示文案（区分本地初始化未完成 / 远程未连接 / 远程已连但未加载完），
+     * 供 [currentPath] 抛出的异常与调用方自定义提示（工具错误、终端提示）复用。
+     */
+    fun notReadyMessage(): String = when {
+        isLocal() -> context.getString(R.string.workspace_not_ready_local)
+        remoteSshConnection.connectionState.value == ConnectionState.CONNECTED ->
+            context.getString(R.string.workspace_not_ready_remote_connected)
+        else -> context.getString(R.string.workspace_not_ready_remote_disconnected)
+    }
+
+    /** 未落定时构造路径访问异常，供路径映射、配置目录解析等需要自己抛错的调用方复用同一文案。 */
+    fun notReadyException(): WorkspaceNotReadyException = WorkspaceNotReadyException(notReadyMessage())
+
     /** 当前工作区的路径，供 projectRoot / 命令执行目录使用。
      * 本地模式返回宿主工作区绝对路径；远程模式返回选中工作区的远程绝对路径（命令 cd 到此）。
-     * 无选中时本地回退到项目根目录，远程回退到配置的 remoteWorkspacePath。 */
-    fun currentPath(): String {
-        if (!isLocal()) {
-            return _current.value?.path
-                ?: remoteSshConnection.config?.remoteWorkspacePath
-                    ?.let { pathHomeResolver.expandHome(it) }
-                    ?.takeIf { it.isNotBlank() }
-                ?: "/"
-        }
-        return _current.value?.path ?: projectsRoot.absolutePath
-    }
+     *
+     * **未落定（连接中 / 初始化未完成 / 无可用工作区）时抛 [WorkspaceNotReadyException]**：
+     * 窗口期返回工作区父目录（远端 remoteWorkspacePath / 本地 projectsRoot）或 "/" 同样是
+     * 「合法路径」，会让命令、文件写入、git、备份、凭据、记忆静默落到错地方。
+     * 需要容错的调用方改用 [currentPathOrNull]，或先经入口等待工作区落定。 */
+    fun currentPath(): String = currentPathOrNull() ?: throw notReadyException()
 
     /** 仅保留字母数字、下划线、连字符、点和空格，去掉路径分隔符等危险字符。 */
     private fun sanitize(raw: String): String =

@@ -43,9 +43,12 @@ class PromptsViewModel @Inject constructor(
         refresh()
     }
 
+    /** 当前工作区根路径；工作区未落定时为空串（项目层不可用，UI 据 hasWorkspace 关掉项目作用域）。 */
+    private fun currentProjectRoot(): String = workspaceRepository.currentPathOrNull().orEmpty()
+
     fun refresh() {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            val projectRoot = currentProjectRoot()
             val loaded = withContext(Dispatchers.IO) {
                 PromptsUiState(
                     fragments = catalog.list(projectRoot),
@@ -67,7 +70,7 @@ class PromptsViewModel @Inject constructor(
         previousNumber: Int? = null
     ) {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            val projectRoot = currentProjectRoot()
             withContext(Dispatchers.IO) {
                 catalog.saveOverride(
                     number,
@@ -85,7 +88,7 @@ class PromptsViewModel @Inject constructor(
     /** 删除某编号的覆盖，自动回退到下一层。 */
     fun deleteFragment(number: Int) {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            val projectRoot = currentProjectRoot()
             withContext(Dispatchers.IO) { catalog.deleteOverride(number, projectRoot) }
             refresh()
         }
@@ -97,7 +100,7 @@ class PromptsViewModel @Inject constructor(
         val renumbered = reordered.mapIndexed { index, fragment -> fragment.copy(number = numbers[index]) }
         _state.update { it.copy(fragments = renumbered) }
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            val projectRoot = currentProjectRoot()
             val refreshed = withContext(Dispatchers.IO) {
                 if (catalog.reorder(renumbered, projectRoot)) catalog.list(projectRoot) else null
             }

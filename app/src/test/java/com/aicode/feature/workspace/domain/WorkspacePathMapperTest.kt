@@ -29,7 +29,7 @@ class WorkspacePathMapperTest {
     private val home = "/root"
 
     private fun newMapper(): WorkspacePathMapper {
-        every { workspaceRepository.currentPath() } returns wsRoot
+        every { workspaceRepository.currentPathOrNull() } returns wsRoot
         every { containerInstaller.aicodeDir } returns File(aicodeDir)
         every { containerInstaller.rootfsDirFor(any()) } returns File(rootfsDir)
         every { containerSettingsRepository.activeProfileIdFlow } returns emptyFlow()

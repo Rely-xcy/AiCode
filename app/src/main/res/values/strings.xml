@@ -1497,6 +1497,9 @@
     <string name="workspace_external_unavailable_hint">该目录当前不可用（可能已被移动或删除），可移除该记录</string>
     <string name="workspace_unavailable_current">工作区「%1$s」当前不可用（目录可能已被移动或删除）</string>
     <string name="workspace_unavailable_fallback">工作区「%1$s」当前不可用，已切换到「%2$s」</string>
+    <string name="workspace_not_ready_local">工作区未就绪：本地工作区尚未初始化完成，请稍后重试</string>
+    <string name="workspace_not_ready_remote_disconnected">工作区未就绪：远程 SSH 未连接，工作区尚未加载</string>
+    <string name="workspace_not_ready_remote_connected">工作区未就绪：远程已连接但工作区尚未加载完成，请稍后重试</string>
 
     <!-- Helper Strings -->
     <string name="container_channel_deleted">通道已删除</string>

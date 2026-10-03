@@ -695,20 +695,29 @@ class BackupManagerImpl @Inject constructor(
      * 解析某会话在备份中的原始工作区路径到目标设备的工作区：
      * 1. 现有工作区路径与备份一致（同设备重装场景，内部/外部本地都能对上）直接复用；
      * 2. 否则按路径末段当作工作区名，经 [resolveWorkspaceForRestore] 复用同名内部工作区或自动创建空工作区；
-     * 3. 路径为空或解析失败（如无法创建）时兜底回当前工作区。
+     * 3. 路径为空或解析失败（如无法创建）时兜底回当前工作区（工作区未落定时退回第一个可用工作区）。
      */
     private suspend fun resolveSessionWorkspace(
         backupWorkspacePath: String,
         restoreMapping: MutableMap<String, Workspace>
     ): String {
-        if (backupWorkspacePath.isBlank()) return workspaceRepository.currentPath()
+        if (backupWorkspacePath.isBlank()) return fallbackWorkspacePath()
         workspaceRepository.workspaces.value
             .firstOrNull { it.path == backupWorkspacePath && it.name !in restoreMapping.keys }
             ?.let { return it.path }
         val name = backupWorkspacePath.trimEnd('/').substringAfterLast('/')
-        if (name.isEmpty()) return workspaceRepository.currentPath()
-        return resolveWorkspaceForRestore(name, restoreMapping)?.path ?: workspaceRepository.currentPath()
+        if (name.isEmpty()) return fallbackWorkspacePath()
+        return resolveWorkspaceForRestore(name, restoreMapping)?.path ?: fallbackWorkspacePath()
     }
+
+    /**
+     * 恢复时的兜底目标工作区：优先当前工作区，未落定时退回第一个可用工作区，都没有才返回空串。
+     * 不返回工作区父目录：那不是任何会话所属的工作区，会让会话的项目根指向公共父级。
+     */
+    private fun fallbackWorkspacePath(): String =
+        workspaceRepository.currentPathOrNull()
+            ?: workspaceRepository.workspaces.value.firstOrNull { it.available }?.path
+            ?: ""
 
     /** 防路径穿越：工作区必须是本地目录，且相对路径规范化后仍位于其内。 */
     private fun isPathInsideWorkspace(wsDir: File, relPath: String): Boolean {

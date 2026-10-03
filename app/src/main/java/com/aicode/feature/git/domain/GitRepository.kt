@@ -715,9 +715,11 @@ class GitRepository @Inject constructor(
      * diff 显示成整文件删除），故退回在执行后端里 `cat` 取内容。
      */
     suspend fun worktreeFileContent(path: String): String {
+        // 先解析工作区路径：工作区未落定时直接报错，而不是被下面的 runCatching 吞掉后误判成「文件为空」。
+        val workspaceRoot = workspaceRepository.currentPath()
         val local = withContext(Dispatchers.IO) {
             runCatching {
-                java.io.File(workspaceRepository.currentPath(), path)
+                java.io.File(workspaceRoot, path)
                     .takeIf { it.isFile }
                     ?.also { if (it.length() > MAX_DIFF_FILE_BYTES) throw GitOutputTooLargeException() }
                     ?.readText()
@@ -729,7 +731,7 @@ class GitRepository @Inject constructor(
         if (local != null) return local
         val result = engine.runCommandSyncUnbounded(
             "cat -- ${shellQuote(path)}",
-            workspaceRepository.currentPath()
+            workspaceRoot
         )
         if (result.outputTruncated) throw GitOutputTooLargeException()
         return if (result.exitCode == 0) result.output else ""

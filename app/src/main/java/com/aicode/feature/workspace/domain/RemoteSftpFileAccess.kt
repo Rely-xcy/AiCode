@@ -57,12 +57,15 @@ class RemoteSftpFileAccess @Inject constructor(
 
     private val sftpMutex = Mutex()
 
-    /** 当前选中工作区在远程服务器上的真实路径（如 /data/.../test/111）。 */
+    /**
+     * 当前选中工作区在远程服务器上的真实路径（如 /data/.../test/111）。
+     *
+     * 工作区未落定时抛工作区未就绪异常：回退到 remoteWorkspacePath（所有工作区的父目录）会让
+     * `~/workspace/...` 的读写静默落到父目录，写文件时还会在服务器上建出那条错误路径。
+     */
     private fun currentWorkspaceRoot(): String {
-        val cfg = connection.config ?: throw IllegalStateException("SSH 未连接")
-        // currentPath() 远程模式返回选中工作区的远程绝对路径；未选中时回退到 remoteWorkspacePath
-        val path = workspaceRepository.currentPath()
-        return if (path.isNotBlank() && path != "/") path else cfg.remoteWorkspacePath.trimEnd('/')
+        if (connection.config == null) throw IllegalStateException("SSH 未连接")
+        return workspaceRepository.currentPathOrNull() ?: throw workspaceRepository.notReadyException()
     }
 
     /** 把 AI 路径映射到远程服务器上的真实路径。 */

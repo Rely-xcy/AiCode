@@ -28,8 +28,11 @@ class ProjectAicodeRoot @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val remoteSshConnection: RemoteSshConnection
 ) {
-    /** 当前工作区的项目级配置目录。 */
-    fun current(): File = forPath(workspaceRepository.currentPath())
+    /** 当前工作区的项目级配置目录；工作区未落定时为 null（调用方应降级到全局层）。 */
+    fun currentOrNull(): File? = workspaceRepository.currentPathOrNull()?.let { forPath(it) }
+
+    /** 当前工作区的项目级配置目录；工作区未落定时抛出工作区未就绪异常。 */
+    fun current(): File = currentOrNull() ?: throw workspaceRepository.notReadyException()
 
     /** 指定工作区路径对应的项目级配置目录。 */
     fun forPath(workspacePath: String): File =

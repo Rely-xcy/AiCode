@@ -46,26 +46,31 @@ class SkillConfigRepository @Inject constructor(
     /** 本地全局配置文件，仅用于宿主文件变更监听。 */
     private fun globalFile(): File = File(containerInstaller.aicodeDir, CONFIG_FILE)
 
-    /** 当前工作区的项目级配置文件：`workspacePath/.aicode/skills.json`。 */
-    private fun projectFile(): File = File(projectAicodeRoot.current(), CONFIG_FILE)
+    /** 当前工作区的项目级配置文件：`workspacePath/.aicode/skills.json`；工作区未落定时为 null。 */
+    private fun projectFile(): File? = projectAicodeRoot.currentOrNull()?.let { File(it, CONFIG_FILE) }
 
-    /** 当前生效的禁用技能名集合（全局 + 项目并集，归一化为小写）。 */
+    /** 当前生效的禁用技能名集合（全局 + 项目并集，归一化为小写）；工作区未落定时只有全局层。 */
     fun disabledNames(): Set<String> {
         val global = readGlobalDisabled()
-        val project = readDisabled(projectFile())
+        val project = projectFile()?.let { readDisabled(it) } ?: emptySet()
         return (global + project).map { it.lowercase() }.toSet()
     }
 
-    /** 在指定作用域的配置中启用/禁用某个技能。 */
+    /** 在指定作用域的配置中启用/禁用某个技能；工作区未落定时项目级写入被忽略，不落到全局层。 */
     fun setDisabled(name: String, disabled: Boolean, scope: SkillScope) {
-        val names = (if (scope == SkillScope.GLOBAL) readGlobalDisabled() else readDisabled(projectFile()))
-            .toMutableSet()
-        if (disabled) names.add(name) else names.remove(name)
         if (scope == SkillScope.GLOBAL) {
+            val names = readGlobalDisabled().toMutableSet()
+            if (disabled) names.add(name) else names.remove(name)
             fileAccess.writeFile(GLOBAL_CONFIG_PATH, serializeDisabled(names))
-        } else {
-            writeDisabled(projectFile(), names)
+            return
         }
+        val file = projectFile() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略项目级技能配置写入：$name")
+            return
+        }
+        val names = readDisabled(file).toMutableSet()
+        if (disabled) names.add(name) else names.remove(name)
+        writeDisabled(file, names)
     }
 
     private fun readGlobalDisabled(): Set<String> = runCatching {
@@ -99,10 +104,12 @@ class SkillConfigRepository @Inject constructor(
     private fun isSkillChange(change: FileChange): Boolean {
         val path = change.hostPath
         if (path == globalFile().absolutePath) return true
-        if (path == projectFile().absolutePath) return true
+        if (path == projectFile()?.absolutePath) return true
         val globalSkills = File(containerInstaller.aicodeDir, SKILLS_DIR).absolutePath
         if (path == globalSkills || path.startsWith("$globalSkills/")) return true
-        val projectSkills = File(projectAicodeRoot.current(), SKILLS_DIR).absolutePath
+        // 工作区未落定时项目级目录未知，按「不是技能变更」处理（订阅本身也只在工作区落定后有内容）。
+        val projectRoot = projectAicodeRoot.currentOrNull() ?: return false
+        val projectSkills = File(projectRoot, SKILLS_DIR).absolutePath
         return path == projectSkills || path.startsWith("$projectSkills/")
     }
 

@@ -122,7 +122,8 @@ class FileChangeHub @Inject constructor(
 
     /**
      * 订阅当前工作区（跟随工作区切换自动重建）。[containerSubPath] 是容器路径，默认整个工作区根。
-     * 远程模式下工作区在服务器上、宿主没有对应目录，订阅退化为空流。
+     * 远程模式下工作区在服务器上、宿主没有对应目录，订阅退化为空流；本地模式下工作区未落定时
+     * 同样不订阅（不能把工作区父目录当成工作区来观察）。
      */
     fun watchWorkspace(
         containerSubPath: String = CONTAINER_ROOT,
@@ -131,14 +132,17 @@ class FileChangeHub @Inject constructor(
         fallbackPoll: Boolean = true,
         batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
     ): Flow<FileChangeBatch> = workspaceRepository.current
-        .map { workspaceRepository.currentPath() }
+        .map { workspaceRepository.currentPathOrNull() }
         .distinctUntilChanged()
-        .flatMapLatest {
-            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+        .flatMapLatest { workspacePath ->
+            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH || workspacePath == null) {
                 emptyFlow()
             } else {
+                // 订阅建立与订阅消费之间工作区可能又失效，映射失败则退化为空流，不让流异常终止。
+                val hostDir = runCatching { pathMapper.toHostFile(containerSubPath) }.getOrNull()
+                    ?: return@flatMapLatest emptyFlow()
                 watchHostDir(
-                    hostDir = pathMapper.toHostFile(containerSubPath),
+                    hostDir = hostDir,
                     containerRootPath = containerSubPath.trimEnd('/'),
                     root = ChangeRoot.WORKSPACE,
                     recursive = recursive,

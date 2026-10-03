@@ -1498,6 +1498,9 @@
     <string name="workspace_external_unavailable_hint">This directory is currently unavailable (may have been moved or deleted). You can remove the record</string>
     <string name="workspace_unavailable_current">Workspace "%1$s" is currently unavailable (the directory may have been moved or deleted)</string>
     <string name="workspace_unavailable_fallback">Workspace "%1$s" is unavailable; switched to "%2$s"</string>
+    <string name="workspace_not_ready_local">Workspace not ready: the local workspace has not finished initializing. Try again shortly.</string>
+    <string name="workspace_not_ready_remote_disconnected">Workspace not ready: the remote SSH connection is not established, so no workspace is loaded.</string>
+    <string name="workspace_not_ready_remote_connected">Workspace not ready: connected remotely, but the workspace has not finished loading. Try again shortly.</string>
 
     <!-- Helper Strings -->
     <string name="container_channel_deleted">Channel deleted</string>

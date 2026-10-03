@@ -88,11 +88,16 @@ class MemoryViewModel @Inject constructor(
 
     fun refresh() {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
+            val projectRoot = workspaceRepository.currentPathOrNull()
             _memories.value = withContext(Dispatchers.IO) {
                 memoryRepository.listMemories(projectRoot)
             }
-            _shortTermSession.value = withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+            _shortTermSession.value = if (projectRoot == null) {
+                null
+            } else {
+                withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+            }
         }
     }
 
@@ -134,7 +139,8 @@ class MemoryViewModel @Inject constructor(
 
     fun delete(memory: Memory) {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            // 工作区未落定时 projectRoot 为 null：项目级删除会失败并走下面的失败提示，不静默落到别的目录。
+            val projectRoot = workspaceRepository.currentPathOrNull()
             val deleted = withContext(Dispatchers.IO) {
                 memoryRepository.deleteMemory(memory.name, memory.scope, projectRoot)
             }
@@ -153,7 +159,7 @@ class MemoryViewModel @Inject constructor(
      */
     fun save(target: Memory?, name: String, description: String, content: String, scope: MemoryScope) {
         viewModelScope.launch {
-            val projectRoot = workspaceRepository.currentPath()
+            val projectRoot = workspaceRepository.currentPathOrNull()
             withContext(Dispatchers.IO) {
                 memoryRepository.saveMemory(
                     name = target?.name ?: name.trim(),

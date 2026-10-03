@@ -102,7 +102,8 @@ class McpConfigRepository @Inject constructor(
         fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
     ).mapNotNull { batch ->
         val globalPath = globalFile.absolutePath
-        val projectPath = projectFileForPath(workspaceRepository.currentPath()).absolutePath
+        // 工作区未落定时项目级配置位置未知，只比对全局配置。
+        val projectPath = workspaceRepository.currentPathOrNull()?.let { projectFileForPath(it).absolutePath }
         val touched = batch.changes.any { it.hostPath == globalPath || it.hostPath == projectPath }
         // 同目录下其它文件的变更（如 skills.json）不触发重连；内容没真变（如 touch）也不触发。
         if (!touched) null else if (reloadFromDisk()) Unit else null
@@ -120,14 +121,16 @@ class McpConfigRepository @Inject constructor(
             changed = true
             FileLogger.i(TAG, "检测到全局 MCP 配置变化，已刷新")
         }
-        val path = workspaceRepository.currentPath()
-        val state = getProjectState(path)
-        if (state.value != null) {
-            val content = load(projectFileForPath(path))
-            if (content != state.value) {
-                state.value = content
-                changed = true
-                FileLogger.i(TAG, "检测到项目 MCP 配置变化，已刷新")
+        val path = workspaceRepository.currentPathOrNull()
+        if (path != null) {
+            val state = getProjectState(path)
+            if (state.value != null) {
+                val content = load(projectFileForPath(path))
+                if (content != state.value) {
+                    state.value = content
+                    changed = true
+                    FileLogger.i(TAG, "检测到项目 MCP 配置变化，已刷新")
+                }
             }
         }
         return changed
@@ -182,11 +185,16 @@ class McpConfigRepository @Inject constructor(
      */
     val effectiveEntriesFlow: Flow<List<McpServerEntry>> =
         workspaceRepository.current.flatMapLatest {
-            val path = workspaceRepository.currentPath()
+            // 工作区未落定时项目层不可用，只发全局条目；工作区落定后本流会重新发射完整列表。
+            val path = workspaceRepository.currentPathOrNull()
             ensureGlobalLoaded()
-            ensureProjectLoaded(path)
-            combine(globalState, getProjectState(path)) { g, p ->
-                merge(parse(g ?: DEFAULT_JSON), parse(p ?: DEFAULT_JSON))
+            if (path == null) {
+                globalState.filterNotNull().map { merge(parse(it), emptyList()) }
+            } else {
+                ensureProjectLoaded(path)
+                combine(globalState, getProjectState(path)) { g, p ->
+                    merge(parse(g ?: DEFAULT_JSON), parse(p ?: DEFAULT_JSON))
+                }
             }
         }
 
@@ -195,8 +203,9 @@ class McpConfigRepository @Inject constructor(
         return parse(globalState.value ?: DEFAULT_JSON)
     }
 
+    /** 当前项目的 MCP 条目；工作区未落定时项目层不可用，返回空列表（不猜测项目位置）。 */
     suspend fun getProjectServers(): List<McpServerConfig> {
-        val path = workspaceRepository.currentPath()
+        val path = workspaceRepository.currentPathOrNull() ?: return emptyList()
         ensureProjectLoaded(path)
         return parse(getProjectState(path).value ?: DEFAULT_JSON)
     }
@@ -209,8 +218,12 @@ class McpConfigRepository @Inject constructor(
         }
     }
 
+    /** 写入当前项目的 MCP 配置；工作区未落定时不写（避免落到全局层或错误项目），仅记日志。 */
     suspend fun setProjectServers(servers: List<McpServerConfig>) {
-        val path = workspaceRepository.currentPath()
+        val path = workspaceRepository.currentPathOrNull() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略项目级 MCP 配置写入")
+            return
+        }
         val json = serialize(servers)
         mutex.withLock {
             withContext(Dispatchers.IO) { writeFile(projectFileForPath(path), json) }
@@ -222,10 +235,11 @@ class McpConfigRepository @Inject constructor(
     suspend fun getEffectiveServers(): List<McpServerConfig> =
         getEffectiveEntries().map { it.server }
 
-    /** 当前项目生效的合并条目（含来源作用域），供设置页列表标注使用。 */
+    /** 当前项目生效的合并条目（含来源作用域），供设置页列表标注使用；工作区未落定时只有全局。 */
     suspend fun getEffectiveEntries(): List<McpServerEntry> {
-        val path = workspaceRepository.currentPath()
         ensureGlobalLoaded()
+        val path = workspaceRepository.currentPathOrNull()
+            ?: return merge(parse(globalState.value ?: DEFAULT_JSON), emptyList())
         ensureProjectLoaded(path)
         return merge(
             parse(globalState.value ?: DEFAULT_JSON),

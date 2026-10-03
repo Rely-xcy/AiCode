@@ -109,8 +109,8 @@ class PermissionRulesRepository @Inject constructor(
                 FileLogger.i(TAG, "检测到全局权限配置变化，已刷新")
             }
         }
-        val path = workspaceRepository.currentPath()
-        if (batch.changes.any { it.hostPath == projectFileForPath(path).absolutePath }) {
+        val path = workspaceRepository.currentPathOrNull()
+        if (path != null && batch.changes.any { it.hostPath == projectFileForPath(path).absolutePath }) {
             val state = getProjectState(path)
             // 缓存尚未加载时不处理：首次加载由 [ensureProjectLoaded] 完成，工作区切换不算外部变更。
             if (state.value != null) {
@@ -198,9 +198,9 @@ class PermissionRulesRepository @Inject constructor(
         }
     }
 
-    /** 指定项目的规则流，供管理界面观察。 */
+    /** 指定项目的规则流，供管理界面观察；工作区未落定时发空列表。 */
     fun projectRulesFlow(projectName: String): Flow<List<PermissionRule>> {
-        val workspacePath = workspaceRepository.currentPath()
+        val workspacePath = workspaceRepository.currentPathOrNull() ?: return flowOf(emptyList())
         val state = getProjectState(workspacePath)
         return flow {
             ensureProjectLoaded(workspacePath)
@@ -210,22 +210,29 @@ class PermissionRulesRepository @Inject constructor(
 
     /**
      * 评估用：当前项目规则 + 全局规则合并（项目在前）。一次性读取快照。
+     *
+     * 工作区未落定时无法定位项目级规则文件，只返回全局规则；此时依赖工作区的工具本身也会因
+     * 工作区未就绪而报错，不会因为少了项目级规则就静默跑到别的目录。
      */
     suspend fun loadEffectiveForCurrentProject(): List<PermissionRule> {
         ensureGlobalLoaded()
         val global = globalState.value ?: emptyList()
-        val workspacePath = workspaceRepository.currentPath()
+        val workspacePath = workspaceRepository.currentPathOrNull() ?: return global
         ensureProjectLoaded(workspacePath)
         val project = getProjectState(workspacePath).value ?: emptyList()
         return project + global
     }
 
-    /** 按 scope 新增规则。PROJECT 写入当前项目；无当前项目则忽略并告警。 */
+    /** 按 scope 新增规则。PROJECT 写入当前项目；无当前项目或工作区未落定时忽略并告警。 */
     suspend fun add(scope: PermissionScope, rule: PermissionRule) {
         when (scope) {
             PermissionScope.GLOBAL -> editGlobal { if (rule !in it) it.add(rule) }
             PermissionScope.PROJECT -> {
-                val workspacePath = workspaceRepository.currentPath()
+                val workspacePath = workspaceRepository.currentPathOrNull()
+                if (workspacePath == null) {
+                    FileLogger.w(TAG, "工作区未就绪，无法新增项目级规则: ${rule.toolName} ${rule.pattern}")
+                    return
+                }
                 editProject(workspacePath) { if (rule !in it) it.add(rule) }
             }
         }
@@ -234,14 +241,21 @@ class PermissionRulesRepository @Inject constructor(
 
     suspend fun removeGlobalRule(rule: PermissionRule) = editGlobal { it.remove(rule) }
 
+    /** 删除项目级规则；工作区未落定时不写（不知道写哪个项目），仅记日志。 */
     suspend fun removeProjectRule(projectName: String, rule: PermissionRule) {
-        val workspacePath = workspaceRepository.currentPath()
+        val workspacePath = workspaceRepository.currentPathOrNull() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略项目级规则删除: ${rule.toolName} ${rule.pattern}")
+            return
+        }
         editProject(workspacePath) { it.remove(rule) }
     }
 
-    /** 把一条项目规则提升为全局：项目删、全局加。 */
+    /** 把一条项目规则提升为全局：项目删、全局加。工作区未落定时不写（避免只删到一半），仅记日志。 */
     suspend fun promoteToGlobal(projectName: String, rule: PermissionRule) {
-        val workspacePath = workspaceRepository.currentPath()
+        val workspacePath = workspaceRepository.currentPathOrNull() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略提升为全局: ${rule.toolName} ${rule.pattern}")
+            return
+        }
         editProject(workspacePath) { it.remove(rule) }
         editGlobal { if (rule !in it) it.add(rule) }
         FileLogger.i(TAG, "提升为全局: ${rule.toolName} ${rule.pattern}")

@@ -45,7 +45,8 @@ class AgentDefinitionConfigRepository @Inject constructor(
     /** 本地全局配置文件，仅用于宿主文件变更监听。 */
     private fun globalFile(): File = File(containerInstaller.aicodeDir, CONFIG_FILE)
 
-    private fun projectFile(): File = File(projectAicodeRoot.current(), CONFIG_FILE)
+    /** 当前工作区的项目级配置文件：`workspacePath/.aicode/agents.json`；工作区未落定时为 null。 */
+    private fun projectFile(): File? = projectAicodeRoot.currentOrNull()?.let { File(it, CONFIG_FILE) }
 
     // ── 外部变更监听：容器内/手工直接增删改子代理目录或 agents.json 后，数秒内通知 UI 刷新 ──
 
@@ -70,27 +71,34 @@ class AgentDefinitionConfigRepository @Inject constructor(
     private fun isAgentChange(change: FileChange): Boolean {
         val path = change.hostPath
         if (path == globalFile().absolutePath) return true
-        if (path == projectFile().absolutePath) return true
+        if (path == projectFile()?.absolutePath) return true
         val globalAgents = File(containerInstaller.aicodeDir, AGENTS_DIR).absolutePath
         if (path == globalAgents || path.startsWith("$globalAgents/")) return true
-        val projectAgents = File(projectAicodeRoot.current(), AGENTS_DIR).absolutePath
+        // 工作区未落定时项目级目录未知，按「不是子代理变更」处理（订阅本身也只在工作区落定后有内容）。
+        val projectRoot = projectAicodeRoot.currentOrNull() ?: return false
+        val projectAgents = File(projectRoot, AGENTS_DIR).absolutePath
         return path == projectAgents || path.startsWith("$projectAgents/")
     }
 
-    /** 当前生效的禁用子代理名集合（全局 + 项目并集，归一化为小写）。 */
+    /** 当前生效的禁用子代理名集合（全局 + 项目并集，归一化为小写）；工作区未落定时只有全局层。 */
     fun disabledNames(): Set<String> =
-        (readGlobalDisabled() + readDisabled(projectFile())).map { it.lowercase() }.toSet()
+        (readGlobalDisabled() + (projectFile()?.let { readDisabled(it) } ?: emptySet())).map { it.lowercase() }.toSet()
 
-    /** 在指定作用域的配置中启用/禁用某个子代理。 */
+    /** 在指定作用域的配置中启用/禁用某个子代理；工作区未落定时项目级写入被忽略，不落到全局层。 */
     fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope) {
-        val names = (if (scope == AgentDefinitionScope.GLOBAL) readGlobalDisabled() else readDisabled(projectFile()))
-            .toMutableSet()
-        if (disabled) names.add(name) else names.removeAll { it.equals(name, ignoreCase = true) }
         if (scope == AgentDefinitionScope.GLOBAL) {
+            val names = readGlobalDisabled().toMutableSet()
+            if (disabled) names.add(name) else names.removeAll { it.equals(name, ignoreCase = true) }
             fileAccess.writeFile(GLOBAL_CONFIG_PATH, serializeDisabled(names))
-        } else {
-            writeDisabled(projectFile(), names)
+            return
         }
+        val file = projectFile() ?: run {
+            FileLogger.w(TAG, "工作区未就绪，忽略项目级子代理配置写入：$name")
+            return
+        }
+        val names = readDisabled(file).toMutableSet()
+        if (disabled) names.add(name) else names.removeAll { it.equals(name, ignoreCase = true) }
+        writeDisabled(file, names)
     }
 
     private fun readGlobalDisabled(): Set<String> = runCatching {
