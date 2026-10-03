@@ -32,6 +32,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -121,6 +122,12 @@ class FileChangeHubProjectConfigTest {
 
     @After
     fun tearDown() {
+        // 顺序很重要：必须先在 Main 还指向测试调度器时把 hub 收干净，再 resetMain。
+        // 1) close() 里订阅收尾时排到 Main 的任务（如 DirWatch.stopWatching）要在本测试内跑完，
+        //    不能拖到 resetMain 之后（那时 Main 已没有 Looper，任务永远不执行）；
+        // 2) 更关键的是 runBlocking 的 eventLoop 在用例结束时就没了——若把 close 拖到这里，
+        //    join 的挂起点永远等不到 resume，tearDown 直接挂死。
+        runBlocking { hub.close() }
         Dispatchers.resetMain()
     }
 
@@ -208,6 +215,51 @@ class FileChangeHubProjectConfigTest {
     private fun agentsJson(round: Int): String =
         "{\"disabled\":[\"agent-$round\"]}\n" + " ".repeat(round)
 
+    /**
+     * [FileChangeHub.close] 的防回归钉子：close 之后 watchAicode 的 flow 必须正常完成
+     * （batchesChannel 被 close，receiveAsFlow 正常收尾），且 collector 不再需要 cancel。
+     *
+     * close 前再改一次文件，确保轮询确实在场、本用例有区分度；close 后等超过一个轮询周期
+     * （2s 轮询 + 300ms 批窗口），channel 已关，真遇泄漏也只会从 collect 的正常完成分支走出。
+     */
+    @Test
+    fun close_stopsEmissions_andCompletesWatchAicodeFlow() = runBlocking {
+        val configFile = projectFile("permissions.json")
+        configFile.writeText(projectConfigJson(0))
+
+        val batches = Channel<FileChangeBatch>(Channel.UNLIMITED)
+        var completed = false
+        val collector = launch {
+            try {
+                hub.watchAicode().collect { batches.send(it) }
+                completed = true
+            } catch (e: Exception) {
+                fail("close 后 watchAicode 应正常完成而不是异常收尾: $e")
+            }
+        }
+
+        // close 前先证明轮询活着：等一个改写事件落地（拿不到也不阻塞用例目的，只影响区分度）。
+        delay(BASELINE_WAIT_MS)
+        configFile.writeText(projectConfigJson(1))
+        withTimeoutOrNull(REWRITE_WAIT_MS) { batches.receive() }
+
+        // 本用例要验的是 flow 完成而不是取消：不能 cancel collector，直接 close。
+        hub.close()
+
+        withTimeoutOrNull(CLOSE_COMPLETION_WAIT_MS) { collector.join() }
+        assertTrue(
+            "close 后 ${CLOSE_COMPLETION_WAIT_MS}ms 内 watchAicode 的 collect 未结束：订阅未随 close 终止",
+            completed
+        )
+
+        // close 后一个轮询周期内不应再收到任何批次（全局线程池上不应有遗留轮询）。
+        configFile.writeText(projectConfigJson(2))
+        assertNull(
+            "close 后仍收到变更批次：ioScope 上有未被取消的轮询协程",
+            withTimeoutOrNull(POLL_PERIOD_MS) { batches.receive() }
+        )
+    }
+
     private companion object {
         const val REMOTE_WORKSPACE = "/remote/ws"
         const val PROJECTS_DIR = "projects"
@@ -220,5 +272,11 @@ class FileChangeHubProjectConfigTest {
 
         /** 最多改写几轮（旧实现下必全轮超时）。 */
         const val REWRITE_ROUNDS = 4
+
+        /** close 后等 flow 完成的上限。 */
+        const val CLOSE_COMPLETION_WAIT_MS = 5_000L
+
+        /** 一个完整轮询周期 + 批窗口：close 后等这么久不应再收到任何批次。 */
+        const val POLL_PERIOD_MS = 2_500L
     }
 }
