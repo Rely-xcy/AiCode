@@ -1631,7 +1631,10 @@ class StatefulAgentWorkflow @Inject constructor(
             return PermissionCheckResult(false, reason, code)
         }
 
-        if (tool.permissionPolicy == ToolPermissionPolicy.AUTO_APPROVE) {
+        // 工具声明「自动批准」时不再询问；唯一的例外是项目级规则读不到的兜底 ASK——那正是无法确认
+        // 有没有项目级 DENY 的时刻，被自动批准短路掉等于把项目级规则整体旁路（browser / memory 这类
+        // 未覆写 permissionPolicy、默认 AUTO_APPROVE 的工具此前正是这个缺口）。
+        if (autoApproveSkipsAsk(tool.permissionPolicy, eval)) {
             return PermissionCheckResult(true)
         }
 
@@ -1672,6 +1675,18 @@ class StatefulAgentWorkflow @Inject constructor(
  * 取一个可识别的常量：子代理/调用方据此判断「不是偶发错误」，不必把失败当成工具本身报错。
  */
 internal const val ARG_OMITTED_BY_COMPACTION = "ARG_OMITTED_BY_COMPACTION"
+
+/**
+ * 工具自己声明的「自动批准」（[ToolPermissionPolicy.AUTO_APPROVE]）能否跳过引擎给出的这一次 ASK。
+ *
+ * 能，除非这次 ASK 是「项目级规则读不到」的兜底（[ToolPermissionPolicyEngine.EvalResult.rulesUnconfirmed]）：
+ * 那时合并结果里可能缺一条项目级 DENY，直接跑等于把项目级规则整体旁路。AUTO 模式下这个标记恒为 false
+ * （引擎在读规则之前就已经放行），所以 AUTO 语义不受影响。
+ */
+internal fun autoApproveSkipsAsk(
+    policy: ToolPermissionPolicy,
+    eval: ToolPermissionPolicyEngine.EvalResult
+): Boolean = policy == ToolPermissionPolicy.AUTO_APPROVE && !eval.rulesUnconfirmed
 
 /**
  * 执行边界守卫：工具调用参数里某个大块正文字段「整串」就是上下文精简的占位说明时，返回拦截原因。

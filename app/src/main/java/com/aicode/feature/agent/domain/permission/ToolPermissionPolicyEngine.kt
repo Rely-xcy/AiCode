@@ -33,6 +33,8 @@ import javax.inject.Singleton
  * 规则读不到期间的 ASK 一律不给「始终允许」（[unconfirmedProjectRulesAsk] 的 rememberablePatterns 为空）：
  * 「始终允许」写的是项目层规则，而此时项目层要么没就绪（写入被 [PermissionRulesRepository.add] 静默跳过，
  * 用户以为记住了、磁盘上什么都没写），要么是解析失败后拿到的空表（写进去会把原有规则覆盖掉）。
+ * 这类兜底 ASK 同时带上 [EvalResult.rulesUnconfirmed]，调用方据此不让工具自己声明的自动批准
+ * （见 StatefulAgentWorkflow 的权限闸门）把它短路掉。
  *
  * [SHIZUKU_TOOL]（Shizuku）按高危处理：无论内置白名单或已记忆规则，一律 ASK 且不可记忆；
  * AUTO 模式也不自动放行（除非已开启「禁用安全拦截」）。
@@ -137,6 +139,11 @@ class ToolPermissionPolicyEngine @Inject constructor(
      * @param verdict 评估结论。
      * @param rememberablePatterns 当 [verdict] 为 ASK 时，「始终允许」会记忆的模式；为空表示不可记忆
      *   （命令不可静态判定，只能单次放行）。
+     * @param rulesUnconfirmed 本次 ASK 是否为「项目级规则读不到」的兜底（见 [unconfirmedProjectRulesAsk]）。
+     *   为 true 时工具自己声明的 [com.aicode.feature.agent.domain.tool.ToolPermissionPolicy.AUTO_APPROVE]
+     *   不得短路掉这次询问：那正是无法确认有没有项目级 DENY 的时刻，直接跑等于把项目级规则整个旁路。
+     *   仅由 [unconfirmedProjectRulesAsk] 置为 true，故 AUTO 模式下恒为 false——AUTO 模式的
+     *   放行发生在读规则之前（见 [evaluate]），AUTO 语义不受影响。
      */
     data class EvalResult(
         val verdict: Verdict,
@@ -144,7 +151,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
         val denyReason: String? = null,
         val rememberDisabledReason: String? = null,
         /** ASK 时的弹窗标题覆盖；null 表示用工具默认标题。 */
-        val askTitle: String? = null
+        val askTitle: String? = null,
+        val rulesUnconfirmed: Boolean = false
     )
 
     suspend fun evaluate(tool: AgentTool?, toolName: String, args: Map<String, JsonElement>, mode: com.aicode.feature.agent.domain.model.AgentMode): EvalResult {
@@ -301,7 +309,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
         verdict = Verdict.ASK,
         rememberablePatterns = emptyList(),
         askTitle = ASK_TITLE_PROJECT_RULES_UNCONFIRMED,
-        rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED
+        rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED,
+        rulesUnconfirmed = true
     )
 
     /**
