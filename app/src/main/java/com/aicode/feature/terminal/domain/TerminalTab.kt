@@ -68,6 +68,13 @@ class TerminalTab(
      */
     @Volatile
     var finishedNotified: Boolean = false
+
+    /**
+     * 远程会话是否是因连接断开而结束（见 [SshShellBackend.closedByDisconnect]）；本地终端恒 false。
+     * 断线结束时 Termux 只会打一句「[Process completed]」，不标出来会被当成正常退出。
+     */
+    var droppedByDisconnect: Boolean = false
+        internal set
 }
 
 /**

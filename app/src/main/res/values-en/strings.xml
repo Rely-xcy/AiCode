@@ -1412,6 +1412,8 @@
     <string name="terminal_start_failed">Cannot start terminal:\n%1$s</string>
     <string name="terminal_retry">Retry</string>
     <string name="terminal_no_open_tabs">No open terminal tabs</string>
+    <string name="terminal_connection_dropped">Connection lost, this terminal has ended</string>
+    <string name="terminal_connection_dropped_hint">This was not a normal exit: open a new tab to retry, or reopen after automatic reconnect</string>
     <string name="terminal_close_tab">Close Tab</string>
     <string name="terminal_cleaning_old_container">Cleaning up old container data…\n%1$s items removed</string>
     <string name="terminal_extracting_env">Extracting environment…\n%1$s files processed</string>

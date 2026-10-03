@@ -1411,6 +1411,8 @@
     <string name="terminal_start_failed">无法启动终端：\n%1$s</string>
     <string name="terminal_retry">重试</string>
     <string name="terminal_no_open_tabs">没有打开的终端标签</string>
+    <string name="terminal_connection_dropped">连接已断开，此终端已结束</string>
+    <string name="terminal_connection_dropped_hint">这不是正常退出：可新建标签重试，或等待自动重连后重新打开</string>
     <string name="terminal_close_tab">关闭标签</string>
     <string name="terminal_cleaning_old_container">正在清理旧容器数据…\n已清理 %1$s 项</string>
     <string name="terminal_extracting_env">正在解压环境…\n已处理 %1$s 个文件</string>
