@@ -116,6 +116,35 @@ class FileChangeHub @Inject constructor(
     /** FileObserver 必须绑定有 Looper 的线程创建与 startWatching，故观察器起停统一走主线程。 */
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    /** 存活的订阅集合与锁；[close] 与 [watchHostDir] 增删都走这里。 */
+    private val activeSubscriptions = mutableSetOf<Subscription>()
+    private val lock = Any()
+
+    /**
+     * 关闭 hub 主动持有的一切监听：取消所有存活订阅的协程，并清空目录观察器表。
+     *
+     * 这是测试用的确定性清理句柄：订阅的 job 由 [watchHostDir] 的 finally 随各自 flow 终止而清理，
+     * 但两类竞态可能把 job 留到取消之后——mergeLoop 已越过取消检查、正向已 close 的
+     * batchesChannel [kotlinx.coroutines.channels.send]（在 SupervisorJob 的 ioScope 上抛
+     * ClosedSendChannelException，无人捕获）；或 attachJob 的 while-delay 循环同帧逃过取消。
+     * [close] 先 cancel 再 join（[Subscription.stopAndJoin]），把这些协程确定性收到为零。不清 ioScope/mainScope 本身：
+     * 它们是 hub 级长生命周期（App 内永活），关掉等于自杀。生产路径永不调用。
+     */
+    suspend fun close() {
+        val subs = synchronized(lock) { activeSubscriptions.toList() }
+        for (sub in subs) sub.stopAndJoin(joinJobs = true)
+        dirWatches.clear()
+    }
+
+    /** 观察器起停调度兜底：单测里 Main 调度器被 resetMain 换掉后仍安全（排队任务不外抛）。 */
+    private fun launchOnMain(block: () -> Unit) {
+        try {
+            mainScope.launch { block() }
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "主线程调度不可用，跳过观察器任务: ${e.message}")
+        }
+    }
+
     /** 宿主目录路径 → 该目录的观察器（多个订阅共享同一个）。 */
     private val dirWatches = ConcurrentHashMap<String, DirWatch>()
 
@@ -292,10 +321,12 @@ class FileChangeHub @Inject constructor(
             domain = domain
         )
         try {
+            synchronized(lock) { activeSubscriptions.add(subscription) }
             subscription.start()
             emitAll(subscription.batches)
         } finally {
-            subscription.stop()
+            synchronized(lock) { activeSubscriptions.remove(subscription) }
+            subscription.stopAndJoin(joinJobs = false)
         }
     }
 
@@ -344,16 +375,18 @@ class FileChangeHub @Inject constructor(
             }
         }
 
-        fun stop() {
-            mergeJob?.cancel()
+        /** 取消本订阅全部协程；[joinJobs] 为真时等它们真正退出（close 用，保证全局线程池收干净）。 */
+        suspend fun stopAndJoin(joinJobs: Boolean) {
+            val jobs = listOfNotNull(mergeJob, attachJob, pollJob)
+            for (job in jobs) job.cancel()
             mergeJob = null
-            pollJob?.cancel()
             pollJob = null
-            attachJob?.cancel()
             attachJob = null
             for (path in myDirs) dirWatches[path]?.unsubscribe(this)
             myDirs.clear()
+            // 先关 channel 再 join：mergeLoop 若正阻塞在 send，闭后立即异常退出，join 不会无限等。
             batchesChannel.close()
+            if (joinJobs) for (job in jobs) job.join()
         }
 
         private fun attachTree() {
@@ -545,7 +578,7 @@ class FileChangeHub @Inject constructor(
                 first
             }
             // watch 已生效时立即回调；否则排到主线程 startObserver 之后，保证 onReady 晚于 startWatching。
-            if (firstSubscriber) startObserver(onReady) else mainScope.launch { onReady?.invoke() }
+            if (firstSubscriber) startObserver(onReady) else launchOnMain { onReady?.invoke() }
         }
 
         fun unsubscribe(sub: Subscription) {
@@ -560,7 +593,7 @@ class FileChangeHub @Inject constructor(
         }
 
         private fun startObserver(onReady: (() -> Unit)? = null) {
-            mainScope.launch {
+            launchOnMain {
                 if (observer != null) {
                     onReady?.invoke()
                     return@launch
@@ -600,7 +633,7 @@ class FileChangeHub @Inject constructor(
         private fun stopObserver() {
             val current = observer ?: return
             observer = null
-            mainScope.launch { runCatching { current.stopWatching() } }
+            launchOnMain { runCatching { current.stopWatching() } }
         }
 
         private fun dispatch(name: String, kind: ChangeKind) {
