@@ -4,9 +4,11 @@ import android.content.Context
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
+import com.aicode.feature.workspace.domain.model.Workspace
 import io.mockk.every
 import io.mockk.mockk
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,6 +44,9 @@ class PermissionRulesRepositoryTest {
         every { context.filesDir } returns globalDir
         val workspaceRepository = mockk<WorkspaceRepository>()
         every { workspaceRepository.currentPathOrNull() } answers { currentPath }
+        // 构造期求值的两个 val（currentProjectNameFlow / projectRulesFlow）都读 current，
+        // 不桩就会在构造函数那一行抛 MockKException。
+        every { workspaceRepository.current } returns MutableStateFlow<Workspace?>(null)
         val projectAicodeRoot = mockk<ProjectAicodeRoot>()
         every { projectAicodeRoot.forPath(any()) } returns projectDir
         // 严格 mock：本类只把 hub 交给仓库构造，startWatching() 从不会被调用，
