@@ -38,8 +38,9 @@ private const val SSH_CONNECT_TIMEOUT_MS = 10_000
 /**
  * 监督循环里单次重连的总时限（包含多条连接：exec + SFTP 惰性重建）。
  * 比单次 connect 超时宽一些，但不设的话一旦底层卡住，重连与后面的指数退避全部不再推进。
+ * 必须是 Long：[withTimeoutOrNull] 只接受 Long/Duration，Kotlin 不会隐式拓宽 Int。
  */
-private const val SSH_RECONNECT_TIMEOUT_MS = 15_000
+private const val SSH_RECONNECT_TIMEOUT_MS = 15_000L
 
 /** 写入远程私有文件（git 凭据等）时的权限位：默认 umask 022 会落成 0644，同机其他用户可读。 */
 private const val PRIVATE_FILE_MODE = "600"
