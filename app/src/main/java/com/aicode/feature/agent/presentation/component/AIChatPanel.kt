@@ -740,9 +740,16 @@ fun AIChatPanel(
     val providerDashboards by (settingsViewModel?.providerDashboards?.collectAsStateWithLifecycle() ?: remember { mutableStateOf(emptyMap()) })
     val currentDashboardState = activeProvider?.let { providerDashboards[it.id] } ?: ProviderDashboardState.Idle
 
-    // 键盘弹出时收起面板，避免输入框被挤压
-    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-    val imeVisible = imeBottomPx > 0
+    // 键盘弹出时收起面板，避免输入框被挤压。
+    // WindowInsets 的像素值本就不该在组合期读（官方文档：读它会让动画的每一帧都做一次组合），
+    // 而 WindowInsets.ime 又是 @Composable getter，只能在组合期取到 insets 对象、不能塞进
+    // derivedStateOf 的 lambda。这里先取对象与 density，再把「键盘是否可见」这个布尔交给
+    // derivedStateOf——只在翻转时才通知读取者，动画期间不再逐帧往下传。
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
+    val imeVisible by remember(imeInsets, density) {
+        derivedStateOf { imeInsets.getBottom(density) > 0 }
+    }
 
     // 余额/待办面板展开状态：展开时叠加面板联动折叠，避免输入框被双重顶开
     var dashboardExpanded by rememberSaveable { mutableStateOf(false) }
@@ -1154,10 +1161,15 @@ fun AIChatPanel(
     }
 
     // 锚点式常驻校准循环：锚点 = 最后内容底部恰好停在悬浮层（输入框）上沿。
-    // scrollToItem(最后一项, Int.MAX_VALUE) 会被 LazyColumn clamp 到可滚的最底部
+    // requestScrollToItem(最后一项, Int.MAX_VALUE) 请求把最后一项滚到可滚最底部
     // （contentPadding 底部预留 reserve 保证），即最后一项底部停在悬浮层上沿，
-    // 数学上任何时刻都成立——消息足够时，最后一条消息永不落入输入框之下，
-    // 且不依赖“最后可见项 == 最后一项”的高度假设（高度跳变时也不会算错目标）。
+    // 目标由 LazyColumn 在**下一帧重新测量**时 clamp 到 maxScroll，
+    // 不依赖“最后可见项 == 最后一项”的高度假设（高度跳变时也不会算错目标）。
+    // 用 requestScrollToItem 而非 scrollToItem：后者是 suspend 的 scroll{} 加 forceRemeasure=true，
+    // 当帧就把整个列表同步重测一遍，还会把 isScrollInProgress 翻成 true——而本循环的触发条件
+    // 恰好包含 isScrollInProgress，等于自己给自己续命（收工后的收尾窗口里反复重启）。
+    // 前者只登记滚动请求、remeasure 交给下一次测量，且无滚动进行中时不会去动滚动互斥量，
+    // 不会把 isScrollInProgress 从 false 翻成 true。
     // 每帧检查最后可见项：最后内容被增长推下（底部超安全区）或有内容被推出视口下方
     // （最后可见项不是最后一项，即跟丢）时，滚回锚点；md 异步解析的高度跳变也会在
     // 下一帧被检测到，不存在信号与渲染错位。
@@ -1179,7 +1191,7 @@ fun AIChatPanel(
                     val lost = lastVisible == null || lastVisible.index < lastIndex
                     val pushedDown = lastVisible != null &&
                         lastVisible.offset + lastVisible.size > safeBottom + AUTO_SCROLL_TOLERANCE_PX
-                    if (lost || pushedDown) listState.scrollToItem(lastIndex, Int.MAX_VALUE)
+                    if (lost || pushedDown) listState.requestScrollToItem(lastIndex, Int.MAX_VALUE)
                 }
             }
         }

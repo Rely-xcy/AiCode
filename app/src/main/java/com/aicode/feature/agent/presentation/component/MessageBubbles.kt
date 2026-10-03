@@ -584,10 +584,14 @@ private fun MessageActionIconButton(
 @Composable
 private fun BackgroundNotificationBar(message: AgentUIMessage) {
     val content = message.content
-    val statuses = Regex("<status>(.*?)</status>")
-        .findAll(content).map { it.groupValues.getOrNull(1)?.trim()?.lowercase() }.filterNotNull().toList()
-    val summaries = Regex("<summary>(.*?)</summary>")
-        .findAll(content).map { it.groupValues.getOrNull(1)?.trim() }.filterNotNull().toList()
+    // 两个标记各自一次 findAll 就够：放在组合期直接跑的话，每次重组都要重建两个 Regex 并全量扫一遍长文本。
+    val (statuses, summaries) = remember(content) {
+        val statusMatches = Regex("<status>(.*?)</status>")
+            .findAll(content).map { it.groupValues.getOrNull(1)?.trim()?.lowercase() }.filterNotNull().toList()
+        val summaryMatches = Regex("<summary>(.*?)</summary>")
+            .findAll(content).map { it.groupValues.getOrNull(1)?.trim() }.filterNotNull().toList()
+        statusMatches to summaryMatches
+    }
     val dotColor = when {
         // status 为 message 的是代理间消息（非失败），用主色；其余非 completed 视为失败。
         statuses.any { it != "completed" && it != "message" } -> MaterialTheme.colorScheme.error
