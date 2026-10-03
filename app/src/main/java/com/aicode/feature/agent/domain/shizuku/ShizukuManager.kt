@@ -26,10 +26,16 @@ import javax.inject.Singleton
 
 /** Shizuku 可用状态，供设置页展示与工具执行前判定。 */
 enum class ShizukuState {
-    /** 未安装 Shizuku（或 Sui）。 */
+    /**
+     * 未安装管理器。
+     *
+     * 状态判定改为以 binder 为准后，[ShizukuManager] 不再产出该状态：管理器包名不在官方契约内
+     * （Sui 是 Magisk 模块、没有独立管理器包；Stellar 等兼容层用各自的包名），以包名判「装没装」
+     * 必然误判。保留该常量只为让既有 UI 与工具的分支穷举继续编译。
+     */
     NOT_INSTALLED,
 
-    /** 已安装但服务未运行，需用户先在 Shizuku 内启动服务。 */
+    /** binder 未就绪：服务未启动或已停止，也可能设备上根本没有可用的管理器。 */
     NOT_RUNNING,
 
     /** 服务运行中，但本应用尚未获得授权。 */
@@ -41,6 +47,19 @@ enum class ShizukuState {
 
 /** 一次 Shizuku 命令执行结果。[exitCode] 为负值表示超时或启动异常。 */
 data class ShizukuCommandResult(val output: String, val exitCode: Int)
+
+/**
+ * Shizuku 服务端的只读身份信息，供设置页展示「当前连的是谁」。
+ *
+ * [version] 是服务端 API 版本，服务端未应答时为 -1；[seLinuxContext] 拿不到时为 null。
+ */
+data class ShizukuPeerInfo(
+    val uid: Int,
+    val version: Int,
+    val seLinuxContext: String?,
+    val isAdb: Boolean,
+    val isRoot: Boolean
+)
 
 /**
  * Shizuku 后端：以 adb shell（uid 2000）身份执行命令。
@@ -57,8 +76,24 @@ class ShizukuManager @Inject constructor(
     private companion object {
         const val TAG = "ShizukuManager"
 
-        /** Shizuku 官方应用包名（Sui 也用它作为入口）。 */
+        /** Shizuku 官方应用包名。 */
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+
+        /** Stellar：兼容 Shizuku 的管理器，包名与官方不同，binder 协议一致。 */
+        const val STELLAR_PACKAGE = "roro.stellar.manager"
+
+        /** 已知管理器包名，按尝试顺序排列；都没命中时退回 provider authority 扫描。 */
+        val KNOWN_MANAGER_PACKAGES = listOf(SHIZUKU_PACKAGE, STELLAR_PACKAGE)
+
+        /** 管理器 provider authority 的命名后缀约定：官方用 `.shizuku`，Stellar 用 `.stellar`。 */
+        const val SHIZUKU_PROVIDER_SUFFIX = ".shizuku"
+        const val STELLAR_PROVIDER_SUFFIX = ".stellar"
+
+        /** adb shell 身份对应的 Linux uid。 */
+        const val UID_SHELL = 2000
+
+        /** root 身份对应的 Linux uid。 */
+        const val UID_ROOT = 0
 
         const val PERMISSION_REQUEST_CODE = 1001
 
@@ -74,7 +109,7 @@ class ShizukuManager @Inject constructor(
         const val DOWNLOAD_URL = "https://shizuku.rikka.app/download/"
     }
 
-    private val _state = MutableStateFlow(ShizukuState.NOT_INSTALLED)
+    private val _state = MutableStateFlow(ShizukuState.NOT_RUNNING)
     val state: StateFlow<ShizukuState> = _state.asStateFlow()
 
     private val bindMutex = Mutex()
@@ -157,21 +192,44 @@ class ShizukuManager @Inject constructor(
         _state.value = computeState()
     }
 
-    private fun computeState(): ShizukuState {
-        if (!isShizukuInstalled()) return ShizukuState.NOT_INSTALLED
-        if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) return ShizukuState.NOT_RUNNING
-        // pre-v11 无 UserService，等同不可用。
-        if (runCatching { Shizuku.isPreV11() }.getOrDefault(false)) return ShizukuState.NOT_RUNNING
-        val granted = runCatching {
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-        }.getOrDefault(false)
-        return if (granted) ShizukuState.READY else ShizukuState.PERMISSION_DENIED
-    }
+    /**
+     * 按 binder 存活与授权结果推导状态。
+     *
+     * 不以管理器包名判「装没装」：官方契约里 binder 由服务端推来（客户端 provider 只收不拉），
+     * 与管理器叫什么包名无关，而 Sui 与 Stellar 也都不使用官方包名。
+     * 任一 binder 调用抛异常（服务恰好在探测途中断开）都按未运行处理，状态机不崩。
+     */
+    private fun computeState(): ShizukuState = runCatching {
+        when {
+            !Shizuku.pingBinder() -> ShizukuState.NOT_RUNNING
+            // pre-v11 无 UserService，等同不可用。
+            Shizuku.isPreV11() -> ShizukuState.NOT_RUNNING
+            // READY 只由服务端按 uid 校验的授权结果决定，本地判断不参与。
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> ShizukuState.READY
+            else -> ShizukuState.PERMISSION_DENIED
+        }
+    }.getOrDefault(ShizukuState.NOT_RUNNING)
 
-    private fun isShizukuInstalled(): Boolean = runCatching {
-        context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
-        true
-    }.getOrDefault(false)
+    /**
+     * 读取当前服务端的只读身份信息（adb / root、API 版本、SELinux 上下文）。
+     *
+     * 纯查询：不触发授权、不改状态。[state] 不是 [ShizukuState.READY] 时直接返回 null，
+     * 其余异常（binder 中途断开等）也一并降级为 null。
+     */
+    fun peerInfo(): ShizukuPeerInfo? {
+        if (_state.value != ShizukuState.READY) return null
+        return runCatching {
+            val uid = Shizuku.getUid()
+            ShizukuPeerInfo(
+                uid = uid,
+                version = Shizuku.getVersion(),
+                seLinuxContext = Shizuku.getSELinuxContext(),
+                isAdb = uid == UID_SHELL,
+                isRoot = uid == UID_ROOT
+            )
+        }.onFailure { FileLogger.w(TAG, "读取 Shizuku 服务端信息失败: ${it.message}") }
+            .getOrNull()
+    }
 
     /** 申请 Shizuku 授权。需在主线程调用（Shizuku 内部要求）。 */
     fun requestPermission() {
@@ -180,9 +238,9 @@ class ShizukuManager @Inject constructor(
             .onFailure { FileLogger.w(TAG, "申请 Shizuku 授权失败: ${it.message}") }
     }
 
-    /** 打开 Shizuku 应用；未安装则跳转官方下载页。 */
+    /** 打开管理器应用；一个都找不到时跳转官方下载页。 */
     fun openShizukuApp() {
-        val launch = context.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+        val launch = findManagerLaunchIntent()
         runCatching {
             if (launch != null) {
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -194,6 +252,42 @@ class ShizukuManager @Inject constructor(
                 )
             }
         }.onFailure { FileLogger.w(TAG, "打开 Shizuku 失败: ${it.message}") }
+    }
+
+    /**
+     * 找一个可启动的管理器：先按已知包名（官方、Stellar），再按 provider authority 命名约定扫描。
+     *
+     * 扫描只认「包自身声明了 authority 等于 `<包名>.shizuku` 或 `<包名>.stellar`」这一条，
+     * 且排除本应用自己（自身就声明 `<applicationId>.shizuku`）。authority 必须精确相等，
+     * 不做前缀或包含匹配，否则抢注相似 authority 的应用能被当成管理器打开。
+     */
+    private fun findManagerLaunchIntent(): Intent? {
+        for (pkg in KNOWN_MANAGER_PACKAGES) {
+            launchIntentFor(pkg)?.let { return it }
+        }
+        val discovered = runCatching { findManagerByProviderAuthority() }
+            .onFailure { FileLogger.w(TAG, "扫描 Shizuku 管理器包失败: ${it.message}") }
+            .getOrNull()
+        return discovered?.let { launchIntentFor(it) }
+    }
+
+    /** 取包名的启动入口；未安装或不可见时返回 null。 */
+    private fun launchIntentFor(pkg: String): Intent? =
+        runCatching { context.packageManager.getLaunchIntentForPackage(pkg) }.getOrNull()
+
+    @Suppress("DEPRECATION")
+    private fun findManagerByProviderAuthority(): String? {
+        val self = context.packageName
+        for (info in context.packageManager.getInstalledPackages(PackageManager.GET_PROVIDERS)) {
+            val pkg = info.packageName
+            if (pkg == self) continue
+            val matched = info.providers.orEmpty().any { provider ->
+                val authority = provider.authority ?: return@any false
+                authority == pkg + SHIZUKU_PROVIDER_SUFFIX || authority == pkg + STELLAR_PROVIDER_SUFFIX
+            }
+            if (matched) return pkg
+        }
+        return null
     }
 
     /** 执行 shell 命令。未就绪或绑定失败时抛异常，由调用方转成工具错误。 */
