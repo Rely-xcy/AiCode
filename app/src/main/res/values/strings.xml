@@ -114,7 +114,6 @@
     <string name="settings_token_stats_col_status">状态</string>
     <string name="settings_token_stats_col_cost">费用</string>
     <string name="settings_token_stats_page">第 %1$d / %2$d 页</string>
-    <string name="settings_token_stats_retries">重试 %1$d 次</string>
     <string name="settings_token_stats_reset">重置</string>
     <string name="settings_token_stats_reset_title">重置 Token 统计</string>
     <string name="settings_token_stats_reset_confirm">将清空全部调用记录，此操作不可恢复。确定重置？</string>
@@ -235,7 +234,6 @@
     <string name="provider_script_params_count">已配置 %1$d 个参数</string>
     <string name="provider_add_sheet_title">添加供应商</string>
     <string name="provider_custom">自定义供应商</string>
-    <string name="provider_preset_loading">正在加载预设库…</string>
     <string name="provider_preset_empty">未找到匹配的预设</string>
     <string name="provider_register_now">立即注册</string>
     <string name="settings_keepalive_title">后台运行保活</string>
@@ -288,7 +286,6 @@
     <string name="common_copy">复制</string>
     <string name="common_copy_success">已复制到剪贴板</string>
     <string name="common_cut">剪切</string>
-    <string name="common_paste">粘贴</string>
     <string name="common_allow">允许</string>
     <string name="common_close">关闭</string>
     <string name="common_clear">清除</string>
@@ -357,11 +354,9 @@
     <string name="chat_attachment_uploaded_partial">已上传 %1$s 个附件，部分附件未加入</string>
     <string name="chat_image_too_large">图片超过 %1$s，请压缩后重试</string>
     <string name="chat_attachment_uploading">正在上传 %1$d 个文件…</string>
-    <string name="chat_uploaded_to">已上传到 %1$s</string>
     <string name="chat_select_workspace_first">请先选择工作区</string>
     <string name="chat_read_file_failed">无法读取所选文件</string>
     <string name="chat_camera_file_failed">无法创建拍照临时文件</string>
-    <string name="chat_workspace_unavailable">工作区不可用</string>
     <string name="chat_upload_failed">上传失败</string>
     <string name="chat_unsupported_image_type">无法识别图片类型，仅支持 jpg/png/gif/webp</string>
     <string name="chat_new_session_btn">新会话</string>
@@ -385,7 +380,6 @@
     <string name="chat_no_model_selected">未选择模型</string>
     <string name="chat_open_git">打开 Git</string>
     <string name="chat_open_terminal">打开终端</string>
-    <string name="chat_open_browser">打开浏览器</string>
     <string name="chat_ssh_connected">SSH：已连接</string>
     <string name="chat_ssh_connecting">SSH：连接中…</string>
     <string name="chat_ssh_failed">SSH：连接失败</string>
@@ -403,7 +397,6 @@
     <string name="agent_stop_refusal">模型基于内容安全策略拒绝了本次回答。</string>
     <string name="agent_stop_context_exceeded">本次输入超出模型上下文窗口，请先压缩上下文或新建会话。</string>    <string name="agent_context_no_compaction">当前上下文无需压缩（消息过少）</string>
     <string name="agent_compaction_failed">压缩失败：%1$s</string>
-    <string name="agent_model_not_selected">未选择</string>
     <!-- About -->
     <string name="about_version">版本</string>
     <string name="about_github_repo">GitHub 仓库</string>
@@ -486,7 +479,6 @@
     <string name="backup_import_failed">导入失败</string>
 
     <!-- Chat Drawer -->
-    <string name="chat_history">历史记录</string>
     <string name="chat_no_sessions_hint">暂无会话</string>
     <string name="chat_search_hint">搜索聊天记录</string>
     <string name="chat_search_no_result">未找到匹配的聊天记录</string>
@@ -512,8 +504,6 @@
     <string name="drawer_tab_files">文件</string>
     <string name="drawer_expand_subagents">展开子代理</string>
     <string name="drawer_collapse_subagents">收起子代理</string>
-    <string name="file_browser_up">上一级</string>
-    <string name="file_browser_empty">空目录</string>
     <string name="file_browser_error">读取目录失败</string>
     <string name="file_browser_refresh">刷新</string>
     <string name="file_browser_expand">展开</string>
@@ -538,7 +528,6 @@
     <string name="editor_save_failed">保存失败</string>
     <string name="editor_unsaved_title">未保存的修改</string>
     <string name="editor_unsaved_message">当前文件有未保存的修改，是否保存？</string>
-    <string name="editor_discard">放弃</string>
     <string name="editor_save_and_exit">保存并退出</string>
     <string name="editor_dont_save">不保存</string>
     <string name="editor_md_preview">预览 Markdown</string>
@@ -647,7 +636,6 @@
     <string name="retry_error_ssl">SSL 握手失败</string>
     <string name="retry_error_unknown">网络异常</string>
     <string name="retry_error_with_code">%1$s (%2$d)</string>
-    <string name="chat_thinking_process">思考过程</string>
     <string name="chat_thinking_running_time">正在思考（耗时 %1$s 秒）</string>
     <string name="chat_thinking_done_time">思考完成（耗时 %1$s 秒）</string>
     <string name="chat_thinking_done">思考完成</string>
@@ -769,7 +757,6 @@
     <string name="git_modified_label">已修改</string>
     <string name="git_untracked_label">未跟踪</string>
     <string name="git_commit_changes">提交更改</string>
-    <string name="git_no_identity">未配置署名，无法提交。请在「凭据」页填写 user.name / user.email。</string>
     <string name="git_stage_all">暂存全部</string>
     <string name="git_pull">拉取</string>
     <string name="git_push">推送</string>
@@ -804,10 +791,6 @@
     <string name="git_credentials_count">凭据 (%1$d)</string>
     <string name="git_load_more_commits">上拉加载更早提交</string>
     <string name="git_no_more_commits">没有更多了</string>
-    <string name="git_latest_commit">最新提交</string>
-    <string name="git_recent_commit">最近提交</string>
-    <string name="git_expanded">已展开</string>
-    <string name="git_latest_date">最新日期</string>
     <string name="git_files_changed">%1$s 个文件改动</string>
     <string name="git_no_files_changed">该提交无文件改动</string>
     <string name="git_loading_files">正在加载改动文件…</string>
@@ -878,7 +861,6 @@
 
     <!-- Git Merge -->
     <string name="git_action_merge">合并分支</string>
-    <string name="git_merge_into">合并到 %1$s</string>
     <string name="git_merge_confirm">确定将分支 %1$s 合并到当前分支（%2$s）吗？</string>
     <string name="git_merge_no_ff">创建合并提交（--no-ff）</string>
 
@@ -926,13 +908,11 @@
     <string name="git_ignore_file">忽略此文件 (%1$s)</string>
     <string name="git_ignore_dir">忽略整个目录 (%1$s/)</string>
     <string name="git_ignore_extension">忽略同类型文件 (*.%1$s)</string>
-    <string name="git_toast_added_to_gitignore">已添加到 .gitignore</string>
 
     <!-- Git Identity -->
     <string name="git_tab_identity">署名</string>
     <string name="git_tab_credentials">凭据</string>
     <string name="git_identity_title">提交署名</string>
-    <string name="git_identity_desc">用于每次提交的 author。容器全局生效，所有工作区共用。</string>
     <string name="git_repo_url_title">仓库地址</string>
     <string name="git_remote_url">remote.origin.url</string>
     <!-- Main Activity -->
@@ -1027,10 +1007,7 @@
     <string name="memory_curation_interval_custom_title">自定义治理周期</string>
     <string name="memory_curation_interval_custom_label">小时数</string>
     <string name="memory_curation_interval_custom_hint">0 表示关闭，最长 720 小时</string>
-    <string name="memory_curation_interval_6h">6 小时</string>
-    <string name="memory_curation_interval_12h">12 小时</string>
     <string name="memory_curation_interval_1d">1 天</string>
-    <string name="memory_curation_interval_3d">3 天</string>
     <string name="memory_curation_interval_7d">7 天</string>
     <string name="memory_curation_interval_hours">每 %1$d 小时</string>
 
@@ -1214,7 +1191,6 @@
     <string name="provider_fetch_http_error">HTTP %1$d · %2$dms</string>
     <string name="provider_test_success">连接正常 · %1$dms</string>
     <string name="common_error">错误</string>
-    <string name="common_select">选择</string>
     <string name="provider_model_context_total">总上下文窗口 (Token)</string>
     <string name="provider_model_window_invalid">请输入有效的正整数，或留空使用自动识别值</string>
     <string name="provider_model_context_input">输入窗口 (Token)</string>
@@ -1266,7 +1242,6 @@
     <string name="provider_model_capability_tools">工具调用</string>
     <string name="provider_model_capability_reasoning">推理能力</string>
     <string name="provider_filter_models_hint">输入模型名称筛选</string>
-    <string name="provider_fetch_failed">拉取失败：%1$s</string>
     <string name="provider_no_matching_models">没有匹配的模型</string>
     <string name="provider_models_aligned_removed">已移除 %1$d 个远端已不存在的模型</string>
     <string name="provider_please_wait">请稍候…</string>
@@ -1274,7 +1249,7 @@
 
     <!-- Provider Logo -->
     <string name="provider_brand_doubao">豆包</string>
-    <string name="provider_brand_zhipu">智谱</string>    <string name="provider_brand_tongyi_qianwen">通义千问</string>
+    <string name="provider_brand_zhipu">智谱</string>
     <string name="provider_brand_hunyuan">混元</string>
     <string name="provider_brand_siliconflow">硅基流动</string>
     <string name="provider_model_icon">模型图标</string>
@@ -1346,7 +1321,6 @@
     <string name="remote_tab_connections">连接配置</string>
     <string name="remote_tab_mounts">挂载目录</string>
     <string name="remote_tab_ftp">内置FTP</string>
-    <string name="remote_tab_sync">同步设置</string>
     <string name="remote_no_connections">暂无连接配置</string>
     <string name="remote_no_connections_desc">添加 SFTP / FTP 连接</string>
     <string name="remote_no_workspaces">暂无挂载目录</string>
@@ -1388,10 +1362,8 @@
     <string name="ssh_host_key_changed_title">SSH 主机密钥已变化</string>
     <string name="ssh_host_key_trust">信任并连接</string>
     <string name="ssh_host_key_reject">拒绝</string>
-    <string name="ssh_host_key_settings_desc">已确认的主机指纹会用于阻止中间人攻击。服务器重装或密钥变化后，请先核实再重新确认。</string>
     <string name="ssh_host_key_empty">暂无已保存的主机指纹</string>
     <string name="ssh_host_key_fingerprint_value">指纹：%1$s</string>
-    <string name="ssh_host_key_remove">删除指纹</string>
     <string name="ssh_host_key_detail">已保存的服务器主机指纹：\n%1$s</string>
 
     <!-- Remote Sync -->
@@ -1440,7 +1412,6 @@
     <string name="terminal_font_builtin">JetBrains Mono</string>
     <string name="terminal_font_delete">删除该字体</string>
     <string name="terminal_font_import_failed">导入失败，请选择有效的 ttf / otf / ttc 字体文件</string>
-    <string name="terminal_preview_text">终端预览</string>
     <string name="terminal_theme_termius_dark">Termius Dark</string>
     <string name="terminal_theme_dracula">Dracula</string>
     <string name="terminal_theme_one_dark">One Dark</string>
@@ -1616,21 +1587,16 @@
     <string name="provider_multi_key_cooldown_off">不冷却</string>
     <string name="proxy_test_url_label">测试地址</string>
     <string name="proxy_test_url_placeholder">https://www.google.com</string>
-    <string name="proxy_server">代理服务器</string>
     <string name="proxy_host">服务器地址</string>
     <string name="proxy_host_placeholder">如 127.0.0.1</string>
     <string name="proxy_port">端口</string>
     <string name="proxy_port_placeholder">如 7890</string>
-    <string name="proxy_auth">认证（可选）</string>
     <string name="proxy_username">账号（可选）</string>
     <string name="proxy_password">密码（可选）</string>
     <string name="proxy_no_proxy">不走代理的地址</string>
     <string name="proxy_no_proxy_hint">逗号分隔；支持通配符 *、host:port、CIDR 网段</string>
 
     <!-- 供应商编辑：代理（可选） -->
-    <string name="provider_proxy_section">代理（可选）</string>
-    <string name="provider_proxy_enable">为该供应商单独配置代理</string>
-    <string name="provider_proxy_enable_desc">开启后该供应商的请求走专属代理；关闭则跟随全局代理</string>
 
     <!-- 首次启动引导 -->
     <string name="settings_rerun_onboarding">重新运行新手引导</string>
@@ -1665,13 +1631,10 @@
     <string name="browser_back">后退</string>
     <string name="browser_forward">前进</string>
     <string name="browser_reload">刷新</string>
-    <string name="browser_not_ready">浏览器未就绪，请在地址栏输入网址开始浏览</string>
     <string name="browser_new_tab">新建标签页</string>
     <string name="browser_close_tab">关闭标签页</string>
     <string name="browser_tab_default_title">新标签页</string>
     <string name="browser_tabs_count">标签页 (%1$d)</string>
-    <string name="browser_empty_hint">在上方地址栏输入网址开始浏览</string>
-    <string name="browser_tabs_manage">标签页管理</string>
     <string name="browser_empty_click_hint">点击上方输入网址开始浏览</string>
     <string name="browser_night_mode_on">关闭夜间模式</string>
     <string name="browser_night_mode_off">开启夜间模式</string>
