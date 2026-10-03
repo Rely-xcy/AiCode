@@ -1173,8 +1173,10 @@ fun SettingsScreen(
                     val shizukuViewModel: ShizukuViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val shizukuState by shizukuViewModel.state.collectAsStateWithLifecycle()
+                    val shizukuPeer by shizukuViewModel.peerInfo.collectAsStateWithLifecycle()
                     AppPermissionsSection(
                         shizukuState = shizukuState,
+                        shizukuPeer = shizukuPeer,
                         onRequestShizukuPermission = { shizukuViewModel.requestPermission() },
                         onOpenShizuku = { shizukuViewModel.openShizukuApp() },
                         onRefreshShizuku = { shizukuViewModel.refresh() }

@@ -33,6 +33,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.feature.agent.domain.shizuku.ShizukuPeerInfo
 import com.aicode.feature.agent.domain.shizuku.ShizukuState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Bell
@@ -42,6 +43,7 @@ import compose.icons.feathericons.Power
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Sun
 import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.User
 import compose.icons.feathericons.Zap
 
 /**
@@ -49,12 +51,13 @@ import compose.icons.feathericons.Zap
  * - 安装未知应用：展示授权状态，未授权点击跳转系统设置开启。
  * - 访问存储空间：展示授权状态，未授权点击申请运行时权限；已被永久拒绝时同样引导去系统设置。
  * - 忽略电池优化 / 自启动管理：跳转系统设置。
- * - Shizuku：展示 adb shell 授权状态，未就绪时点击安装/启动/申请授权。
+ * - Shizuku：展示 adb shell 授权状态与当前连到的服务端身份，未就绪时点击安装/启动/申请授权。
  * 页面恢复（含从系统设置页或 Shizuku 应用返回）时刷新各权限状态。
  */
 @Composable
 internal fun AppPermissionsSection(
     shizukuState: ShizukuState,
+    shizukuPeer: ShizukuPeerInfo?,
     onRequestShizukuPermission: () -> Unit,
     onOpenShizuku: () -> Unit,
     onRefreshShizuku: () -> Unit
@@ -160,7 +163,7 @@ internal fun AppPermissionsSection(
             )
             SettingsDivider()
             val shizukuAction: (() -> Unit)? = when (shizukuState) {
-                ShizukuState.NOT_INSTALLED, ShizukuState.NOT_RUNNING -> onOpenShizuku
+                ShizukuState.NOT_RUNNING -> onOpenShizuku
                 ShizukuState.PERMISSION_DENIED -> onRequestShizukuPermission
                 ShizukuState.READY -> null
             }
@@ -177,6 +180,16 @@ internal fun AppPermissionsSection(
                     )
                 }
             )
+            // 就绪后多给一行「当前连的是谁」：adb shell 与 root 能做的事不一样
+            //（root 才读得到其它应用的私有目录），只写「已就绪」看不出这点。
+            shizukuPeer?.let { peer ->
+                SettingsDivider()
+                SettingsRow(
+                    icon = FeatherIcons.User,
+                    title = stringResource(R.string.settings_shizuku_peer_title),
+                    subtitle = shizukuPeerLabel(peer)
+                )
+            }
         }
     }
 
@@ -296,7 +309,6 @@ internal fun BackgroundRunSection(
 /** Shizuku 状态对应的右侧状态文字。 */
 @StringRes
 private fun ShizukuState.statusRes(): Int = when (this) {
-    ShizukuState.NOT_INSTALLED -> R.string.settings_shizuku_status_not_installed
     ShizukuState.NOT_RUNNING -> R.string.settings_shizuku_status_not_running
     ShizukuState.PERMISSION_DENIED -> R.string.settings_shizuku_status_denied
     ShizukuState.READY -> R.string.settings_shizuku_status_ready
@@ -305,10 +317,17 @@ private fun ShizukuState.statusRes(): Int = when (this) {
 /** Shizuku 状态对应的副标题（点击提示）。 */
 @StringRes
 private fun ShizukuState.hintRes(): Int = when (this) {
-    ShizukuState.NOT_INSTALLED -> R.string.settings_shizuku_hint_not_installed
     ShizukuState.NOT_RUNNING -> R.string.settings_shizuku_hint_not_running
     ShizukuState.PERMISSION_DENIED -> R.string.settings_shizuku_hint_denied
     ShizukuState.READY -> R.string.settings_shizuku_hint_ready
+}
+
+/** 服务端身份的展示文字：adb shell / root 各自一档，其余按 uid 如实写。 */
+@Composable
+private fun shizukuPeerLabel(peer: ShizukuPeerInfo): String = when {
+    peer.isAdb -> stringResource(R.string.settings_shizuku_peer_adb)
+    peer.isRoot -> stringResource(R.string.settings_shizuku_peer_root)
+    else -> stringResource(R.string.settings_shizuku_peer_other, peer.uid)
 }
 
 /** 权限无法通过系统弹框授予时，提醒用户去系统设置手动开启。 */

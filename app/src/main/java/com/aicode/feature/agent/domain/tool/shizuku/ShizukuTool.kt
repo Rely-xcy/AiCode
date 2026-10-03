@@ -109,8 +109,7 @@ class ShizukuTool @Inject constructor(
     }
 
     private fun stateHint(state: ShizukuState): String = when (state) {
-        ShizukuState.NOT_INSTALLED -> "未安装 Shizuku，请先安装并启动 Shizuku 服务"
-        ShizukuState.NOT_RUNNING -> "Shizuku 服务未运行，请在 Shizuku 应用中启动服务"
+        ShizukuState.NOT_RUNNING -> "Shizuku 未就绪：未安装或服务未启动，请在「设置 → 软件权限 → Shizuku」处理"
         ShizukuState.PERMISSION_DENIED -> "本应用尚未获得 Shizuku 授权，请在设置中授予"
         ShizukuState.READY -> ""
     }
