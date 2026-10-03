@@ -348,9 +348,16 @@ fun ProviderEditorScreen(
             customHeaders.any { it.first.isNotBlank() } ||
             models.isNotEmpty()
 
+    var lastSubmittedConfig by remember {
+        mutableStateOf(if (initialProvider != null) currentConfig() else null)
+    }
+
     fun saveCurrent() {
         if (!hasSubstantiveInput()) return
-        onSave(currentConfig())
+        val config = currentConfig()
+        if (config == lastSubmittedConfig) return
+        onSave(config)
+        lastSubmittedConfig = config
     }
 
     // 拉取成功后自动对齐：远端已不存在的本地模型直接移除（可在「偏好设置」关掉）。拉取失败或返回空列表时不动列表。
