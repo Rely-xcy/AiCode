@@ -114,3 +114,23 @@ fun List<PermissionRule>.toPermissionFile(): PermissionFile {
         )
     )
 }
+
+// ── 评估快照 ──────────────────────────────────────────────────────
+
+/**
+ * 工具授权评估用的规则快照：能用的规则 + 「项目级规则是否确认可读」。
+ *
+ * 两件事必须分开，**「读不到」不等于「没有规则」**：
+ *
+ * - [projectRulesConfirmed] = true：工作区已落定且项目级文件有结论——读到规则，或文件不存在
+ *   （= 确认没有项目规则，[rules] 里自然没有项目级条目）。评估方按常规判定。
+ * - [projectRulesConfirmed] = false：工作区未落定，或项目级文件读取/解析失败。此时 [rules] 只含全局规则，
+ *   **不得**当成「项目级没有规则」：项目级 DENY 会被漏读，判定从「需授权」退化成「直接执行」。
+ *
+ * 由 [PermissionRulesRepository.loadEffectiveForCurrentProject] 产出，供
+ * [ToolPermissionPolicyEngine] 按 fail-closed 处理。
+ */
+data class EffectivePermissionRules(
+    val rules: List<PermissionRule>,
+    val projectRulesConfirmed: Boolean
+)

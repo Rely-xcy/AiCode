@@ -49,6 +49,9 @@ import javax.inject.Singleton
  * 安全要点：全局规则存在 app 私有目录，AI 无法篡改；项目级规则存在工作区内，
  * 可被 AI 修改，但作为项目级声明式配置这是有意为之（可 git 追踪/回滚）。
  *
+ * 读取语义：「确认没有项目级规则」与「读不到项目级规则」严格区分（文件不存在 = 确认没有；工作区未落定或
+ * 解析失败 = 读不到），后者不得当成「项目级没有规则」，见 [loadEffectiveForCurrentProject]。
+ *
  * 并发模式参考 [McpConfigRepository]：Mutex 保护文件 IO + MutableStateFlow 缓存。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -77,8 +80,16 @@ class PermissionRulesRepository @Inject constructor(
 
     // ── 内存缓存与响应式流 ──────────────────────────────────────
 
+    /**
+     * 一次规则文件读取的结果，区分「确认没有规则」与「读不到」：
+     *
+     * - [confirmed] = true：文件不存在（= 确认没有规则）或解析成功；
+     * - [confirmed] = false：读取/解析失败——此时 [rules] 不能当作「没有规则」使用。
+     */
+    private data class LoadedRules(val rules: List<PermissionRule>, val confirmed: Boolean)
+
     private val globalState = MutableStateFlow<List<PermissionRule>?>(null)
-    private val projectStates = ConcurrentHashMap<String, MutableStateFlow<List<PermissionRule>?>>()
+    private val projectStates = ConcurrentHashMap<String, MutableStateFlow<LoadedRules?>>()
     private val mutex = Mutex()
 
     // ── 外部修改监听：容器内/手工直接编辑 permissions.json 后刷新缓存，UI 与评估即时生效 ──
@@ -103,7 +114,7 @@ class PermissionRulesRepository @Inject constructor(
     private suspend fun refreshFromDisk(batch: FileChangeBatch) {
         val globalPath = globalFile.absolutePath
         if (batch.changes.any { it.hostPath == globalPath }) {
-            val rules = loadFromFile(globalFile)
+            val rules = loadFromFile(globalFile).rules
             if (rules != (globalState.value ?: emptyList<PermissionRule>())) {
                 globalState.value = rules
                 FileLogger.i(TAG, "检测到全局权限配置变化，已刷新")
@@ -114,17 +125,18 @@ class PermissionRulesRepository @Inject constructor(
             val state = getProjectState(path)
             // 缓存尚未加载时不处理：首次加载由 [ensureProjectLoaded] 完成，工作区切换不算外部变更。
             if (state.value != null) {
-                val rules = loadFromFile(projectFileForPath(path))
-                if (rules != state.value) {
-                    state.value = rules
+                // 刷新失败时写入 confirmed=false：文件刚被改成读不出来的样子，此后不再当作「没有项目规则」。
+                val loaded = loadFromFile(projectFileForPath(path))
+                if (loaded != state.value) {
+                    state.value = loaded
                     FileLogger.i(TAG, "检测到项目权限配置变化，已刷新")
                 }
             }
         }
     }
 
-    private fun getProjectState(workspacePath: String): MutableStateFlow<List<PermissionRule>?> =
-        projectStates.getOrPut(workspacePath) { MutableStateFlow(null) }
+    private fun getProjectState(workspacePath: String): MutableStateFlow<LoadedRules?> =
+        projectStates.getOrPut(workspacePath) { MutableStateFlow<LoadedRules?>(null) }
 
     // ── 懒加载 ──────────────────────────────────────────────────
 
@@ -132,28 +144,31 @@ class PermissionRulesRepository @Inject constructor(
         if (globalState.value != null) return
         mutex.withLock {
             if (globalState.value != null) return
-            globalState.value = loadFromFile(globalFile)
+            globalState.value = loadFromFile(globalFile).rules
         }
     }
 
-    private suspend fun ensureProjectLoaded(workspacePath: String) {
+    /** 加载并缓存指定工作区的项目级规则；返回本次（或缓存中）的读取结果，含「是否确认可读」。 */
+    private suspend fun ensureProjectLoaded(workspacePath: String): LoadedRules {
         val state = getProjectState(workspacePath)
-        if (state.value != null) return
-        mutex.withLock {
-            if (state.value != null) return
-            state.value = loadFromFile(projectFileForPath(workspacePath))
+        state.value?.let { return it }
+        return mutex.withLock {
+            state.value ?: loadFromFile(projectFileForPath(workspacePath)).also { state.value = it }
         }
     }
 
-    private suspend fun loadFromFile(file: File): List<PermissionRule> =
+    private suspend fun loadFromFile(file: File): LoadedRules =
         withContext(Dispatchers.IO) {
-            if (!file.isFile) return@withContext emptyList()
+            if (!file.isFile) return@withContext LoadedRules(emptyList(), confirmed = true)
             runCatching {
                 JSON.decodeFromString<PermissionFile>(file.readText()).toRuleList()
-            }.getOrElse {
-                FileLogger.w(TAG, "读取 ${file.path} 失败: ${it.message}")
-                emptyList()
-            }
+            }.fold(
+                onSuccess = { LoadedRules(it, confirmed = true) },
+                onFailure = {
+                    FileLogger.w(TAG, "读取 ${file.path} 失败: ${it.message}")
+                    LoadedRules(emptyList(), confirmed = false)
+                }
+            )
         }
 
     private fun writeToFile(file: File, rules: List<PermissionRule>) {
@@ -198,29 +213,37 @@ class PermissionRulesRepository @Inject constructor(
         }
     }
 
-    /** 指定项目的规则流，供管理界面观察；工作区未落定时发空列表。 */
+    /**
+     * 指定项目的规则流，供管理界面观察；工作区未落定时发空列表。
+     * 读不到规则时发空列表（UI 只能展示已读到的部分），评估路径不走这里、不受此影响。
+     */
     fun projectRulesFlow(projectName: String): Flow<List<PermissionRule>> {
         val workspacePath = workspaceRepository.currentPathOrNull() ?: return flowOf(emptyList())
         val state = getProjectState(workspacePath)
         return flow {
             ensureProjectLoaded(workspacePath)
-            emitAll(state.filterNotNull())
+            emitAll(state.filterNotNull().map { it.rules })
         }
     }
 
     /**
      * 评估用：当前项目规则 + 全局规则合并（项目在前）。一次性读取快照。
      *
-     * 工作区未落定时无法定位项目级规则文件，只返回全局规则；此时依赖工作区的工具本身也会因
-     * 工作区未就绪而报错，不会因为少了项目级规则就静默跑到别的目录。
+     * **「确认没有项目级规则」与「读不到项目级规则」不是一回事**：
+     * - 工作区已落定且项目文件读到（含文件不存在 = 确认没有规则）→ `projectRulesConfirmed = true`；
+     * - 工作区未落定（[WorkspaceRepository.currentPathOrNull] 为 null）或项目文件读取/解析失败 → 只返回全局规则，
+     *   且 `projectRulesConfirmed = false`，调用方不得据此放宽放行判定（否则项目级 DENY 会被漏读）。
+     *
+     * 全局规则读不到时这里仍退回空表（与收紧前一致）：全局文件在 app 私有目录，其可用性不由工作区决定，
+     * 不在本次「项目级规则不可确认」的缺口内，未一并改动。
      */
-    suspend fun loadEffectiveForCurrentProject(): List<PermissionRule> {
+    suspend fun loadEffectiveForCurrentProject(): EffectivePermissionRules {
         ensureGlobalLoaded()
         val global = globalState.value ?: emptyList()
-        val workspacePath = workspaceRepository.currentPathOrNull() ?: return global
-        ensureProjectLoaded(workspacePath)
-        val project = getProjectState(workspacePath).value ?: emptyList()
-        return project + global
+        val workspacePath = workspaceRepository.currentPathOrNull()
+            ?: return EffectivePermissionRules(global, projectRulesConfirmed = false)
+        val project = ensureProjectLoaded(workspacePath)
+        return EffectivePermissionRules(project.rules + global, projectRulesConfirmed = project.confirmed)
     }
 
     /**
@@ -283,10 +306,11 @@ class PermissionRulesRepository @Inject constructor(
         ensureProjectLoaded(workspacePath)
         mutex.withLock {
             val state = getProjectState(workspacePath)
-            val list = (state.value ?: emptyList()).toMutableList()
+            val list = (state.value?.rules ?: emptyList()).toMutableList()
             mutate(list)
             withContext(Dispatchers.IO) { writeToFile(projectFileForPath(workspacePath), list) }
-            state.value = list
+            // 刚写盘成功，缓存可直接标为「确认可读」。
+            state.value = LoadedRules(list, confirmed = true)
         }
     }
 }

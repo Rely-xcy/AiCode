@@ -16,10 +16,17 @@ import javax.inject.Singleton
  *   1) 任一段命中 DENY 规则 → DENY（即便命令不可静态判定，DENY 也对已解析的段生效；可覆盖内置白名单）；
  *   2) 命令不可静态判定（含命令替换/分组/绝对路径重定向等）→ ASK，且不可记忆；
  *   3) 所有段都命中内置安全白名单（ls/git status 等只读命令，见 [BuiltInSafeCommands]）→ ALLOW；
- *   4) 所有段都命中已记忆的 ALLOW 规则 → ALLOW；
- *   5) 否则 → ASK，可记忆前缀为各段的「程序名」或「程序名+子命令」（对 git/npm 等子命令分发器，
+ *   4) 项目级规则读不到 → ASK，且不可记忆（见下）；
+ *   5) 所有段都命中已记忆的 ALLOW 规则 → ALLOW；
+ *   6) 否则 → ASK，可记忆前缀为各段的「程序名」或「程序名+子命令」（对 git/npm 等子命令分发器，
  *      记 `git pull` 而非 `git`，使不同子命令各自独立授权）。
  * 非 shell 的 ASK 工具按整工具（pattern=`*`）匹配。
+ *
+ * **项目级规则可能暂时读不到**（工作区未落定 / 读取失败）。此时不能按「项目级没有规则」判定：
+ * 合并结果里可能缺一条项目级 DENY，判定会从「需授权」退化成「直接执行」。所以规则读不到时，对
+ * **可能造成副作用**的调用一律降级为一次性授权（不可记忆）；只读调用不受影响——shell 侧只有
+ * 「全部段命中内置只读白名单」（第 3 步）才继续放行，非 shell 侧按 [isDangerousTool] 区分，
+ * 避免出现「远程没连上就什么都干不了」。
  *
  * [SHIZUKU_TOOL]（Shizuku）按高危处理：无论内置白名单或已记忆规则，一律 ASK 且不可记忆；
  * AUTO 模式也不自动放行（除非已开启「禁用安全拦截」）。
@@ -38,6 +45,16 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         const val REASON_SHIZUKU =
             "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
+
+        /**
+         * 项目级规则读不到（工作区未落定 / 读取失败）时的弹窗标题与单次放行说明。
+         * 命中时一律 ASK、不可记忆：无法确认项目级有没有 DENY，也不能让「始终允许」写进一个
+         * 还没就绪的项目层。
+         */
+        const val ASK_TITLE_PROJECT_RULES_UNCONFIRMED = "项目授权规则暂不可用"
+        const val REASON_PROJECT_RULES_UNCONFIRMED =
+            "项目级授权规则当前读不到（工作区未就绪或读取失败），无法确认是否存在项目级 DENY 规则；" +
+                "为避免绕过项目授权，本次仅支持单次放行，不可记忆"
 
         /**
          * 合并后的终端会话工具：其 `start` 动作承载 shell 命令，需走指令级前缀匹配；
@@ -155,11 +172,17 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.ALLOW, emptyList())
         }
 
+        // 规则快照：项目级规则可能读不到（工作区未落定 / 读取失败），此时 projectRulesConfirmed=false，
+        // 不能当作「项目级没有规则」——见 [unconfirmedProjectRulesAsk]。
+        val effective = rulesRepo.loadEffectiveForCurrentProject()
+
         // task 只读动作（read/list）：不放行 DENY 规则，其余直接自动放行（不弹窗）。
+        // read/list/send 的 effectiveCapabilities 为空集（见 TaskTool），不属「可能造成副作用」的调用，
+        // 故项目级规则读不到时也不收紧。
         if (toolName == TASK_TOOL) {
             val action = (args["action"] as? JsonPrimitive)?.content?.trim()?.lowercase() ?: "create"
             if (action in TASK_AUTO_ACTIONS) {
-                val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
+                val rules = effective.rules.filter { it.toolName == toolName }
                 val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
                 if (whole.any { it.decision == PermissionDecision.DENY }) {
                     return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
@@ -168,11 +191,23 @@ class ToolPermissionPolicyEngine @Inject constructor(
             }
         }
 
-        val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
+        val rules = effective.rules.filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
-            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL)
+            evaluateShell(
+                rules = rules,
+                args = args,
+                forceAsk = toolName == SHIZUKU_TOOL,
+                projectRulesConfirmed = effective.projectRulesConfirmed
+            )
         } else {
-            evaluateGeneric(rules, capabilities)
+            evaluateGeneric(
+                rules = rules,
+                capabilities = capabilities,
+                // 只对可能造成副作用的调用收紧：只读工具（readFile/viewImage/webfetch 等）规则读不到时
+                // 仍按已有规则判定，避免「远程没连上就什么都干不了」。
+                askForUnconfirmedProjectRules = !effective.projectRulesConfirmed &&
+                    isDangerousTool(toolName, args, capabilities)
+            )
         }
     }
 
@@ -249,6 +284,18 @@ class ToolPermissionPolicyEngine @Inject constructor(
             )
         }
 
+    /**
+     * 项目级规则读不到（工作区未落定或读取失败）时的兜底判定：无法确认是否存在项目级 DENY 规则，
+     * 故不放行本次调用，只给一次性授权且不可记忆（此时「始终允许」写项目层也可能落不下去）。
+     * 只用于**可能造成副作用**的调用；只读调用不受影响，见 [evaluate]。
+     */
+    private fun unconfirmedProjectRulesAsk(): EvalResult = EvalResult(
+        verdict = Verdict.ASK,
+        rememberablePatterns = emptyList(),
+        askTitle = ASK_TITLE_PROJECT_RULES_UNCONFIRMED,
+        rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED
+    )
+
     /** 把「始终允许」的选择落库为 ALLOW 规则（去重交给仓库）。 */
     suspend fun remember(toolName: String, patterns: List<String>, scope: PermissionScope) {
         patterns.distinct().forEach { pattern ->
@@ -256,9 +303,21 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
     }
 
-    private fun evaluateGeneric(rules: List<PermissionRule>, capabilities: Set<ToolCapability>): EvalResult {
+    /**
+     * 非 shell 工具的整工具判定。
+     *
+     * @param askForUnconfirmedProjectRules 项目级规则读不到、且本次调用可能造成副作用时为 true：
+     *   不能凭全局 ALLOW 规则放行（项目级可能有一条 DENY 覆盖它），降级为一次性授权。
+     *   无默认值——调用点必须显式表态，避免漏传后静默 fail-open。
+     */
+    private fun evaluateGeneric(
+        rules: List<PermissionRule>,
+        capabilities: Set<ToolCapability>,
+        askForUnconfirmedProjectRules: Boolean
+    ): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
         if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
+        if (askForUnconfirmedProjectRules) return unconfirmedProjectRulesAsk()
         if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
@@ -330,10 +389,17 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
     }
 
+    /**
+     * shell 工具的指令级判定（编号见类文档）。
+     *
+     * @param projectRulesConfirmed 项目级规则是否确认可读（见 [EffectivePermissionRules]）。为 false 时
+     *   只有「全部段命中内置只读白名单」才自动放行，其余一律降级为一次性授权。
+     */
     private fun evaluateShell(
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
-        forceAsk: Boolean = false
+        forceAsk: Boolean = false,
+        projectRulesConfirmed: Boolean
     ): EvalResult {
         val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
             ?: return EvalResult(Verdict.ASK, emptyList())
@@ -363,13 +429,19 @@ class ToolPermissionPolicyEngine @Inject constructor(
         if (!analysis.analyzable) return EvalResult(Verdict.ASK, emptyList())
 
         // 4) 内置安全白名单：每段都命中安全前缀（ls/git status 等）→ 自动放行，不弹窗。
+        //    这是代码内置、不可篡改的只读清单，故项目级规则读不到时（第 5 步）仍适用。
         if (analysis.segments.isNotEmpty() &&
             analysis.segments.all { BuiltInSafeCommands.isSafe(it) }
         ) {
             return EvalResult(Verdict.ALLOW, emptyList())
         }
 
-        // 5) 已记忆的 ALLOW：每段都命中 → 放行。
+        // 5) 项目级规则读不到 → 不能放行：合并结果里可能缺一条项目级 DENY。
+        //    能走到这里说明至少有一段不在内置只读白名单内（可证的只读命令已在第 4 步放行），
+        //    故一律降级为一次性授权且不可记忆。
+        if (!projectRulesConfirmed) return unconfirmedProjectRulesAsk()
+
+        // 6) 已记忆的 ALLOW：每段都命中 → 放行。
         // 对 rm 命令进行精细化校验：避免存量或宽泛的 "rm"/"rm -rf" 无目标规则放行高风险删除
         val allAllowed = analysis.segments.isNotEmpty() &&
             analysis.segments.all { seg ->
@@ -387,7 +459,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
             }
         if (allAllowed) return EvalResult(Verdict.ALLOW, emptyList())
 
-        // 6) 否则弹窗，可记忆前缀（子命令分发器记 程序名+子命令）。
+        // 7) 否则弹窗，可记忆前缀（子命令分发器记 程序名+子命令）。
         val hasRmUnrememberable = analysis.segments.any { seg ->
             val rmInfo = ShellCommandParser.parseRmInfo(seg)
             rmInfo.isRm && (rmInfo.targetPaths.isEmpty() || rmInfo.isRecursive || rmInfo.isWildcard)

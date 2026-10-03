@@ -23,9 +23,16 @@ import org.junit.Test
  */
 class ToolPermissionPolicyEngineTest {
 
-    private fun engine(vararg rules: PermissionRule, safetyDisabled: Boolean = false): ToolPermissionPolicyEngine {
+    private fun engine(
+        vararg rules: PermissionRule,
+        safetyDisabled: Boolean = false,
+        projectRulesConfirmed: Boolean = true
+    ): ToolPermissionPolicyEngine {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
-        coEvery { repo.loadEffectiveForCurrentProject() } returns rules.toList()
+        // projectRulesConfirmed=false 模拟「项目级规则读不到」（工作区未落定 / 读取失败）；
+        // 默认 true 即「已确认：读到规则，或确认没有项目级规则」。
+        coEvery { repo.loadEffectiveForCurrentProject() } returns
+            EffectivePermissionRules(rules.toList(), projectRulesConfirmed)
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
         return ToolPermissionPolicyEngine(repo, safety)
@@ -208,6 +215,106 @@ class ToolPermissionPolicyEngineTest {
         )
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git clone https://x"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    // ── 项目级规则读不到（未落定 / 读取失败）：fail-closed ───────────────
+    // projectRulesConfirmed=false 只意味着「读不到」，不等于「项目级没有规则」：
+    // 合并结果里可能少一条项目级 DENY，所以不能凭全局 ALLOW 规则或白名单以外的放行口直接跑；
+    // 但也不能把可证的只读调用一并挡住（否则远程没连上就什么都干不了）。
+
+    @Test
+    fun unconfirmedProjectRules_rememberedAllowRule_asksOnce() = runTest {
+        val e = engine(
+            PermissionRule("Bash", "git pull", PermissionDecision.ALLOW),
+            projectRulesConfirmed = false
+        )
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git pull origin main"), AgentMode.BUILD)
+        // 收紧前这里是 ALLOW：项目级若有一条 DENY 覆盖这条全局 ALLOW，那条 DENY 会被漏读，现在只能单次放行
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertTrue(r.rememberablePatterns.isEmpty())
+        assertNotNull(r.rememberDisabledReason)
+        assertNotNull(r.askTitle)
+    }
+
+    @Test
+    fun unconfirmedProjectRules_genericWholeAllowRule_asksOnce() = runTest {
+        val e = engine(
+            PermissionRule("writeFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
+            projectRulesConfirmed = false
+        )
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertTrue(r.rememberablePatterns.isEmpty())
+        assertNotNull(r.rememberDisabledReason)
+        assertNotNull(r.askTitle)
+    }
+
+    @Test
+    fun unconfirmedProjectRules_safeShellCommands_stillAutoAllowed() = runTest {
+        val e = engine(projectRulesConfirmed = false)
+        // 内置只读白名单是代码内置、不可篡改的，不因项目级规则读不到而弹窗（避免「远程没连上就啥都干不了」）
+        assertEquals(
+            ToolPermissionPolicyEngine.Verdict.ALLOW,
+            e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.BUILD).verdict
+        )
+        assertEquals(
+            ToolPermissionPolicyEngine.Verdict.ALLOW,
+            e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git status -s"), AgentMode.BUILD).verdict
+        )
+    }
+
+    @Test
+    fun unconfirmedProjectRules_readOnlyGenericTool_stillAllowed() = runTest {
+        val e = engine(
+            PermissionRule("readFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
+            projectRulesConfirmed = false
+        )
+        // readFile 能力只有 READ_WORKSPACE，不属危险调用：规则读不到也照旧放行
+        val r = e.evaluate(tool(ToolCapability.READ_WORKSPACE), "readFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    @Test
+    fun unconfirmedProjectRules_taskReadActions_stillAutoAllowed() = runTest {
+        val e = engine(projectRulesConfirmed = false)
+        // task read/list/send 的 effectiveCapabilities 为空集（见 TaskTool），不算有副作用的调用
+        for (action in listOf("read", "list", "send")) {
+            assertEquals(
+                "task $action",
+                ToolPermissionPolicyEngine.Verdict.ALLOW,
+                e.evaluate(tool(), "task", terminal(action), AgentMode.BUILD).verdict
+            )
+        }
+    }
+
+    @Test
+    fun unconfirmedProjectRules_globalDenyStillDenies() = runTest {
+        val e = engine(
+            PermissionRule("Bash", "ls", PermissionDecision.DENY),
+            projectRulesConfirmed = false
+        )
+        // 收紧只针对「放行」侧：已读到的 DENY 仍优先于内置白名单
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun unconfirmedProjectRules_catastrophicRmStillDenied() = runTest {
+        val e = engine(projectRulesConfirmed = false)
+        assertEquals(
+            ToolPermissionPolicyEngine.Verdict.DENY,
+            e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /etc"), AgentMode.BUILD).verdict
+        )
+    }
+
+    @Test
+    fun unconfirmedProjectRules_taskWholeDenyRule_stillDenies() = runTest {
+        val e = engine(
+            PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY),
+            projectRulesConfirmed = false
+        )
+        val r = e.evaluate(tool(), "task", terminal("read"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
     // ── rm 精细校验：无目标 / 递归 / 通配的规则不得放行 ───────────────
