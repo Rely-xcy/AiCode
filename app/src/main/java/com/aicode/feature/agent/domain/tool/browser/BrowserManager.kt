@@ -823,7 +823,17 @@ class BrowserManager @Inject constructor(
         }
     }
 
+    /**
+     * 销毁全部标签与 WebView。
+     *
+     * 先停保活：监督协程的活儿就是「唤醒还活着的页面」，这里把页面全销毁了，它再跑就是对着
+     * 不存在的标签空转（每 [KEEPALIVE_INTERVAL_MS] 一轮，直到进程结束），而保活集合里还留着
+     * 已销毁标签的 id。停掉之后集合也一并清空，下一次真要用会由面板关闭时重新注册。
+     *
+     * 面板只是关闭（[detachFromViewHierarchy]，WebView 留着）时不走这里，不会误杀保活。
+     */
     fun destroy() {
+        stopKeepAlive()
         tabs.forEach { tab ->
             tab.webView.apply {
                 stopLoading()
@@ -871,6 +881,10 @@ class BrowserManager @Inject constructor(
         tab.consoleLogs.clear()
         tabs.remove(tab)
         keepAliveTabIds.remove(tabId)
+        // 保活集合空了（面板关着，且关掉的正是唯一要保活的那个标签）：监督协程没活儿可干了，
+        // 停掉它，别每分钟空转一轮（while 里那一轮虽然什么也不做，也是一次唤醒）。
+        // 面板重新打开（getOrCreateContainerView）或面板关着时新建标签都会重新注册。
+        if (keepAliveTabIds.isEmpty()) stopKeepAlive()
 
         if (tabs.isEmpty()) {
             // 所有标签都被关闭，自动重置为一个新的空白标签页
