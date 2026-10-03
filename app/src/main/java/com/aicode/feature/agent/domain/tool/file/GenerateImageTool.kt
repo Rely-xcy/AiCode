@@ -9,11 +9,13 @@ import com.aicode.feature.agent.data.remote.openai.ImageGenerationResponse
 import com.aicode.feature.agent.data.remote.openai.OpenAIApi
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
+import com.aicode.feature.agent.domain.provider.AllKeysFailedException
 import com.aicode.feature.agent.domain.provider.enrichWithHttpErrorBody
 import com.aicode.feature.agent.domain.provider.isKeySwitchFailure
 import com.aicode.feature.agent.domain.provider.joinUrl
 import com.aicode.feature.agent.domain.provider.parseInteractionSteps
 import com.aicode.feature.agent.domain.provider.resolveCustomHeaders
+import com.aicode.feature.agent.domain.provider.retryStaircase
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
@@ -21,6 +23,7 @@ import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.ImageGenModelSettingsRepository
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.domain.model.ProviderType
@@ -61,7 +64,8 @@ class GenerateImageTool @Inject constructor(
     private val openAIApi: OpenAIApi,
     private val geminiApi: GeminiApi,
     private val httpClient: OkHttpClient,
-    private val keyRotator: ProviderKeyRotator
+    private val keyRotator: ProviderKeyRotator,
+    private val generalSettingsRepository: GeneralSettingsRepository
 ) : AbstractContextualTool() {
 
     override val name = "generateImage"
@@ -176,10 +180,13 @@ class GenerateImageTool @Inject constructor(
         var seq = 0
         var lastProviderId = ""
         var activeApiKey = ""
+        // 本次已用过的 Key（含首次）：重试时不再选它。声明在 try 外，失败出口还要用它上报。
+        val triedKeys = mutableSetOf<String>()
         return@withContext try {
             val provider = resolveImageGenProvider()
             lastProviderId = provider.id
             activeApiKey = keyRotator.activeKey(provider, context.sessionId) ?: provider.firstUsableApiKey
+            triedKeys += activeApiKey
             val model = provider.effectiveModel
             // Gemini 官方图像模型走 Interactions 协议（v1beta/interactions），OpenAI 的
             // /v1/images/generations 端点打不通；设了 Gemini 生图模型时切独立通道，
@@ -219,12 +226,33 @@ class GenerateImageTool @Inject constructor(
 
             seq = AILogger.logRequest(context.sessionId, provider.id, model, "POST", url, request)
 
-            val response = openAIApi.createImage(
-                url = url,
-                authorization = "Bearer $activeApiKey",
-                extraHeaders = resolveCustomHeaders(provider.customHeaders, context.sessionId, activeApiKey),
-                request = request
-            )
+            val response = retryStaircase(
+                maxRetries = imageGenMaxRetries(),
+                onKeyFailure = { e, _ ->
+                    // 与文本路径同一套判定：先看是否归因于 Key（鉴权/额度/限流），是才切；
+                    // 切完返回 true，retryStaircase 重置重试计数并重发；无可切候选就报「N 个 Key 均失败」。
+                    if (activeApiKey.isEmpty() || !e.isKeySwitchFailure(provider.effectiveKeySwitchStatusCodes)) {
+                        false
+                    } else {
+                        val switched = keyRotator.reportFailure(provider.id, context.sessionId, activeApiKey, triedKeys)
+                            ?: throw AllKeysFailedException(
+                                "「${provider.name}」的 ${provider.effectiveApiKeys.size} 个 Key 均失败：" +
+                                    (e.message ?: e.javaClass.simpleName),
+                                e
+                            )
+                        activeApiKey = switched.newKey
+                        triedKeys += switched.newKey
+                        true
+                    }
+                }
+            ) {
+                openAIApi.createImage(
+                    url = url,
+                    authorization = "Bearer $activeApiKey",
+                    extraHeaders = resolveCustomHeaders(provider.customHeaders, context.sessionId, activeApiKey),
+                    request = request
+                )
+            }
             AILogger.logResponse(context.sessionId, provider.id, response, seq)
             buildSuccess(response, n, outputPath, model)
         } catch (e: CancellationException) {
@@ -232,13 +260,25 @@ class GenerateImageTool @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             if (activeApiKey.isNotEmpty() && enriched.isKeySwitchFailure()) {
-                keyRotator.reportFailure(lastProviderId, context.sessionId, activeApiKey)
+                // 重试循环未走 onKeyFailure 的兜底（如自定义触发码把 5xx 也算作 Key 失败）；
+                // 传 triedKeys，避免把本次已试过的 Key 又选回来。
+                keyRotator.reportFailure(lastProviderId, context.sessionId, activeApiKey, triedKeys)
             }
             FileLogger.e(TAG, "generateImage 失败", enriched)
             AILogger.logError(context.sessionId, lastProviderId, enriched, seq)
             ToolResult.Error(enriched.message ?: "生图调用失败", "IMAGE_GEN_FAILED")
         }
     }
+
+    /**
+     * 生图这一路径的网络重试次数：在用户设置（设置 → 重试次数）之上再压一个生图专用上限。
+     *
+     * 文本请求重试几乎无代价，生图则几十秒一张且按张计费：超时/连接中断时服务端可能已经生成并
+     * 计费（Images API 无幂等键），重发就是在赌重复扣费。所以不改用户设置、只在生图侧封顶；
+     * 用户把重试设为 0 时照传 0。Key 切换不受这个上限约束（与文本路径一致，切完立即重发）。
+     */
+    private suspend fun imageGenMaxRetries(): Int =
+        generalSettingsRepository.maxNetworkRetries().coerceAtMost(MAX_IMAGE_GEN_RETRIES)
 
     private suspend fun resolveImageGenProvider(): com.aicode.feature.settings.domain.model.AIProviderConfig {
         val providerId = imageGenModelSettingsRepository.getImageGenProviderId().trim()
@@ -693,6 +733,15 @@ class GenerateImageTool @Inject constructor(
         const val MAX_IMAGES = 4
         const val MAX_IMAGE_BYTES = 20L * 1024 * 1024
         const val MAX_TOTAL_IMAGE_BYTES = 48L * 1024 * 1024
+
+        /**
+         * 生图网络失败的重试次数上限（不含首次请求）。
+         *
+         * 文本路径直接用用户设置的次数（默认 6），生图不能照抄：一次生图几十秒且按张计费，而超时/
+         * 连接中断时服务端可能已经生成并计费，重发就是在赌重复扣费。429、5xx 这类服务端明确未受理的
+         * 失败值得退避重试，但最多 2 次（合计最多 3 次尝试）；再多就只是把重复扣费的概率拉高。
+         */
+        const val MAX_IMAGE_GEN_RETRIES = 2
         const val FORMAT_PNG = "png"
         const val FORMAT_JPEG = "jpeg"
         const val FORMAT_WEBP = "webp"
