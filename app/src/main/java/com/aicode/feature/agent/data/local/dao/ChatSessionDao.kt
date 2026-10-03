@@ -68,7 +68,14 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions WHERE workspacePath = :workspacePath")
     suspend fun deleteByWorkspace(workspacePath: String)
 
-    @Query("UPDATE chat_sessions SET providerId = :providerId, model = :model WHERE id = :id")
+    /**
+     * 换绑会话的模型/渠道，并把「上次请求的输入 token」清零。
+     *
+     * 清零是必要的：判定侧取 `max(lastInputTokens, 本地估算)`（见 CompactionModule.beforeLlmCall），
+     * 而换模型前那一轮的真实用量是旧模型/旧上下文的值，留着会把新的一轮直接顶过硬压缩线——
+     * 白花一次摘要调用，失败时还要弹一张红色卡片。清零后判定退回本地估算。
+     */
+    @Query("UPDATE chat_sessions SET providerId = :providerId, model = :model, lastInputTokens = 0 WHERE id = :id")
     suspend fun updateProviderModel(id: String, providerId: String?, model: String?)
 
     @Query("UPDATE chat_sessions SET reasoningEffort = :effort WHERE id = :id")

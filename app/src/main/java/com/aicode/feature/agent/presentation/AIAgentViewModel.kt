@@ -2473,11 +2473,13 @@ class AIAgentViewModel @Inject constructor(
                 }
                 agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
                 restoreRewoundCompactedRows(sessionId)
+                resetSessionInputTokens(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CONVERSATION -> {
                 agentMessageDao.deleteMessagesFromTimestamp(sessionId, targetMsgEntity.timestamp)
                 restoreRewoundCompactedRows(sessionId)
+                resetSessionInputTokens(sessionId)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
             }
             RewindOption.RESTORE_CODE -> {
@@ -2502,6 +2504,22 @@ class AIAgentViewModel @Inject constructor(
         if (restored > 0) {
             FileLogger.i(TAG, "回退时把 $restored 行被折叠的原文放回上下文（会话 $sessionId）")
         }
+    }
+
+    /**
+     * 上下文明确变短（回退、删掉某条消息及其后续）后，清零该会话「上次请求的输入 token」。
+     *
+     * 判定侧取 `max(lastInputTokens, 本地估算)`（见 CompactionModule.beforeLlmCall）：历史已经删掉，
+     * 而上一轮的真实用量还挂在会话行上——旧的大值会把新的一轮顶过硬压缩线，白花一次摘要调用，
+     * 失败时还要弹一张红色的压缩失败卡片。清零后判定退回本地估算，与「上下文真的变短」对得上。
+     *
+     * 只清这一列就够：校准基线的退化条件就是 `baselineUsage <= 0`（见 TokenEstimator.calibrated），
+     * 清零后下一轮的基线对不上真实用量而自动退化；那一轮结束前 rememberRawEstimate 会把基线
+     * 刷新成新的估算，不会出现「旧基线配新真实值」的错配（详见 CompactionModule 的 lastRawEstimates）。
+     */
+    private suspend fun resetSessionInputTokens(sessionId: String) {
+        runCatching { chatSessionDao.updateLastInputTokens(sessionId, 0) }
+            .onFailure { FileLogger.w(TAG, "清零 lastInputTokens 失败，压缩判定可能仍按旧值（会话 $sessionId）", it) }
     }
 
     /** 重命名会话标题。仅更新 title，不改 updatedAt，列表顺序保持不变。 */
@@ -2582,6 +2600,8 @@ class AIAgentViewModel @Inject constructor(
             if (msg != null && msg.role == MessageRole.USER.name) {
                 agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
                 restoreRewoundCompactedRows(msg.sessionId)
+                // 与回退同一回事：历史被删掉后，会话行上那一轮的真实用量已经不代表现状
+                resetSessionInputTokens(msg.sessionId)
             }
             agentMessageDao.deleteMessageById(messageId)
         } catch (e: Exception) {
