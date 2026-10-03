@@ -101,6 +101,7 @@ import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -695,6 +696,31 @@ fun AIChatPanel(
     var messageForMenu by remember { mutableStateOf<AgentUIMessage?>(null) }
     var editingMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
     var queuedEditing by remember { mutableStateOf<QueuedRequest?>(null) }
+    // 已发出、还没在消息列表里就位的用户消息（乐观上屏）。发送时当场生成 id，尾巴 item 据此画气泡；
+    // 「什么时候退场」只认 id 相等（落库行 id / 队列条目的 clientMessageId），见 [resolvePendingUserMessages]。
+    // 按会话 remember：切会话即清空，不会把上一个会话的待落库气泡带过来。
+    var pendingUserMessages by remember(currentSessionId) {
+        mutableStateOf<List<PendingUserMessage>>(emptyList())
+    }
+    val persistedMessageIds = remember(messages) { messages.mapTo(HashSet<String>()) { it.id } }
+    val queuedClientMessageIds = remember(queuedRequests) {
+        queuedRequests.mapNotNullTo(HashSet<String>()) { it.clientMessageId }
+    }
+    val visiblePendingUserMessages = resolvePendingUserMessages(
+        pending = pendingUserMessages,
+        persistedIds = persistedMessageIds,
+        queuedClientMessageIds = queuedClientMessageIds
+    )
+    // 退场后同时把状态收拾干净：只靠 filter 的话，每次发送都会在列表里堆一条永不释放的条目。
+    LaunchedEffect(pendingUserMessages, persistedMessageIds, queuedClientMessageIds) {
+        if (pendingUserMessages.isEmpty()) return@LaunchedEffect
+        val kept = resolvePendingUserMessages(
+            pending = pendingUserMessages,
+            persistedIds = persistedMessageIds,
+            queuedClientMessageIds = queuedClientMessageIds
+        )
+        if (kept.size != pendingUserMessages.size) pendingUserMessages = kept
+    }
     val listState = rememberLazyListState()
     // 消息未就绪时的加载提示：本地读库通常几十毫秒，立刻显示反而闪一下，等一小会儿还没就绪才提示。
     var showMessagesLoading by remember(currentSessionId) { mutableStateOf(false) }
@@ -1273,6 +1299,15 @@ fun AIChatPanel(
             val promptAttachments = if (modelSupportsVision) attachments.filterNot { it.isImage } else attachments
             val modelRequest = appendAttachmentsToRequest(context, text, promptAttachments)
             val images = if (modelSupportsVision) attachments.toAgentImages() else emptyList()
+            val agentAttachments = attachments.toAgentAttachments()
+            // 先给这条消息定 id：它就是落库行的主键，乐观气泡与队列条目都拿它认领。
+            // 同一段文本连发两次时两个 id 不同，先落库的那条不会把后发的那条顶掉。
+            val clientMessageId = UUID.randomUUID().toString()
+            pendingUserMessages = pendingUserMessages + PendingUserMessage(
+                id = clientMessageId,
+                text = text,
+                attachments = agentAttachments
+            )
             // 统一走队列：AI 忙时入队（等本轮结束后自动发送下一条），空闲时直接发送。
             // 斜杠命令在 ViewModel 内（agent workflow 之前）分流执行，无需在此区分。
             viewModel.enqueueAgentRequest(
@@ -1282,7 +1317,8 @@ fun AIChatPanel(
                 selectedCode = selectedCode,
                 projectRoot = projectRoot,
                 inputImages = images,
-                inputAttachments = attachments.toAgentAttachments()
+                inputAttachments = agentAttachments,
+                clientMessageId = clientMessageId
             )
             inputText = ""
             viewModel.clearInputDraft()
@@ -1537,7 +1573,7 @@ fun AIChatPanel(
                             )
                         }
                     }
-                } else if (messages.isEmpty()) {
+                } else if (messages.isEmpty() && visiblePendingUserMessages.isEmpty()) {
                     WelcomeState(
                         bottomReserve = with(LocalDensity.current) { inputBarReservePx.toDp() },
                         modifier = Modifier.fillMaxSize()
@@ -1622,6 +1658,12 @@ fun AIChatPanel(
                                         if (ks != null) KeySwitchedBubble(ks.newIndex, ks.total) else Box(Modifier)
                                     }
                                     TailKind.NONE -> Box(Modifier)
+                                }
+                                // 待落库用户气泡：挂在尾巴 item 内而非 chatItems。
+                                // item 数不变 → 不会牵动 firstVisibleItemIndex 的 clamp（本 item 的注释说的就是那个坑），
+                                // 也天然拿不到「复制 / 更多 / 回退」操作行（那些按钮按消息 id 反查库，pending 的 id 库里还没有）。
+                                visiblePendingUserMessages.forEach { pending ->
+                                    PendingUserMessageBubble(pending)
                                 }
                             }
                         }
