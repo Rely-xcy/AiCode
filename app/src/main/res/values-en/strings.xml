@@ -730,6 +730,7 @@
     <string name="credential_toast_save_failed">Save failed: %1$s</string>
     <string name="credential_toast_deleted">Credential deleted</string>
     <string name="credential_toast_identity_saved">Identity and repository URL saved</string>
+    <string name="credential_toast_inject_deferred">Workspace not ready; injection config not uploaded, will sync when ready</string>
 
     <!-- Credential List -->
     <string name="credential_empty_hint">No credentials yet, tap + to add</string>

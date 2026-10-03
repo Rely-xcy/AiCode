@@ -730,6 +730,7 @@
     <string name="credential_toast_save_failed">保存失败：%1$s</string>
     <string name="credential_toast_deleted">凭据已删除</string>
     <string name="credential_toast_identity_saved">署名与仓库地址已保存</string>
+    <string name="credential_toast_inject_deferred">工作区未就绪，注入配置未上传；就绪后自动补传</string>
 
     <!-- Credential List -->
     <string name="credential_empty_hint">尚未添加凭据，点右上角 + 添加</string>

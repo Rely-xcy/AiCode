@@ -16,6 +16,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -91,6 +92,15 @@ class CredentialViewModel @Inject constructor(
     init {
         refreshIdentity()
         refreshAutoInjectState()
+        // 工作区落定 / 切换后补一次注入：开关已经是打开状态时，若上一次因「工作区未就绪」跳过了
+        // 上传（见 applyInjection），这里补上。原先只有凭据增删会触发同步，用户只拨开关、之后
+        // 不改凭据，远端就永远不会补上，而开关看着是开着的。
+        viewModelScope.launch {
+            workspaceRepository.current.collectLatest { workspace ->
+                if (workspace?.path.isNullOrBlank()) return@collectLatest
+                syncInjectionIfEnabled()
+            }
+        }
     }
 
     /** 从容器 git config 读取当前署名与仓库地址刷新 UI（编辑框初值 + 实际值回显）。可重入，进凭据页时调一次兜住终端改动。 */
@@ -155,7 +165,7 @@ class CredentialViewModel @Inject constructor(
         viewModelScope.launch {
             val key = currentServerKey() ?: return@launch
             injectSettings.setAutoInject(key, enabled)
-            applyInjection(key, enabled)
+            if (!applyInjection(key, enabled)) reportInjectionDeferred()
             refreshAutoInjectState()
         }
     }
@@ -166,26 +176,34 @@ class CredentialViewModel @Inject constructor(
             val key = currentServerKey() ?: return@launch
             injectSettings.markAsked(key)
             injectSettings.setAutoInject(key, enabled)
-            applyInjection(key, enabled)
+            if (!applyInjection(key, enabled)) reportInjectionDeferred()
             refreshAutoInjectState()
         }
     }
 
-    /** 开启时上传远程注入配置（凭据 + includeIf 限定的 gitconfig），关闭时撤销。 */
-    private suspend fun applyInjection(key: String, enabled: Boolean) {
+    /**
+     * 开启时上传远程注入配置（凭据 + includeIf 限定的 gitconfig），关闭时撤销。
+     * 返回 false 表示「开关要开、但工作区未就绪」——本次没上传，由调用方提示（工作区就绪后会自己补）。
+     */
+    private suspend fun applyInjection(key: String, enabled: Boolean): Boolean {
         if (!enabled) {
             remoteSshConnection.removeGitCredentialConfig()
-            return
+            return true
         }
         val creds = credentialRepository.getAll().first()
         // 工作区未落定时不退回 remoteWorkspacePath：那是所有工作区的父目录，includeIf 会指向公共父级。
-        // 宁可本次不上传（开关已持久化，后续同步会补上），也不写错作用域。
+        // 宁可本次不上传（开关已持久化，工作区落定后由 init 里的收集器补上），也不写错作用域。
         val workspaceRoot = workspaceRepository.currentPathOrNull()?.takeIf { it.isNotBlank() }
         if (workspaceRoot == null) {
             FileLogger.w(TAG, "工作区未就绪，跳过 git 凭据注入配置上传")
-            return
+            return false
         }
         remoteSshConnection.uploadGitCredentialConfig(creds, workspaceRoot)
+        return true
+    }
+
+    private fun reportInjectionDeferred() {
+        toast(context.getString(R.string.credential_toast_inject_deferred))
     }
 
     /** 凭据增删后若当前服务器已开启注入，重新同步到远程。 */
