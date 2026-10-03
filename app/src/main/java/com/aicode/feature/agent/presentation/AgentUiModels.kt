@@ -252,5 +252,12 @@ data class QueuedRequest(
     val projectRoot: String,
     val inputImages: List<AgentImage> = emptyList(),
     val inputAttachments: List<AgentAttachment> = emptyList(),
-    val isAutoTrigger: Boolean = false
+    val isAutoTrigger: Boolean = false,
+    /**
+     * 调用方（UI）为本条请求预生成的消息 id，也即它落库后的用户行主键。
+     * 队列条目被消费时原样透传给 [AIAgentViewModel.executeAgentRequestStream]，保证「入队再执行」
+     * 与「直接执行」得到同一个行 id——UI 的乐观气泡才有唯一稳定的认领判据（文本 + 时间戳认不了：
+     * 同文本连发两条会互相顶掉，见 PendingUserMessage）。
+     */
+    val clientMessageId: String? = null
 )

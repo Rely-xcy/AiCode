@@ -1328,7 +1328,9 @@ class AIAgentViewModel @Inject constructor(
         inputImages: List<AgentImage> = emptyList(),
         inputAttachments: List<AgentAttachment> = emptyList(),
         isAutoTrigger: Boolean = false,
-        targetSessionId: String? = null
+        targetSessionId: String? = null,
+        /** 调用方（UI）预生成的用户消息行 id：无论本条走直发还是先入队，落库行的主键都用它。 */
+        clientMessageId: String? = null
     ) {
         val sid = targetSessionId ?: _currentSessionId.value
         val isCurrentRunning = sid != null &&
@@ -1343,7 +1345,8 @@ class AIAgentViewModel @Inject constructor(
                 projectRoot = projectRoot,
                 inputImages = inputImages,
                 inputAttachments = inputAttachments,
-                isAutoTrigger = isAutoTrigger
+                isAutoTrigger = isAutoTrigger,
+                clientMessageId = clientMessageId
             )
             val currentList = _queuedRequests.value[sid] ?: emptyList()
             _queuedRequests.value = _queuedRequests.value + (sid to (currentList + req))
@@ -1357,7 +1360,8 @@ class AIAgentViewModel @Inject constructor(
                 inputImages = inputImages,
                 inputAttachments = inputAttachments,
                 targetSessionId = sid,
-                isAutoTrigger = isAutoTrigger
+                isAutoTrigger = isAutoTrigger,
+                clientMessageId = clientMessageId
             )
         }
     }
@@ -1442,7 +1446,8 @@ class AIAgentViewModel @Inject constructor(
             inputImages = next.inputImages,
             inputAttachments = next.inputAttachments,
             targetSessionId = sessionId,
-            isAutoTrigger = next.isAutoTrigger
+            isAutoTrigger = next.isAutoTrigger,
+            clientMessageId = next.clientMessageId
         )
     }
 
@@ -1450,12 +1455,27 @@ class AIAgentViewModel @Inject constructor(
      * 执行斜杠命令：先把命令文本作为用户消息落库（进入对话上下文），再按类型派发——
      * 内置命令走本地动作，技能则把其正文作为本轮指令触发 agent 回合。
      * 执行期间标记为命令占用（防新消息并行执行），结束后接续队列中排队的下一条。
+     *
+     * [userMessageId] 是调用方预生成的用户行 id（可空，空则自取随机）；命令轮次不注册 job，
+     * 但这条用户行照样落库，UI 的乐观气泡就靠这个 id 认出它。
      */
-    private fun runResolvedCommand(resolved: ResolvedCommand, input: String, sessionId: String) {
+    private fun runResolvedCommand(
+        resolved: ResolvedCommand,
+        input: String,
+        sessionId: String,
+        userMessageId: String? = null
+    ) {
         viewModelScope.launch {
             _runningCommandSessions.value = _runningCommandSessions.value + sessionId
             try {
-                messagePersistenceUseCase.persist(sessionId, MessageRole.USER, input)
+                // 斜杠命令的文本也是用户消息，行 id 用调用方预生成的那个：命令虽然不进 agent workflow，
+                // UI 的乐观气泡对它与普通消息一视同仁地按 id 认领（不回退成文本比对）。
+                messagePersistenceUseCase.persist(
+                    sessionId,
+                    MessageRole.USER,
+                    input,
+                    id = userMessageId ?: UUID.randomUUID().toString()
+                )
                 sessionUseCase.touch(sessionId, messagePersistenceUseCase.nextTimestamp())
                 when (resolved) {
                     is ResolvedCommand.Action -> resolved.handler.execute(this@AIAgentViewModel, resolved.args)
@@ -1479,7 +1499,13 @@ class AIAgentViewModel @Inject constructor(
         targetSessionId: String? = null,
         isAutoTrigger: Boolean = false,
         /** 子代理等场景：已预设会话标题，跳过首条消息的标题推导/生成，保留预设标题。 */
-        skipTitleUpdate: Boolean = false
+        skipTitleUpdate: Boolean = false,
+        /**
+         * 调用方预生成的本轮用户消息行 id：非空时直接用它当落库行的主键，UI 据此行 id 认领自己的
+         * 乐观气泡（见 AIChatPanel 的 pendingUserMessages）。为空则回退为随机 id。
+         * 自动触发轮次（/init、/skill 等）不落用户行，忽略它。
+         */
+        clientMessageId: String? = null
     ): Job = viewModelScope.launch {
         val sessionId = targetSessionId ?: ensureSession()
         if (sessionId.isBlank()) {
@@ -1491,7 +1517,7 @@ class AIAgentViewModel @Inject constructor(
         // 因此 isRunning 保持 false，/compress 等命令内部的自检可以正常工作。
         if (request.startsWith("/")) {
             slashCommandRegistry.resolve(request)?.let { command ->
-                runResolvedCommand(command, request, sessionId)
+                runResolvedCommand(command, request, sessionId, clientMessageId)
                 return@launch
             }
         }
@@ -1521,7 +1547,8 @@ class AIAgentViewModel @Inject constructor(
 
             // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
             // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
-            val userMsgId = if (isAutoTrigger) null else UUID.randomUUID().toString()
+            // 调用方带了预生成 id（UI 乐观气泡）就用它，让「气泡」与「落库行」是同一条的判据落在 id 上。
+            val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
             if (userMsgId != null) {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
