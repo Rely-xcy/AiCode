@@ -88,6 +88,12 @@ class WorkspaceRepository @Inject constructor(
          * 的往返耗时；超过这个时间还不落定，宁可明确报错也不继续等。
          */
         private const val READY_WAIT_TIMEOUT_MS = 8_000L
+
+        /**
+         * [waitForConnection] 的等待上限：SSH 建连（含认证）超过它就不等了，
+         * 按「本次没连上」继续初始化（工作区保持空，由连接监督协程与手动刷新后续补上）。
+         */
+        private const val CONNECTION_WAIT_TIMEOUT_MS = 5_000L
         private val json = Json { ignoreUnknownKeys = true }
 
         /** 外部工作区记录 → 工作区列表；[isDir] 判定目录当前是否存在，决定 available。 */
@@ -198,13 +204,19 @@ class WorkspaceRepository @Inject constructor(
     private fun isLocal(): Boolean =
         executionModeHolder.currentMode() != ExecutionMode.REMOTE_SSH
 
-    /** 远程模式下等待 SSH 连接就绪（最多 5 秒），避免启动时序竞争。 */
-    /** 远程模式下挂起等待 SSH 连接就绪（CONNECTED）；连接失败（FAILED）则提前返回，保持空工作区。 */
+    /**
+     * 远程模式下挂起等待 SSH 连接就绪（CONNECTED），最多 [CONNECTION_WAIT_TIMEOUT_MS]；
+     * 连接失败（FAILED）或等待超时都提前返回，工作区保持空，由后续刷新补齐。
+     */
     private suspend fun waitForConnection() {
-        val state = remoteSshConnection.connectionState.first {
-            it == ConnectionState.CONNECTED || it == ConnectionState.FAILED
+        val state = withTimeoutOrNull(CONNECTION_WAIT_TIMEOUT_MS) {
+            remoteSshConnection.connectionState.first {
+                it == ConnectionState.CONNECTED || it == ConnectionState.FAILED
+            }
         }
-        if (state == ConnectionState.FAILED) {
+        if (state == null) {
+            FileLogger.w(TAG, "等待 SSH 连接就绪超时（${CONNECTION_WAIT_TIMEOUT_MS}ms），工作区保持空")
+        } else if (state == ConnectionState.FAILED) {
             FileLogger.w(TAG, "SSH 连接失败，工作区保持空")
         }
     }

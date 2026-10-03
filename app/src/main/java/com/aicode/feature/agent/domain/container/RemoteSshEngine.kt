@@ -235,10 +235,22 @@ class RemoteSshEngine @Inject constructor(
             _initProgress.value = ContainerInitState.Ready
         } catch (e: Exception) {
             FileLogger.e(TAG, "SSH 连接失败", e)
-            val friendly = friendlySshError(e)
+            val friendly = hostKeyPendingHint() ?: friendlySshError(e)
             _initProgress.value = ContainerInitState.Failed(friendly)
             throw RuntimeException(friendly, e)
         }
+    }
+
+    /**
+     * 本次连接失败是不是因为主机密钥尚未确认：是则返回与「连接配置」页同一句引导文案，否则 null。
+     *
+     * 不消费 [SshHostKeyVerifier.consumePending]：pending 是单例上的单个字段，挂载/测试连通性路径
+     * 同样要靠它拿到待确认详情，谁先消费谁就把对方的抢走。这里只按 `host:port` 只读匹配，重复失败
+     * 也只是重复同一句静态提示，不会误报成别的主机。
+     */
+    private fun hostKeyPendingHint(): String? {
+        val cfg = connection.config ?: return null
+        return connection.pendingHostKey(cfg.host, cfg.port)?.let { SSH_HOST_KEY_CONFIRM_HINT }
     }
 
     /** 拼接 cd 到 projectPath 再执行 command 的完整命令；projectPath 为 null 则直接执行。

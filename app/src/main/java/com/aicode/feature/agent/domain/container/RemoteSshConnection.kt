@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.sftp.SFTPClient
@@ -26,6 +27,22 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RemoteSshConnection"
+
+/**
+ * 建立/认证单条 SSH 连接的上限。sshj 的 [net.schmizz.sshj.SocketClient] 默认 connectTimeout=0，
+ * 即 JDK 语义下的无限等待——服务器层丢包或中间设备黑洞时，connect 会一直挂着调用方。
+ * 只限连接建立，不设读超时（`setTimeout`）：那会让大文件传输与长时间无输出的命令被误杀。
+ */
+private const val SSH_CONNECT_TIMEOUT_MS = 10_000
+
+/**
+ * 监督循环里单次重连的总时限（包含多条连接：exec + SFTP 惰性重建）。
+ * 比单次 connect 超时宽一些，但不设的话一旦底层卡住，重连与后面的指数退避全部不再推进。
+ */
+private const val SSH_RECONNECT_TIMEOUT_MS = 15_000
+
+/** 写入远程私有文件（git 凭据等）时的权限位：默认 umask 022 会落成 0644，同机其他用户可读。 */
+private const val PRIVATE_FILE_MODE = "600"
 
 /**
  * 共享的 SSH 连接管理器：持有两条独立的 sshj [SSHClient]——exec 通道供 [RemoteSshEngine] 执行命令，
@@ -114,6 +131,14 @@ class RemoteSshConnection @Inject constructor(
     }
 
     fun savedHostKeys(): Map<String, String> = hostKeyStore.entries()
+
+    /**
+     * 该主机待确认的主机密钥详情（只读，不清 pending）；未确认时返回 null。
+     * 供执行模式在连接失败时给出与「连接配置」页一致的引导文案。
+     */
+    fun pendingHostKey(host: String, port: Int): SshHostKeyPendingException? =
+        hostKeyVerifier.pendingFor(host, port)
+
     /** 无参 connect：用上次保存的 config 重连。 */
     suspend fun connect() {
         val cfg = config ?: throw IllegalStateException("未配置 SSH 连接")
@@ -142,6 +167,7 @@ class RemoteSshConnection @Inject constructor(
     /** 建立一条 SSH transport 并完成认证与保活（exec 与 SFTP 各建一条）。 */
     private fun newSshClient(config: RemoteConnectionConfig): SSHClient = SSHClient().apply {
         addHostKeyVerifier(hostKeyVerifier)
+        setConnectTimeout(SSH_CONNECT_TIMEOUT_MS)
         connect(config.host, config.port)
         when (val auth = config.auth) {
             is RemoteAuth.Password -> authPassword(config.username, auth.password)
@@ -243,8 +269,8 @@ class RemoteSshConnection @Inject constructor(
                     backoffMs = 15000 // 连接正常，拉长探活间隔（仅兜底，断开有 DisconnectListener 即时通知）
                     continue
                 }
-                // 连接已断，尝试重连
-                tryReconnectIfDisconnected()
+                // 连接已断，尝试重连；单次重连限时，否则一次卡死的 connect 会让整个循环不再推进
+                withTimeoutOrNull(SSH_RECONNECT_TIMEOUT_MS) { tryReconnectIfDisconnected() }
                 // 重连失败后指数退避
                 if (!isConnected()) {
                     delay(backoffMs)
@@ -422,18 +448,24 @@ class RemoteSshConnection @Inject constructor(
         }
     }
 
-    /** exec + printf 写一个文本文件到远程（content 为原文，内部转义单引号/反斜杠）。 */
+    /**
+     * exec + printf 写一个文本文件到远程（content 为原文，内部转义单引号/反斜杠）。
+     *
+     * 写入后强制 chmod [PRIVATE_FILE_MODE]：本方法的调用方全是 App 管理的配置与凭据文件
+     * （`~/.aicode/git-credentials` 等），服务器默认 umask 022 会落成 0644，同一台机器上的其它用户
+     * 可以直接读走 token。不要用它写需要更宽权限的文件。
+     */
     private suspend fun writeRemoteFile(client: SSHClient, dest: String, content: String) {
         if (content.isEmpty()) {
             // 空内容直接 truncate，避免 printf %s '' 的引号歧义
             val session = client.startSession()
-            session.exec("printf '' > '$dest'").join()
+            session.exec("printf '' > '$dest' && chmod $PRIVATE_FILE_MODE '$dest'").join()
             session.close()
             return
         }
         val escaped = content.replace("\\", "\\\\").replace("'", "'\\\"'\"'")
         val session = client.startSession()
-        session.exec("printf %s '$escaped' > '$dest'").join()
+        session.exec("printf %s '$escaped' > '$dest' && chmod $PRIVATE_FILE_MODE '$dest'").join()
         session.close()
     }
 

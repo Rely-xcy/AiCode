@@ -3,6 +3,7 @@ package com.aicode.feature.workspace.domain
 import com.aicode.core.util.BoundedLineReader
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
+import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.friendlySshError
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.WorkspacePathMapper.Companion.CONTAINER_ROOT
@@ -77,6 +78,15 @@ class RemoteSftpFileAccess @Inject constructor(
         displayPathFor(remotePath, currentWorkspaceRoot())
 
     /**
+     * SFTP 通道建立失败是否因为主机密钥未确认：是则返回与「连接配置」页同一句引导文案。
+     * 只读判断（不清 pending），避免把挂载/测试连通性路径要用的待确认详情吃掉。
+     */
+    private fun hostKeyPendingHint(): String? {
+        val cfg = connection.config ?: return null
+        return connection.pendingHostKey(cfg.host, cfg.port)?.let { SSH_HOST_KEY_CONFIRM_HINT }
+    }
+
+    /**
      * 在独立 SFTP 通道上串行执行 [block]。传输层异常时丢弃当前通道（下次调用自动重建）后原样抛出；
      * 业务错误（文件不存在/已存在、SFTP 状态码错误）不重建。不做自动重试——写操作重试可能重复落盘。
      */
@@ -86,7 +96,7 @@ class RemoteSftpFileAccess @Inject constructor(
                 val sftp = try {
                     connection.sftp()
                 } catch (e: Exception) {
-                    throw IOException(friendlySshError(e), e)
+                    throw IOException(hostKeyPendingHint() ?: friendlySshError(e), e)
                 }
                 guarded { block(sftp) }
             }

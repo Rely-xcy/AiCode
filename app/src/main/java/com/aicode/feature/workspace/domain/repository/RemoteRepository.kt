@@ -5,6 +5,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.core.watch.WatchFilter
 import com.aicode.feature.agent.domain.container.SshHostKeyStore
+import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.SshHostKeyVerifier
 import com.aicode.feature.agent.domain.container.SshLoginKeyStore
 import com.aicode.feature.agent.domain.container.SshPrivateKeyStore
@@ -243,10 +244,10 @@ class RemoteRepository @Inject constructor(
             startStateWatch(mountId, engine)
             Result.success(Unit)
         } catch (e: Exception) {
-            // 挂载连接不弹确认：提示用户先去连接配置页测试连通性完成确认
+            // 挂载连接不弹确认：提示用户先去连接配置页测试连通性完成确认（文案与执行模式路径共用）
             val pending = hostKeyVerifier.consumePending()
             if (pending != null) {
-                Result.failure(Exception("主机密钥未确认，请先在「连接配置」页测试连通性完成确认"))
+                Result.failure(Exception(SSH_HOST_KEY_CONFIRM_HINT))
             } else {
                 Result.failure(Exception(friendlySshError(e), e))
             }
