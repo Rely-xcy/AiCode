@@ -614,11 +614,7 @@ fun AIChatPanel(
     val currentMode by viewModel.currentSessionMode.collectAsStateWithLifecycle()
     val slashCommands by viewModel.slashCommands.collectAsStateWithLifecycle()
 
-    var inputText by remember { mutableStateOf("") }
-    val inputDraft by viewModel.inputDraft.collectAsStateWithLifecycle()
-    LaunchedEffect(inputDraft) {
-        if (inputText != inputDraft) inputText = inputDraft
-    }
+    val inputText by viewModel.inputDraft.collectAsStateWithLifecycle()
     // 输入 "/" 打开命令菜单时重扫技能，反映磁盘上技能的增删改。
     LaunchedEffect(inputText) {
         if (inputText == "/") viewModel.refreshSlashCommands()
@@ -1205,7 +1201,6 @@ fun AIChatPanel(
                 inputImages = images,
                 inputAttachments = attachments.toAgentAttachments()
             )
-            inputText = ""
             viewModel.clearInputDraft()
             pendingAttachments = emptyList()
             followBottom = true
@@ -1612,7 +1607,7 @@ fun AIChatPanel(
 
             ChatInputBar(
                 value = inputText,
-                onValueChange = { inputText = it; viewModel.updateInputDraft(it) },
+                onValueChange = viewModel::updateInputDraft,
                 onSend = sendMessage,
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
@@ -1743,7 +1738,7 @@ fun AIChatPanel(
                     promptSnippet = targetMsg?.content ?: "",
                     onOptionSelected = { option ->
                         viewModel.executeRewindOption(targetId, option) { text, attachments ->
-                            inputText = text
+                            viewModel.updateInputDraft(text)
                             pendingAttachments = attachments.map { it.toPendingAttachment() }
                         }
                     },
