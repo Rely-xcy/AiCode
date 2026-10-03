@@ -957,6 +957,27 @@ class AIAgentViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /**
+     * 已被丢弃、确认不会再落库的用户消息 id 集合（队列删除 / 插话转通知 / 回退清空队列 /
+     * 切换工作区停止全部 / 会话被删）。
+     *
+     * 乐观气泡（见 AIChatPanel 的 pendingUserMessages）只有两个退场判据：这条落库了、这条还在队列里。
+     * 被丢弃的那条两条都不满足，UI 会把「既没落库也不在队列」当成「还在路上」而一直画着它
+     * （只有切会话才清）。四条丢弃路径在这里各记一笔，UI 据此显式让气泡退场，而不是靠集合差去猜。
+     *
+     * 只增不减：每条一个 UUID（几十字节），不随发送次数增长；刻意不做「UI 消费后回收」，
+     * 那会在「回收先于气泡退场生效」时让气泡复活。id 由发送方预生成，只会被认领一次。
+     */
+    private val _discardedClientMessageIds = MutableStateFlow<Set<String>>(emptySet())
+    val discardedClientMessageIds: StateFlow<Set<String>> = _discardedClientMessageIds.asStateFlow()
+
+    /** 把一批即将从队列里消失的条目计入 [discardedClientMessageIds]（必须在真正移除队列条目之前调用）。 */
+    private fun markClientMessagesDiscarded(requests: Collection<QueuedRequest>) {
+        val ids = requests.mapNotNull { it.clientMessageId?.takeIf(String::isNotBlank) }.toSet()
+        if (ids.isEmpty()) return
+        _discardedClientMessageIds.value = _discardedClientMessageIds.value + ids
+    }
+
     val pendingPlanApproval: StateFlow<PlanApprovalRequest?> = planApprovalManager.pendingApproval
 
     // 工具调用传入参数（argsPreview）按落库消息 id 暂存：ToolCallStarted 落库后，
@@ -1370,6 +1391,7 @@ class AIAgentViewModel @Inject constructor(
     fun removeQueuedRequest(id: String) {
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
+        markClientMessagesDiscarded(queue.filter { it.id == id })
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
     }
 
@@ -1417,6 +1439,9 @@ class AIAgentViewModel @Inject constructor(
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
+        // 转成通知投递后，落库的是通知消息（另有随机 id），原来那条用户行的 id 再也不会落库，
+        // 记一笔让乐观气泡退场——它的一条同文本内容会以通知消息的形态出现在列表里。
+        markClientMessagesDiscarded(listOf(req))
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
         deliverSystemEvent(
             sid,
@@ -1949,6 +1974,7 @@ class AIAgentViewModel @Inject constructor(
         jobs.forEach { it.cancel() }
         sessionJobs.clear()
         agentNotificationCenter.clearAll()
+        markClientMessagesDiscarded(_queuedRequests.value.values.flatten())
         _queuedRequests.value = emptyMap()
         _runningCommandSessions.value = emptySet()
         _agentStates.value = _agentStates.value.mapValues { AgentUIState.Idle }
@@ -2325,6 +2351,7 @@ class AIAgentViewModel @Inject constructor(
             setStreamingReasoning(sid, null)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
+            markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
@@ -2364,6 +2391,7 @@ class AIAgentViewModel @Inject constructor(
             setStreamingReasoning(sid, null)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
+            markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
@@ -2416,6 +2444,7 @@ class AIAgentViewModel @Inject constructor(
         dismissRewindMenu()
 
         // 1. 停止当前正在运行的 Agent 任务及后续排队
+        markClientMessagesDiscarded(_queuedRequests.value[sessionId].orEmpty())
         _queuedRequests.value = _queuedRequests.value + (sessionId to emptyList())
         agentNotificationCenter.clear(sessionId)
         val runningJob = sessionJobs[sessionId]

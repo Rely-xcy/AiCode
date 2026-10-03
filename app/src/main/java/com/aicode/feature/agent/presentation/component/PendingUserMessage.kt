@@ -34,19 +34,27 @@ internal data class PendingUserMessage(
 )
 
 /**
- * 过滤出仍需要由乐观气泡承载的条目：已经以别的形态出现过的都剔除——
+ * 过滤出仍需要由乐观气泡承载的条目：已经以别的形态出现过、或已被丢弃的，都剔除——
  * - [persistedIds]：库里已有同 id 的行，说明它已正式上屏（同一 id 不会在气泡与列表里各显示一次）；
- * - [queuedClientMessageIds]：VM 把它入了队，这条改由输入框上方的队列面板承载（气泡与队列面板不会同显同一条）。
+ * - [queuedClientMessageIds]：VM 把它入了队，这条改由输入框上方的队列面板承载（气泡与队列面板不会同显同一条）；
+ * - [discardedClientMessageIds]：VM 已把它丢出队列且不会再落库（队列删除 / 插话转通知 / 回退 / 全部停止 / 会话被删），
+ *   记在 VM 的作废台账里（见 AIAgentViewModel.discardedClientMessageIds）。
  *
- * 两个判据都是 id 集合，全程不做文本比较；纯函数，便于锁住「不重复」这条性质（见 PendingUserMessageTest）。
+ * 第三个判据必须由 VM 显式给出、不能靠「既没落库也不在队列」反推：那个形状同时也是「刚发出、还没落库」
+ * 的形状，靠集合差推断会让被丢弃的气泡永久留在屏幕上。
+ *
+ * 三个判据都是 id 集合，全程不做文本比较；纯函数，便于锁住「不重复」这条性质（见 PendingUserMessageTest）。
  */
 internal fun resolvePendingUserMessages(
     pending: List<PendingUserMessage>,
     persistedIds: Set<String>,
-    queuedClientMessageIds: Set<String>
+    queuedClientMessageIds: Set<String>,
+    discardedClientMessageIds: Set<String>
 ): List<PendingUserMessage> {
     if (pending.isEmpty()) return pending
-    return pending.filterNot { it.id in persistedIds || it.id in queuedClientMessageIds }
+    return pending.filterNot {
+        it.id in persistedIds || it.id in queuedClientMessageIds || it.id in discardedClientMessageIds
+    }
 }
 
 /**

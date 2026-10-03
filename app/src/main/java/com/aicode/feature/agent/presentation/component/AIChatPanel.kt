@@ -706,18 +706,23 @@ fun AIChatPanel(
     val queuedClientMessageIds = remember(queuedRequests) {
         queuedRequests.mapNotNullTo(HashSet<String>()) { it.clientMessageId }
     }
+    // 已被 VM 丢弃（删除 / 插话 / 回退 / 全部停止）的 id：这些既不会落库也不会留在队列里，
+    // 不把 VM 记下的这一笔当判据，气泡就再也等不到退场信号。
+    val discardedClientMessageIds by viewModel.discardedClientMessageIds.collectAsStateWithLifecycle()
     val visiblePendingUserMessages = resolvePendingUserMessages(
         pending = pendingUserMessages,
         persistedIds = persistedMessageIds,
-        queuedClientMessageIds = queuedClientMessageIds
+        queuedClientMessageIds = queuedClientMessageIds,
+        discardedClientMessageIds = discardedClientMessageIds
     )
     // 退场后同时把状态收拾干净：只靠 filter 的话，每次发送都会在列表里堆一条永不释放的条目。
-    LaunchedEffect(pendingUserMessages, persistedMessageIds, queuedClientMessageIds) {
+    LaunchedEffect(pendingUserMessages, persistedMessageIds, queuedClientMessageIds, discardedClientMessageIds) {
         if (pendingUserMessages.isEmpty()) return@LaunchedEffect
         val kept = resolvePendingUserMessages(
             pending = pendingUserMessages,
             persistedIds = persistedMessageIds,
-            queuedClientMessageIds = queuedClientMessageIds
+            queuedClientMessageIds = queuedClientMessageIds,
+            discardedClientMessageIds = discardedClientMessageIds
         )
         if (kept.size != pendingUserMessages.size) pendingUserMessages = kept
     }
