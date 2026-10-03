@@ -110,6 +110,11 @@ interface FileAccessProvider {
      * 本地模式直接返回映射后的宿主 [File]（不复制）；
      * 远程模式 SFTP 下载到缓存目录，返回本地临时文件。
      * 供 [ViewImageTool]（需本地路径喂 BitmapFactory）等使用。
+     *
+     * 异常契约：本地实现不检查存在性，返回的 [File] 可能不存在（用 `File.isFile` 判定）；
+     * 远程实现对「远端确实没有这个文件」抛 [NoSuchFileException]，对断线/通道异常/工作区未落定抛
+     * [java.io.IOException] 或 WorkspaceNotReadyException。两类失败语义不同（前者是文件没了、后者是这次拿不到），
+     * 调用方想给用户区分提示就必须分别处理；不能只接 [java.io.File] 而把异常一律当成文件不存在。
      */
     fun copyToLocal(path: String): File
 
