@@ -1026,6 +1026,15 @@ fun SettingsScreen(
                             memoryViewModel.clearDeleteFailed()
                         }
                     }
+                    // 保存失败（项目级但工作区未落定等）同样给一次提示：编辑器已经关了，
+                    // 只刷列表的话用户看到的是「面板关了、列表没变」。
+                    val saveFailed by memoryViewModel.saveFailed.collectAsStateWithLifecycle()
+                    LaunchedEffect(saveFailed) {
+                        if (saveFailed) {
+                            Toast.makeText(memoryToastContext, memoryToastContext.getString(R.string.memory_save_failed), Toast.LENGTH_SHORT).show()
+                            memoryViewModel.clearSaveFailed()
+                        }
+                    }
                     // 每次进入本分区重扫：引擎可能在后台刚沉淀了新条目，
                     // 而 VM 在设置页返回栈里常驻，只在 init 扫一次会永远是旧列表。
                     LaunchedEffect(Unit) { memoryViewModel.refresh() }

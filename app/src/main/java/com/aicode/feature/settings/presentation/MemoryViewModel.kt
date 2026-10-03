@@ -71,6 +71,20 @@ class MemoryViewModel @Inject constructor(
         _deleteFailed.value = false
     }
 
+    private val _saveFailed = MutableStateFlow(false)
+
+    /**
+     * 保存失败的一次性信号：界面提示一次后调 [clearSaveFailed]。
+     *
+     * 仓库侧遇到「项目级但工作区未落定」会返回 false 且不落到别的目录（见 MemoryRepository.saveMemory）。
+     * 但保存入口一返回就关面板，界面上只能看到「面板关了、列表没变」——不提示的话用户以为存上了。
+     */
+    val saveFailed: StateFlow<Boolean> = _saveFailed.asStateFlow()
+
+    fun clearSaveFailed() {
+        _saveFailed.value = false
+    }
+
     val activeMemoryEnabled: StateFlow<Boolean> = memorySettings.activeMemoryEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -160,7 +174,7 @@ class MemoryViewModel @Inject constructor(
     fun save(target: Memory?, name: String, description: String, content: String, scope: MemoryScope) {
         viewModelScope.launch {
             val projectRoot = workspaceRepository.currentPathOrNull()
-            withContext(Dispatchers.IO) {
+            val saved = withContext(Dispatchers.IO) {
                 memoryRepository.saveMemory(
                     name = target?.name ?: name.trim(),
                     description = description.trim(),
@@ -172,6 +186,8 @@ class MemoryViewModel @Inject constructor(
                     createdAt = target?.createdAt ?: 0L
                 )
             }
+            // 存失败不能静静吞掉：编辑器已经关了，只 refresh 的话用户看到的是「列表里没这条」
+            if (!saved) _saveFailed.value = true
             refresh()
         }
     }
