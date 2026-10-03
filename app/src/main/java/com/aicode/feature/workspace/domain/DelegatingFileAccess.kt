@@ -2,6 +2,7 @@ package com.aicode.feature.workspace.domain
 
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.workspace.data.repository.WorkspaceNotReadyException
 import java.io.File
 import java.io.InputStream
 import java.nio.charset.Charset
