@@ -151,14 +151,21 @@ class CompactionModule @Inject constructor(
         }
         // 判定输入与发布结果必须能对上账：环显示偏小时，靠这条日志分清是「估算顶上来的」
         // 还是「界面取错了会话」。只在线以上打，否则每次工具调用都写一条，日志会被判定刷屏。
+        // 同时打估算的构成（cjk/alnum/other/图片/消息数）：只有「原始」一个总数时，估算偏高或偏低
+        // 看不出是哪类内容贡献的，归因只能猜。构成走 TokenEstimator.breakdown，只读数、不参与判定。
         if (reachedSoft || reachedHard) {
+            val composition = TokenEstimator.breakdown(messages)
+            val messageTokens = composition.cjk + composition.alnum + composition.other + composition.image
             FileLogger.i(
                 TAG,
                 "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
                     "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含 system+工具开销 ${call.overheadTokens}" +
                     "${if (baselineEstimate != null) "，校准基线 $baselineEstimate" else "，未校准"}）" +
                     "判定=$currentTokens 窗口=$contextLimit 软线=$softThreshold " +
-                    "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}"
+                    "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}" +
+                    "；消息构成 cjk=${composition.cjk} alnum=${composition.alnum} " +
+                    "other=${composition.other} 图片=${composition.image} 消息数=${composition.messages}" +
+                    "（消息合计 $messageTokens + 开销 ${call.overheadTokens}）"
             )
         }
 

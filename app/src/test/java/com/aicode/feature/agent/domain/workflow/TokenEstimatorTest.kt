@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -14,7 +15,8 @@ class TokenEstimatorTest {
     }
 
     @Test
-    fun `拉丁按四字符一 token`() {
+    fun `拉丁短串保底一 token，中等串按四点五字符一 token`() {
+        // "abc"（3 字符）按 4.5 换算不足 1，走保底 1；"abcdefgh" 得 1.78 → 取整 2
         assertEquals(2, TokenEstimator.estimateText("abcdefgh"))
         assertEquals(1, TokenEstimator.estimateText("abc"))
     }
@@ -26,13 +28,13 @@ class TokenEstimatorTest {
 
     @Test
     fun `混合文本按类别分别计数`() {
-        // "abc" = ceil(3/4) = 1；"中文" = 2
+        // "abc" = max(1, 3/4.5) = 1；"中文" = 2
         assertEquals(3, TokenEstimator.estimateText("abc中文"))
     }
 
     @Test
-    fun `中文按一字一 token，拉丁按四字符一 token`() {
-        // 同样 5 个 token：中文只要 5 个字，拉丁要 20 个字符。
+    fun `中文按一字一 token，拉丁按四点五字符一 token`() {
+        // 同样 5 个 token：中文只要 5 个字，拉丁中长串要 4.5 字符一个。
         // 统一按「字符数 ÷ 4」会把中文低估约 4 倍（5 个字只算 1），压缩触发随之偏晚。
         assertEquals(5, TokenEstimator.estimateText("上下文压缩"))
         assertEquals(5, TokenEstimator.estimateText("abcdefghijklmnopqrst"))
@@ -41,6 +43,66 @@ class TokenEstimatorTest {
     @Test
     fun `空串为 0`() {
         assertEquals(0, TokenEstimator.estimateText(""))
+    }
+
+    // ---------- 串长分档：改动前长串一律按短串口径，是真机原始估算 1.42 倍的主要来源 ----------
+
+    @Test
+    fun `空白与标点长串按串长分档`() {
+        // 5~16 字符按 4 字符/token，>16 按 8（实测长缩进与注释分隔线 1 token 能顶 7~10 个字符）
+        assertEquals(1, TokenEstimator.estimateText("  "))
+        assertEquals(2, TokenEstimator.estimateText("    "))
+        assertEquals(2, TokenEstimator.estimateText(" ".repeat(8)))
+        assertEquals(4, TokenEstimator.estimateText(" ".repeat(16)))
+        assertEquals(3, TokenEstimator.estimateText(" ".repeat(24)))
+        assertEquals(10, TokenEstimator.estimateText("-".repeat(78)))
+        assertEquals(5, TokenEstimator.estimateText("*".repeat(40)))
+    }
+
+    @Test
+    fun `中等长度字母数字串按四点五字符一 token，长串回落到四`() {
+        // 实测 5~32 字符的词/标识符是 5.6~6.6 字符/token，取 4.5 是留在保守一侧
+        assertEquals(3, TokenEstimator.estimateText("a".repeat(10)))
+        assertEquals(8, TokenEstimator.estimateText("a".repeat(32)))
+        // ≥33 字符视为路径/哈希/URL 一类不可再合并的长串，沿用 4 字符/token
+        assertEquals(9, TokenEstimator.estimateText("a".repeat(33)))
+        assertEquals(12, TokenEstimator.estimateText("a".repeat(45)))
+        // 短串保底 1 token：CSV / hex 转储 / IP 列表这类短串密集内容实测只估到 0.91~1.0，不能更低
+        assertEquals(1, TokenEstimator.estimateText("abc"))
+    }
+
+    @Test
+    fun `估算构成按分支拆开，供判定日志归因`() {
+        val messages = listOf(
+            AgentMessage.UserMessage(content = "中文abc"),
+            AgentMessage.ToolResultMessage(toolName = "read", result = "x".repeat(40))
+        )
+        val parts = TokenEstimator.breakdown(messages)
+
+        // cjk = 「中文」2 字；alnum = 短串「abc」保底 1 + 工具名「read」保底 1 + 40 字符（≥33 按 4）= 12
+        assertEquals(2, parts.cjk)
+        assertEquals(12, parts.alnum)
+        assertEquals(0, parts.other)
+        assertEquals(0, parts.image)
+        assertEquals(2, parts.messages)
+        // 构成分项与逐条估算同量级：分支各自求和后取整，只允许 ≤ 消息数 的取整差
+        assertTrue(
+            abs(parts.cjk + parts.alnum + parts.other + parts.image - TokenEstimator.estimateMessages(messages)) <=
+                parts.messages
+        )
+    }
+
+    @Test
+    fun `构成里的文本部分与 estimateText 同一口径`() {
+        val text = "val tokens = ceil(otherRun / 2.0) // 中文注释\n"
+        val parts = TokenEstimator.breakdown(listOf(AgentMessage.UserMessage(content = text)))
+
+        // cjk「中文注释」4 字；alnum「val tokens ceil otherRun」按 4.5 换算；other 按串长分档
+        assertEquals(4, parts.cjk)
+        assertEquals(11, parts.alnum)
+        assertEquals(10, parts.other)
+        // 估算与日志归因走同一条 textCost 路径，单条纯文本消息两边必须完全一致
+        assertEquals(TokenEstimator.estimateText(text), parts.cjk + parts.alnum + parts.other + parts.image)
     }
 
     @Test
