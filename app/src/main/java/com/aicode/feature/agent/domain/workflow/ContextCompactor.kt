@@ -313,6 +313,12 @@ class ContextCompactor @Inject constructor(
         hardThreshold: Int,
         contextLimit: Int,
         /**
+         * 触发本次折叠的那个数（模块侧 `currentTokens = max(真实 usage, 校准后估算)`，估算含
+         * system 与工具定义开销）。与 [messages] 的本地估算**不是同一个量**：后者只算消息、
+         * 不含固定开销，所以它比硬线低几千 token 也可能已经触发折叠。只记账，不参与判断。
+         */
+        decisionTokens: Int = 0,
+        /**
          * 折叠前的回调：拿到即将被折叠掉的那段历史（head）。
          * 给调用方一个「趁还没丢，先把长期价值捞出来」的机会（如抽取长期记忆）。
          */
@@ -569,8 +575,10 @@ class ContextCompactor @Inject constructor(
         }
         FileLogger.i(
             TAG,
-            "折叠记账 会话=${sessionId ?: "-"} 判定前=$estimatedTokens 折叠后=$compactedTokens " +
-                "硬线=$hardThreshold 窗口=$contextLimit " +
+            "折叠记账 会话=${sessionId ?: "-"} 折叠前消息估算=$estimatedTokens（仅消息，不含 system/工具开销）" +
+                " 触发判定=${if (decisionTokens > 0) decisionTokens.toString() else "未提供"}" +
+                " 硬线=$hardThreshold 窗口=$contextLimit " +
+                "折叠后=$compactedTokens " +
                 "摘要输入估算[指令=${TokenEstimator.estimateText(summaryInstruction)} " +
                 "内容=${TokenEstimator.estimateMessages(trimmedHead)}] $usageText " +
                 "耗时=${durationMillis}ms 折叠条数=${trimmedHead.size} 保留条数=${tail.size} " +
