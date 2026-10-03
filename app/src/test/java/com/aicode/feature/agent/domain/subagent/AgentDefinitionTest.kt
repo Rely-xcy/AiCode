@@ -1,7 +1,6 @@
 package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.core.watch.FileChangeHub
-import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import io.mockk.Called
@@ -33,13 +32,11 @@ class AgentDefinitionTest {
         localGlobalRoot = tempFolder.newFolder("local-global")
         activeGlobalRoot = tempFolder.newFolder("remote-global")
         projectRoot = tempFolder.newFolder("project-config")
-        val installer = mockk<ContainerInstaller>()
-        every { installer.aicodeDir } returns localGlobalRoot
         val projectAicodeRoot = mockk<ProjectAicodeRoot>()
         every { projectAicodeRoot.currentOrNull() } returns projectRoot
         val hub = mockk<FileChangeHub>()
         every { hub.watchAicode(any(), any(), any(), any(), any()) } returns emptyFlow()
-        every { hub.watchWorkspace(any(), any(), any(), any(), any()) } returns emptyFlow()
+        every { hub.watchWorkspace(any(), any(), any(), any(), any(), any()) } returns emptyFlow()
         fileAccess = mockk()
         every { fileAccess.isFile("~/.aicode/agents.json") } answers {
             File(activeGlobalRoot, "agents.json").isFile
@@ -50,7 +47,7 @@ class AgentDefinitionTest {
         every { fileAccess.writeFile("~/.aicode/agents.json", any(), any(), any()) } answers {
             File(activeGlobalRoot, "agents.json").writeText(secondArg())
         }
-        configRepository = AgentDefinitionConfigRepository(installer, projectAicodeRoot, hub, fileAccess)
+        configRepository = AgentDefinitionConfigRepository(projectAicodeRoot, hub, fileAccess)
     }
 
     @Test
