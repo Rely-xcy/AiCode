@@ -552,6 +552,9 @@
     <string name="editor_font_size_value">%1$d sp</string>
     <string name="editor_file_too_large">File too large (%1$d MB) to open</string>
     <string name="editor_load_failed">Failed to open file</string>
+    <string name="editor_save_conflict_title">File changed elsewhere</string>
+    <string name="editor_save_conflict_message">This file was modified by another program or session after it was opened. Saving will overwrite those changes. Save anyway?</string>
+    <string name="editor_save_conflict_overwrite">Save anyway</string>
     <string name="editor_binary_unsupported">Binary file, opening not supported</string>
 
     <!-- Chat Input Bar -->

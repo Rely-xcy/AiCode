@@ -112,6 +112,7 @@ fun CodeEditorScreen(
     val baselineText = remember { mutableStateOf("") }
     var pendingSaveText by remember { mutableStateOf("") }
     var pendingExit by remember { mutableStateOf(false) }
+    var showSaveConflict by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var previewMode by remember { mutableStateOf(false) }
@@ -130,6 +131,7 @@ fun CodeEditorScreen(
         canRedo = false
         dirty = false
         pendingExit = false
+        showSaveConflict = false
         cursorLine = 1
         cursorColumn = 1
         previewMode = false
@@ -158,6 +160,8 @@ fun CodeEditorScreen(
                         Toast.LENGTH_LONG
                     ).show()
                 }
+                // 文件被外部改过：弹二次确认（不硬拦，确认后强制写盘）
+                is SaveResult.Conflict -> showSaveConflict = true
             }
         }
     }
@@ -328,6 +332,27 @@ fun CodeEditorScreen(
                 HintText(s.detail ?: stringResource(R.string.editor_load_failed))
             }
         }
+    }
+
+    if (showSaveConflict) {
+        AlertDialog(
+            onDismissRequest = { showSaveConflict = false },
+            title = { Text(stringResource(R.string.editor_save_conflict_title)) },
+            text = { Text(stringResource(R.string.editor_save_conflict_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSaveConflict = false
+                    // 强制写盘：pendingExit 保持不变，保存成功后照旧走退出流程
+                    viewModel.save(pendingSaveText, force = true)
+                }) { Text(stringResource(R.string.editor_save_conflict_overwrite)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showSaveConflict = false
+                    pendingExit = false
+                }) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
     }
 
     if (showUnsavedDialog) {
