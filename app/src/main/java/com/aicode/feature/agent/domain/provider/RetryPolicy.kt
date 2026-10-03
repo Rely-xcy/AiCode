@@ -358,12 +358,17 @@ private fun isConnectionReset(e: IOException): Boolean {
  * 1. 秒数（如 `"30"`）→ 直接转为毫秒
  * 2. HTTP 日期（如 `"Fri, 29 Jun 2026 10:00:00 GMT"`）→ 计算距当前时间的差值
  *
- * 非 HttpException 或无 `Retry-After` 头部 → 返回 null。
- * 解析失败也返回 null（降级到指数退避）。
+ * 沿 cause 链找第一个 [HttpException]，与同族的 [isRateLimitError] 同一套遍历：目前全仓的
+ * [enrichWithHttpErrorBody] 都写在重试封装之外，重试块看到的就是未包装的 [HttpException]（头部读得到），
+ * 但一旦有人把 enrich 挪进重试封装内、或再加一层包装，这里就会静默失效（不再尊重服务端要求的等待时长），
+ * 而 [isRateLimitError] 却照常按 429 重试——两边不该有不同的穿透力。
+ *
+ * 非 HTTP 异常、HTTP 异常无 `Retry-After` 头部 → 返回 null（调用方退避到指数退避）。
+ * 解析失败也返回 null。
  */
 fun extractRetryAfterMillis(t: Throwable): Long? {
-    if (t !is HttpException) return null
-    val header = t.response()?.headers()?.get("Retry-After") ?: return null
+    val http = findHttpException(t) ?: return null
+    val header = http.response()?.headers()?.get("Retry-After") ?: return null
 
     // 格式 1：纯秒数
     header.toLongOrNull()?.let { seconds ->
@@ -379,6 +384,23 @@ fun extractRetryAfterMillis(t: Throwable): Long? {
         val delay = retryTime - System.currentTimeMillis()
         if (delay > 0) delay else null
     }.getOrNull()
+}
+
+/**
+ * 沿 cause 链找第一个 [HttpException]；找不到返回 null。
+ *
+ * 深度上限用 [MAX_CAUSE_DEPTH]（与 [isRateLimitError] 同一个常量），畸形的自引用 cause
+ * 不会让遍历停不下来。
+ */
+private fun findHttpException(t: Throwable): HttpException? {
+    var current: Throwable? = t
+    var depth = 0
+    while (current != null && depth < MAX_CAUSE_DEPTH) {
+        if (current is HttpException) return current
+        current = current.cause
+        depth++
+    }
+    return null
 }
 
 /**

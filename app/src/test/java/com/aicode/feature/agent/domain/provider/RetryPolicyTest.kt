@@ -208,6 +208,37 @@ class RetryPolicyTest {
     private fun httpError(code: Int): HttpException =
         HttpException(Response.error<Any>(code, "{}".toResponseBody(null)))
 
+    /**
+     * 带 Retry-After 头的 429。Retrofit 只有 `error(int, ResponseBody)`（不带响应头）与
+     * `error(ResponseBody, okhttp3.Response)`（响应头取自 rawResponse）两个重载，带头的那个要自己造 raw response。
+     */
+    private fun httpErrorWithRetryAfter(seconds: String): HttpException =
+        HttpException(
+            Response.error<Any>(
+                "{}".toResponseBody(null),
+                okhttp3.Response.Builder()
+                    .code(429)
+                    .message("Too Many Requests")
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .request(okhttp3.Request.Builder().url("https://example.com/").build())
+                    .header("Retry-After", seconds)
+                    .build()
+            )
+        )
+
+    @Test
+    fun retryAfter_isReadThroughWrapperCauseChain() {
+        assertEquals(30_000L, extractRetryAfterMillis(httpErrorWithRetryAfter("30")))
+        // 包装一层也要读得到：与 isRateLimitError 同一套 cause 链穿透，
+        // 否则把 enrichWithHttpErrorBody 挪进重试封装内时 Retry-After 会静默失效。
+        assertEquals(
+            30_000L,
+            extractRetryAfterMillis(IllegalStateException("wrapped", httpErrorWithRetryAfter("30")))
+        )
+        assertNull(extractRetryAfterMillis(IOException("no http")))
+        assertNull(extractRetryAfterMillis(httpError(429)))
+    }
+
     @Test
     fun http_429_maps_to_rate_limit() {
         val info = httpError(429).toRetryErrorInfo()
