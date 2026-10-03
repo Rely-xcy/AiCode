@@ -1507,7 +1507,6 @@ class AIAgentViewModel @Inject constructor(
 
         coroutineContext[Job]?.let { sessionJobs[sessionId] = it }
         FileLogger.d(TAG, "stream start: sid=$sessionId prevState=${_agentStates.value[sessionId]} isAutoTrigger=$isAutoTrigger")
-        setAgentState(sessionId, AgentUIState.Streaming)
         acquireKeepalive()
 
         try {
@@ -1531,6 +1530,13 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
             sessionUseCase.touch(sessionId, messagePersistenceUseCase.nextTimestamp())
+
+            // 本次用户消息落库（上面的 persist 已返回）之后才点「正在工作」的灯：灯早于消息上屏时，
+            // 用户看到的是「三点已亮 + 正在思考，消息还没出现」。这一段前置工作（buildHistory、persist）
+            // 都在主线程上跑，会话越长越慢，灯早亮几百毫秒就是同一现象的放大器。
+            // 队列/停止等等分支都不看这个状态（队列看 sessionJobs，见 enqueueAgentRequest），判据与本行位置无关；
+            // 错误路径：buildHistory 抛异常时状态还是 Idle，直接由下面的 catch 置 Error，不存在从 Streaming 回退的问题。
+            setAgentState(sessionId, AgentUIState.Streaming)
 
             val sessionEntity = sessionUseCase.getSessionById(sessionId)
             val sessionDomain = sessionEntity?.toDomain()
