@@ -49,8 +49,9 @@ import javax.inject.Singleton
  * 安全要点：全局规则存在 app 私有目录，AI 无法篡改；项目级规则存在工作区内，
  * 可被 AI 修改，但作为项目级声明式配置这是有意为之（可 git 追踪/回滚）。
  *
- * 读取语义：「确认没有项目级规则」与「读不到项目级规则」严格区分（文件不存在 = 确认没有；工作区未落定或
- * 解析失败 = 读不到），后者不得当成「项目级没有规则」，见 [loadEffectiveForCurrentProject]。
+ * 读取语义：「确认没有规则」与「读不到规则」严格区分（文件不存在 = 确认没有；工作区未落定或
+ * 解析失败 = 读不到），后者不得当成「这一层没有规则」——项目级与全局级都适用，
+ * 见 [loadEffectiveForCurrentProject]。
  *
  * 并发模式参考 [McpConfigRepository]：Mutex 保护文件 IO + MutableStateFlow 缓存。
  */
@@ -88,7 +89,7 @@ class PermissionRulesRepository @Inject constructor(
      */
     private data class LoadedRules(val rules: List<PermissionRule>, val confirmed: Boolean)
 
-    private val globalState = MutableStateFlow<List<PermissionRule>?>(null)
+    private val globalState = MutableStateFlow<LoadedRules?>(null)
     private val projectStates = ConcurrentHashMap<String, MutableStateFlow<LoadedRules?>>()
     private val mutex = Mutex()
 
@@ -114,9 +115,10 @@ class PermissionRulesRepository @Inject constructor(
     private suspend fun refreshFromDisk(batch: FileChangeBatch) {
         val globalPath = globalFile.absolutePath
         if (batch.changes.any { it.hostPath == globalPath }) {
-            val rules = loadFromFile(globalFile).rules
-            if (rules != (globalState.value ?: emptyList<PermissionRule>())) {
-                globalState.value = rules
+            // 与项目级同一套语义：读失败写入 confirmed=false，此后不再当作「全局没有规则」。
+            val loaded = loadFromFile(globalFile)
+            if (loaded != globalState.value) {
+                globalState.value = loaded
                 FileLogger.i(TAG, "检测到全局权限配置变化，已刷新")
             }
         }
@@ -140,11 +142,11 @@ class PermissionRulesRepository @Inject constructor(
 
     // ── 懒加载 ──────────────────────────────────────────────────
 
-    private suspend fun ensureGlobalLoaded() {
-        if (globalState.value != null) return
-        mutex.withLock {
-            if (globalState.value != null) return
-            globalState.value = loadFromFile(globalFile).rules
+    /** 加载并缓存全局规则；返回本次（或缓存中）的读取结果，含「是否确认可读」。 */
+    private suspend fun ensureGlobalLoaded(): LoadedRules {
+        globalState.value?.let { return it }
+        return mutex.withLock {
+            globalState.value ?: loadFromFile(globalFile).also { globalState.value = it }
         }
     }
 
@@ -193,23 +195,21 @@ class PermissionRulesRepository @Inject constructor(
             if (ws == null) flowOf(emptyList()) else projectRulesFlow(ws.name)
         }
 
-    /** 全局规则流，供管理界面观察。 */
+    /** 全局规则流，供管理界面观察。读不到规则时发空列表（UI 只能展示已读到的部分），评估路径不走这里。 */
     val globalRulesFlow: Flow<List<PermissionRule>> = flow {
         ensureGlobalLoaded()
-        emitAll(globalState.filterNotNull())
+        emitAll(globalState.filterNotNull().map { it.rules })
     }
 
     /** 一次性读取全部全局规则（备份用）。 */
-    suspend fun getGlobalRulesOnce(): List<PermissionRule> {
-        ensureGlobalLoaded()
-        return globalState.value ?: emptyList()
-    }
+    suspend fun getGlobalRulesOnce(): List<PermissionRule> = ensureGlobalLoaded().rules
 
     /** 全量替换全局规则（备份导入用），原子写文件并更新缓存。 */
     suspend fun setGlobalRules(rules: List<PermissionRule>) {
         mutex.withLock {
             withContext(Dispatchers.IO) { writeToFile(globalFile, rules) }
-            globalState.value = rules
+            // 刚写盘成功，缓存可直接标为「确认可读」。
+            globalState.value = LoadedRules(rules, confirmed = true)
         }
     }
 
@@ -229,21 +229,27 @@ class PermissionRulesRepository @Inject constructor(
     /**
      * 评估用：当前项目规则 + 全局规则合并（项目在前）。一次性读取快照。
      *
-     * **「确认没有项目级规则」与「读不到项目级规则」不是一回事**：
-     * - 工作区已落定且项目文件读到（含文件不存在 = 确认没有规则）→ `projectRulesConfirmed = true`；
-     * - 工作区未落定（[WorkspaceRepository.currentPathOrNull] 为 null）或项目文件读取/解析失败 → 只返回全局规则，
-     *   且 `projectRulesConfirmed = false`，调用方不得据此放宽放行判定（否则项目级 DENY 会被漏读）。
-     *
-     * 全局规则读不到时这里仍退回空表（与收紧前一致）：全局文件在 app 私有目录，其可用性不由工作区决定，
-     * 不在本次「项目级规则不可确认」的缺口内，未一并改动。
+     * **「确认没有某一层规则」与「读不到某一层规则」不是一回事**（项目级与全局级同规）：
+     * - 工作区已落定且项目文件读到（含文件不存在 = 确认没有项目规则）→ `projectRulesConfirmed = true`；
+     * - 全局文件读到（含文件不存在）→ `globalRulesConfirmed = true`；
+     * - 工作区未落定 / 项目文件读取或解析失败 → `projectRulesConfirmed = false`；
+     * - 全局文件读取或解析失败 → `globalRulesConfirmed = false`。
+     * 任一为 false 时，调用方都不得据此放宽放行判定（否则对应层的 DENY 会被漏读）。
      */
     suspend fun loadEffectiveForCurrentProject(): EffectivePermissionRules {
-        ensureGlobalLoaded()
-        val global = globalState.value ?: emptyList()
+        val global = ensureGlobalLoaded()
         val workspacePath = workspaceRepository.currentPathOrNull()
-            ?: return EffectivePermissionRules(global, projectRulesConfirmed = false)
+            ?: return EffectivePermissionRules(
+                global.rules,
+                projectRulesConfirmed = false,
+                globalRulesConfirmed = global.confirmed
+            )
         val project = ensureProjectLoaded(workspacePath)
-        return EffectivePermissionRules(project.rules + global, projectRulesConfirmed = project.confirmed)
+        return EffectivePermissionRules(
+            project.rules + global.rules,
+            projectRulesConfirmed = project.confirmed,
+            globalRulesConfirmed = global.confirmed
+        )
     }
 
     /**
@@ -295,10 +301,11 @@ class PermissionRulesRepository @Inject constructor(
     private suspend fun editGlobal(mutate: (MutableList<PermissionRule>) -> Unit) {
         ensureGlobalLoaded()
         mutex.withLock {
-            val list = (globalState.value ?: emptyList()).toMutableList()
+            val list = (globalState.value?.rules ?: emptyList()).toMutableList()
             mutate(list)
             withContext(Dispatchers.IO) { writeToFile(globalFile, list) }
-            globalState.value = list
+            // 刚写盘成功，缓存可直接标为「确认可读」。
+            globalState.value = LoadedRules(list, confirmed = true)
         }
     }
 

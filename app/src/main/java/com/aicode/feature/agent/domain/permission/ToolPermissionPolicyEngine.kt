@@ -24,14 +24,14 @@ import javax.inject.Singleton
  *      记 `git pull` 而非 `git`，使不同子命令各自独立授权）。
  * 非 shell 的 ASK 工具按整工具（pattern=`*`）匹配。
  *
- * **项目级规则可能暂时读不到**（工作区未落定 / 读取失败）。此时不能按「项目级没有规则」判定：
- * 合并结果里可能缺一条项目级 DENY，判定会从「需授权」退化成「直接执行」。所以规则读不到时，对
- * **可能造成副作用**的调用一律降级为一次性授权（不可记忆）；只读调用不受影响——shell 侧只有
+ * **规则文件可能暂时读不到**（项目级：工作区未落定 / 读取失败；全局级：读取或解析失败）。此时不能按
+ * 「这一层没有规则」判定：合并结果里可能缺一条 DENY，判定会从「需授权」退化成「直接执行」。所以规则读不到时，
+ * 对**可能造成副作用**的调用一律降级为一次性授权（不可记忆）；只读调用不受影响——shell 侧只有
  * 「全部段命中内置只读白名单」（第 3 步）才继续放行，非 shell 侧按 [isDangerousTool] 区分，
- * 避免出现「远程没连上就什么都干不了」。
+ * 避免出现「远程没连上就什么都干不了」。两层共用同一条边界，弹窗文案指明是哪一层读不到。
  *
- * 规则读不到期间的 ASK 一律不给「始终允许」（[unconfirmedProjectRulesAsk] 的 rememberablePatterns 为空）：
- * 「始终允许」写的是项目层规则，而此时项目层要么没就绪（写入被 [PermissionRulesRepository.add] 静默跳过，
+ * 规则读不到期间的 ASK 一律不给「始终允许」（[unconfirmedRulesAsk] 的 rememberablePatterns 为空）：
+ * 「始终允许」写的就是读不到的那一层，要么没就绪（写入被 [PermissionRulesRepository.add] 静默跳过，
  * 用户以为记住了、磁盘上什么都没写），要么是解析失败后拿到的空表（写进去会把原有规则覆盖掉）。
  * 这类兜底 ASK 同时带上 [EvalResult.rulesUnconfirmed]，调用方据此不让工具自己声明的自动批准
  * （见 StatefulAgentWorkflow 的权限闸门）把它短路掉。
@@ -57,14 +57,19 @@ class ToolPermissionPolicyEngine @Inject constructor(
             "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
 
         /**
-         * 项目级规则读不到（工作区未落定 / 读取失败）时的弹窗标题与单次放行说明。
-         * 命中时一律 ASK、不可记忆：无法确认项目级有没有 DENY，也不能让「始终允许」写进一个
-         * 还没就绪的项目层。
+         * 规则读不到（项目级：工作区未落定 / 读取失败；全局级：读取或解析失败）时的弹窗标题与单次放行说明。
+         * 命中时一律 ASK、不可记忆：无法确认那一层有没有 DENY，也不能让「始终允许」写进一个
+         * 还没就绪、或解析失败后只剩空表的那一层。
          */
         const val ASK_TITLE_PROJECT_RULES_UNCONFIRMED = "项目授权规则暂不可用"
         const val REASON_PROJECT_RULES_UNCONFIRMED =
             "项目级授权规则当前读不到（工作区未就绪或读取失败），无法确认是否存在项目级 DENY 规则；" +
                 "为避免绕过项目授权，本次仅支持单次放行，不可记忆"
+
+        const val ASK_TITLE_GLOBAL_RULES_UNCONFIRMED = "全局授权规则暂不可用"
+        const val REASON_GLOBAL_RULES_UNCONFIRMED =
+            "全局级授权规则当前读不到（文件读取或解析失败），无法确认是否存在全局 DENY 规则；" +
+                "为避免绕过全局授权，本次仅支持单次放行，不可记忆"
 
         /**
          * 合并后的终端会话工具：其 `start` 动作承载 shell 命令，需走指令级前缀匹配；
@@ -139,10 +144,10 @@ class ToolPermissionPolicyEngine @Inject constructor(
      * @param verdict 评估结论。
      * @param rememberablePatterns 当 [verdict] 为 ASK 时，「始终允许」会记忆的模式；为空表示不可记忆
      *   （命令不可静态判定，只能单次放行）。
-     * @param rulesUnconfirmed 本次 ASK 是否为「项目级规则读不到」的兜底（见 [unconfirmedProjectRulesAsk]）。
+     * @param rulesUnconfirmed 本次 ASK 是否为「规则读不到」的兜底（见 [unconfirmedRulesAsk]）。
      *   为 true 时工具自己声明的 [com.aicode.feature.agent.domain.tool.ToolPermissionPolicy.AUTO_APPROVE]
-     *   不得短路掉这次询问：那正是无法确认有没有项目级 DENY 的时刻，直接跑等于把项目级规则整个旁路。
-     *   仅由 [unconfirmedProjectRulesAsk] 置为 true，故 AUTO 模式下恒为 false——AUTO 模式的
+     *   不得短路掉这次询问：那正是无法确认有没有 DENY 的时刻，直接跑等于把那一层规则整个旁路。
+     *   仅由 [unconfirmedRulesAsk] 置为 true，故 AUTO 模式下恒为 false——AUTO 模式的
      *   放行发生在读规则之前（见 [evaluate]），AUTO 语义不受影响。
      */
     data class EvalResult(
@@ -188,9 +193,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.ALLOW, emptyList())
         }
 
-        // 规则快照：项目级规则可能读不到（工作区未落定 / 读取失败），此时 projectRulesConfirmed=false，
-        // 不能当作「项目级没有规则」——见 [unconfirmedProjectRulesAsk]。
+        // 规则快照：项目级与全局级都可能读不到（见 [EffectivePermissionRules]），
+        // 任一层读不到都不能当作「那一层没有规则」——见 [unconfirmedRulesAsk]。
         val effective = rulesRepo.loadEffectiveForCurrentProject()
+        val unconfirmedLayer = when {
+            !effective.projectRulesConfirmed -> UnconfirmedLayer.PROJECT
+            !effective.globalRulesConfirmed -> UnconfirmedLayer.GLOBAL
+            else -> null
+        }
 
         // task 只读动作（read/list）：不放行 DENY 规则，其余直接自动放行（不弹窗）。
         // read/list/send 的 effectiveCapabilities 为空集（见 TaskTool），不属「可能造成副作用」的调用，
@@ -213,7 +223,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 rules = rules,
                 args = args,
                 forceAsk = toolName == SHIZUKU_TOOL,
-                projectRulesConfirmed = effective.projectRulesConfirmed
+                unconfirmedLayer = unconfirmedLayer
             )
         } else {
             evaluateGeneric(
@@ -222,7 +232,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 // 只对可能造成副作用的调用收紧：只读工具（readFile/viewImage/webfetch 等）规则读不到时
                 // 仍按已有规则判定，避免「远程没连上就什么都干不了」。
                 dangerous = isDangerousTool(toolName, args, capabilities),
-                projectRulesConfirmed = effective.projectRulesConfirmed
+                unconfirmedLayer = unconfirmedLayer
             )
         }
     }
@@ -301,17 +311,33 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
 
     /**
-     * 项目级规则读不到（工作区未落定或读取失败）时的兜底判定：无法确认是否存在项目级 DENY 规则，
-     * 故不放行本次调用，只给一次性授权且不可记忆（此时「始终允许」写项目层也可能落不下去）。
+     * 读不到规则的那一层。项目级与全局级共用同一条收紧边界，只差弹窗文案（得告诉用户是哪一层不可用）；
+     * 两层同时读不到时先报项目级（工作区未落定是最常见的来由）。
+     */
+    private enum class UnconfirmedLayer { PROJECT, GLOBAL }
+
+    /**
+     * 规则读不到（工作区未落定 / 项目文件或全局文件读取、解析失败）时的兜底判定：
+     * 无法确认那一层是否存在 DENY 规则，故不放行本次调用，只给一次性授权且不可记忆
+     * （此时「始终允许」写那一层也可能落不下去、或把原文件覆盖成空表）。
      * 只用于**可能造成副作用**的调用；只读调用不受影响，见 [evaluate]。
      */
-    private fun unconfirmedProjectRulesAsk(): EvalResult = EvalResult(
-        verdict = Verdict.ASK,
-        rememberablePatterns = emptyList(),
-        askTitle = ASK_TITLE_PROJECT_RULES_UNCONFIRMED,
-        rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED,
-        rulesUnconfirmed = true
-    )
+    private fun unconfirmedRulesAsk(layer: UnconfirmedLayer): EvalResult = when (layer) {
+        UnconfirmedLayer.PROJECT -> EvalResult(
+            verdict = Verdict.ASK,
+            rememberablePatterns = emptyList(),
+            askTitle = ASK_TITLE_PROJECT_RULES_UNCONFIRMED,
+            rememberDisabledReason = REASON_PROJECT_RULES_UNCONFIRMED,
+            rulesUnconfirmed = true
+        )
+        UnconfirmedLayer.GLOBAL -> EvalResult(
+            verdict = Verdict.ASK,
+            rememberablePatterns = emptyList(),
+            askTitle = ASK_TITLE_GLOBAL_RULES_UNCONFIRMED,
+            rememberDisabledReason = REASON_GLOBAL_RULES_UNCONFIRMED,
+            rulesUnconfirmed = true
+        )
+    }
 
     /**
      * 把「始终允许」的选择落库为 ALLOW 规则（去重交给仓库）。
@@ -343,20 +369,20 @@ class ToolPermissionPolicyEngine @Inject constructor(
      * 非 shell 工具的整工具判定。
      *
      * @param dangerous 本次调用是否可能造成副作用（见 [isDangerousTool]）。
-     * @param projectRulesConfirmed 项目级规则是否确认可读（见 [EffectivePermissionRules]）。为 false 时
-     *   一律不给「始终允许」：项目层写不进去，且无法确认有没有项目级 DENY 覆盖全局 ALLOW，
-     *   故只读调用按已有规则判定、危险调用降级为一次性授权，两条路都落到 [unconfirmedProjectRulesAsk]。
+     * @param unconfirmedLayer 读不到规则的那一层（见 [EffectivePermissionRules]）；非 null 时
+     *   一律不给「始终允许」：那一层写不进去，且无法确认有没有该层 DENY 覆盖别的层的 ALLOW，
+     *   故只读调用按已有规则判定、危险调用降级为一次性授权，两条路都落到 [unconfirmedRulesAsk]。
      *   两个参数都无默认值——调用点必须显式表态，避免漏传后静默 fail-open。
      */
     private fun evaluateGeneric(
         rules: List<PermissionRule>,
         capabilities: Set<ToolCapability>,
         dangerous: Boolean,
-        projectRulesConfirmed: Boolean
+        unconfirmedLayer: UnconfirmedLayer?
     ): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
         if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
-        if (dangerous && !projectRulesConfirmed) return unconfirmedProjectRulesAsk()
+        if (dangerous && unconfirmedLayer != null) return unconfirmedRulesAsk(unconfirmedLayer)
         if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
@@ -366,7 +392,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
             )
         }
         // 走到这里仍可能是「规则读不到」：只读工具不受上面那道收紧影响，但同样不能给「始终允许」。
-        if (!projectRulesConfirmed) return unconfirmedProjectRulesAsk()
+        if (unconfirmedLayer != null) return unconfirmedRulesAsk(unconfirmedLayer)
         return EvalResult(Verdict.ASK, listOf(PermissionRule.WHOLE_TOOL))
     }
 
@@ -433,14 +459,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
     /**
      * shell 工具的指令级判定（编号见类文档）。
      *
-     * @param projectRulesConfirmed 项目级规则是否确认可读（见 [EffectivePermissionRules]）。为 false 时
+     * @param unconfirmedLayer 读不到规则的那一层（见 [EffectivePermissionRules]）；非 null 时
      *   只有「全部段命中内置只读白名单」才自动放行，其余一律降级为一次性授权。
      */
     private fun evaluateShell(
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
         forceAsk: Boolean = false,
-        projectRulesConfirmed: Boolean
+        unconfirmedLayer: UnconfirmedLayer?
     ): EvalResult {
         val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
             ?: return EvalResult(Verdict.ASK, emptyList())
@@ -477,10 +503,10 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.ALLOW, emptyList())
         }
 
-        // 5) 项目级规则读不到 → 不能放行：合并结果里可能缺一条项目级 DENY。
+        // 5) 规则读不到（项目级或全局级）→ 不能放行：合并结果里可能缺一条 DENY。
         //    能走到这里说明至少有一段不在内置只读白名单内（可证的只读命令已在第 4 步放行），
         //    故一律降级为一次性授权且不可记忆。
-        if (!projectRulesConfirmed) return unconfirmedProjectRulesAsk()
+        if (unconfirmedLayer != null) return unconfirmedRulesAsk(unconfirmedLayer)
 
         // 6) 已记忆的 ALLOW：每段都命中 → 放行。
         // 对 rm 命令进行精细化校验：避免存量或宽泛的 "rm"/"rm -rf" 无目标规则放行高风险删除

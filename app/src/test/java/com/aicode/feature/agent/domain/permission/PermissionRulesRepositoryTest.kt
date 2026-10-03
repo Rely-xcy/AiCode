@@ -29,6 +29,7 @@ class PermissionRulesRepositoryTest {
     val tempFolder = TemporaryFolder()
 
     private lateinit var repository: PermissionRulesRepository
+    private lateinit var globalDir: File
     private lateinit var projectDir: File
 
     /** 当前工作区路径；null = 工作区未落定。 */
@@ -38,7 +39,7 @@ class PermissionRulesRepositoryTest {
 
     @Before
     fun setUp() {
-        val globalDir = tempFolder.newFolder("files")
+        globalDir = tempFolder.newFolder("files")
         projectDir = tempFolder.newFolder("project-aicode")
         val context = mockk<Context>()
         every { context.filesDir } returns globalDir
@@ -62,6 +63,9 @@ class PermissionRulesRepositoryTest {
     }
 
     private fun projectFile(): File = File(projectDir, "permissions.json")
+
+    /** 全局规则文件：`filesDir/aicode/permissions.json`。 */
+    private fun globalPermissionsFile(): File = File(File(globalDir, "aicode"), "permissions.json")
 
     @Test
     fun unsettledWorkspace_onlyGlobalRules_andNotConfirmed() = runTest {
@@ -111,6 +115,29 @@ class PermissionRulesRepositoryTest {
         // 项目级在前、全局在后；项目级 DENY 必须在快照里可见
         assertEquals(listOf(projectDeny, globalRule), effective.rules)
         assertTrue(effective.projectRulesConfirmed)
+    }
+
+    @Test
+    fun corruptedGlobalFile_notConfirmed() = runTest {
+        currentPath = "/remote/ws"
+        globalPermissionsFile().parentFile?.mkdirs()
+        globalPermissionsFile().writeText("{broken json")
+
+        val effective = repository.loadEffectiveForCurrentProject()
+
+        // 全局层与项目级同一套语义：解析失败 = 读不到，不能当成「全局没有规则」
+        assertFalse(effective.globalRulesConfirmed)
+    }
+
+    @Test
+    fun missingGlobalFile_confirmedAsNoGlobalRules() = runTest {
+        currentPath = "/remote/ws"
+
+        val effective = repository.loadEffectiveForCurrentProject()
+
+        // 文件不存在 = 确认没有全局规则（默认情形，不应当成「读不到」）
+        assertTrue(effective.globalRulesConfirmed)
+        assertEquals(emptyList<PermissionRule>(), effective.rules)
     }
 
     @Test

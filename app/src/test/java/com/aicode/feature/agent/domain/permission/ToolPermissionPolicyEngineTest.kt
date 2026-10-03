@@ -26,13 +26,15 @@ class ToolPermissionPolicyEngineTest {
     private fun engine(
         vararg rules: PermissionRule,
         safetyDisabled: Boolean = false,
-        projectRulesConfirmed: Boolean = true
+        projectRulesConfirmed: Boolean = true,
+        globalRulesConfirmed: Boolean = true
     ): ToolPermissionPolicyEngine {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         // projectRulesConfirmed=false 模拟「项目级规则读不到」（工作区未落定 / 读取失败）；
-        // 默认 true 即「已确认：读到规则，或确认没有项目级规则」。
+        // globalRulesConfirmed=false 模拟「全局级规则读不到」（全局文件读取 / 解析失败）；
+        // 默认 true 即「已确认：读到规则，或确认没有规则」。
         coEvery { repo.loadEffectiveForCurrentProject() } returns
-            EffectivePermissionRules(rules.toList(), projectRulesConfirmed)
+            EffectivePermissionRules(rules.toList(), projectRulesConfirmed, globalRulesConfirmed)
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
         return ToolPermissionPolicyEngine(repo, safety)
@@ -315,6 +317,41 @@ class ToolPermissionPolicyEngineTest {
         )
         val r = e.evaluate(tool(), "task", terminal("read"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    // ── 全局级规则读不到（读取 / 解析失败）：与项目级同一条边界 ─────────
+    // 全局文件在 app 私有目录、不依赖工作区，来由只有读失败；但语义相同：读不到 ≠ 没有规则，
+    // 不能凭别层规则放行可能有副作用的调用，而可证的只读调用不许误伤。
+
+    @Test
+    fun unconfirmedGlobalRules_rememberedAllowRule_asksOnce() = runTest {
+        val e = engine(
+            PermissionRule("Bash", "git pull", PermissionDecision.ALLOW),
+            globalRulesConfirmed = false
+        )
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git pull origin main"), AgentMode.BUILD)
+        // 收紧前这里是 ALLOW：全局层可能有一条 DENY 覆盖同层的这条 ALLOW 而没被读到
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertTrue(r.rememberablePatterns.isEmpty())
+        assertNotNull(r.rememberDisabledReason)
+        assertNotNull(r.askTitle)
+    }
+
+    @Test
+    fun unconfirmedGlobalRules_readOnlyCalls_stillAllowed() = runTest {
+        val e = engine(
+            PermissionRule("readFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
+            globalRulesConfirmed = false
+        )
+        // 只读的不许误伤：内置只读白名单与只读工具照旧放行
+        assertEquals(
+            ToolPermissionPolicyEngine.Verdict.ALLOW,
+            e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.BUILD).verdict
+        )
+        assertEquals(
+            ToolPermissionPolicyEngine.Verdict.ALLOW,
+            e.evaluate(tool(ToolCapability.READ_WORKSPACE), "readFile", emptyMap(), AgentMode.BUILD).verdict
+        )
     }
 
     // ── rm 精细校验：无目标 / 递归 / 通配的规则不得放行 ───────────────
