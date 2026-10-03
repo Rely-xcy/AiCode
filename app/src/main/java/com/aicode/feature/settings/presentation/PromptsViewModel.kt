@@ -49,7 +49,7 @@ class PromptsViewModel @Inject constructor(
     private fun currentProjectRoot(): String = workspaceRepository.currentPathOrNull().orEmpty()
 
     /**
-     * 作用域写入因「工作区未就绪」被跳过时的一次性提示；UI 展示后调 [consumeConfigWriteError] 清空。
+     * 作用域写入或删除因「工作区未就绪」被跳过时的一次性提示；UI 展示后调 [consumeConfigWriteError] 清空。
      *
      * 与设置页其它作用域写入同源：提示语取 [WorkspaceRepository.notReadyMessage]。不提示的话，
      * 用户看到的只是「编辑器关掉了、列表没变」，分不清是没保存还是存错了层。
@@ -108,11 +108,19 @@ class PromptsViewModel @Inject constructor(
         }
     }
 
-    /** 删除某编号的覆盖，自动回退到下一层。 */
-    fun deleteFragment(number: Int) {
+    /**
+     * 删除某编号在 [scope] 层的覆盖（列表行左滑：删的就是该行标的那一层），删后自动回退到下一层。
+     *
+     * 项目层删除被跳（工作区未落定）时给出可见提示。只有项目层会因未落定被拒；全局层的删除不
+     * 依赖工作区，返回 false 是别的原因（文件已不在、IO 失败），不套「未就绪」文案。
+     */
+    fun deleteFragment(number: Int, scope: PromptFragmentSource) {
         viewModelScope.launch {
             val projectRoot = currentProjectRoot()
-            withContext(Dispatchers.IO) { catalog.deleteOverride(number, projectRoot) }
+            val deleted = withContext(Dispatchers.IO) {
+                catalog.deleteOverride(number, projectRoot, scope)
+            }
+            if (!deleted && scope == PromptFragmentSource.PROJECT) reportConfigWriteSkipped()
             refresh()
         }
     }

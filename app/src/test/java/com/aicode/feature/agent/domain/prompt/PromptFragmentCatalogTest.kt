@@ -124,7 +124,37 @@ class PromptFragmentCatalogTest {
     @Test
     fun deleteOverride_删除可写覆盖() {
         write(globalDir, "12-x.md", "X")
-        assertTrue(catalog.deleteOverride(12, workspaceDir.path))
+        assertTrue(catalog.deleteOverride(12, workspaceDir.path, PromptFragmentSource.GLOBAL))
+        assertFalse(File(globalDir, "12-x.md").exists())
+    }
+
+    @Test
+    fun deleteOverride_删项目层不动全局层那份() {
+        write(globalDir, "12-x.md", "G")
+        write(projectDir, "12-x.md", "P")
+
+        assertTrue(catalog.deleteOverride(12, workspaceDir.path, PromptFragmentSource.PROJECT))
+
+        assertFalse(File(projectDir, "12-x.md").exists())
+        assertEquals("删项目层应回退到全局层，全局层那份不动", "G", File(globalDir, "12-x.md").readText())
+    }
+
+    @Test
+    fun deleteOverride_工作区未落定时项目层返回false且不删全局层() {
+        // 窗口期（currentPathOrNull 为空 → projectRoot 为 ""）：项目层解析不到，
+        // 旧行为按「生效层」推断会删掉全局层那份，而用户看着的是项目级那条。
+        write(globalDir, "12-x.md", "G")
+        write(projectDir, "12-x.md", "P")
+
+        assertFalse(catalog.deleteOverride(12, projectRoot = "", target = PromptFragmentSource.PROJECT))
+        assertEquals("全局层不该被动", "G", File(globalDir, "12-x.md").readText())
+        assertEquals("项目层不该被动", "P", File(projectDir, "12-x.md").readText())
+
+        assertFalse(catalog.deleteOverride(12, projectRoot = null, target = PromptFragmentSource.PROJECT))
+        assertEquals("G", File(globalDir, "12-x.md").readText())
+
+        // 同一入口删全局层不受影响（本地模式/未选工作区仍可删全局提示词）
+        assertTrue(catalog.deleteOverride(12, projectRoot = "", target = PromptFragmentSource.GLOBAL))
         assertFalse(File(globalDir, "12-x.md").exists())
     }
 

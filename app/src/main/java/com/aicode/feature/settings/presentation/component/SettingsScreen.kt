@@ -528,6 +528,27 @@ fun SettingsScreen(
         // 过渡期间退场页会向左移出自身区域（sizeTransform 为 null 时 AnimatedContent 不裁剪），
         // 不夹住就会画到大屏左侧常驻菜单上。
         Box(modifier = Modifier.weight(1f).clipToBounds()) {
+        // 提示词片段的作用域写入/删除被「工作区未就绪」跳过时的一次性提示：保存（编辑器）与
+        // 左滑删除（列表页）都走它。三个提示词分区互斥、消息只有一个来源，所以只在这里挂一个
+        // collector：挂进各分区分支的话，页面过渡期间新旧两页同时在组合，同一条消息会弹两次。
+        val promptsToastViewModel: com.aicode.feature.settings.presentation.PromptsViewModel? =
+            if (section == SettingsSection.Prompts ||
+                section == SettingsSection.PromptEditor ||
+                section == SettingsSection.PromptDetail
+            ) {
+                androidx.hilt.navigation.compose.hiltViewModel()
+            } else {
+                null
+            }
+        if (promptsToastViewModel != null) {
+            val promptConfigError by promptsToastViewModel.configWriteError.collectAsStateWithLifecycle()
+            val promptConfigErrorContext = LocalContext.current
+            LaunchedEffect(promptConfigError) {
+                val message = promptConfigError ?: return@LaunchedEffect
+                Toast.makeText(promptConfigErrorContext, message, Toast.LENGTH_SHORT).show()
+                promptsToastViewModel.consumeConfigWriteError()
+            }
+        }
         // 分区切换走整页过渡（顶栏一起滑），而不是瞬切；方向按层级深度定：进更深一层从右来，返回从左来。
         AnimatedContent(
             targetState = section,
@@ -603,14 +624,6 @@ fun SettingsScreen(
                 val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
                 val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
-                // 项目层保存因工作区未就绪被跳过时给一次提示：不然用户只看到编辑器关掉、列表没变
-                val promptWriteError by promptsViewModel.configWriteError.collectAsStateWithLifecycle()
-                val promptWriteErrorContext = LocalContext.current
-                LaunchedEffect(promptWriteError) {
-                    val message = promptWriteError ?: return@LaunchedEffect
-                    Toast.makeText(promptWriteErrorContext, message, Toast.LENGTH_SHORT).show()
-                    promptsViewModel.consumeConfigWriteError()
-                }
                 val number = promptEditTarget?.number
                 val fragment = number?.let { value -> promptsState.fragments.firstOrNull { it.number == value } }
                 PromptEditorScreen(

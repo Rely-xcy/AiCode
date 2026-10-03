@@ -72,13 +72,13 @@ internal data class PromptEditTarget(val number: Int? = null)
  * 提示词页：顶部是「完全禁用内置提示词」开关与帮助入口，下面是按编号列出的生效片段。
  *
  * 每行一张卡片（图标 + 编号·名称 + 摘要 + 来源徽章），长按行内容可拖拽调整顺序，
- * 点击进入详情预览（右上角再进编辑），来源可写时左滑删除。
+ * 点击进入详情预览（右上角再进编辑），来源可写时左滑删除（删的就是该行标的那一层）。
  */
 @Composable
 internal fun PromptsSection(
     state: PromptsUiState,
     onOpenFragment: (PromptFragment) -> Unit,
-    onDeleteFragment: (Int) -> Unit,
+    onDeleteFragment: (Int, PromptFragmentSource) -> Unit,
     onReorder: (List<PromptFragment>) -> Unit,
     onToggleBuiltinDisabled: (Boolean) -> Unit
 ) {
@@ -124,7 +124,7 @@ internal fun PromptsSection(
 private fun PromptList(
     fragments: List<PromptFragment>,
     onOpenFragment: (PromptFragment) -> Unit,
-    onDeleteFragment: (Int) -> Unit,
+    onDeleteFragment: (Int, PromptFragmentSource) -> Unit,
     onReorder: (List<PromptFragment>) -> Unit
 ) {
     var localFragments by remember { mutableStateOf(fragments) }
@@ -178,7 +178,7 @@ private fun PromptList(
                     PromptRow(
                         fragment = fragment,
                         onClick = { onOpenFragment(fragment) },
-                        onDelete = { onDeleteFragment(fragment.number) },
+                        onDelete = { onDeleteFragment(fragment.number, fragment.source) },
                         deleteEnabled = fragment.editable,
                         dragModifier = Modifier.longPressDraggableHandle(
                             onDragStarted = {

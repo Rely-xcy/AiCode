@@ -186,10 +186,26 @@ class PromptFragmentCatalog @Inject constructor(
         }
     }
 
-    /** 删除某编号的覆盖（仅当生效层可写），删后自动回退到下一层。 */
-    fun deleteOverride(number: Int, projectRoot: String?): Boolean {
-        val file = fragment(number, projectRoot)?.takeIf { it.editable }?.file ?: return false
-        return file.delete()
+    /**
+     * 删除某编号在 [target] 层的覆盖，删后自动回退到下一层。
+     *
+     * - [target] 指定要删的层（项目层 / 全局层）；本地层与内置层不可删，返回 false。
+     * - [target] 为 PROJECT 而没有工作区（未落定的窗口期）时**返回 false 且一层都不删**：此时项目层
+     *   解析不到，「生效层」退化成全局层，被删掉的会是全局层那份同编号覆盖——用户看着项目级那条，
+     *   项目层的文件反而留了下来。由调用方提示「工作区未就绪」。
+     */
+    fun deleteOverride(number: Int, projectRoot: String?, target: PromptFragmentSource): Boolean {
+        val project = projectDir(projectRoot)
+        if (target == PromptFragmentSource.PROJECT && project == null) {
+            FileLogger.w(TAG, "项目级提示词覆盖删除被跳过：工作区未落定 (#$number)")
+            return false
+        }
+        val dir = when (target) {
+            PromptFragmentSource.PROJECT -> project
+            PromptFragmentSource.GLOBAL -> globalDir
+            else -> null
+        }
+        return numberedFragments(dir)[number]?.delete() ?: false
     }
 
     /** 切换「完全禁用内置提示词」标记（全局层）。 */
