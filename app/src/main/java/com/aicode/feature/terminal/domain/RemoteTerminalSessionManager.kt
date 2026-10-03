@@ -101,6 +101,10 @@ class RemoteTerminalSessionManager @Inject constructor(
         sourceSessionId: String?
     ): String {
         val id = nextId()
+        // 先等工作区落定（带上限）再开 shell：没落定就没有可靠的 cd 目标，
+        // 宁可直接报错，也不要留下一个停在远端 home 的标签页（窗口期不往错目录跑命令）。
+        val wsPath = workspaceRepository.awaitCurrentPathOrNull()
+            ?: throw workspaceRepository.notReadyException()
         // sshj startSession/startShell 走网络 I/O，必须离开主线程，否则 NetworkOnMainThreadException。
         // 但 TerminalSession 构造时会 new Handler()（绑当前线程 Looper），必须在有 Looper 的线程（主线程）构造，
         // 所以只把 sshj channel 建立切到 IO，拿到 shell 句柄后回主线程构造 session。
@@ -112,10 +116,7 @@ class RemoteTerminalSessionManager @Inject constructor(
         termSession.updateSize(DEFAULT_COLUMNS, DEFAULT_ROWS)
         // shell 登录后默认在 home，先 cd 到当前工作区，与命令执行链路（RemoteSshEngine.buildCdCommand）保持一致：
         // 优先 ~/workspace 符号链接，失败回退到真实工作区路径。
-        val wsPath = workspaceRepository.currentPath()
-        if (wsPath.isNotBlank() && wsPath != "/") {
-            termSession.write("cd ~/workspace 2>/dev/null || cd '${wsPath.trimEnd('/')}' 2>/dev/null\n")
-        }
+        termSession.write("cd ~/workspace 2>/dev/null || cd '${wsPath.trimEnd('/')}' 2>/dev/null\n")
         if (command != null) {
             val init = command + (if (notify) "" else "; exec /bin/sh")
             termSession.write(init + "\n")

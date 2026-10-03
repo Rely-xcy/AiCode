@@ -134,12 +134,16 @@ class McpManager @Inject constructor(
                 containerEngine.notReadyHintFor(runtimeProfile)?.let {
                     throw IllegalStateException(it)
                 }
+                // stdio server 在工作区下启动（工具常读写项目文件）：窗口期先等工作区落定（带上限），
+                // 仍未落定则按连接失败抛出，不把 server 起在工作区父目录上。
+                val projectPath = workspaceRepository.awaitCurrentPathOrNull()
+                    ?: throw IllegalStateException(workspaceRepository.notReadyMessage())
                 StdioTransport(
                     serverName = cfg.name,
                     engine = containerEngine,
                     program = cfg.command!!,
                     programArgs = cfg.args,
-                    projectPath = workspaceRepository.currentPath(),
+                    projectPath = projectPath,
                     extraEnv = cfg.env,
                     runtimeProfile = runtimeProfile
                 )

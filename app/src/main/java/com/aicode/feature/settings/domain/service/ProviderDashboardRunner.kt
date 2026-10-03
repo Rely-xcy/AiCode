@@ -679,9 +679,13 @@ class ProviderDashboardRunner @Inject constructor(
         FileLogger.i(TAG, "执行面板脚本 provider=${provider.name} targetPath=$targetPath model=${context?.model}")
         // 必须传工作区路径：proot 靠它把当前工作区 bind 到容器内 /root/workspace，
         // 否则脚本里访问工作区文件（如 .aicode/progress.json）会落到 rootfs 的空目录。
+        // 工作区路径决定 proot 把哪个目录绑定成容器内 /root/workspace：窗口期先等工作区落定（带上限），
+        // 仍未落定则直接失败，不让脚本把工作区父目录当成项目根。
+        val workspacePath = workspaceRepository.awaitCurrentPathOrNull()
+            ?: throw workspaceRepository.notReadyException()
         val result = commandEngine.runCommandSyncUnbounded(
             fullCommand,
-            projectPath = workspaceRepository.currentPath(),
+            projectPath = workspacePath,
             timeoutMs = SCRIPT_TIMEOUT_MS
         )
         val output = result.output.trim()

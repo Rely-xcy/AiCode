@@ -101,8 +101,10 @@ class ExecuteCommandTool @Inject constructor(
             ?: return ToolResult.Error("缺少必需参数：command")
 
         return try {
-            // 在当前工作区目录内执行，与文件工具保持同一根目录
-            val workdir = workspaceRepository.currentPath()
+            // 在当前工作区目录内执行，与文件工具保持同一根目录。
+            // 窗口期先等工作区落定（带上限），仍未落定则明确报错，不把命令跑在工作区父目录上。
+            val workdir = workspaceRepository.awaitCurrentPathOrNull()
+                ?: return ToolResult.Error(workspaceRepository.notReadyMessage(), "WORKSPACE_NOT_READY")
             val timeoutMs = resolveTimeoutMs(args)
             FileLogger.d(TAG, "execute_command (timeout=${timeoutMs}ms): $command")
             val output = commandEngine.runCommandSync(command, workdir, timeoutMs)
@@ -134,7 +136,12 @@ class ExecuteCommandTool @Inject constructor(
         // 限幅累积：喂回模型的最终结果只保留开头+结尾，避免超大输出撑爆上下文。
         val accumulated = BoundedOutput()
         try {
-            val workdir = workspaceRepository.currentPath()
+            // 窗口期先等工作区落定（带上限），仍未落定则不执行命令，直接给出未就绪提示。
+            val workdir = workspaceRepository.awaitCurrentPathOrNull()
+            if (workdir == null) {
+                emit(ToolStreamEvent.Completed(ToolResult.Error(workspaceRepository.notReadyMessage(), "WORKSPACE_NOT_READY")))
+                return@flow
+            }
             val timeoutMs = resolveTimeoutMs(args)
             FileLogger.d(TAG, "execute_command(流式, timeout=${timeoutMs}ms): $command")
             commandEngine.runCommandStream(command, workdir, timeoutMs).collect { event ->

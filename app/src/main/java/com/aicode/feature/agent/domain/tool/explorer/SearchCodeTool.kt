@@ -60,9 +60,13 @@ class SearchCodeTool @Inject constructor(
                 ?: return ToolResult.Error("search 仅支持 | head [-n N] 截断输出，不支持其它管道命令", "INVALID_PIPE")
 
             val startedAt = System.currentTimeMillis()
+            // 窗口期先等工作区落定（带上限），仍未落定则不搜：projectPath 决定 rg 的工作目录，
+            // 落到工作区父目录会把「搜当前项目」变成「搜所有项目」。
+            val projectPath = workspaceRepository.awaitCurrentPathOrNull()
+                ?: return ToolResult.Error(workspaceRepository.notReadyMessage(), "WORKSPACE_NOT_READY")
             val result = commandEngine.runCommandSyncIfReady(
                 command = command,
-                projectPath = workspaceRepository.currentPath(),
+                projectPath = projectPath,
                 timeoutMs = SEARCH_TIMEOUT_MS
             ) ?: return ToolResult.Error("容器未就绪，无法执行 rg", "CONTAINER_NOT_READY")
 

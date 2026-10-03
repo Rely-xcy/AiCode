@@ -27,7 +27,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -80,6 +82,12 @@ class WorkspaceRepository @Inject constructor(
     companion object {
         private const val TAG = "WorkspaceRepository"
         private const val DEFAULT_WORKSPACE = "default"
+
+        /**
+         * [awaitCurrentPathOrNull] 的默认等待上限：覆盖一次 SSH 建连 + 列工作区（含可能的新建默认工作区）
+         * 的往返耗时；超过这个时间还不落定，宁可明确报错也不继续等。
+         */
+        private const val READY_WAIT_TIMEOUT_MS = 8_000L
         private val json = Json { ignoreUnknownKeys = true }
 
         /** 外部工作区记录 → 工作区列表；[isDir] 判定目录当前是否存在，决定 available。 */
@@ -502,6 +510,18 @@ class WorkspaceRepository @Inject constructor(
 
     /** 当前工作区路径；**未落定时为 null**，不猜测兜底目录。供能自然处理「暂无工作区」的调用方使用。 */
     fun currentPathOrNull(): String? = _current.value?.path
+
+    /**
+     * 取当前工作区路径，窗口期先等工作区落定（最多 [timeoutMs]）；仍未落定返回 null。
+     *
+     * 供工具 / 命令 / 终端 / git 等「要一个 cwd 或项目根」的入口使用：刚连上 SSH 的那几秒先等，
+     * 超时或确定无可用工作区时返回 null，由调用方给出「工作区未就绪」的明确提示，
+     * 而不是让命令跑到工作区父目录上。已落定时零等待。
+     */
+    suspend fun awaitCurrentPathOrNull(timeoutMs: Long = READY_WAIT_TIMEOUT_MS): String? {
+        currentPathOrNull()?.let { return it }
+        return withTimeoutOrNull(timeoutMs) { current.mapNotNull { it?.path }.first() }
+    }
 
     /**
      * 未落定原因的提示文案（区分本地初始化未完成 / 远程未连接 / 远程已连但未加载完），

@@ -40,7 +40,7 @@ class GitRepositoryTest {
             else CommandResult(output, exitCode)
         }
         val workspace = mockk<WorkspaceRepository>()
-        every { workspace.currentPath() } returns workPath
+        every { workspace.currentPathOrNull() } returns workPath
         return GitRepository(engine, workspace)
     }
 
@@ -392,7 +392,7 @@ class GitRepositoryTest {
     fun commit_messageWithPipe_shellSingleQuoted() = runTest {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
-        every { workspace.currentPath() } returns workPath
+        every { workspace.currentPathOrNull() } returns workPath
         val slot = slot<String>()
         coEvery { engine.runCommandSyncUnbounded(capture(slot), any(), any()) } returns CommandResult("", 0)
         val repo = GitRepository(engine, workspace)
@@ -406,7 +406,7 @@ class GitRepositoryTest {
     fun commit_messageWithSingleQuote_escaped() = runTest {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
-        every { workspace.currentPath() } returns workPath
+        every { workspace.currentPathOrNull() } returns workPath
         val slot = slot<String>()
         coEvery { engine.runCommandSyncUnbounded(capture(slot), any(), any()) } returns CommandResult("", 0)
         val repo = GitRepository(engine, workspace)

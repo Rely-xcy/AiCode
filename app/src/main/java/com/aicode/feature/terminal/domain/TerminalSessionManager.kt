@@ -110,8 +110,9 @@ class TerminalSessionManager @Inject constructor(
         val id = nextId()
         val shellCommand = buildInteractiveCommand()
         FileLogger.i(TAG, "交互 shell 命令（$id）：$shellCommand")
+        val workspace = requireWorkspacePath()
         val (session, client) = try {
-            buildSession(shellCommand)
+            buildSession(shellCommand, workspace)
         } catch (e: Exception) {
             FileLogger.e(TAG, "创建交互终端会话失败（$id）", e)
             containerEngine.logContainerDiagnostics("创建交互终端会话失败")
@@ -188,7 +189,7 @@ class TerminalSessionManager @Inject constructor(
         val afterCommand = if (notify) "; exit \$ec" else "; exec ${containerEngine.defaultShell()}"
         val shellCommand = "cd ~/workspace 2>/dev/null; export ENV=/etc/profile; " +
             "$command; ec=\$?; echo \"[command exited: \$ec]\"$afterCommand"
-        val (session, client) = buildSession(shellCommand)
+        val (session, client) = buildSession(shellCommand, requireWorkspacePath())
         addTab(
             TerminalTab(
                 id = id,
@@ -393,13 +394,21 @@ class TerminalSessionManager @Inject constructor(
     }
 
     /**
+     * 取当前工作区路径：窗口期先等工作区落定（带上限），仍未落定则抛工作区未就绪异常。
+     *
+     * 终端的工作目录就是工作区（proot 把它绑定到容器内 `/root/workspace`），未就绪时必须报错，
+     * 不能把工作区父目录当工作区绑给终端（那样 `~/workspace` 会变成所有工作区的目录）。
+     */
+    private suspend fun requireWorkspacePath(): String =
+        workspaceRepository.awaitCurrentPathOrNull() ?: throw workspaceRepository.notReadyException()
+
+    /**
      * 构造一个进入容器的 PTY 会话，并接好输出/结束回调。
      *
      * client 的 viewProvider/onFinished 都以 session 为键回查 [_tabs]：会话与标签一一对应，
      * 故无需把 tab 引用提前注入 client（避免「构造 client 时 tab 还不存在」的先有鸡先有蛋）。
      */
-    private fun buildSession(shellCommand: String): Pair<TerminalSession, AppTerminalSessionClient> {
-        val workspace = workspaceRepository.currentPath()
+    private fun buildSession(shellCommand: String, workspace: String): Pair<TerminalSession, AppTerminalSessionClient> {
         val invocation = containerEngine.buildProotInvocation(shellCommand, workspace)
         FileLogger.i(
             TAG,

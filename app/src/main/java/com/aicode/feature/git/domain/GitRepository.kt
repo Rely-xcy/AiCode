@@ -70,7 +70,7 @@ class GitRepository @Inject constructor(
     ): String {
         // 用不限幅执行：diff 内容/文件内容可能远超 AI 工具链路的 4 万字符限幅，
         // 截断占位符会混入 diff 数据流被 UI 渲染成伪 diff 行。
-        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), workspaceRepository.currentPath(), timeoutMs)
+        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), projectPath(), timeoutMs)
         if (result.outputTruncated) throw GitOutputTooLargeException()
         if (result.exitCode == 0) return result.output
         throw GitCommandFailureException(result.output.ifBlank { "git 退出码 ${result.exitCode}" })
@@ -78,10 +78,19 @@ class GitRepository @Inject constructor(
 
     /** 拼命令并跑（不判退出码），[git] 与 [gitChecked] 复用。 */
     private suspend fun gitRaw(args: Array<out String>): String {
-        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), workspaceRepository.currentPath())
+        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), projectPath())
         if (result.outputTruncated) throw GitOutputTooLargeException()
         return result.output
     }
+
+    /**
+     * git 命令的工作目录（当前工作区）。
+     *
+     * 窗口期（刚连上/工作区未加载完）先等工作区落定（带上限），仍未落定则按 git 失败抛出，
+     * 由 Git 页 toast 出原因——不把 git 跑到工作区父目录上（那会把父目录当仓库操作）。
+     */
+    private suspend fun projectPath(): String = workspaceRepository.awaitCurrentPathOrNull()
+        ?: throw GitCommandFailureException(workspaceRepository.notReadyMessage())
 
     /** 拼成交给 `/bin/sh -c` 的单条命令字符串，逐参数 [shellQuote] 转义。 */
     private fun buildGitCommand(args: Array<out String>): String = buildString {
@@ -526,12 +535,12 @@ class GitRepository @Inject constructor(
         if (normalized.isBlank()) return ""
         // 先检查 .gitignore 是否已有该规则
         val checkCmd = "grep -F -x -- ${shellQuote(normalized)} .gitignore"
-        val checkResult = engine.runCommandSyncUnbounded(checkCmd, workspaceRepository.currentPath())
+        val checkResult = engine.runCommandSyncUnbounded(checkCmd, projectPath())
         if (checkResult.exitCode == 0) return normalized // 已存在，无需重复追加
 
         // 不存在则通过 printf 安全追加（如果文件不存在则自动创建）
         val appendCmd = "printf '%s\\n' ${shellQuote(normalized)} >> .gitignore"
-        val appendResult = engine.runCommandSyncUnbounded(appendCmd, workspaceRepository.currentPath())
+        val appendResult = engine.runCommandSyncUnbounded(appendCmd, projectPath())
         if (appendResult.exitCode != 0) {
             throw GitCommandFailureException(appendResult.output.ifBlank { "写入 .gitignore 失败" })
         }
@@ -716,7 +725,7 @@ class GitRepository @Inject constructor(
      */
     suspend fun worktreeFileContent(path: String): String {
         // 先解析工作区路径：工作区未落定时直接报错，而不是被下面的 runCatching 吞掉后误判成「文件为空」。
-        val workspaceRoot = workspaceRepository.currentPath()
+        val workspaceRoot = projectPath()
         val local = withContext(Dispatchers.IO) {
             runCatching {
                 java.io.File(workspaceRoot, path)
