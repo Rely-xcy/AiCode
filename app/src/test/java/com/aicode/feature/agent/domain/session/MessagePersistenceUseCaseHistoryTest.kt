@@ -131,6 +131,30 @@ class MessagePersistenceUseCaseHistoryTest {
         )
     }
 
+    @Test
+    fun contextStatsMatchWhatReplayActuallySends() = runTest {
+        val dao = db.agentMessageDao()
+        dao.insertAll(
+            listOf(
+                user("u1", timestamp = 100, content = "第一句"),
+                // 迁移 58 给升级前 /usage 统计行标的形状：isContextExcluded=1、isCompacted=0（从不进对话）
+                usageRow("usage", timestamp = 150),
+                user("u2", timestamp = 200, content = "第二句"),
+                // 被折叠的历史：留在库里（聊天页看得见）但不参与回放
+                user("folded", timestamp = 50, content = "被折叠的历史").copy(isCompacted = true)
+            )
+        )
+
+        // 记忆页「短期上下文」的条数取自 AgentMessageDao.sessionContextStats，必须等于回放真的
+        // 带上模型的消息数：两边判据一旦分叉（统计只看 isCompacted、回放还看 isContextExcluded），
+        // 这条断言即红。
+        val stats = dao.sessionContextStats(SESSION)
+        val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
+
+        assertEquals(2, history.size)
+        assertEquals(history.size, stats.retainedMessages)
+    }
+
     private fun AgentMessage.text(): String = when (this) {
         is AgentMessage.UserMessage -> content
         is AgentMessage.AssistantMessage -> content
@@ -162,5 +186,15 @@ class MessagePersistenceUseCaseHistoryTest {
         role = MessageRole.USER.name,
         content = content,
         timestamp = timestamp
+    )
+
+    /** 迁移 58 给历史 /usage 统计行标的形状：排除出上下文（isContextExcluded=1）且未压缩。 */
+    private fun usageRow(id: String, timestamp: Long) = AgentMessageEntity(
+        id = id,
+        sessionId = SESSION,
+        role = MessageRole.ASSISTANT.name,
+        content = "| 项目 | 今日 | 累计 |",
+        timestamp = timestamp,
+        isContextExcluded = true
     )
 }
