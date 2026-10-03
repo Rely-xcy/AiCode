@@ -98,6 +98,13 @@ class FileChangeHub @Inject constructor(
         /** AI 配置目录在宿主/服务器上的目录名：容器内 `/root/.aicode` 与远端 `$HOME/.aicode` 都是它。 */
         private const val AICODE_DIR_NAME = ".aicode"
 
+        /**
+         * 项目级配置在宿主私有配置目录下的落点目录名：远端模式下
+         * [com.aicode.feature.workspace.domain.ProjectAicodeRoot] 把项目级配置写在这里的
+         * `<项目键>/` 下（本地模式下项目级配置随工作区走，这个目录不使用）。
+         */
+        private const val PROJECTS_DIR = "projects"
+
         private const val IN_IGNORED = 0x00008000
 
         private val MASK = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MOVED_TO or
@@ -181,10 +188,11 @@ class FileChangeHub @Inject constructor(
      * 订阅 AI 配置目录（`~/.aicode`）下的子路径，[containerSubPath] 为空表示该目录本身。
      * 产出的变更一律标 [ChangeDomain.AICODE_CONFIG]。
      *
-     * 两条路由都听：
+     * 三条路由都听：
      * - 宿主私有配置目录：MCP 与权限规则的全局配置一律存在这里（读写都走 java.io.File，不随执行模式切换）；
-     * - 远端模式下服务器上的 `$HOME/.aicode`：技能与子代理的全局配置按执行环境读写，就存在那里。
-     * 两条路由各自独立：宿主那条不随执行模式切换重建，远端那条跟随「模式 + 连接状态」重建
+     * - 远端模式下服务器上的 `$HOME/.aicode`：技能与子代理的全局配置按执行环境读写，就存在那里；
+     * - 宿主私有配置目录下的 `projects/`（见 [PROJECTS_DIR]）：远端模式下项目级配置的落点。
+     * 前两条各自独立：宿主那条不随执行模式切换重建，远端那条跟随「模式 + 连接状态」重建
      * （远端 home 要连上才知道，订阅比连接先建立时靠它补上）。
      */
     fun watchAicode(
@@ -205,6 +213,26 @@ class FileChangeHub @Inject constructor(
             batchWindowMs = batchWindowMs,
             domain = ChangeDomain.AICODE_CONFIG
         )
+        // 项目级配置在远端模式下落在宿主私有目录 `<aicode 目录>/projects/<项目键>/`（见 ProjectAicodeRoot）：
+        // 它是 aicode 目录的**孙**层，上面那条宿主路由非递归、够不着；它也不在服务器上，远端那条路由同样
+        // 够不着——于是「改项目级配置」原先没有任何订阅覆盖。该目录与执行模式无关（两种模式下都是宿主私有），
+        // 所以单独一条递归路由盯它；事件标同一个域，按域认领的 MCP / 权限 / 技能 / 子代理四个消费方自动受益。
+        // 只在订阅整个 aicode 目录时附带，否则 watchAicode("skills") 这类子目录订阅会让同一批事件投两遍。
+        val projects = if (sub.isEmpty()) {
+            watchHostDir(
+                hostDir = File(containerInstaller.aicodeDir, PROJECTS_DIR),
+                // 就在 aicode 目录下，容器路径交给 pathMapper 还原成 `/root/.aicode/projects/...`
+                containerRootPath = null,
+                root = ChangeRoot.AICODE,
+                recursive = true,
+                filter = filter,
+                fallbackPoll = fallbackPoll,
+                batchWindowMs = batchWindowMs,
+                domain = ChangeDomain.AICODE_CONFIG
+            )
+        } else {
+            emptyFlow()
+        }
         val remote = combine(
             executionModeHolder.mode,
             remoteSshConnection.connectionState
@@ -220,7 +248,7 @@ class FileChangeHub @Inject constructor(
                     domain = ChangeDomain.AICODE_CONFIG
                 )
             }
-        return merge(local, remote)
+        return merge(local, remote, projects)
     }
 
     /**
