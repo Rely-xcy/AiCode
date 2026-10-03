@@ -1287,7 +1287,15 @@ fun AIChatPanel(
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
         snapshotFlow {
-            Triple(streamingText?.length, streamingReasoning?.length, messages.size)
+            // 第 4 项是待落库用户气泡的字数：它长在尾巴 item 内，出现那一帧同样要把底部校准一次——
+            // 用户空闲时发出消息，isBusy 仍为 false（逐帧校准循环没在跑）、messages.size 也没变，
+            // 没有这一项就没有任何信号去把气泡从输入框后面拉出来。
+            listOf(
+                streamingText?.length ?: -1,
+                streamingReasoning?.length ?: -1,
+                messages.size,
+                pendingUserMessages.sumOf { it.text.length },
+            )
         }.collect { calibrateToAnchor() }
     }
 
