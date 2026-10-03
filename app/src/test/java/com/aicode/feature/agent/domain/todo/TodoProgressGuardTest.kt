@@ -22,9 +22,39 @@ class TodoProgressGuardTest {
         listOf(
             "已完成主要改动，下一步跑测试。",
             "两处都改好了，接下来我再看看编译。",
-            "做完这两件事，剩余工作如下。",
+            "这两件事都完成了，剩余工作如下。",
             "Done. Next steps: run the tests.",
             "I've finished the refactor."
+        ).forEach { text ->
+            assertTrue("应当认作收尾: $text", TodoProgressGuard.claimsWrapUp(text))
+        }
+    }
+
+    /**
+     * 只描述时间顺序或剩余量的词不再算收尾：它们在正常叙述里到处都是，认了就等着白拦。
+     * 实测口径：本机 721 个干活回合里，原词表命中 37.4%，删掉这六个词后 19.6%。
+     */
+    @Test
+    fun claimsWrapUp_ignoresForwardLookingAndRemainingQuantity() {
+        listOf(
+            "下一步我打算先看看这个文件。",
+            "接下来要处理的是压缩阈值。",
+            "后续再看这一块。",
+            "剩下的两项先放着。",
+            "还剩两个文件没读，剩余时间不够。",
+            "Next steps: run the tests.",
+            "Three items remaining on the list."
+        ).forEach { text ->
+            assertFalse("不该认作收尾: $text", TodoProgressGuard.claimsWrapUp(text))
+        }
+    }
+
+    /** 收窄的是「只提下一步」那一类；只要同一段里有完成声明，仍然要拦。 */
+    @Test
+    fun claimsWrapUp_stillFiresWhenCompletionClaimIsPresent() {
+        listOf(
+            "已完成 A，下一步 B。",
+            "接口改好了，剩下的下次再说。"
         ).forEach { text ->
             assertTrue("应当认作收尾: $text", TodoProgressGuard.claimsWrapUp(text))
         }
