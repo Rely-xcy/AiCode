@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.core.util.FileLogger
+import com.aicode.di.CompactionWork
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.LlmCall
@@ -18,6 +19,10 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.settings.domain.model.ProviderType
 import dagger.Lazy
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -52,7 +57,14 @@ class CompactionModule @Inject constructor(
     private val modelMetadataService: ModelMetadataService,
     private val generalSettingsRepository: GeneralSettingsRepository,
     /** 判定结果发布给界面：显示百分比与触发阈值必须同源。 */
-    private val contextUsageHolder: ContextUsageHolder
+    private val contextUsageHolder: ContextUsageHolder,
+    /**
+     * 判定与整个压缩体所在的调度器（见 [CompactionWork]）。
+     *
+     * 做成可注入项而不是在本类里直接写 `Dispatchers.Default`：单测要能换成自定义调度器，
+     * 把「压缩没跑在调用者线程上」变成可断言的事实。
+     */
+    @param:CompactionWork private val workDispatcher: CoroutineDispatcher
 ) : EngineModule {
 
     override val id = MODULE_ID
@@ -86,7 +98,34 @@ class CompactionModule @Inject constructor(
      */
     private val lastRawEstimates = ConcurrentHashMap<String, Int>()
 
+    /**
+     * 调模型前的上下文处理入口：只负责把整段判定与压缩体搬到主线程之外。
+     *
+     * 为什么必须搬：本模块与 [ContextCompactor] 全程没有线程切换，调用链是
+     * ViewModel 的 Main 协程 → AgentEngine → 本模块 → ContextCompactor，于是全量 token 估算
+     * （逐字符过整段历史）、软精简、摘要模型往返、归档写盘与落库全压在主线程上，
+     * 长会话一次折叠实测把主线程占住近一分钟。
+     *
+     * 这里只换线程：阈值、判定式、日志字段、摘要内容一字未改，返回的消息与之前逐字节相同。
+     */
     override suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? {
+        // 事件是发给调用者的（界面侧在 Main 上收集并直接改状态）：压缩挪到后台线程后，
+        // 回调用当前 context 发就会把收集者一起换到后台线程上。所以先在调用者线程上记下它的
+        // context，回调时切回去。minusKey(Job) 只借它的调度器与其它元素，父 Job 仍取当前协程的——
+        // 带着外层 Job 进 withContext 会把结构化并发（取消传播）拆掉，取消就不再沿本协程链走。
+        val eventContext = currentCoroutineContext().minusKey(Job)
+        val backgroundCall = call.copy(
+            onEvent = { event -> withContext(eventContext) { call.onEvent(event) } }
+        )
+        val compacted = withContext(workDispatcher) { beforeLlmCallOnBackground(ctx, backgroundCall) }
+        // 包过 context 的那份 onEvent 只给压缩内部用：回传对象换回调用者自己那份，不外泄。
+        return compacted?.copy(onEvent = call.onEvent)
+    }
+
+    /**
+     * [beforeLlmCall] 的实体：判定、估算、软精简、硬折叠与发送前兜底全部在 [workDispatcher] 上执行。
+     */
+    private suspend fun beforeLlmCallOnBackground(ctx: EngineContext, call: LlmCall): LlmCall? {
         val messages = call.messages
         if (messages.isEmpty()) return null
         // 窗口来源：优先主聊天模型（决定「谁快撑满」），退到摘要模型。

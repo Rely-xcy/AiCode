@@ -16,6 +16,8 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -46,10 +48,12 @@ class CompactionModuleTest {
         val module: CompactionModule,
         val provider: AIProvider,
         val usageHolder: ContextUsageHolder,
-        val completeCalls: () -> Int
+        val completeCalls: () -> Int,
+        /** 摘要调用发生时的线程名：压缩体到底跑在哪个线程上的证据。 */
+        val summaryCallThreads: () -> List<String>
     )
 
-    private fun harness(): Harness {
+    private fun harness(workDispatcher: CoroutineDispatcher = Dispatchers.Default): Harness {
         val compactor = ContextCompactor(
             agentMessageDao = mockk(relaxed = true),
             systemPromptProvider = mockk(relaxed = true),
@@ -57,8 +61,10 @@ class CompactionModuleTest {
             compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
         )
         var completeCalls = 0
+        val summaryCallThreads = mutableListOf<String>()
         fun failSummaryCall(): Nothing {
             completeCalls++
+            summaryCallThreads += Thread.currentThread().name
             throw RuntimeException("摘要模型挂了")
         }
         val provider = mockk<AIProvider>(relaxed = true)
@@ -82,9 +88,10 @@ class CompactionModuleTest {
             systemPromptProvider = fixedLazy(mockk<SystemPromptProvider>(relaxed = true)),
             modelMetadataService = metadata,
             generalSettingsRepository = settings,
-            contextUsageHolder = usageHolder
+            contextUsageHolder = usageHolder,
+            workDispatcher = workDispatcher
         )
-        return Harness(module, provider, usageHolder) { completeCalls }
+        return Harness(module, provider, usageHolder, { completeCalls }, { summaryCallThreads })
     }
 
     /** 给模块一个「取出来就是它」的 Lazy：DI 的惰性装配在这条路径上没有语义，不必拿 mockk 去桩它。 */
@@ -181,5 +188,39 @@ class CompactionModuleTest {
         assertEquals(10_000, usage.currentTokens)
         assertEquals(10_000, usage.reportedTokens)
         assertTrue(usage.currentTokens < usage.softThreshold)
+    }
+
+    /**
+     * 压缩体必须在调用者线程之外跑：调用链（ViewModel 的 Main 协程 → AgentEngine → 本模块 →
+     * ContextCompactor）原本全程没有线程切换，全量 token 估算、摘要往返、归档写盘与落库全压在主线程上，
+     * 长会话一次折叠实测把主线程占住近一分钟。
+     *
+     * 两条断言各锁一件事：
+     * 1. 摘要调用不在调用者线程上——整段体确实被 withContext(workDispatcher) 搬走了。
+     *    去掉那层 withContext，摘要调用就回到 JUnit 的测试线程上，断言立刻红；
+     * 2. 事件仍回到调用者线程——压缩内部发出的回调把调用者原本的 context 放了回去，
+     *    界面侧收集器的线程与改动前一致（否则 onEvent 里的界面状态更新会在后台线程上执行）。
+     *
+     * 这里显式传入生产默认值（Dispatchers.Default），测的就是实际生效的那个调度器。
+     */
+    @Test
+    fun `压缩体跑到调用者线程之外且事件回到调用者线程`() = runTest {
+        val callerThread = Thread.currentThread().name
+        val eventThreads = mutableListOf<String>()
+        val h = harness(workDispatcher = Dispatchers.Default)
+        h.module.beforeLlmCall(
+            EngineContext(sessionId = "s1", projectRoot = "/ws"),
+            LlmCall(
+                messages = oversizedHistory(),
+                windowProvider = h.provider,
+                summaryProvider = h.provider,
+                onEvent = { eventThreads += Thread.currentThread().name }
+            )
+        )
+        val workThreads = h.summaryCallThreads()
+        assertTrue(workThreads.isNotEmpty())
+        assertTrue(workThreads.none { it == callerThread })
+        assertTrue(eventThreads.isNotEmpty())
+        assertTrue(eventThreads.all { it == callerThread })
     }
 }
