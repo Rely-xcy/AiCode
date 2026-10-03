@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.aicode.R
 import com.aicode.core.theme.Brand
+import com.aicode.core.util.FileLogger
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.LocalImageViewer
@@ -48,6 +49,8 @@ import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Image
 import java.io.File
+import java.nio.file.NoSuchFileException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -229,17 +232,26 @@ internal val LocalAttachmentOpener = staticCompositionLocalOf<AttachmentOpener> 
  * 卡片记录的 [AgentAttachment.localPath] 不保证仍然有效：远程 SSH 模式下它是 `copyToLocal` 的临时副本
  * （进程重启或系统清缓存后消失），外部本地目录工作区、自定义挂载源的文件又落在 FileProvider 声明的目录树之外。
  * 因此失效时退回 [AgentAttachment.containerPath] 经 [fileAccess] 重取，重取到的路径仍无法授权时
- * 再复制进 cacheDir（已由 cache-path 覆盖）分享。文件确实不存在与最终无法分享分别提示，不再混用一句文案。
+ * 再复制进 cacheDir（已由 cache-path 覆盖）分享。文件确实不存在、这次取不到（断线/未就绪）与最终
+ * 无法分享分别提示，不混用一句文案：把可重试的连接问题说成「文件不存在」，用户会去删工作区而不是重连。
  */
 internal suspend fun openSentAttachment(
     context: Context,
     attachment: AgentAttachment,
     fileAccess: FileAccessProvider
 ) {
-    val local = withContext(Dispatchers.IO) { resolveLocalFile(attachment, fileAccess) }
-    if (local == null) {
-        Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
-        return
+    val localFile = when (
+        val resolved = withContext(Dispatchers.IO) { resolveLocalFile(attachment, fileAccess) }
+    ) {
+        is LocalFileResolution.Found -> resolved.file
+        LocalFileResolution.Missing -> {
+            Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
+            return
+        }
+        LocalFileResolution.Unavailable -> {
+            Toast.makeText(context, context.getString(R.string.chat_open_file_unavailable), Toast.LENGTH_SHORT).show()
+            return
+        }
     }
     // APK 安装包：系统安装器要求「允许安装未知应用」授权，未授权时引导用户去设置页开启，
     // 否则点击只会弹出「没有权限安装」的拒绝提示。
@@ -260,7 +272,7 @@ internal suspend fun openSentAttachment(
         }
     }
     val shareable = withContext(Dispatchers.IO) {
-        if (isShareable(context, local)) local else copyToShareCache(context, local)
+        if (isShareable(context, localFile)) localFile else copyToShareCache(context, localFile)
     }
     val uri = shareable?.let {
         runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }.getOrNull()
@@ -279,12 +291,42 @@ internal suspend fun openSentAttachment(
     }
 }
 
+/**
+ * 附件落到宿主本地文件的结果。
+ *
+ * 必须把「文件确实不在」与「这次取不到」分开：本地模式下 [FileAccessProvider.copyToLocal] 对不存在的路径
+ * 只返回一个 isFile 为 false 的 [File]（不抛异常），而远程模式对「远端没有这个文件」抛 [NoSuchFileException]、
+ * 对断线/通道异常/工作区未落定抛 [java.io.IOException] 或 WorkspaceNotReadyException。前者是文件没了，
+ * 后者是文件可能还在、只是这次拿不到——提示语不能共用一句。
+ */
+private sealed interface LocalFileResolution {
+    data class Found(val file: File) : LocalFileResolution
+    data object Missing : LocalFileResolution
+    data object Unavailable : LocalFileResolution
+}
+
 /** 卡片记录的宿主路径失效（远程临时副本被清、文件被删或移动）时，退回容器路径重取。 */
-private suspend fun resolveLocalFile(attachment: AgentAttachment, fileAccess: FileAccessProvider): File? {
-    attachment.localPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }?.let { return it }
+private suspend fun resolveLocalFile(
+    attachment: AgentAttachment,
+    fileAccess: FileAccessProvider
+): LocalFileResolution {
+    attachment.localPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }
+        ?.let { return LocalFileResolution.Found(it) }
     val containerPath = attachment.containerPath
-    if (containerPath.isBlank()) return null
-    return runCatching { fileAccess.copyToLocal(containerPath) }.getOrNull()?.takeIf { it.isFile }
+    if (containerPath.isBlank()) return LocalFileResolution.Missing
+    return try {
+        fileAccess.copyToLocal(containerPath).takeIf { it.isFile }
+            ?.let { LocalFileResolution.Found(it) }
+            ?: LocalFileResolution.Missing
+    } catch (e: CancellationException) {
+        // 协程取消不是「取不到」：继续走 catch (e: Exception) 会把它吞成一次提示，取消就再也传不上去。
+        throw e
+    } catch (e: NoSuchFileException) {
+        LocalFileResolution.Missing
+    } catch (e: Exception) {
+        FileLogger.w(TAG, "取附件本地副本失败：$containerPath", e)
+        LocalFileResolution.Unavailable
+    }
 }
 
 /** 路径落在 FileProvider 声明的目录树内时可直接授权；不能就抛异常，故按能否取到 URI 判定。 */
@@ -304,6 +346,8 @@ private fun copyToShareCache(context: Context, source: File): File? = runCatchin
 }.getOrNull()
 
 private const val SHARE_CACHE_DIR = "sent_files"
+
+private const val TAG = "MessageAttachment"
 
 private fun isApk(attachment: AgentAttachment): Boolean {
     if (attachment.mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)) return true

@@ -370,6 +370,7 @@
     <string name="chat_reasoning_effort_xhigh">Extra high</string>
     <string name="chat_reasoning_effort_max">Max</string>
     <string name="chat_open_file_missing">File not found or has been moved</string>
+    <string name="chat_open_file_unavailable">Cannot read this file: the connection is lost or the workspace is not ready yet, please try again later</string>
     <string name="chat_open_file_unshareable">This file\'s location cannot be shared with other apps</string>
     <string name="chat_open_file_no_app">No app available to open this file</string>
     <string name="chat_open_apk_permission">Installing apps requires permission. Allow installs from this source in the settings that just opened</string>

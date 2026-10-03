@@ -370,6 +370,7 @@
     <string name="chat_reasoning_effort_xhigh">极高</string>
     <string name="chat_reasoning_effort_max">最高</string>
     <string name="chat_open_file_missing">文件不存在或已被移动</string>
+    <string name="chat_open_file_unavailable">无法读取文件：连接已断开或工作区未就绪，请稍后重试</string>
     <string name="chat_open_file_unshareable">文件所在位置无法分享给其它应用</string>
     <string name="chat_open_file_no_app">没有可打开该文件的应用</string>
     <string name="chat_open_apk_permission">安装应用需要授权，请在跳转的设置中允许来自此来源的应用</string>
