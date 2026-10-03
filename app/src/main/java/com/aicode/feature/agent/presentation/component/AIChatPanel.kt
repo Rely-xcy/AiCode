@@ -1576,7 +1576,9 @@ fun AIChatPanel(
             val questionForPanel = rememberLastNonNull(pendingQuestion)
             AnimatedVisibility(
                 visible = pendingQuestion != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
