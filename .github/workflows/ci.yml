@@ -75,6 +75,20 @@ jobs:
       - name: Run unit tests
         run: ./gradlew :app:testUniversalDebugUnitTest
 
+      # 单测失败时把测试报告与原始 XML 传成 artifact：CI 日志只有 FAILED 摘要，
+      # 真栈（例如 kotlinx-coroutines-test 把根因塞进 suppressed、只落到 system-err）
+      # 只在测试报告里，日志里捞不到。只在失败时传，平时不占 artifact 配额。
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests/**
+            app/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
+
       # Room 的 schema 导出（app/schemas/<Version>.json）由 KSP 在构建时生成，是 MigrationTest
       # 的输入。没有 JDK 的开发环境（例如容器里的 agent）生成不了它，只能从构建产物里取。
       # always()：即使上面的构建/测试失败也要传，缺 schema 正是测试红的原因之一。
