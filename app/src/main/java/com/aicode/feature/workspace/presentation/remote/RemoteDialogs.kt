@@ -404,45 +404,21 @@ fun AddRemoteConnectionDialog(
                 }
             )
 
-            // 主机密钥确认：独立弹窗，覆盖在编辑弹窗之上（首次连接/指纹变化时由测试连通性触发）
+            // 主机密钥确认：独立弹窗，覆盖在编辑弹窗之上（首次连接/指纹变化时由测试连通性触发）。
+            // 弹窗本体与聊天页「重试连接」共用 HostKeyConfirmDialog，指纹与文案只有一份。
             pendingHostKey?.let { pending ->
-                AlertDialog(
-                    onDismissRequest = onRejectHostKey,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    title = {
-                        Text(
-                            stringResource(
-                                if (pending.changed) R.string.ssh_host_key_changed_title
-                                else R.string.ssh_host_key_confirm_title
-                            )
-                        )
-                    },
-                    text = {
-                        Text(
-                            "${pending.host}:${pending.port}\n${pending.keyType}\n" +
-                                stringResource(R.string.ssh_host_key_fingerprint_value, pending.fingerprint)
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                onConfirmHostKey()
-                                // 确认后立即重测：指纹已保存，此次应直接连通
-                                isTesting = true
-                                onTestConnection(host, port, username, currentAuth, protocol) { success, msg ->
-                                    isTesting = false
-                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        ) {
-                            Text(stringResource(R.string.ssh_host_key_trust))
+                HostKeyConfirmDialog(
+                    pendingHostKey = pending,
+                    onConfirm = {
+                        onConfirmHostKey()
+                        // 确认后立即重测：指纹已保存，此次应直接连通
+                        isTesting = true
+                        onTestConnection(host, port, username, currentAuth, protocol) { success, msg ->
+                            isTesting = false
+                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
                         }
                     },
-                    dismissButton = {
-                        TextButton(onClick = onRejectHostKey) {
-                            Text(stringResource(R.string.ssh_host_key_reject))
-                        }
-                    }
+                    onReject = onRejectHostKey
                 )
             }
         }

@@ -20,6 +20,7 @@ import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
+import com.aicode.feature.agent.domain.container.SshHostKeyPendingException
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -79,6 +80,7 @@ import com.aicode.feature.settings.data.repository.VisionModelSettingsRepository
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.repository.RemoteRepository
+import com.aicode.feature.workspace.presentation.remote.PendingHostKeyConfirmation
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ModelMetadata
@@ -112,6 +114,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+private const val TAG = "SettingsViewModel"
 
 sealed class FetchState {
     object Idle : FetchState()
@@ -662,10 +666,70 @@ class SettingsViewModel @Inject constructor(
     /**
      * 主动重试远程连接（聊天页「SSH 连接失败」提示上的「重试连接」按钮）。
      * 与 MainActivity.onResume 的前台重连走同一条路径（[RemoteSshConnection.tryReconnectIfDisconnected]），
-     * 不新建连接流程；失败时由连接状态本身反映（继续显示 FAILED）。
+     * 不新建连接流程。
+     *
+     * 失败不再就地吞掉：重连链只回报一个布尔值（它自己从不设置待确认状态），指纹未确认与网络不通在
+     * 调用方看来完全一样。这里把待确认详情写进 [pendingHostKeyConfirm] 交给聊天页弹同一个确认弹窗，
+     * 其它失败把具体原因写进 [remoteRetryError]。
      */
     fun retryRemoteConnection() {
-        viewModelScope.launch { runCatching { remoteSshConnection.tryReconnectIfDisconnected() } }
+        viewModelScope.launch {
+            _remoteRetryError.value = null
+            val connected = runCatching { remoteSshConnection.tryReconnectIfDisconnected() }
+                .getOrElse { e ->
+                    FileLogger.w(TAG, "远程重连异常", e)
+                    false
+                }
+            val outcome = classifyRemoteRetry(
+                connected = connected,
+                pendingHostKey = retryPendingHostKey(),
+                hasConfig = remoteSshConnection.config != null
+            )
+            when (outcome) {
+                RemoteRetryOutcome.Connected -> _pendingHostKeyConfirm.value = null
+                is RemoteRetryOutcome.HostKeyPending -> _pendingHostKeyConfirm.value = outcome.confirmation
+                RemoteRetryOutcome.NotConfigured -> {
+                    _pendingHostKeyConfirm.value = null
+                    _remoteRetryError.value = context.getString(R.string.chat_ssh_retry_no_config)
+                }
+                RemoteRetryOutcome.Failed -> {
+                    _pendingHostKeyConfirm.value = null
+                    _remoteRetryError.value = context.getString(R.string.chat_ssh_retry_failed)
+                }
+            }
+        }
+    }
+
+    /**
+     * 聊天页确认主机指纹：落盘后立刻再走一次重连链，不让用户再点一次重试。
+     *
+     * 复用 [RemoteRepository.confirmHostKey]，与「连接配置」页测试连通性确认后写的是同一处存储，
+     * 任一入口确认一次即对全局生效。
+     */
+    fun confirmRetryHostKey() {
+        val pending = _pendingHostKeyConfirm.value ?: return
+        remoteRepository.confirmHostKey(pending.host, pending.port, pending.fingerprint)
+        _pendingHostKeyConfirm.value = null
+        retryRemoteConnection()
+    }
+
+    /** 聊天页拒绝主机指纹：关闭弹窗且不落盘；下次重连会再次进入待确认态。 */
+    fun rejectRetryHostKey() {
+        _pendingHostKeyConfirm.value = null
+    }
+
+    /** 消费聊天页已展示的重连失败原因。 */
+    fun consumeRemoteRetryError() {
+        _remoteRetryError.value = null
+    }
+
+    /**
+     * 当前配置对应的待确认主机密钥详情；无配置或该主机无待确认时返回 null。
+     * 走只读匹配（不消费 pending），避免抢走「连接配置」页测试连通性要用的详情。
+     */
+    private fun retryPendingHostKey(): SshHostKeyPendingException? {
+        val cfg = remoteSshConnection.config ?: return null
+        return remoteSshConnection.pendingHostKey(cfg.host, cfg.port)
     }
 
     /**
@@ -764,6 +828,19 @@ class SettingsViewModel @Inject constructor(
 
     /** 远程 SSH 连接状态，供 UI 显示指示器。 */
     val connectionState: StateFlow<ConnectionState> = remoteSshConnection.connectionState
+
+    private val _pendingHostKeyConfirm = MutableStateFlow<PendingHostKeyConfirmation?>(null)
+
+    /**
+     * 聊天页重连遇到待确认主机密钥时的待确认详情；非 null 时聊天页弹出确认弹窗
+     * （与「连接配置」页同一个组件、同一份指纹）。确认或拒绝后清空。
+     */
+    val pendingHostKeyConfirm: StateFlow<PendingHostKeyConfirmation?> = _pendingHostKeyConfirm.asStateFlow()
+
+    private val _remoteRetryError = MutableStateFlow<String?>(null)
+
+    /** 聊天页重连的失败原因（非主机密钥待确认的那类）；UI 展示后调用 [consumeRemoteRetryError] 清空。 */
+    val remoteRetryError: StateFlow<String?> = _remoteRetryError.asStateFlow()
 
     /** Token 统计：当前选中的统计周期。 */
     private val _tokenStatsPeriod = MutableStateFlow(TokenStatsPeriod.LAST_7_DAYS)

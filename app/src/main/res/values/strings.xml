@@ -393,6 +393,8 @@
     <string name="chat_remote_connect_failed">远程服务器连接失败，请检查设置</string>
     <string name="chat_no_remote_connection">未连接远程服务器</string>
     <string name="chat_ssh_retry">重试连接</string>
+    <string name="chat_ssh_retry_failed">重连失败：网络不通或认证被拒，请检查连接配置</string>
+    <string name="chat_ssh_retry_no_config">重连失败：尚未配置远程连接</string>
     <string name="chat_placeholder">有什么可以帮你的？</string>
     <string name="chat_input_hint">描述你的需求，我来帮你编写、修改或解释代码</string>
 

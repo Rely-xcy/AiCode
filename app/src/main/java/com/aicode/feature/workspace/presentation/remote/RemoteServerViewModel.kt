@@ -481,7 +481,7 @@ data class RemoteServerUiState(
     val pendingHostKey: PendingHostKeyConfirmation? = null
 )
 
-/** 待确认的主机密钥（首次连接或指纹变化），由连接配置弹窗展示。 */
+/** 待确认的主机密钥（首次连接或指纹变化），由「连接配置」页与聊天页共用的确认弹窗展示。 */
 data class PendingHostKeyConfirmation(
     val host: String,
     val port: Int,
