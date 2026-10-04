@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -124,7 +125,7 @@ class AIAgentViewModelBrowseRefreshTest {
         sessionUseCase = mockk(relaxed = true),
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
-        terminalSessionManager = mockk(relaxed = true),
+        terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
         slashCommandRegistry = mockk(relaxed = true),
         checkpointManager = mockk(relaxed = true),
         checkpointDao = mockk(relaxed = true),
@@ -133,7 +134,7 @@ class AIAgentViewModelBrowseRefreshTest {
         agentSoundSettings = mockk(relaxed = true),
         generalSettingsRepository = mockk(relaxed = true),
         keepaliveSettings = mockk(relaxed = true),
-        subAgentEventBus = mockk(relaxed = true),
+        subAgentEventBus = mockk(relaxed = true) { every { events } returns MutableSharedFlow() },
         agentNotificationCenter = mockk(relaxed = true),
         agentDefinitionRepository = mockk(relaxed = true),
         todoItemDao = mockk(relaxed = true),
