@@ -1,5 +1,6 @@
 package com.aicode.feature.workspace.domain
 
+import androidx.annotation.VisibleForTesting
 import com.aicode.core.util.BoundedLineReader
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
@@ -59,6 +60,28 @@ class RemoteSftpFileAccess @Inject constructor(
     private val workspaceRepository: WorkspaceRepository
 ) : FileAccessProvider {
 
+    /** 取一条可用的 SFTP 通道。默认走共享连接；测试可经下方次构造换成桩。 */
+    private var sftpProvider: suspend () -> SFTPClient = { connection.sftp() }
+
+    /** 丢弃当前 SFTP 通道（下次调用自动重建）。默认走共享连接；测试可经下方次构造换成桩。 */
+    private var invalidateChannel: suspend () -> Unit = { connection.invalidateSftp() }
+
+    /**
+     * **测试专用**，勿在注入路径使用：Hilt 一律走 [@Inject] 主构造，两个回调的默认实现与
+     * 不开放这个构造时逐字相同（生产行为零变化）。开这个口子只为在没有真实 SSH 连接的前提下
+     * 验证读写缓冲循环的取消语义（取消点、取消后丢弃通道、不重试）。
+     */
+    @VisibleForTesting
+    internal constructor(
+        connection: RemoteSshConnection,
+        workspaceRepository: WorkspaceRepository,
+        sftpProvider: suspend () -> SFTPClient,
+        invalidateChannel: suspend () -> Unit
+    ) : this(connection, workspaceRepository) {
+        this.sftpProvider = sftpProvider
+        this.invalidateChannel = invalidateChannel
+    }
+
     private val sftpMutex = Mutex()
 
     /**
@@ -97,7 +120,7 @@ class RemoteSftpFileAccess @Inject constructor(
         withContext(Dispatchers.IO) {
             sftpMutex.withLock {
                 val sftp = try {
-                    connection.sftp()
+                    sftpProvider()
                 } catch (e: Exception) {
                     throw IOException(hostKeyPendingHint() ?: friendlySshError(e), e)
                 }
@@ -122,7 +145,7 @@ class RemoteSftpFileAccess @Inject constructor(
             // 取消路径必须用 NonCancellable：此时本协程已被取消，[connection.invalidateSftp] 里的
             // `sftpLock.withLock` 会在拿锁前就抛 CancellationException，通道永远丢不掉，
             // 下一次 [connection.sftp] 拿到的还是已损坏的旧 client → 一次取消把 SFTP 打成永久失败。
-            withContext(NonCancellable) { runCatching { connection.invalidateSftp() } }
+            withContext(NonCancellable) { runCatching { invalidateChannel() } }
         }
         throw e
     }
