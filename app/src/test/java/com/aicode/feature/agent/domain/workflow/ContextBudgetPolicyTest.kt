@@ -175,6 +175,31 @@ class ContextBudgetPolicyTest {
     }
 
     /**
+     * 投影前沿（已投影消息里最靠后那条）之前的历史本轮不再回头动：改动点只前进，
+     * 前缀缓存的失效范围逐次收窄。
+     *
+     * 旧实现的可动区间是 `0 until historyEnd`：第一次削了 toolB（体量最大），第二次会把更早的
+     * toolA 也一起削掉，等于把改动点往回推——之前省下的缓存也跟着一起作废。
+     */
+    @Test
+    fun `已投影之后才是可动区，更早的历史不再回头重写`() {
+        val toolA = tool("a".repeat(20_000), id = "tool-a")
+        val toolB = tool("b".repeat(30_000), id = "tool-b")
+        val messages = listOf(toolA, toolB) + recentRounds()
+        val compactor = compactor()
+
+        // 第一次只要求削掉一丁点：按体量先削最大的 toolB，更早的 toolA 不动
+        val once = compactor.softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
+        assertNotNull((once[1] as AgentMessage.ToolResultMessage).modelResult, "体量最大的 toolB 应先被削")
+        assertSame(toolA, once[0])
+
+        // 第二次预算再紧也够不到前沿之前：toolA 仍为 null，且整体无改动 → 返回原引用
+        val twice = compactor.softTrim(once, targetTokens = 1)
+        assertNull((twice[0] as AgentMessage.ToolResultMessage).modelResult, "前沿之前的 toolA 不该被回头重写")
+        assertSame(once, twice)
+    }
+
+    /**
      * 粗筛（H）：阈值线上的工具结果必须仍被削 —— 粗筛不能把它当“太短”跳过。
      *
      * 3001 字符刚过 softTrim 自己的门限（`current.length <= SOFT_TRIM_TOOL_CHARS` 就跳过），

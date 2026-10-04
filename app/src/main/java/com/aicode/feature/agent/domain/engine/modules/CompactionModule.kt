@@ -99,6 +99,26 @@ class CompactionModule @Inject constructor(
     private val lastRawEstimates = ConcurrentHashMap<String, Int>()
 
     /**
+     * 软精简闸门与滞回：会话 id → 上一次真正裁动历史时的（轮次身份, 判定 token）。
+     *
+     * 存在的理由：软线过去是**裸的** `currentTokens >= softThreshold`，长会话里每一轮都会够线，
+     * 每够一次就再裁一刀。前缀缓存以「第一处改动」为界——每动一次，改动点往后的缓存全部失效，
+     * 下一次请求要按 1.25× 的价格把这些前缀重新写回去。这是真金白银。
+     *
+     * 记两个数抑制它：
+     * 1. 轮次身份（[turnKeyOf]）：同一轮只裁一次，工具循环里的后续调用直接跳过；
+     * 2. 判定 token：两次裁剪之间至少要再长出 [SOFT_HYSTERESIS_PERCENT]% 才值得再动一次，
+     *    削完落在软线附近，于是短时间内的再次判定不会够线。
+     *
+     * 尺寸与其它同类簿记一致：按会话分槽，会话删掉时一并回收（见 [onSessionDeleted]）。
+     * 只抑制「软线这一支的触发」：硬线、92% 兜底与发送前硬截断一字未动，`call.force` 也不受抑制。
+     */
+    private val softTrimGates = ConcurrentHashMap<String, SoftTrimGate>()
+
+    /** 软精简闸门记住的两样东西：裁在哪一轮、裁在多少 token 上。 */
+    private data class SoftTrimGate(val turnKey: String, val tokens: Int)
+
+    /**
      * 调模型前的上下文处理入口：只负责把整段判定与压缩体搬到主线程之外。
      *
      * 为什么必须搬：本模块与 [ContextCompactor] 全程没有线程切换，调用链是
@@ -167,7 +187,14 @@ class CompactionModule @Inject constructor(
                 thresholds = thresholds
             )
         )
-        val reachedSoft = currentTokens >= softThreshold
+        // 软线滞回：刚到软线不动手，要再高出 [SOFT_HYSTERESIS_PERCENT]% 才值得动一次。
+        // 判定值到软线的差在长会话里是常态，不设这一层就会每轮都够线。
+        val softHysteresis = softThreshold * SOFT_HYSTERESIS_PERCENT / 100
+        // 闸门读上次动手的位点：两次裁剪之间至少要再长出同样的量；同轮只裁一次（见 [softTrimGates]）。
+        // 记的是判定值 `currentTokens`，与硬线取同一个数，不受 system/工具开销口径影响。
+        val softTrimGate = ctx.sessionId?.let { softTrimGates[it] }
+        val reachedSoft = currentTokens >= softThreshold + softHysteresis &&
+            (softTrimGate == null || currentTokens >= softTrimGate.tokens + softHysteresis)
         // 折叠被跳过有两种来由，都只针对「再折一次」：上一轮折完仍超线（可折的 head 已经折掉了），
         // 或上一轮硬折叠直接失败。两者都等上下文相对位点又长出 [REFOLD_GROWTH_PERCENT]% 才再试；
         // call.force 不受抑制（用户手动点了就该干活）。判据只决定折不折，模块其余职责照跑——
@@ -315,14 +342,22 @@ class CompactionModule @Inject constructor(
                 }
             }
         } else if (reachedSoft) {
-            val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
-            if (trimmed !== result) {
-                FileLogger.i(
-                    TAG,
-                    "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens 达软线 $softThreshold，" +
-                        "精简历史工具输出（未调用摘要模型）"
-                )
-                result = trimmed
+            // 同轮闸门：同一轮（同一次用户请求）已经裁过就不再裁。裁一刀就会改动消息字节，
+            // 而前缀缓存以第一处改动为界——每多裁一次，就从那处往后重新计一遍缓存。
+            val turnKey = turnKeyOf(messages)
+            val trimmedThisTurn = turnKey != null && softTrimGate?.turnKey == turnKey
+            if (!trimmedThisTurn) {
+                val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
+                if (trimmed !== result) {
+                    FileLogger.i(
+                        TAG,
+                        "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens 达软线触发 " +
+                            "$softThreshold+滞回 $softHysteresis，精简历史工具输出（未调用摘要模型）"
+                    )
+                    result = trimmed
+                    // 记下本轮身份与动手时的判定值：本轮不再裁，且直到再长出滞回量才会够线。
+                    ctx.sessionId?.let { softTrimGates[it] = SoftTrimGate(turnKey.orEmpty(), currentTokens) }
+                }
             }
         }
 
@@ -361,7 +396,20 @@ class CompactionModule @Inject constructor(
         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
         ctx.sessionId?.let { foldFailedTokens.remove(it) }
         ctx.sessionId?.let { lastRawEstimates.remove(it) }
+        ctx.sessionId?.let { softTrimGates.remove(it) }
     }
+
+    /**
+     * 本轮（同一次用户请求）的身份：最后一条用户消息。
+     *
+     * 工具循环里的多次调用都带着同一条用户消息，于是天然聚成「同一轮」；下一轮用户发话会换掉它，
+     * 闸门随之放开。id 为空（少数内存态消息没有行 id）时退到「长度 + 内容哈希」：不追求密码学强度，
+     * 只求同一轮内稳定、跨轮可区分。
+     */
+    private fun turnKeyOf(messages: List<AgentMessage>): String? =
+        messages.filterIsInstance<AgentMessage.UserMessage>().lastOrNull()?.let { lastUser ->
+            lastUser.id.ifBlank { "len${lastUser.content.length}:${lastUser.content.hashCode()}" }
+        }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
         val className = provider::class.simpleName.orEmpty()
@@ -381,6 +429,14 @@ class CompactionModule @Inject constructor(
          * 按比例而不是固定值：小窗口与大窗口的「一折」量级差很远，比例跟得上。
          */
         const val REFOLD_GROWTH_PERCENT = 5
+
+        /**
+         * 软线滞回：判定值要高出软线这么多百分比才动手（软线的 10%）。
+         *
+         * 削完落回软线附近，于是要再涨出同样的量才会再削一次。按比例而不是固定值：
+         * 小窗口与大窗口的「一轮」量级差很远，比例跟得上。
+         */
+        const val SOFT_HYSTERESIS_PERCENT = 10
 
         /**
          * 「折叠后仍超线」在界面上的卡片名。

@@ -54,7 +54,12 @@ sealed class AgentUIState {
 /** 侧边栏「文件」Tab 的文件树读取状态。远程模式走 SFTP/exec，读取可能失败或较慢，故区分三态。 */
 sealed interface FileBrowseState {
     data object Loading : FileBrowseState
-    data class Success(val nodes: List<FileTreeNode>) : FileBrowseState
+
+    /**
+     * 树已就绪。[refreshing] 表示「手动刷新进行中」：远程模式下要串行重列所有已展开目录，
+     * 可能数秒；刷新期间继续渲染上一份 [nodes]，UI 只在工具栏叠加进行中指示，不退回 [Loading]。
+     */
+    data class Success(val nodes: List<FileTreeNode>, val refreshing: Boolean = false) : FileBrowseState
     data class Error(val detail: String?) : FileBrowseState
 }
 

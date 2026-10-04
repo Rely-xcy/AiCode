@@ -102,9 +102,12 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -342,18 +345,29 @@ internal fun buildChatItems(
     messages: List<AgentUIMessage>,
     groupOverrides: Map<String, Boolean>,
     turnOverrides: Map<String, Boolean> = emptyMap(),
+    /**
+     * 当前正在跑的那一轮的轮首用户行对应 key（空闲时为 null）。
+     *
+     * 判定是「等于它、或排在它之后」：本轮中途的插话会在同一次运行里再开一轮，那些轮还没跑完，
+     * 同样按进行中渲染（不显示「已完成」、不把进行中的正文当结果）。
+     */
     activeTurnKey: String? = null,
 ): List<ChatRenderItem> {
     val items = ArrayList<ChatRenderItem>(messages.size)
     val (leading, turns) = splitChatTurns(messages)
     // 轮首之前的散消息（会话开头就出现的助手/工具输出，罕见）不折叠，原样常显。
     leading.forEach { items += messageRenderItems(it) }
+    var runningFromHere = false
     for (turn in turns) {
+        // 「正在跑」= 「activeTurnKey 起、往后都算」，不是「等于 activeTurnKey」：本轮中途的插话会在同一次
+        // 运行里再开一轮，它同样没跑完。只认相等的话，插话一落库就会把正在跑的那一轮顶成「已完成」，
+        // 进行中的正文也会被当成最终回答（见上面的 activeTurnKey）。
+        if (activeTurnKey != null && turn.key == activeTurnKey) runningFromHere = true
+        val running = runningFromHere
         items += messageRenderItems(turn.userMessage)
         val endAssistant = turn.messages.lastOrNull {
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
-        val running = turn.key == activeTurnKey
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
         // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
         val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides)
@@ -405,6 +419,36 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
     }
     user?.let { turns += ChatTurn(turnKeyOf(it.id), it, body?.toList().orEmpty()) }
     return leading to turns
+}
+
+/**
+ * 可以挂「复制 / 更多」操作行的消息 id 集合（每个已收尾轮次的末条可挂消息，含开头的散消息）。
+ *
+ * 轮次是否收尾只看 [activeTurnKey]：它以及排在它之后的轮都属于正在跑的那次运行（本轮中途插话会在
+ * 同一次运行里再开一轮），一律不挂——否则本轮进行中的正文会被当成最终回答，生成中途就冒出操作行。
+ * [busy] 为真但 [activeTurnKey] 为空（本轮没有轮首用户行，或它还没被加载进来）时退回旧判据
+ * 「除末轮外都算收尾」，与改动前一致。
+ */
+internal fun actionableResultIds(
+    messages: List<AgentUIMessage>,
+    activeTurnKey: String?,
+    busy: Boolean
+): Set<String> {
+    val (leading, turns) = splitChatTurns(messages)
+    val ids = mutableSetOf<String>()
+    leading.filter { it.rendersActionRow() }.forEach { ids += it.id }
+    val runningFrom = activeTurnKey?.let { key -> turns.indexOfFirst { it.key == key }.takeIf { it >= 0 } }
+    for (i in turns.indices) {
+        val turn = turns[i]
+        val turnFinished = if (runningFrom != null) i < runningFrom else (!busy || i != turns.lastIndex)
+        if (!turnFinished) continue
+        val resultMsg = turn.messages.lastOrNull { it.isResultCandidate() && it.rendersActionRow() }
+            ?: turn.messages.lastOrNull { it.rendersActionRow() }
+        if (resultMsg != null) {
+            ids += resultMsg.id
+        }
+    }
+    return ids
 }
 
 /** 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。 */
@@ -648,6 +692,9 @@ fun AIChatPanel(
     val pendingQuestion by viewModel.pendingUserQuestion.collectAsStateWithLifecycle()
     val currentTodoItems by viewModel.currentSessionTodoItems.collectAsStateWithLifecycle()
     val queuedRequests by viewModel.queuedRequests.collectAsStateWithLifecycle()
+    // 正在运行的那一轮的轮首用户行 id（运行时真值，见 AIAgentViewModel.currentSessionRunningTurnAnchorId）：
+    // 「哪一轮还在跑」只认它。
+    val runningTurnAnchorId by viewModel.currentSessionRunningTurnAnchorId.collectAsStateWithLifecycle()
     val targetRewindMessageId by viewModel.targetRewindMessageId.collectAsStateWithLifecycle()
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
     val modelMetadata = settingsViewModel?.modelMetadata?.collectAsStateWithLifecycle()?.value.orEmpty()
@@ -686,6 +733,8 @@ fun AIChatPanel(
     }
     var pendingAttachments by remember { mutableStateOf<List<PendingUploadAttachment>>(emptyList()) }
     var uploadingCount by remember { mutableStateOf(0) }
+    // 进行中的上传任务：供「取消上传」入口取消。取消会经 runInterruptible 打断阻塞的 SFTP 写循环。
+    var uploadJob by remember { mutableStateOf<Job?>(null) }
     // 附件上传串行化：连续两次选取时两次上传会并发跑，槽位判断与 pendingAttachments 的读-改-写
     // 必须同处一个临界区，否则按同一份旧计数各自放行（超发）并在写回时互相覆盖（先选附件预览丢失）。
     val attachmentUploadMutex = remember { Mutex() }
@@ -765,12 +814,25 @@ fun AIChatPanel(
     // 提到这里（而不是 LazyColumn 分支内）是因为 isFarFromBottom 的「布局是否对应当前消息」判定
     // 需要它：分组会让 item 数 ≠ 消息数 + 1，不能再拿消息数当期望值。
     // 末轮且 agent 忙 = 当前正在跑的那一轮：它的折叠头默认展开（显示「执行中」），收工后自动收起。
-    val activeTurnKey = remember(messages, isBusy) {
+    //
+    // 定位用运行时真值——本轮轮首用户行 id（VM 在本轮用户行落库时登记，见 AIAgentViewModel 的
+    // currentSessionRunningTurnAnchorId）。不能按「最后一条用户消息」定位：本轮中途的插话也是一条普通
+    // 用户消息，它一落库就会把正在跑的那一轮顶掉，折叠头当场翻成「已完成」、进行中的正文被当成最终
+    // 回答——用户看到的就是「一点插话，这一轮被结束了」。
+    // 锚点还没出现在已加载的消息里（分页把它翻出去了），或本轮本来就没有轮首用户行（自动触发轮次、
+    // 后台通知轮次）时退回旧判据：这些情况的行为与改前一致。
+    val activeTurnKey = remember(messages, isBusy, runningTurnAnchorId) {
         if (!isBusy) {
             null
         } else {
-            messages.lastOrNull { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker }
-                ?.let { turnKeyOf(it.id) }
+            val anchor = runningTurnAnchorId?.let { id ->
+                messages.firstOrNull { it.id == id }
+                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker }
+            }
+            val anchorMessage = anchor ?: messages.lastOrNull {
+                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker
+            }
+            anchorMessage?.let { turnKeyOf(it.id) }
         }
     }
     val chatItems = remember(messages, toolGroupOverrideSnapshot, turnOverrideSnapshot, activeTurnKey) {
@@ -781,34 +843,23 @@ fun AIChatPanel(
             activeTurnKey = activeTurnKey,
         )
     }
-    // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方
-    val taskDurations = remember(messages, isBusy) {
-        computeTaskDurations(messages, lastTurnFinished = !isBusy)
+    // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方。
+    // 正在跑的那一轮（以及本轮中途插话在同一次运行里开的后续轮）不给结论：耗时与用量都要等本轮收工
+    // 才成立。按轮首用户行 id 传入（与 activeTurnKey 同一个运行时真值），插话才顶不掉它。
+    val runningTurnStartId = if (isBusy) runningTurnAnchorId else null
+    val taskDurations = remember(messages, isBusy, runningTurnStartId) {
+        computeTaskDurations(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
     }
-    val turnUsages = remember(messages, isBusy) {
-        computeTurnUsage(messages, lastTurnFinished = !isBusy)
+    val turnUsages = remember(messages, isBusy, runningTurnStartId) {
+        computeTurnUsage(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
     }
     val reasoningDurations = viewModel.reasoningDurations
     // 方案 A：每轮正常收尾的最终回复（包括历史所有轮次的回复）均挂操作行（复制/更多），
     // 彻底解决依赖内存集合导致重启 App 后历史消息丢失操作按钮的 Bug。
-    // 仅在最新一轮正在生成（isBusy == true）时暂不挂出，避免生成中途按钮乱跳。
-    val actionableMessageIds = remember(messages, isBusy) {
-        val (leading, turns) = splitChatTurns(messages)
-        val ids = mutableSetOf<String>()
-        leading.filter { it.rendersActionRow() }.forEach { ids += it.id }
-        for (i in turns.indices) {
-            val turn = turns[i]
-            val isLastTurn = i == turns.lastIndex
-            val turnFinished = !isLastTurn || !isBusy
-            if (turnFinished) {
-                val resultMsg = turn.messages.lastOrNull { it.isResultCandidate() && it.rendersActionRow() }
-                    ?: turn.messages.lastOrNull { it.rendersActionRow() }
-                if (resultMsg != null) {
-                    ids += resultMsg.id
-                }
-            }
-        }
-        ids
+    // 仅在最新一轮正在生成（isBusy == true）时暂不挂出，避免生成中途按钮乱跳；
+    // 「正在跑的那一轮」按 activeTurnKey 定位（见上），中途插话开的后续轮同属本次运行，也不挂。
+    val actionableMessageIds = remember(messages, isBusy, activeTurnKey) {
+        actionableResultIds(messages, activeTurnKey, isBusy)
     }
     val activeModel = activeProvider?.effectiveModel.orEmpty()
     val activeModelMetadata = activeProvider?.let { modelMetadata[modelMetadataKey(it.id, activeModel)] }
@@ -967,7 +1018,7 @@ fun AIChatPanel(
             Toast.makeText(context, emptyWorkspaceMessage(context), Toast.LENGTH_SHORT).show()
             return
         }
-        scope.launch {
+        uploadJob = scope.launch {
             var successCount = 0
             var skipped = 0
             val failures = mutableListOf<String>()
@@ -988,6 +1039,8 @@ fun AIChatPanel(
                                 pendingAttachments = pendingAttachments + uploaded.toPendingAttachment()
                                 successCount += 1
                             }.onFailure { error ->
+                                // 取消不是失败：原样上抛，否则会被计成失败项并继续后续文件，取消等于没生效。
+                                if (error is CancellationException) throw error
                                 failures += (error.message ?: uploadFallbackError(context))
                             }
                         }
@@ -1011,6 +1064,19 @@ fun AIChatPanel(
                 else ->
                     Toast.makeText(context, uploadSuccessMessage(context, successCount), Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    fun cancelUpload() {
+        // 只有确实有上传在跑时才提示：横条的退场动画期间按钮仍可点，重复点不该再弹一次。
+        val job = uploadJob
+        if (job != null && job.isActive) {
+            job.cancel()
+            Toast.makeText(
+                context,
+                context.getString(R.string.chat_attachment_upload_cancelled),
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -1710,7 +1776,7 @@ fun AIChatPanel(
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
-                lastUploadingCount?.let { UploadingBanner(count = it) }
+                lastUploadingCount?.let { UploadingBanner(count = it, onCancel = { cancelUpload() }) }
             }
 
             val questionForPanel = rememberLastNonNull(pendingQuestion)

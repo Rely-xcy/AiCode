@@ -79,7 +79,8 @@ class ContextCompactor @Inject constructor(
      * 4. 近期引用只降优先级：最近几轮用过同一文件/同一调用 id 的历史内容排到最后（见
      *    [isRecentlyReferenced]）。它是「模型现在还在对着它干活」的弱证据，不够格免死（软线
      *    本就是该省的地方），但能让体积排序不再拿正在用的内容开刀；跳过哪几条会写进日志；
-     * 5. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短。
+     * 5. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短；并且只动「投影前沿」之后
+     *    的内容（前沿 = 已投影消息里最靠后那条），改动点只前进、不回退，缓存失效范围逐次收窄。
      *
      * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
      */
@@ -111,15 +112,22 @@ class ContextCompactor @Inject constructor(
         }
         if (historyEnd <= 0) return messages
 
+        // 投影前沿：已经投影过的消息里最靠后那一条的位置。它之前的历史本轮一律不再动。
+        // 幂等只能保证同一条消息不会被越削越短，保证不了新的一次裁剪不会回头去改更早的消息——
+        // 而前缀缓存以第一处改动为界，往回动一次就把那处往后的缓存全部作废（连之前省下的也搭上）。
+        // 边界只前进，改动点才只前进，失效范围才会逐次收窄。
+        val frontier = messages.indexOfLast { it.isSoftProjected() }
+        val trimFrom = if (frontier < 0) 0 else frontier
+
         // 近期引用：最近几轮还在操作的文件与用过的本地调用 id。命中的历史内容只降级（排到最后），
         // 不做豁免：预算真不够时仍要削得动，否则软精简就失去意义。
         val callPaths = toolCallPathsById(messages)
         val recent = collectRecentReferences(messages, historyEnd)
-        val argCandidates = (0 until historyEnd)
+        val argCandidates = (trimFrom until historyEnd)
             .filter { index -> isSoftTrimArgCandidate(messages[index]) }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
         val argDeferred = argCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
-        val resultCandidates = (0 until historyEnd)
+        val resultCandidates = (trimFrom until historyEnd)
             .filter { index -> isSoftTrimResultCandidate(messages[index]) }
             .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
         val resultDeferred = resultCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
@@ -194,6 +202,22 @@ class ContextCompactor @Inject constructor(
         if (message !is AgentMessage.ToolResultMessage) return false
         val current = message.modelResult ?: message.result
         return current.length > SOFT_TRIM_TOOL_CHARS && !current.endsWith(SOFT_TRIM_MARKER)
+    }
+
+    /**
+     * 这条消息是不是已经被软精简投影过。
+     *
+     * 工具结果认 [SOFT_TRIM_MARKER]：发送前兜底（[enforceWindowLimit]）也会写 `modelResult`，
+     * 但不带这个标记，不会被误当成本模块的投影而把前沿推得太靠后。工具参数看是否已经重建过
+     * `modelArguments`（软精简与兜底共用 [rebuildToolCallArguments]，这里区分不开，而兜底只在
+     * 逼近窗口时才跑，不是常态）。
+     *
+     * 用来定位「投影前沿」：已投影消息里最靠后那一条的位置，就是本轮不许再回头越过的边界。
+     */
+    private fun AgentMessage.isSoftProjected(): Boolean = when (this) {
+        is AgentMessage.AssistantMessage -> toolCalls.any { it.modelArguments != null }
+        is AgentMessage.ToolResultMessage -> modelResult?.endsWith(SOFT_TRIM_MARKER) == true
+        is AgentMessage.UserMessage -> false
     }
 
     /**

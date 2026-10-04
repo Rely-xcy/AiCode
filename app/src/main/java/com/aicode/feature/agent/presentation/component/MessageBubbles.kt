@@ -105,10 +105,18 @@ internal data class TurnUsage(
  * 轮末判定：其后第一条消息是用户消息，或它就是列表末条且本轮已结束（[lastTurnFinished]，
  * 由 agent 是否空闲给出）。仍在生成中的末轮不计入——耗时与用量都要等本轮收工才成立。
  *
+ * [runningTurnStartId] 是正在运行的那一轮的轮首用户行 id（无运行轮次时为空）：它以及排在它之后的
+ * 轮一律不结算。本轮中途的插话也是一条普通用户消息，若按「下一个用户消息即轮末」算，正在跑的那一轮
+ * 会被插话提前结算出耗时/用量；它之后由插话开的那些轮同属本次运行，同样不结算。
+ *
  * 上下文压缩插入的锚点/摘要落在轮内（压缩发生在请求前），若参与划分会把轮起点算到压缩
  * 时刻上，故先剔除。
  */
-private fun splitTurns(messages: List<AgentUIMessage>, lastTurnFinished: Boolean): List<AgentTurn> {
+private fun splitTurns(
+    messages: List<AgentUIMessage>,
+    lastTurnFinished: Boolean,
+    runningTurnStartId: String? = null
+): List<AgentTurn> {
     val turnMessages = messages.filter {
         !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure
     }
@@ -116,19 +124,21 @@ private fun splitTurns(messages: List<AgentUIMessage>, lastTurnFinished: Boolean
     val turns = mutableListOf<AgentTurn>()
     var turnStart: Long? = null
     var assistants = mutableListOf<AgentUIMessage>()
+    var running = false
     turnMessages.forEachIndexed { index, message ->
         when (message.role) {
             MessageRole.USER -> {
                 turnStart = message.timestamp
                 assistants = mutableListOf()
+                if (runningTurnStartId != null && message.id == runningTurnStartId) running = true
             }
             MessageRole.ASSISTANT -> {
                 val start = turnStart ?: return@forEachIndexed
                 assistants += message
-                val isTurnEnd = if (index == turnMessages.lastIndex) {
-                    lastTurnFinished
-                } else {
-                    turnMessages[index + 1].role == MessageRole.USER
+                val isTurnEnd = when {
+                    running -> false
+                    index == turnMessages.lastIndex -> lastTurnFinished
+                    else -> turnMessages[index + 1].role == MessageRole.USER
                 }
                 if (isTurnEnd) {
                     turns += AgentTurn(start, assistants.toList(), message)
@@ -148,8 +158,10 @@ private fun splitTurns(messages: List<AgentUIMessage>, lastTurnFinished: Boolean
  */
 internal fun computeTaskDurations(
     messages: List<AgentUIMessage>,
-    lastTurnFinished: Boolean
-): Map<String, Long> = splitTurns(messages, lastTurnFinished)
+    lastTurnFinished: Boolean,
+    /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
+    runningTurnStartId: String? = null
+): Map<String, Long> = splitTurns(messages, lastTurnFinished, runningTurnStartId)
     .filter { it.endMessage.timestamp > it.startMillis }
     .associate { it.endMessage.id to (it.endMessage.timestamp - it.startMillis) }
 
@@ -162,8 +174,10 @@ internal fun computeTaskDurations(
  */
 internal fun computeTurnUsage(
     messages: List<AgentUIMessage>,
-    lastTurnFinished: Boolean
-): Map<String, TurnUsage> = splitTurns(messages, lastTurnFinished).associate { turn ->
+    lastTurnFinished: Boolean,
+    /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
+    runningTurnStartId: String? = null
+): Map<String, TurnUsage> = splitTurns(messages, lastTurnFinished, runningTurnStartId).associate { turn ->
     turn.endMessage.id to TurnUsage(
         inputTokens = turn.assistantMessages.sumOf { it.inputTokens },
         outputTokens = turn.assistantMessages.sumOf { it.outputTokens },

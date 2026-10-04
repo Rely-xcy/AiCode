@@ -38,7 +38,7 @@
     <string name="settings_compaction_threshold">Auto-compaction threshold</string>
     <string name="settings_compaction_threshold_desc">Fold early turns into a handoff summary (short-term memory, this session only) once context reaches this share of the window</string>
     <string name="settings_soft_compaction_threshold">Soft-trim threshold</string>
-    <string name="settings_soft_compaction_threshold_desc">Trim oversized tool outputs from history at this share without calling a model (short-term memory, this session only)</string>
+    <string name="settings_soft_compaction_threshold_desc">Trim oversized tool outputs from history once context slightly exceeds this share, without calling a model (short-term memory, this session only)</string>
     <string name="settings_compaction_effective_hard_capped">Actual %1$d%% (%2$s tokens, capped by tier limit)</string>
     <string name="settings_compaction_effective_soft_capped">Limited by the auto-compaction threshold; effective at %1$d%%</string>
     <string name="settings_compaction_effective_disabled">Auto-compaction is unavailable at this tier (window %1$s); only soft trimming runs</string>
@@ -297,6 +297,7 @@
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_cancel">Cancel</string>
+    <string name="common_retry">Retry</string>
     <string name="common_go_to_settings">Go to Settings</string>
     <string name="common_name">Name</string>
     <string name="common_image_preview">Image Preview</string>
@@ -356,6 +357,7 @@
     <string name="chat_attachment_uploaded_partial">%1$s attachments uploaded, some were not added</string>
     <string name="chat_image_too_large">Image exceeds %1$s, please compress and retry</string>
     <string name="chat_attachment_uploading">Uploading %1$d files…</string>
+    <string name="chat_attachment_upload_cancelled">Upload cancelled</string>
     <string name="chat_select_workspace_first">Please select a workspace first</string>
     <string name="chat_read_file_failed">Cannot read the selected file</string>
     <string name="chat_camera_file_failed">Cannot create camera file</string>
@@ -523,6 +525,8 @@
     <string name="drawer_collapse_subagents">Collapse subagents</string>
     <string name="file_browser_error">Failed to read folder</string>
     <string name="file_browser_refresh">Refresh</string>
+    <string name="file_browser_refreshing">Refreshing…</string>
+    <string name="file_browser_refresh_failed">Failed to refresh folder: %1$s</string>
     <string name="file_browser_expand">Expand</string>
     <string name="file_browser_collapse">Collapse</string>
     <string name="file_browser_new_file">New file</string>

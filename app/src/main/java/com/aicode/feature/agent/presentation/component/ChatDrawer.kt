@@ -73,6 +73,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -866,6 +868,8 @@ private fun FileBrowserTab(
     var pendingRename by remember { mutableStateOf<FileTreeNode?>(null) }
     var pendingDelete by remember { mutableStateOf<FileTreeNode?>(null) }
     val hScroll = rememberScrollState()
+    // 手动刷新进行中：远程模式下需串行重列所有已展开目录，可能数秒；期间保留旧树并叠加进行中指示。
+    val refreshing = state is FileBrowseState.Success && state.refreshing
 
     Box(modifier = Modifier.fillMaxSize()) {
         when (state) {
@@ -880,13 +884,23 @@ private fun FileBrowserTab(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = state.detail ?: stringResource(R.string.file_browser_error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(horizontal = Spacing.md)
-                )
+                ) {
+                    // 有失败原因就带上具体原因：只说「读取目录失败」分不清是断线、权限还是目录已不在。
+                    Text(
+                        text = state.detail?.let { stringResource(R.string.file_browser_refresh_failed, it) }
+                            ?: stringResource(R.string.file_browser_error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    TextButton(onClick = onRefresh) {
+                        Text(stringResource(R.string.common_retry))
+                    }
+                }
             }
 
             is FileBrowseState.Success -> {
@@ -941,7 +955,8 @@ private fun FileBrowserTab(
             }
         }
 
-        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
+        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 进行中指示 + 刷新按钮。
+        // 刷新中把刷新按钮禁用：再点一下也只是重发一次相同的重列，没有意义。
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -955,15 +970,21 @@ private fun FileBrowserTab(
                     modifier = Modifier.padding(end = Spacing.xs)
                 )
             }
-            if (fileOpPaths.isNotEmpty()) {
+            if (fileOpPaths.isNotEmpty() || refreshing) {
+                // 转圈本身没有文字，读屏用户只知道「有个进度条」；刷新中补一句说明它在做什么。
+                val refreshLabel = stringResource(R.string.file_browser_refreshing)
                 CircularProgressIndicator(
-                    modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
+                    modifier = Modifier
+                        .padding(end = Spacing.xs)
+                        .size(16.dp)
+                        .then(if (refreshing) Modifier.semantics { contentDescription = refreshLabel } else Modifier),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary
                 )
             }
             IconButton(
                 onClick = onRefresh,
+                enabled = !refreshing,
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(

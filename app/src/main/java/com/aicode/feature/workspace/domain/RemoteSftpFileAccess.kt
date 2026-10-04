@@ -1,5 +1,6 @@
 package com.aicode.feature.workspace.domain
 
+import androidx.annotation.VisibleForTesting
 import com.aicode.core.util.BoundedLineReader
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
@@ -8,6 +9,9 @@ import com.aicode.feature.agent.domain.container.friendlySshError
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.WorkspacePathMapper.Companion.CONTAINER_ROOT
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -56,6 +60,28 @@ class RemoteSftpFileAccess @Inject constructor(
     private val workspaceRepository: WorkspaceRepository
 ) : FileAccessProvider {
 
+    /** 取一条可用的 SFTP 通道。默认走共享连接；测试可经下方次构造换成桩。 */
+    private var sftpProvider: suspend () -> SFTPClient = { connection.sftp() }
+
+    /** 丢弃当前 SFTP 通道（下次调用自动重建）。默认走共享连接；测试可经下方次构造换成桩。 */
+    private var invalidateChannel: suspend () -> Unit = { connection.invalidateSftp() }
+
+    /**
+     * **测试专用**，勿在注入路径使用：Hilt 一律走 [@Inject] 主构造，两个回调的默认实现与
+     * 不开放这个构造时逐字相同（生产行为零变化）。开这个口子只为在没有真实 SSH 连接的前提下
+     * 验证读写缓冲循环的取消语义（取消点、取消后丢弃通道、不重试）。
+     */
+    @VisibleForTesting
+    internal constructor(
+        connection: RemoteSshConnection,
+        workspaceRepository: WorkspaceRepository,
+        sftpProvider: suspend () -> SFTPClient,
+        invalidateChannel: suspend () -> Unit
+    ) : this(connection, workspaceRepository) {
+        this.sftpProvider = sftpProvider
+        this.invalidateChannel = invalidateChannel
+    }
+
     private val sftpMutex = Mutex()
 
     /**
@@ -90,11 +116,11 @@ class RemoteSftpFileAccess @Inject constructor(
      * 在独立 SFTP 通道上串行执行 [block]。传输层异常时丢弃当前通道（下次调用自动重建）后原样抛出；
      * 业务错误（文件不存在/已存在、SFTP 状态码错误）不重建。不做自动重试——写操作重试可能重复落盘。
      */
-    private fun <T> withSftp(block: (SFTPClient) -> T): T = runBlocking {
+    private fun <T> withSftp(block: suspend (SFTPClient) -> T): T = runBlocking {
         withContext(Dispatchers.IO) {
             sftpMutex.withLock {
                 val sftp = try {
-                    connection.sftp()
+                    sftpProvider()
                 } catch (e: Exception) {
                     throw IOException(hostKeyPendingHint() ?: friendlySshError(e), e)
                 }
@@ -107,19 +133,32 @@ class RemoteSftpFileAccess @Inject constructor(
      * 复用已打开的 SFTP 通道执行一次操作（不重新取 client）。供 [readLines] 惰性迭代使用：每次只锁住
      * 一次读取，`yield` 在锁外，调用方中途放弃迭代时不会把 [sftpMutex] 永久占住。
      */
-    private fun <T> onSftp(block: () -> T): T = runBlocking {
+    private fun <T> onSftp(block: suspend () -> T): T = runBlocking {
         withContext(Dispatchers.IO) { sftpMutex.withLock { guarded(block) } }
     }
 
-    /** 传输层异常时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */
-    private suspend fun <T> guarded(block: () -> T): T = try {
+    /** 传输层异常或取消时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */
+    private suspend fun <T> guarded(block: suspend () -> T): T = try {
         block()
     } catch (e: Exception) {
         if (e !is SFTPException && e !is NoSuchFileException && e !is FileAlreadyExistsException) {
-            runCatching { connection.invalidateSftp() }
+            // 取消路径必须用 NonCancellable：此时本协程已被取消，[connection.invalidateSftp] 里的
+            // `sftpLock.withLock` 会在拿锁前就抛 CancellationException，通道永远丢不掉，
+            // 下一次 [connection.sftp] 拿到的还是已损坏的旧 client → 一次取消把 SFTP 打成永久失败。
+            withContext(NonCancellable) { runCatching { invalidateChannel() } }
         }
         throw e
     }
+
+    /**
+     * 读写缓冲循环的协作式取消点：调用方协程被取消（如用户中断附件上传）时抛 CancellationException，
+     * 由 [guarded] 丢弃通道后原样上抛，不自动重试——写重试可能重复落盘。
+     *
+     * 用协程取消而不是 Thread.interrupted：循环跑在 [withSftp] 里 `runBlocking` 桥接出的子协程上，
+     * 调用方用 `runInterruptible` 中断阻塞调用后会取消该子协程（BlockingCoroutine.joinBlocking 的
+     * 中断处理），这里直接检查 job 状态最准确；且 sshj 的阻塞 socket 读不响应线程中断。
+     */
+    private suspend fun ensureTransferActive() = currentCoroutineContext().ensureActive()
 
     override fun readFile(path: String): String = String(readAll(toRemotePath(path)), Charsets.UTF_8)
 
@@ -231,6 +270,7 @@ class RemoteSftpFileAccess @Inject constructor(
                     val buf = ByteArray(IO_CHUNK)
                     var offset = 0L
                     while (true) {
+                        ensureTransferActive()
                         val n = input.read(buf)
                         if (n < 0) break
                         if (n == 0) continue
@@ -352,11 +392,12 @@ class RemoteSftpFileAccess @Inject constructor(
         sftp.open(remote).use { rf -> readFully(rf) }
     }
 
-    private fun readFully(rf: RemoteFile): ByteArray {
+    private suspend fun readFully(rf: RemoteFile): ByteArray {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(IO_CHUNK)
         var offset = 0L
         while (true) {
+            ensureTransferActive()
             val n = rf.read(offset, buf, 0, buf.size)
             if (n <= 0) break
             out.write(buf, 0, n)
@@ -365,9 +406,10 @@ class RemoteSftpFileAccess @Inject constructor(
         return out.toByteArray()
     }
 
-    private fun writeAll(rf: RemoteFile, bytes: ByteArray) {
+    private suspend fun writeAll(rf: RemoteFile, bytes: ByteArray) {
         var offset = 0
         while (offset < bytes.size) {
+            ensureTransferActive()
             val n = minOf(IO_CHUNK, bytes.size - offset)
             rf.write(offset.toLong(), bytes, offset, n)
             offset += n
@@ -390,7 +432,7 @@ class RemoteSftpFileAccess @Inject constructor(
     }
 
     /** 递归复制（SFTP 无服务端复制原语）：目录建好后逐项复制，文件流式读写。 */
-    private fun copyRecursive(sftp: SFTPClient, from: String, to: String) {
+    private suspend fun copyRecursive(sftp: SFTPClient, from: String, to: String) {
         val attrs = sftp.statExistence(from) ?: throw NoSuchFileException(File(from))
         if (attrs.type == FileMode.Type.DIRECTORY) {
             sftp.mkdirs(to)
@@ -405,6 +447,7 @@ class RemoteSftpFileAccess @Inject constructor(
                     val buf = ByteArray(IO_CHUNK)
                     var offset = 0L
                     while (true) {
+                        ensureTransferActive()
                         val n = src.read(offset, buf, 0, buf.size)
                         if (n <= 0) break
                         dst.write(offset, buf, 0, n)

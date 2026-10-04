@@ -426,9 +426,9 @@ private fun FileAttachmentPreview(attachment: PendingUploadAttachment) {
     }
 }
 
-/** 上传进行中的提示条：大文件传输耗时较久，没有反馈会像卡死。 */
+/** 上传进行中的提示条：大文件传输耗时较久，没有反馈会像卡死；右侧叉号用于取消本次上传。 */
 @Composable
-internal fun UploadingBanner(count: Int) {
+internal fun UploadingBanner(count: Int, onCancel: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -449,8 +449,21 @@ internal fun UploadingBanner(count: Int) {
             Text(
                 text = stringResource(R.string.chat_attachment_uploading, count),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
             )
+            Spacer(Modifier.width(Spacing.sm))
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    FeatherIcons.X,
+                    contentDescription = stringResource(R.string.common_cancel),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }
