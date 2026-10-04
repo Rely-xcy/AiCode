@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.container.friendlySshError
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.WorkspacePathMapper.Companion.CONTAINER_ROOT
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
@@ -113,12 +114,15 @@ class RemoteSftpFileAccess @Inject constructor(
         withContext(Dispatchers.IO) { sftpMutex.withLock { guarded(block) } }
     }
 
-    /** 传输层异常时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */
+    /** 传输层异常或取消时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */
     private suspend fun <T> guarded(block: suspend () -> T): T = try {
         block()
     } catch (e: Exception) {
         if (e !is SFTPException && e !is NoSuchFileException && e !is FileAlreadyExistsException) {
-            runCatching { connection.invalidateSftp() }
+            // 取消路径必须用 NonCancellable：此时本协程已被取消，[connection.invalidateSftp] 里的
+            // `sftpLock.withLock` 会在拿锁前就抛 CancellationException，通道永远丢不掉，
+            // 下一次 [connection.sftp] 拿到的还是已损坏的旧 client → 一次取消把 SFTP 打成永久失败。
+            withContext(NonCancellable) { runCatching { connection.invalidateSftp() } }
         }
         throw e
     }
