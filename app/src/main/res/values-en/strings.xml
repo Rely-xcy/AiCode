@@ -428,9 +428,10 @@
     <string name="update_channel_latest">Preview</string>
     <string name="update_channel_latest_desc">Also detects pre-releases (RC)</string>
     <string name="about_no_changelog">No changelog available</string>
-    <!-- fork-only: self-hosted update source (drop these two fork_update_ keys before an upstream PR) -->
+    <!-- fork-only: self-hosted update source (drop these three fork_update_ keys before an upstream PR) -->
     <string name="fork_update_release_title">%1$s (%2$s)</string>
     <string name="fork_update_install_now">Update now</string>
+    <string name="fork_update_changelog_truncated">… (long changelog — showing only the first %1$d lines)</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>

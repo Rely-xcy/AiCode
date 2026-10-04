@@ -428,9 +428,10 @@
     <string name="update_channel_latest">预览版</string>
     <string name="update_channel_latest_desc">除正式版外，还检测预览版（RC）更新</string>
     <string name="about_no_changelog">暂无更新说明</string>
-    <!-- fork 专属：自建更新源（推上游 PR 前连同下面 fork_update_ 前缀的两条一起删） -->
+    <!-- fork 专属：自建更新源（推上游 PR 前连同下面 fork_update_ 前缀的三条一起删） -->
     <string name="fork_update_release_title">%1$s（%2$s）</string>
     <string name="fork_update_install_now">立即更新</string>
+    <string name="fork_update_changelog_truncated">……（更新日志较长，此处仅显示前 %1$d 行）</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI 需要你的确认</string>

@@ -47,7 +47,7 @@ internal const val FORK_UPDATE_SUPPORTS_CHANNEL = false
  * 5. UpdateCheckDialog：onOpenDownload 改回 onOpenRelease，按钮回到 githubReleaseUrl(state.latestTag) 与 R.string.about_download；
  * 6. MainActivity：onOpenDownload 改回 onOpenRelease(tag) 并补回 githubReleaseUrl import；
  * 7. AboutSection：拆掉 FORK_UPDATE_SUPPORTS_CHANNEL 的 if 包裹与 import；
- * 8. strings.xml（中英两份）删掉 fork_ 前缀的两条；docs-site/docs/guide/about.md 改回 GitHub Releases 的描述。
+ * 8. strings.xml（中英两份）删掉 fork_ 前缀的三条；docs-site/docs/guide/about.md 改回 GitHub Releases 的描述。
  * 一行定位：rg -n "FORK_UPDATE_SUPPORTS_CHANNEL|ForkUpdateCheckService|forkUpdateCheckService|fork_update_|downloadUrl"
  */
 @Singleton
