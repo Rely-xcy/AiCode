@@ -11,6 +11,7 @@ import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import java.io.File
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 internal data class UploadedWorkspaceFile(
@@ -186,13 +187,15 @@ internal suspend fun copyUriToWorkspace(
         if (declared != null && declared > MAX_IMAGE_UPLOAD_BYTES) error(imageLimitError(context))
     }
 
+    // 大文件读写可能持续很久。用 runInterruptible 把「上传协程被取消」转成对阻塞调用的线程中断，
+    // 远程 SFTP 侧的缓冲循环才能观察到取消；写操作被取消后不会重试（重试可能重复落盘）。
     val sizeBytes: Long
     val image: AgentImage?
     if (includeImageData) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: error(unreadableFileMessage(context))
         if (bytes.size > MAX_IMAGE_UPLOAD_BYTES) error(imageLimitError(context))
-        fileAccess.writeBytes(containerPath, bytes, overwrite = true)
+        runInterruptible { fileAccess.writeBytes(containerPath, bytes, overwrite = true) }
         sizeBytes = bytes.size.toLong()
         image = AgentImage(
             mimeType = mimeType,
@@ -202,13 +205,13 @@ internal suspend fun copyUriToWorkspace(
     } else {
         // 普通附件流式落盘：不再整份读进内存，于是文件多大都不会顶爆堆
         sizeBytes = context.contentResolver.openInputStream(uri)?.use { input ->
-            fileAccess.writeStream(containerPath, input, overwrite = true)
+            runInterruptible { fileAccess.writeStream(containerPath, input, overwrite = true) }
         } ?: error(unreadableFileMessage(context))
         image = null
     }
 
     // 缩略图与图片数据需要本地文件：本地模式直接给宿主文件，远程模式下载到临时文件
-    val localFile = fileAccess.copyToLocal(containerPath)
+    val localFile = runInterruptible { fileAccess.copyToLocal(containerPath) }
 
     UploadedWorkspaceFile(
         fileName = fileName,

@@ -102,6 +102,8 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -686,6 +688,8 @@ fun AIChatPanel(
     }
     var pendingAttachments by remember { mutableStateOf<List<PendingUploadAttachment>>(emptyList()) }
     var uploadingCount by remember { mutableStateOf(0) }
+    // 进行中的上传任务：供「取消上传」入口取消。取消会经 runInterruptible 打断阻塞的 SFTP 写循环。
+    var uploadJob by remember { mutableStateOf<Job?>(null) }
     // 附件上传串行化：连续两次选取时两次上传会并发跑，槽位判断与 pendingAttachments 的读-改-写
     // 必须同处一个临界区，否则按同一份旧计数各自放行（超发）并在写回时互相覆盖（先选附件预览丢失）。
     val attachmentUploadMutex = remember { Mutex() }
@@ -967,7 +971,7 @@ fun AIChatPanel(
             Toast.makeText(context, emptyWorkspaceMessage(context), Toast.LENGTH_SHORT).show()
             return
         }
-        scope.launch {
+        uploadJob = scope.launch {
             var successCount = 0
             var skipped = 0
             val failures = mutableListOf<String>()
@@ -988,6 +992,8 @@ fun AIChatPanel(
                                 pendingAttachments = pendingAttachments + uploaded.toPendingAttachment()
                                 successCount += 1
                             }.onFailure { error ->
+                                // 取消不是失败：原样上抛，否则会被计成失败项并继续后续文件，取消等于没生效。
+                                if (error is CancellationException) throw error
                                 failures += (error.message ?: uploadFallbackError(context))
                             }
                         }
@@ -1012,6 +1018,10 @@ fun AIChatPanel(
                     Toast.makeText(context, uploadSuccessMessage(context, successCount), Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    fun cancelUpload() {
+        uploadJob?.cancel()
     }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -1710,7 +1720,7 @@ fun AIChatPanel(
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
-                lastUploadingCount?.let { UploadingBanner(count = it) }
+                lastUploadingCount?.let { UploadingBanner(count = it, onCancel = { cancelUpload() }) }
             }
 
             val questionForPanel = rememberLastNonNull(pendingQuestion)
