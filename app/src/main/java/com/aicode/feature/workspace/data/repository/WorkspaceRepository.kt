@@ -338,11 +338,19 @@ class WorkspaceRepository @Inject constructor(
         }
     }
 
-    /** 远程工作区根（remoteWorkspacePath 展开 ~ 后）的绝对路径；未配置或为空时 null。 */
-    private fun remoteWorkspaceRootPath(): String? {
-        val cfg = remoteSshConnection.config ?: return null
+    /**
+     * [cfg] 对应的远程工作区根绝对路径（remoteWorkspacePath 展开 ~ 后）；没有配置或展开后为空时 null。
+     *
+     * 「有没有可用的根」只此一份判据：[initialize] 与 [refreshRemoteWorkspaces] 都走它，
+     * 两边不一致时，同一份配置会在两个入口给出不同的工作区列表。
+     */
+    private fun remoteWorkspaceRootOrNull(cfg: RemoteConnectionConfig?): String? {
+        if (cfg == null) return null
         return pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/')).ifEmpty { null }
     }
+
+    /** 远程工作区根（remoteWorkspacePath 展开 ~ 后）的绝对路径；未配置或为空时 null。 */
+    private fun remoteWorkspaceRootPath(): String? = remoteWorkspaceRootOrNull(remoteSshConnection.config)
 
     /** 单次扫描远程工作区根得到的结果，见 [scanRemoteWorkspaceRoot]。 */
     private data class RemoteRootScan(
@@ -474,13 +482,20 @@ class WorkspaceRepository @Inject constructor(
         return internal + external
     }
 
-    /** exec 列出 remoteWorkspacePath 下的子目录作为工作区（不用 SFTP，避免 sshj Buffer bug）。 */
+    /**
+     * exec 列出 remoteWorkspacePath 下的子目录作为工作区（不用 SFTP，避免 sshj Buffer bug）；
+     * 没有可用的工作区根（未配置 / 目标目录展开后为空）时直接空列表，不发命令。
+     */
     private suspend fun refreshRemoteWorkspaces(): List<Workspace> {
-        val cfg = remoteSshConnection.config ?: run {
-            FileLogger.w(TAG, "远程工作区列表失败：SSH 未配置")
+        val cfg = remoteSshConnection.config
+        // 与 initialize() 共用 remoteWorkspaceRootOrNull：目标目录展开后为空时 wsRoot 为 null，
+        // 这里必须走空列表，不能再拿空串去拼命令 —— 那会拼出列远端根目录的 ls，把 /home、/tmp、
+        // /etc 这些根目录下的子目录当成工作区，和 initialize() 在同样配置下的空列表结果分叉。
+        val wsRoot = remoteWorkspaceRootOrNull(cfg)
+        if (wsRoot == null) {
+            FileLogger.w(TAG, "远程工作区列表为空：${remoteScanAbortReason(cfg, wsRoot)}")
             return emptyList()
         }
-        val wsRoot = pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/'))
         return runCatching {
             // ls -d */ 列出子目录，取基名
             val output = execRemote("ls -d ${wsRoot}/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null")
