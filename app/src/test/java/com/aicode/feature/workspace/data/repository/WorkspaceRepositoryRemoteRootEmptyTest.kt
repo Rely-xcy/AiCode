@@ -13,11 +13,13 @@ import com.aicode.feature.workspace.domain.PathHomeResolver
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import net.schmizz.sshj.connection.channel.direct.Session
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -33,6 +35,9 @@ import java.nio.file.Files
  * ② 工作区列表 —— `refreshRemoteWorkspaces()` 拿空串去拼命令，拼出来的是列远端根目录的那条 ls，
  * 远端根下的 `/home`、`/tmp` 这些子目录会被当成工作区列出来，与 `initialize()` 在同一份配置下
  * 给出空列表的结果分叉（打开工作区面板时 `refreshAvailability()` 走的就是这条链）。
+ * ③ 写/删入口 —— `createWorkspace()` / `deleteWorkspace()` 同样拿空串拼目标路径，拼出来是远端
+ * 根目录下的 `/<名称>`：新建会在服务器根目录下建目录，删除会 `rm -rf` 到系统目录（如 `/home`）。
+ * 两者都必须在根取不到时直接拒绝，一条远程命令都不发。
  *
  * 这里构造**真实**的 [WorkspaceRepository]（只 mock 依赖），被测的就是仓库自己的取根与分派逻辑；
  * 纯 JVM：Context 用 mockk，DataStore/projectsRoot 落到临时目录，exec 会话用 mockk 喂回放好的 stdout。
@@ -65,7 +70,9 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     private fun createRepository(
         config: RemoteConnectionConfig?,
         listing: String = "",
-        connectionState: ConnectionState = ConnectionState.CONNECTED
+        connectionState: ConnectionState = ConnectionState.CONNECTED,
+        // 按命令给退出码：`test -d` 要靠它判断「目录已存在」，其余默认成功
+        exitCode: (String) -> Int = { 0 }
     ): WorkspaceRepository {
         every { executionModeHolder.currentMode() } returns ExecutionMode.REMOTE_SSH
         every { remoteSshConnection.connectionState } returns MutableStateFlow(connectionState)
@@ -89,8 +96,9 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
         every { context.getString(R.string.workspace_remote_not_configured) } returns NOT_CONFIGURED_MESSAGE
         every { context.getString(R.string.workspace_remote_default_create_failed) } returns PERMISSION_DISK_MESSAGE
         every { remoteSshConnection.startExecSession(any()) } answers {
-            executedCommands += firstArg<String>()
-            execSessionReturning(listing)
+            val command = firstArg<String>()
+            executedCommands += command
+            execSessionReturning(listing, exitCode(command))
         }
         return WorkspaceRepository(
             context = context,
@@ -102,10 +110,11 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
         )
     }
 
-    /** 一个把 [output] 当作命令 stdout 的 exec 会话。 */
-    private fun execSessionReturning(output: String): Session.Command {
+    /** 一个把 [output] 当作命令 stdout、[exitCode] 当作退出码的 exec 会话。 */
+    private fun execSessionReturning(output: String, exitCode: Int = 0): Session.Command {
         val command = mockk<Session.Command>()
         every { command.inputStream } returns ByteArrayInputStream(output.toByteArray())
+        every { command.exitStatus } returns exitCode
         every { command.close() } returns Unit
         return command
     }
@@ -178,6 +187,68 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
         assertEquals(
             RemoteScanAbort.ScanAborted,
             WorkspaceRepository.remoteScanAbort(cfg = config("/srv/ai/code"), root = "/srv/ai/code")
+        )
+    }
+
+    // ── ③ 写/删入口：根展开为空时一条远程命令都不许发 ─────────────────────────
+
+    @Test
+    fun deleteWorkspace_targetDirIsSlash_issuesNoDeleteCommand() = runTest {
+        val repo = createRepository(config = config("/"))
+
+        repo.deleteWorkspace("home")
+
+        // 旧实现下必红：拼出的 remotePath 是 "/home"，executedCommands 里会留下一条
+        // `rm -rf '/home'` —— 目标是服务器根目录下的 /home，root 账号下就是真删。
+        assertTrue(executedCommands.isEmpty())
+        verify(exactly = 0) { remoteSshConnection.startExecSession(any()) }
+    }
+
+    @Test
+    fun createWorkspace_targetDirIsSlash_createsNothing() = runTest {
+        // 远端根目录下没有同名目录（test -d 退出码非 0），旧实现会真的走 mkdir 那一步
+        val repo = createRepository(
+            config = config("/"),
+            exitCode = { if (it.startsWith("test -d")) 1 else 0 }
+        )
+
+        val created = repo.createWorkspace("home")
+
+        // 旧实现下必红：会先后发出 `test -d '/home'` 与 `mkdir -p '/home'`，
+        // 于是服务器根目录下会被建出 /home。
+        assertTrue(executedCommands.isEmpty())
+        // 旧实现下必红：mkdir 的退出码不看成败，照样返回 path 为 "/home" 的工作区，
+        // 之后的会话 cwd、文件读写就会落到工作区范围之外。
+        assertNull(created)
+    }
+
+    // ── 护栏（新旧实现都绿，不是本次修复的红/绿证据）───────────────────────
+
+    @Test
+    fun deleteWorkspace_configuredTargetDir_deletesUnderThatDir() = runTest {
+        // 防的是「把空路径的短路写宽了，顺手把正常删除路径也短路掉」：
+        // 正常配置下的删除命令逐字未变，删的仍是该目录下的那一个子目录。
+        val repo = createRepository(config = config("/srv/ai/code"))
+
+        repo.deleteWorkspace("demo")
+
+        assertEquals("rm -rf '/srv/ai/code/demo'", executedCommands.first())
+    }
+
+    @Test
+    fun createWorkspace_configuredTargetDir_createsUnderThatDir() = runTest {
+        // 同上：正常配置下仍然是先 test -d 再 mkdir -p，目标都在该目录下
+        val repo = createRepository(
+            config = config("/srv/ai/code"),
+            exitCode = { if (it.startsWith("test -d")) 1 else 0 }
+        )
+
+        val created = repo.createWorkspace("demo")
+
+        assertEquals("/srv/ai/code/demo", created?.path)
+        assertEquals(
+            listOf("test -d '/srv/ai/code/demo'", "mkdir -p '/srv/ai/code/demo'"),
+            executedCommands.take(2)
         )
     }
 
