@@ -1483,6 +1483,8 @@
     <string name="workspace_name_exists">已存在同名工作区</string>
     <string name="workspace_remote_root_create_failed">远程工作区目录创建失败，请检查路径与服务器权限</string>
     <string name="workspace_remote_default_create_failed">远程默认工作区创建失败，请检查服务器权限与磁盘空间</string>
+    <string name="workspace_remote_target_dir_empty">远程工作区路径为空或无效，请在「容器与镜像」中填写具体目录</string>
+    <string name="workspace_remote_not_configured">尚未配置远程连接，无法加载工作区</string>
     <string name="workspace_add_local_dir">添加本地目录</string>
     <string name="workspace_external_added">已添加本地目录工作区「%1$s」</string>
     <string name="workspace_external_warning_title">添加本地目录工作区</string>

@@ -52,6 +52,27 @@ private val Context.workspaceDataStore by preferencesDataStore(
 class WorkspaceNotReadyException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
 /**
+ * 远程工作区根取不到、或远程扫描没进行成时的来因。
+ *
+ * 日志文案（[WorkspaceRepository.remoteScanAbortReason]）与给用户的提示文案
+ * （[WorkspaceRepository.initialize] 里默认工作区没建出来时）都从这一份分类派生，
+ * 免得同一条链路上出现两套判据。
+ *
+ * 远程路径配成 `/`（或只有斜杠）时，结尾斜杠会被 `trimEnd('/')` 吃光得到空串，这与「压根没配
+ * 远程连接」是两回事：一个要去改路径，一个要去建连接，文案必须分开。
+ */
+internal enum class RemoteScanAbort {
+    /** 没有已保存的远程连接配置。 */
+    NotConfigured,
+
+    /** 有配置，但 remoteWorkspacePath 展开后为空，没有任何可用的工作区根。 */
+    TargetDirEmpty,
+
+    /** 工作区根取到了，失败落在连接或远端命令上。 */
+    ScanAborted
+}
+
+/**
  * 管理 App 内的"工作区/项目"。
  *
  * **本地模式**：所有项目放在内部私有目录 `filesDir/projects/<name>` 下——ext4 真实路径，
@@ -119,21 +140,29 @@ class WorkspaceRepository @Inject constructor(
         }
 
         /**
-         * [initialize] 里远程扫描没进行成（`scan == null`，工作区列表被置空）时写进失败级日志的来因。
+         * 远程工作区根取不到（[root] 为 null）、或扫描没进行成时的来因分类 —— 判据只有这一份。
          *
          * [root] 为 null 只有两种可能，且都不是「服务器上确实没有工作区目录」那种可自愈的预期情况：
          * 没有已保存的远程连接配置，或配置的远程目标目录展开后为空。两者对用户的含义完全不同
-         * （一个要去连远程，一个要去改目标目录），文案必须分开，不能笼统写一句「列表为空」。
+         * （一个要去连远程，一个要去改目标目录），日志与提示文案都必须分开。
          *
          * [root] 不为 null 说明根路径取到了，失败落在连接或远端命令上 —— 那两处已各自在
          * [scanRemoteWorkspaceRoot] 里记了带上下文的 WARN，这里只说结论，避免把原因说错。
          */
+        internal fun remoteScanAbort(cfg: RemoteConnectionConfig?, root: String?): RemoteScanAbort {
+            if (root != null) return RemoteScanAbort.ScanAborted
+            return if (cfg == null) RemoteScanAbort.NotConfigured else RemoteScanAbort.TargetDirEmpty
+        }
+
+        /** [remoteScanAbort] 的分类结果对应的失败级日志来因，带上可核对的上下文（路径 / 根目录）。 */
         internal fun remoteScanAbortReason(cfg: RemoteConnectionConfig?, root: String?): String {
-            if (root != null) {
-                return "连接或远端命令未能完成扫描（原因见上一条远程工作区日志），根目录=$root"
+            return when (remoteScanAbort(cfg, root)) {
+                RemoteScanAbort.ScanAborted ->
+                    "连接或远端命令未能完成扫描（原因见上一条远程工作区日志），根目录=$root"
+                RemoteScanAbort.NotConfigured -> "SSH 未配置（没有已保存的远程连接配置）"
+                RemoteScanAbort.TargetDirEmpty ->
+                    "远程目标目录为空（remoteWorkspacePath='${cfg?.remoteWorkspacePath}'）"
             }
-            if (cfg == null) return "SSH 未配置（没有已保存的远程连接配置）"
-            return "远程目标目录为空（remoteWorkspacePath='${cfg.remoteWorkspacePath}'）"
         }
 
         /**
@@ -243,8 +272,21 @@ class WorkspaceRepository @Inject constructor(
                 val created = createRemoteWorkspaceWithoutRelist(fallbackName)
                 if (created != null) {
                     _workspaces.value = _workspaces.value + created
-                } else if (remoteSshConnection.isConnected()) {
-                    _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                } else {
+                    // 默认工作区没建出来：按同一份判据（remoteScanAbort）区分来因再决定文案。
+                    // 目标目录没配、远程连接没配这两种都指向配置，不能借「请检查服务器权限与磁盘空间」
+                    // 把用户带去查服务器；只有根路径取到了却没建成，才确实是权限或磁盘的问题。
+                    when (remoteScanAbort(remoteSshConnection.config, remoteWorkspaceRootPath())) {
+                        RemoteScanAbort.TargetDirEmpty ->
+                            _initError.value = context.getString(R.string.workspace_remote_target_dir_empty)
+                        RemoteScanAbort.NotConfigured ->
+                            _initError.value = context.getString(R.string.workspace_remote_not_configured)
+                        RemoteScanAbort.ScanAborted -> {
+                            if (remoteSshConnection.isConnected()) {
+                                _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                            }
+                        }
+                    }
                 }
             }
         }
