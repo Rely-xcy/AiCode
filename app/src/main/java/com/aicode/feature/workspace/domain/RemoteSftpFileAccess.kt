@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.friendlySshError
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.WorkspacePathMapper.Companion.CONTAINER_ROOT
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -137,14 +138,24 @@ class RemoteSftpFileAccess @Inject constructor(
         withContext(Dispatchers.IO) { sftpMutex.withLock { guarded(block) } }
     }
 
-    /** 传输层异常或取消时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */
+    /**
+     * 传输层异常时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误（文件不存在/已存在、
+     * SFTP 状态码错误）与**取消**都不重建。
+     *
+     * 取消单独放行是有意的：取消只表示「这一次调用不做了」，连接本身没坏。读写缓冲循环的取消点
+     * （[ensureTransferActive]）在取消时抛 [CancellationException]，若把它也当成传输层异常，
+     * 一次取消就会把仍然健康的通道丢掉——并发或紧随其后的文件树重列、读取要白白重建一条 SSH 传输。
+     */
     private suspend fun <T> guarded(block: suspend () -> T): T = try {
         block()
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         if (e !is SFTPException && e !is NoSuchFileException && e !is FileAlreadyExistsException) {
-            // 取消路径必须用 NonCancellable：此时本协程已被取消，[connection.invalidateSftp] 里的
-            // `sftpLock.withLock` 会在拿锁前就抛 CancellationException，通道永远丢不掉，
-            // 下一次 [connection.sftp] 拿到的还是已损坏的旧 client → 一次取消把 SFTP 打成永久失败。
+            // 丢弃通道必须放 NonCancellable：本协程可能已被并发取消，[invalidateChannel] 的
+            // `withLock` 会在拿锁前就抛 CancellationException，通道丢不掉、旧 client 一直留着。
+            // 留一条日志：通道何时因何被丢是远程异常的现场证据（取消不再走这条路径）。
+            FileLogger.w(TAG, "丢弃 SFTP 通道（下次调用重建）: ${e::class.java.simpleName}", e)
             withContext(NonCancellable) { runCatching { invalidateChannel() } }
         }
         throw e
@@ -152,7 +163,7 @@ class RemoteSftpFileAccess @Inject constructor(
 
     /**
      * 读写缓冲循环的协作式取消点：调用方协程被取消（如用户中断附件上传）时抛 CancellationException，
-     * 由 [guarded] 丢弃通道后原样上抛，不自动重试——写重试可能重复落盘。
+     * 经 [guarded] 原样上抛（取消不丢通道），不自动重试——写重试可能重复落盘。
      *
      * 用协程取消而不是 Thread.interrupted：循环跑在 [withSftp] 里 `runBlocking` 桥接出的子协程上，
      * 调用方用 `runInterruptible` 中断阻塞调用后会取消该子协程（BlockingCoroutine.joinBlocking 的
