@@ -16,7 +16,14 @@ on:
       - 'LICENSE'
       - '.gitignore'
   # 允许 API/页面手动触发（复验 flake、重跑门禁用）。
+  # test_filters 仅供二分定位测试泄漏：逗号分隔的 --tests 模式；留空即全量。
   workflow_dispatch:
+    inputs:
+      test_filters:
+        description: 'Comma-separated --tests patterns (empty = full suite)'
+        required: false
+        default: ''
+        type: string
   pull_request:
     branches: [ main, fork/release ]
     paths-ignore:
@@ -73,7 +80,17 @@ jobs:
       # 只跑 universal debug 变体：单测逻辑与 flavor 无关（flavor 仅影响 abiFilters/assets），
       # 跑全 flavor 6 变体是重复编译，无额外覆盖。
       - name: Run unit tests
-        run: ./gradlew :app:testUniversalDebugUnitTest
+        env:
+          # 仅 workflow_dispatch 用；其它事件下 inputs 为空 -> 保持全量。
+          TEST_FILTERS: "${{ github.event_name == 'workflow_dispatch' && inputs.test_filters || '' }}"
+        run: |
+          filters=()
+          IFS=',' read -ra parts <<< "$TEST_FILTERS"
+          for part in "${parts[@]}"; do
+            if [ -n "$part" ]; then filters+=(--tests "$part"); fi
+          done
+          echo "unit test --tests filters: ${filters[*]:-<none (full suite)>}"
+          ./gradlew :app:testUniversalDebugUnitTest ${filters[@]+"${filters[@]}"}
 
       # 单测失败时把测试报告与原始 XML 传成 artifact：CI 日志只有 FAILED 摘要，
       # 真栈（例如 kotlinx-coroutines-test 把根因塞进 suppressed、只落到 system-err）
