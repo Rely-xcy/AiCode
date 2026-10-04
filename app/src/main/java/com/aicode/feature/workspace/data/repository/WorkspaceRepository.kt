@@ -10,6 +10,7 @@ import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ConnectionState
+import com.aicode.feature.agent.domain.container.RemoteConnectionConfig
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -116,6 +117,37 @@ class WorkspaceRepository @Inject constructor(
             while ("$base ($i)" in existing) i++
             return "$base ($i)"
         }
+
+        /**
+         * [initialize] 里远程扫描没进行成（`scan == null`，工作区列表被置空）时写进失败级日志的来因。
+         *
+         * [root] 为 null 只有两种可能，且都不是「服务器上确实没有工作区目录」那种可自愈的预期情况：
+         * 没有已保存的远程连接配置，或配置的远程目标目录展开后为空。两者对用户的含义完全不同
+         * （一个要去连远程，一个要去改目标目录），文案必须分开，不能笼统写一句「列表为空」。
+         *
+         * [root] 不为 null 说明根路径取到了，失败落在连接或远端命令上 —— 那两处已各自在
+         * [scanRemoteWorkspaceRoot] 里记了带上下文的 WARN，这里只说结论，避免把原因说错。
+         */
+        internal fun remoteScanAbortReason(cfg: RemoteConnectionConfig?, root: String?): String {
+            if (root != null) {
+                return "连接或远端命令未能完成扫描（原因见上一条远程工作区日志），根目录=$root"
+            }
+            if (cfg == null) return "SSH 未配置（没有已保存的远程连接配置）"
+            return "远程目标目录为空（remoteWorkspacePath='${cfg.remoteWorkspacePath}'）"
+        }
+
+        /**
+         * [initialize] 收尾那条日志的文案。
+         *
+         * [currentName] 为 null 表示收尾时仍没有可用工作区：这种情况下文案里不能出现「完成」——
+         * 原来不论成败都打「工作区初始化完成，当前: null」，事后翻日志只看到一条长得像成功的记录，
+         * 查不出「工作区列表为什么是空的」。
+         */
+        internal fun initCompletionMessage(currentName: String?, location: String): String {
+            val root = location.ifBlank { "未配置" }
+            if (currentName != null) return "工作区初始化完成，当前: $currentName，根目录: $root"
+            return "工作区初始化结束，无可用工作区（列表为空），根目录: $root"
+        }
     }
 
     private val currentNameKey = stringPreferencesKey("current_workspace_name")
@@ -170,19 +202,28 @@ class WorkspaceRepository @Inject constructor(
         // 远程模式：等 SSH 连接就绪后再列工作区，避免启动时序竞争
         if (!isLocal()) {
             waitForConnection()
+            val cfg = remoteSshConnection.config
             val wsRoot = remoteWorkspaceRootPath()
             val scan = wsRoot?.let { root -> scanRemoteWorkspaceRoot(root, symlinkCandidateName?.let { "$root/$it" }) }
             if (scan == null) {
-                // 未连接 / 未配置 / 根路径为空：与原来「根目录检查提前返回 + 列目录失败」一致，保持空列表
+                // 扫描没进行成：保持空列表，但必须留下失败级日志并写清是哪一种来因
+                // （未配置 / 目标目录为空 / 未连接 / 远端命令失败），否则事后只剩一句「列表为空」。
+                FileLogger.w(TAG, "远程工作区初始化中止，工作区列表置空：${remoteScanAbortReason(cfg, wsRoot)}")
                 _workspaces.value = emptyList()
             } else {
-                if (scan.rootExit != null && scan.rootExit != 0) {
+                val rootCreateFailed = scan.rootExit != null && scan.rootExit != 0
+                if (rootCreateFailed) {
                     FileLogger.w(TAG, "创建远程工作区根目录失败: $wsRoot (exit=${scan.rootExit})")
                     _initError.value = context.getString(R.string.workspace_remote_root_create_failed)
                 }
                 symlinkHandledByScan = scan.symlinkDone
                 _workspaces.value = scan.dirs.map { name ->
                     Workspace(name = name, path = "$wsRoot/$name", type = WorkspaceType.REMOTE)
+                }
+                // 「服务器上确实没有工作区目录」是可自愈的预期情况（根目录刚被 mkdir -p 建出来也一样）：
+                // 用 INFO 与上面那条 WARN 分开，紧接着的默认工作区创建会把条目补上。
+                if (scan.dirs.isEmpty() && !rootCreateFailed) {
+                    FileLogger.i(TAG, "远程工作区根下暂无子目录，按预期创建默认工作区: $wsRoot")
                 }
             }
             ensureCurrentReachable()
@@ -220,7 +261,14 @@ class WorkspaceRepository @Inject constructor(
         }
         _current.value = target
         val location = if (isLocal()) projectsRoot.absolutePath else remoteSshConnection.config?.remoteWorkspacePath ?: ""
-        FileLogger.i(TAG, "工作区初始化完成，当前: ${target?.name}，根目录: $location")
+        // 只有真的落到可用工作区才报成功形状的 INFO；否则降为 WARN 并写明「无可用工作区」，
+        // 免得日志里只留下一条「工作区初始化完成，当前: null」—— 看着像成功，实则什么都没落定。
+        val completion = initCompletionMessage(target?.name, location)
+        if (target != null) {
+            FileLogger.i(TAG, completion)
+        } else {
+            FileLogger.w(TAG, completion)
+        }
         // 远程模式：选中工作区后更新符号链接，让 Bash 的 ~/workspace 指向当前工作区
         // （若本次扫描已经指向同一个工作区并执行过，就省掉这次往返）
         if (!isLocal() && target != null && !(symlinkHandledByScan && target.name == symlinkCandidateName)) {
@@ -275,7 +323,10 @@ class WorkspaceRepository @Inject constructor(
      * @return null 表示连接不可用/未配置，调用方保持空列表。
      */
     private suspend fun scanRemoteWorkspaceRoot(wsRoot: String, symlinkCandidate: String?): RemoteRootScan? {
-        if (!remoteSshConnection.isConnected()) return null
+        if (!remoteSshConnection.isConnected()) {
+            FileLogger.w(TAG, "远程工作区扫描中止：SSH 未连接（连接状态=${remoteSshConnection.connectionState.value}），根目录=$wsRoot")
+            return null
+        }
         val root = shellQuote(wsRoot)
         val linkPart = if (symlinkCandidate == null) {
             "echo LN:skip"
@@ -307,7 +358,11 @@ class WorkspaceRepository @Inject constructor(
      * ——列表刚列过且为空是已知事实，条目直接本地拼（`mkdir -p` 本身幂等，名字被别的客户端抢先建出也无害）。
      */
     private suspend fun createRemoteWorkspaceWithoutRelist(name: String): Workspace? {
-        val wsRoot = remoteWorkspaceRootPath() ?: return null
+        val wsRoot = remoteWorkspaceRootPath()
+        if (wsRoot == null) {
+            FileLogger.w(TAG, "远程默认工作区创建中止：远程连接未配置或目标目录展开后为空")
+            return null
+        }
         val path = "$wsRoot/$name"
         val exit = execRemoteExit("mkdir -p ${shellQuote(path)}")
         if (exit != 0) {
@@ -354,13 +409,21 @@ class WorkspaceRepository @Inject constructor(
     private suspend fun createLocalFallbackWorkspace(): Workspace? {
         val fallbackName = uniqueName(DEFAULT_WORKSPACE, _workspaces.value.map { it.name }.toSet())
         val fallbackDir = File(projectsRoot, fallbackName)
-        if (!fallbackDir.isDirectory && !fallbackDir.mkdirs()) return null
+        if (!fallbackDir.isDirectory && !fallbackDir.mkdirs()) {
+            FileLogger.e(TAG, "创建本地默认工作区失败: ${fallbackDir.absolutePath}")
+            return null
+        }
         _workspaces.value = refreshLocalWorkspaces()
         return _workspaces.value.firstOrNull { it.name == fallbackName && it.available }
     }
 
     private suspend fun refreshLocalWorkspaces(): List<Workspace> {
-        val internal = projectsRoot.listFiles { f -> f.isDirectory }
+        val internalDirs = projectsRoot.listFiles { f -> f.isDirectory }
+        // 列不出来（返回 null）与「目录里确实没有子目录」（空数组）在列表上长得一样，日志里得分开
+        if (internalDirs == null) {
+            FileLogger.w(TAG, "本地工作区根目录列目录失败，内部工作区按空处理: ${projectsRoot.absolutePath}")
+        }
+        val internal = internalDirs
             ?.sortedBy { it.name.lowercase() }
             ?.map { Workspace(name = it.name, path = it.absolutePath) }
             ?: emptyList()
