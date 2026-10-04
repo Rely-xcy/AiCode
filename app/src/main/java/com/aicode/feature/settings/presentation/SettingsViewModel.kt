@@ -1612,8 +1612,9 @@ class SettingsViewModel @Inject constructor(
             if (manual) {
                 _updateCheckState.value = UpdateCheckUiState.Checking
             }
-            // fork 专属：数据源换成自建 id 版接口（首次不弹、失败静默、id 必存由该服务内部保证）
-            val result = forkUpdateCheckService.checkForUpdate()
+            // fork 专属：数据源换成自建接口，并把本机 versionName 传进去——服务里从 `+g<短哈希>`
+            // 与站点包名里的哈希比对，相等才算最新（见 ForkUpdateCheckService.hasNewVersion）
+            val result = forkUpdateCheckService.checkForUpdate(currentVersionName())
             _updateCheckState.value = when (result) {
                 is UpdateCheckResult.UpToDate -> {
                     if (manual) UpdateCheckUiState.UpToDate else UpdateCheckUiState.Idle
