@@ -551,8 +551,9 @@ class WorkspaceRepository @Inject constructor(
 
     /**
      * 新建工作区目录。名称会被清洗为安全的文件夹名。
-     * 本地模式 mkdirs projectsRoot/name；远程模式 SFTP mkdirs remoteWorkspacePath/name。
-     * @return 创建成功的 [Workspace]；名称非法或已存在返回 null。
+     * 本地模式 mkdirs projectsRoot/name；远程模式 exec mkdir remoteWorkspacePath/name。
+     * @return 创建成功的 [Workspace]；名称非法、已存在、远程工作区根取不到（未配置 / 目标目录展开后为空）
+     *   时返回 null，后者不发任何远程命令（空根会让目标变成远端根目录下的 /<名称>）。
      */
     suspend fun createWorkspace(rawName: String): Workspace? = withContext(Dispatchers.IO) {
         val name = sanitize(rawName)
@@ -574,8 +575,18 @@ class WorkspaceRepository @Inject constructor(
             FileLogger.i(TAG, "新建工作区: $name")
             Workspace(name = name, path = dir.absolutePath)
         } else {
-            val cfg = remoteSshConnection.config ?: return@withContext null
-            val wsRoot = pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/'))
+            val cfg = remoteSshConnection.config
+            // 与 initialize()/refreshRemoteWorkspaces/deleteWorkspace 共用 remoteWorkspaceRootOrNull 这一份判据：
+            // 根取不到（未配置 / 目标目录展开后为空）时绝不拼命令 —— 空根拼出来的是远端根目录下的
+            // /<名称>，`mkdir -p` 会在服务器根目录下建出目录（root 账号下真的建得出来）。
+            val wsRoot = remoteWorkspaceRootOrNull(cfg)
+            if (wsRoot == null) {
+                FileLogger.w(
+                    TAG,
+                    "远程新建工作区中止，未发出任何远程命令：${remoteScanAbortReason(cfg, wsRoot)}，名称='$name'"
+                )
+                return@withContext null
+            }
             val remotePath = "$wsRoot/$name"
             runCatching {
                 if (execRemoteExit("test -d ${shellQuote(remotePath)}") == 0) {
