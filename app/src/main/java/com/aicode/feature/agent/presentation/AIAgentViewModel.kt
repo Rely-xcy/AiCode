@@ -969,6 +969,30 @@ class AIAgentViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
+     * 正在运行的那一轮「轮首用户行 id」（每会话一条；该会话无运行中的轮次时无条目）。
+     *
+     * 写入方：[executeAgentRequestStream] 在本轮用户行落库之后登记、在本轮收尾（finally）时清除
+     * （以及停止全部 / 删除会话时一并清掉，避免留下过时条目）。
+     * 读方：聊天界面据此认定「哪一轮还在跑」——折叠头显示「执行中」、进行中的正文不当最终回答、
+     * 不挂操作行与本轮耗时/token（见 AIChatPanel 的 activeTurnKey、MessageBubbles 的 splitTurns）。
+     *
+     * 为什么不按「列表里最后一条用户消息」定位：本轮中途的插话同样是一条普通用户消息，它一落库就会
+     * 把「正在跑的那一轮」顶掉，本轮当场被判为已完成——用户看到的就是「一点插话，这一轮被结束了」。
+     * 这里登记的是运行时真值：本轮用户行的主键，与交给 workflow 的
+     * [com.aicode.feature.agent.domain.model.AgentContext.userMessageId] 同一个值（workflow 用它把
+     * 本轮模式提醒写回该行）。它不是启发式，也不看界面列表。
+     *
+     * 自动触发轮次（/init、/skill 等不落用户行）与后台通知轮次（落的是通知行，不是轮起点）不登记：
+     * 它们没有轮首用户行，界面按旧判据兜底，行为与改动前一致。
+     */
+    private val _runningTurnAnchorIds = MutableStateFlow<Map<String, String>>(emptyMap())
+    val currentSessionRunningTurnAnchorId: StateFlow<String?> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf<String?>(null) else _runningTurnAnchorIds.map { it[id] }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
      * 已被丢弃、确认不会再落库的用户消息 id 集合（队列删除 / 回退清空队列 /
      * 切换工作区停止全部 / 会话被删）。
      *
@@ -1618,6 +1642,11 @@ class AIAgentViewModel @Inject constructor(
             val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
             if (userMsgId != null) {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
+                // 登记本轮轮首用户行 id（见 [currentSessionRunningTurnAnchorId]）：界面靠它认定
+                // 「哪一轮还在跑」。后台通知轮次落的是通知行、不是轮起点，不登记。
+                if (!request.startsWith(BACKGROUND_NOTIFICATION_PREFIX)) {
+                    _runningTurnAnchorIds.value = _runningTurnAnchorIds.value + (sessionId to userMsgId)
+                }
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
                 if (isFirst && !skipTitleUpdate) {
                     sessionUseCase.updateTitle(sessionId, sessionUseCase.deriveTitle(request))
@@ -1967,6 +1996,9 @@ class AIAgentViewModel @Inject constructor(
             FileLogger.d(TAG, "stream finally: sid=$sessionId isOwnJob=$isOwnJob state=${_agentStates.value[sessionId]}")
             if (isOwnJob) {
                 sessionJobs.remove(sessionId)
+                // 本轮锚点随 job 一起清：紧随其后的 flush / 队列会同步起新一轮并在那时登记新锚点，
+                // 先清才不会把新一轮的锚点抹掉。
+                _runningTurnAnchorIds.value = _runningTurnAnchorIds.value - sessionId
             }
             _runningTools.value = _runningTools.value - sessionId
             setStreamingText(sessionId, null)
@@ -2021,6 +2053,8 @@ class AIAgentViewModel @Inject constructor(
         val jobs = sessionJobs.values.filter { it.isActive }
         jobs.forEach { it.cancel() }
         sessionJobs.clear()
+        // 清空所有锚点：被 cancel 的 job 里 finally 可能看不到自己（sessionJobs 已清），别的清理点不落空。
+        _runningTurnAnchorIds.value = emptyMap()
         agentNotificationCenter.clearAll()
         markClientMessagesDiscarded(_queuedRequests.value.values.flatten())
         _queuedRequests.value = emptyMap()
@@ -2406,6 +2440,7 @@ class AIAgentViewModel @Inject constructor(
             _retryStates.value = _retryStates.value - sid
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
+            _runningTurnAnchorIds.value = _runningTurnAnchorIds.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
@@ -2446,6 +2481,7 @@ class AIAgentViewModel @Inject constructor(
             _retryStates.value = _retryStates.value - sid
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
+            _runningTurnAnchorIds.value = _runningTurnAnchorIds.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
