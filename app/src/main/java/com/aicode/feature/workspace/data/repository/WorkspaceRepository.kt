@@ -661,7 +661,9 @@ class WorkspaceRepository @Inject constructor(
 
     /** 删除工作区。内部/远程工作区连同文件与会话记录删除；外部本地工作区只解除关联，不删除物理目录，
      *  其会话记录是否一并删除由「偏好设置」中的开关决定。
-     *  若删的是当前工作区，则自动切到剩余的第一个。 */
+     *  若删的是当前工作区，则自动切到剩余的第一个。
+     *  远程模式下的工作区根取不到（未配置 / 目标目录展开后为空）时拒绝执行远程删除：
+     *  空根拼出的目标是远端根目录下的 /<名称>，一条 rm -rf 就可能删掉服务器系统目录。 */
     suspend fun deleteWorkspace(name: String) = withContext(Dispatchers.IO) {
         val target = _workspaces.value.firstOrNull { it.name == name }
         if (isLocal() && target?.type == WorkspaceType.EXTERNAL_LOCAL) {
@@ -686,8 +688,17 @@ class WorkspaceRepository @Inject constructor(
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }
         } else {
             val cfg = remoteSshConnection.config
-            if (cfg != null) {
-                val remotePath = "${pathHomeResolver.expandHome(cfg.remoteWorkspacePath).trimEnd('/')}/$name"
+            // 同一份根判据（与 initialize()/refreshRemoteWorkspaces/createWorkspace 同源）：根取不到时
+            // 不拼命令、不执行 —— 空根拼出来的是远端根目录下的 /<名称>，`rm -rf '/home'` 打在服务器
+            // 系统目录上就是真删。宁可本次远端删除什么都没做，也不把删除范围扩到工作区之外。
+            val wsRoot = remoteWorkspaceRootOrNull(cfg)
+            if (wsRoot == null) {
+                FileLogger.w(
+                    TAG,
+                    "远程删除工作区中止，未发出任何远程命令：${remoteScanAbortReason(cfg, wsRoot)}，名称='$name'"
+                )
+            } else {
+                val remotePath = "$wsRoot/$name"
                 runCatching { execRemoteExit("rm -rf ${shellQuote(remotePath)}") }
                     .onFailure { FileLogger.e(TAG, "远程删除工作区失败: $remotePath", it) }
             }
