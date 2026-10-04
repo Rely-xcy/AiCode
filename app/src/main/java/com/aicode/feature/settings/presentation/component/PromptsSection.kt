@@ -106,6 +106,12 @@ internal fun PromptsSection(
                 modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
             )
         } else {
+            Text(
+                text = stringResource(R.string.prompts_sort_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 8.dp)
+            )
             PromptList(
                 fragments = state.fragments,
                 onOpenFragment = onOpenFragment,
@@ -175,26 +181,28 @@ private fun PromptList(
                             scaleY = dragScale
                         }
                 ) {
+                    // 内置片段存在 assets 里，文件名改不了，不给拖拽手柄。
+                    val draggable = fragment.source != PromptFragmentSource.BUILTIN
                     PromptRow(
                         fragment = fragment,
                         onClick = { onOpenFragment(fragment) },
                         onDelete = { onDeleteFragment(fragment.number, fragment.source) },
                         deleteEnabled = fragment.editable,
-                        dragModifier = Modifier.longPressDraggableHandle(
-                            onDragStarted = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                            },
-                            onDragStopped = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                // 立即重编号（槽化），与落盘后的编号一致，避免 key 变化引起列表跳动
-                                val numbers = localFragments.map { it.number }.sorted()
-                                val renumbered = localFragments.mapIndexed { index, item ->
-                                    item.copy(number = numbers[index])
+                        draggable = draggable,
+                        dragModifier = if (draggable) {
+                            Modifier.longPressDraggableHandle(
+                                onDragStarted = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                },
+                                onDragStopped = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                    // 只需把新顺序交给上层：编号分配与落盘都由 Catalog 按各片段自身的层处理。
+                                    onReorder(localFragments)
                                 }
-                                localFragments = renumbered
-                                onReorder(renumbered)
-                            }
-                        )
+                            )
+                        } else {
+                            Modifier
+                        }
                     )
                 }
             }
@@ -239,16 +247,22 @@ internal fun PromptsAddSheet(
     }
 }
 
-/** 单条片段行：图标 + 编号·名称 + 摘要 + 来源徽章 + 箭头；长按内容区拖拽排序，左滑删除。 */
+/** 单条片段行：图标 + 编号·名称 + 摘要 + 来源徽章 + 箭头；可拖动的行长按内容区拖拽排序，左滑删除。 */
 @Composable
 private fun PromptRow(
     fragment: PromptFragment,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     deleteEnabled: Boolean,
+    draggable: Boolean,
     dragModifier: Modifier
 ) {
     val sortDescription = stringResource(R.string.prompts_sort_long_press)
+    val dragSemantics = if (draggable) {
+        Modifier.semantics { contentDescription = sortDescription }
+    } else {
+        Modifier
+    }
     val row: @Composable () -> Unit = {
         Row(
             modifier = Modifier
@@ -260,7 +274,7 @@ private fun PromptRow(
                 modifier = Modifier
                     .weight(1f)
                     .then(dragModifier)
-                    .semantics { contentDescription = sortDescription },
+                    .then(dragSemantics),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(

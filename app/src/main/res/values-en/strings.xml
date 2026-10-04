@@ -1028,6 +1028,7 @@
     <!-- Custom Prompts -->
     <string name="prompts_title">Prompts</string>
     <string name="prompts_sort_long_press">Long-press to reorder</string>
+    <string name="prompts_sort_hint">Long-press and drag to change injection order. Dragging only changes the number, never a fragment's source layer; built-in fragments are not reorderable.</string>
     <string name="prompts_empty">No fragments available</string>
     <string name="prompts_source_project">Project</string>
     <string name="prompts_source_global">Global</string>
