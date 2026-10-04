@@ -497,17 +497,27 @@ class AIAgentViewModel @Inject constructor(
         .flatMapLatest { expanded ->
             val watched = expanded + WorkspacePathMapper.CONTAINER_ROOT
             val triggers = merge(
-                watched.map { fileChangeHub.watchWorkspace(it).asDirtySignal() }.merge().debounce(BROWSE_DEBOUNCE_MS),
+                watched.map { fileChangeHub.watchWorkspace(it).asDirtySignal() }.merge().debounce(BROWSE_DEBOUNCE_MS).map { false },
                 // drop(1) 丢掉 StateFlow 重建时的当前值，否则刚展开就会多读一次
-                _browseRefresh.drop(1).map { },
+                _browseRefresh.drop(1).map { true },
                 // AI 工具刚写完工作区文件：远程模式（SFTP）没有 inotify，写入方不主动提一下就不会重读
-                workspaceWriteSignal.writes
+                workspaceWriteSignal.writes.map { false }
             )
             flow {
                 // 首次产出前由 stateIn 初值 Loading 占位；后续展开/折叠/刷新不再回到 Loading，
                 // StateFlow 保留上一份 Success 直到新树就绪，避免闪加载动画与滚动位置丢失。
-                emit(buildBrowseTree(expanded))
-                triggers.collect { emit(buildBrowseTree(expanded)) }
+                var previous: FileBrowseState = buildBrowseTree(expanded)
+                emit(previous)
+                triggers.collect { manualRefresh ->
+                    val last = previous
+                    // 只有手动刷新需要先发一帧进行中态：远程模式下要串行重列所有已展开目录，
+                    // 数秒内没有任何反馈会像卡死。原样发上一份树（仅置 refreshing）保住滚动位置。
+                    if (manualRefresh && last is FileBrowseState.Success) {
+                        emit(last.copy(refreshing = true))
+                    }
+                    previous = buildBrowseTree(expanded)
+                    emit(previous)
+                }
             }.flowOn(Dispatchers.IO)
         }
         // 新树已就绪：清掉展开等待态（无论成功/出错都清，避免转圈卡死）。

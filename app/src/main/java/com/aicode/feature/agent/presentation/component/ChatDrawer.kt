@@ -866,6 +866,8 @@ private fun FileBrowserTab(
     var pendingRename by remember { mutableStateOf<FileTreeNode?>(null) }
     var pendingDelete by remember { mutableStateOf<FileTreeNode?>(null) }
     val hScroll = rememberScrollState()
+    // 手动刷新进行中：远程模式下需串行重列所有已展开目录，可能数秒；期间保留旧树并叠加进行中指示。
+    val refreshing = state is FileBrowseState.Success && state.refreshing
 
     Box(modifier = Modifier.fillMaxSize()) {
         when (state) {
@@ -941,7 +943,8 @@ private fun FileBrowserTab(
             }
         }
 
-        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
+        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 进行中指示 + 刷新按钮。
+        // 刷新中把刷新按钮禁用：再点一下也只是重发一次相同的重列，没有意义。
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -955,7 +958,7 @@ private fun FileBrowserTab(
                     modifier = Modifier.padding(end = Spacing.xs)
                 )
             }
-            if (fileOpPaths.isNotEmpty()) {
+            if (fileOpPaths.isNotEmpty() || refreshing) {
                 CircularProgressIndicator(
                     modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
                     strokeWidth = 2.dp,
@@ -964,6 +967,7 @@ private fun FileBrowserTab(
             }
             IconButton(
                 onClick = onRefresh,
+                enabled = !refreshing,
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(
