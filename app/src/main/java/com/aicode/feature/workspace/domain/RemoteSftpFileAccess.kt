@@ -249,9 +249,11 @@ class RemoteSftpFileAccess @Inject constructor(
         } catch (e: Exception) {
             // 用完即删：临时文件不依赖 deleteOnExit（只在进程退出清），失败路径也回收，避免长会话累积。
             runCatching { tempFile.delete() }
+            // 只有真的是「不存在」才报不存在：断线/通道异常一律报连接类原因，
+            // 否则 AI 读图时看到的是「文件不存在」，而文件其实就在服务器上
             if (e is NoSuchFileException) throw e
             FileLogger.e(TAG, "copyToLocal 失败: $remote", e)
-            throw NoSuchFileException(File(remote))
+            throw IOException(friendlySshError(e), e)
         }
     }
 
