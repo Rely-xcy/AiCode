@@ -235,7 +235,7 @@ class RemoteSshConnection @Inject constructor(
         return runCatching { connect(cfg) }
             .onSuccess {
                 FileLogger.i(TAG, "SSH 重连成功（前台触发）")
-                runCatching { onReconnected?.invoke() }
+                invokeReconnectedCallbackSafely(onReconnected)
             }
             .onFailure {
                 FileLogger.w(TAG, "SSH 重连失败（前台触发）", it)
@@ -476,6 +476,29 @@ class RemoteSshConnection @Inject constructor(
     /** 与 app 侧一致的编码：base64 后整体反转（属混淆，非加密）。 */
     private fun encodeCreds(plain: String): String =
         android.util.Base64.encodeToString(plain.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP).reversed()
+}
+
+/**
+ * 调用重连成功后的回调（工作区重载、内置文档同步等），并把回调抛出的异常降级成一条日志。
+ *
+ * 抽成独立函数是为了让这条路径可测（[RemoteSshConnection] 起真连接要一台服务器，内部直接 new 了
+ * sshj 的 SSHClient，换不掉）。
+ *
+ * 两件事必须同时成立：**不外抛**——[RemoteSshConnection.tryReconnectIfDisconnected] 的返回值与
+ * 随后的状态判断表达的是「连接是否建立」，回调失败不该被算成连接失败，否则会把刚连上的状态改回
+ * FAILED；**不能吞掉痕迹**——回调里任何没被自己兜住的异常都会让「已连接、工作区列表却是空的」
+ * 变成一个查不到原因的现象，所以失败必须记下异常类型与消息。
+ *
+ * @param callback 未注册时（null）为空操作且不记日志：supervisor 尚未启动属正常启动时序。
+ * @param logFailure 记录失败的方式；默认写 App 日志，测试里换成收集器。
+ */
+internal suspend fun invokeReconnectedCallbackSafely(
+    callback: (suspend () -> Unit)?,
+    logFailure: (String, Throwable) -> Unit = { message, error -> FileLogger.w(TAG, message, error) }
+) {
+    runCatching { callback?.invoke() }.onFailure { e ->
+        logFailure("SSH 重连成功但重连后处理失败（连接本身正常）: ${e.javaClass.simpleName}: ${e.message}", e)
+    }
 }
 
 /** 远程 SSH 连接状态，供 UI 指示器与工作区初始化时序判断。 */
