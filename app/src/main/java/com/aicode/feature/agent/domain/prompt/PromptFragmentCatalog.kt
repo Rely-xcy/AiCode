@@ -6,7 +6,6 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -75,15 +74,12 @@ class PromptFragmentCatalog @Inject constructor(
         val builtin = builtinFiles()
         val project = numberedFragments(projectDir(projectRoot))
         val global = numberedFragments(globalDir)
-        val local = numberedFragments(localDir)
         val numbers = LinkedHashSet<Int>().apply {
             addAll(builtin.keys)
             addAll(project.keys)
             addAll(global.keys)
-            // 本地层也按编号参与：重排会把本地片段改到任意编号上（不再只认内置文件名）。
-            addAll(local.keys)
         }
-        val all = numbers.sorted().mapNotNull { resolve(it, builtin, project, global, local) }
+        val all = numbers.sorted().mapNotNull { resolve(it, builtin, project, global) }
         // 「完全禁用内置提示词」时列表只保留自定义来源，与注入结果一致。
         return if (isBuiltinDisabled()) {
             all.filter {
@@ -98,8 +94,7 @@ class PromptFragmentCatalog @Inject constructor(
         number,
         builtinFiles(),
         numberedFragments(projectDir(projectRoot)),
-        numberedFragments(globalDir),
-        numberedFragments(localDir)
+        numberedFragments(globalDir)
     )
 
     /** 静态基线正文：所有生效片段去掉前导注释后按编号拼接。 */
@@ -165,124 +160,30 @@ class PromptFragmentCatalog @Inject constructor(
     }
 
     /**
-     * 按拖拽后的顺序重新编号并落盘：编号集合不变，只把新顺序映射到这些编号上，
-     * 从而改变注入顺序（数字越小越靠前）。
-     *
-     * 每个片段写回它**自己所属的层**（项目 → 工作区 `.aicode/prompts.custom/`、
-     * 全局 → `<aicodeDir>/prompts.custom/`、本地 → `<aicodeDir>/prompts/`），
-     * 所以各行的来源徽章不会因为拖动而改变。内置片段存在 assets 里、文件名改不了，
-     * 一律跳过（由 UI 禁止拖动内置行）。
-     *
-     * 落盘顺序保证不丢内容：先把这些编号上已有的文件（含被遮挡的同编号文件）整体挪进暂存目录，
-     * 再写新内容并校验；任一步失败都把暂存目录里的文件搬回原位，磁盘与操作前一致。
+     * 按拖拽后的顺序重新编号并落盘：编号集合保持不变，只把各片段内容依次映射到这些编号，
+     * 从而改变注入顺序（数字越小越靠前）。写入可写层。
      */
     fun reorder(reordered: List<PromptFragment>, projectRoot: String?): Boolean {
+        if (reordered.isEmpty()) return false
         val project = projectDir(projectRoot)
-        val movable = reordered.filter { it.source != PromptFragmentSource.BUILTIN }
-        if (movable.isEmpty()) return false
-        val numbers = movable.map { it.number }.sorted()
-        if (numbers.toSet().size != numbers.size) {
-            FileLogger.w(TAG, "提示词重排被跳过：编号重复 $numbers")
-            return false
-        }
-        val writes = movable.mapIndexedNotNull { index, fragment ->
-            reorderDir(fragment.source, project)?.let { dir ->
-                ReorderWrite(dir, fileName(numbers[index], fragment.title), fragment.content)
-            }
-        }
-        if (writes.size != movable.size) {
-            FileLogger.w(TAG, "提示词重排被跳过：存在无法写回的来源")
-            return false
-        }
-        val dirs = listOfNotNull(project, globalDir, localDir).distinct()
-        return applyReorder(numbers, writes, dirs)
-    }
-
-    /** 重排时各来源可写回的层目录。只影响改编号，与「内容能否编辑」的 [editable] 无关。 */
-    private fun reorderDir(source: PromptFragmentSource, project: File?): File? = when (source) {
-        PromptFragmentSource.PROJECT -> project
-        PromptFragmentSource.GLOBAL -> globalDir
-        PromptFragmentSource.LOCAL -> localDir
-        PromptFragmentSource.BUILTIN -> null
-    }
-
-    /** 一个编号定向目标：写到哪个目录、用什么文件名、写什么内容。 */
-    private data class ReorderWrite(val dir: File, val name: String, val content: String)
-
-    private fun fileName(number: Int, title: String): String =
-        "%02d-%s.md".format(number, sanitizeTitle(title))
-
-    /**
-     * 两阶段落盘：先把涉及的旧文件整体暂存，再写新状态并校验，失败则整体回滚。
-     *
-     * @param numbers 参与重排的编号集合（顺序无关）。
-     * @param writes 目标状态：每个编号最终应有的文件。
-     * @param dirs 需要参与清理的目录（项目 / 全局 / 本地）。
-     */
-    private fun applyReorder(numbers: List<Int>, writes: List<ReorderWrite>, dirs: List<File>): Boolean {
-        val staging = File(containerInstaller.aicodeDir, STAGING_DIR)
-        val stashed = mutableListOf<Pair<File, File>>()
-        val written = mutableListOf<File>()
-        fun rollback() {
-            written.forEach { it.delete() }
-            stashed.forEach { (original, stash) ->
-                if (stash.isFile) {
-                    original.parentFile?.mkdirs()
-                    stash.copyTo(original, overwrite = true)
-                }
-            }
-            staging.deleteRecursively()
-        }
+        val dir = writableDir(projectRoot)
+        val numbers = reordered.map { it.number }.sorted()
         return try {
-            staging.deleteRecursively()
-            if (!staging.mkdirs()) throw IOException("暂存目录创建失败: ${staging.absolutePath}")
-            dirs.forEachIndexed { dirIndex, dir ->
-                dir.listFiles().orEmpty().forEach { file ->
-                    val number = if (file.isFile) PromptFragmentResolver.parseNumber(file.name) else null
-                    if (number == null || number !in numbers) return@forEach
-                    val stash = File(File(staging, dirIndex.toString()), file.name)
-                    stash.parentFile?.mkdirs()
-                    if (!file.renameTo(stash)) throw IOException("暂存失败: ${file.absolutePath}")
-                    stashed += file to stash
-                }
+            if (!dir.exists()) dir.mkdirs()
+            numbers.forEach { number ->
+                deleteOverridesFor(number, dir)
+                if (project != null && project != dir) deleteOverridesFor(number, project)
+                if (globalDir != dir) deleteOverridesFor(number, globalDir)
             }
-            writes.forEach { write ->
-                if (!write.dir.exists() && !write.dir.mkdirs()) {
-                    throw IOException("目录创建失败: ${write.dir.absolutePath}")
-                }
-                File(write.dir, write.name).writeText(write.content)
-                written += File(write.dir, write.name)
+            reordered.forEachIndexed { index, fragment ->
+                File(dir, "%02d-%s.md".format(numbers[index], sanitizeTitle(fragment.title)))
+                    .writeText(fragment.content)
             }
-            if (!verifyReorder(numbers, writes, dirs)) throw IOException("重排校验未通过")
-            staging.deleteRecursively()
             true
         } catch (e: Exception) {
-            FileLogger.e(TAG, "重排提示词失败，已回滚", e)
-            rollback()
+            FileLogger.e(TAG, "重排提示词失败", e)
             false
         }
-    }
-
-    /** 校验：每个参与重排的编号上，只应有目标文件且内容逐字一致。 */
-    private fun verifyReorder(numbers: List<Int>, writes: List<ReorderWrite>, dirs: List<File>): Boolean {
-        val expected = HashMap<Int, ReorderWrite>()
-        writes.forEach { write ->
-            val number = PromptFragmentResolver.parseNumber(write.name) ?: return false
-            if (expected.put(number, write) != null) return false
-        }
-        numbers.forEach { number ->
-            val write = expected[number] ?: return false
-            val target = File(write.dir, write.name)
-            if (!target.isFile || target.readText() != write.content) return false
-            dirs.forEach { dir ->
-                dir.listFiles().orEmpty().forEach { file ->
-                    if (file.isFile && PromptFragmentResolver.parseNumber(file.name) == number && file != target) {
-                        return false
-                    }
-                }
-            }
-        }
-        return true
     }
 
     /**
@@ -328,14 +229,14 @@ class PromptFragmentCatalog @Inject constructor(
         number: Int,
         builtin: Map<Int, String>,
         project: Map<Int, File>,
-        global: Map<Int, File>,
-        local: Map<Int, File>
+        global: Map<Int, File>
     ): PromptFragment? {
         project[number]?.let { return readFragment(it, number, PromptFragmentSource.PROJECT) }
         global[number]?.let { return readFragment(it, number, PromptFragmentSource.GLOBAL) }
-        // 本地层按编号解析（不再要求文件名与内置同名），重排到任意编号后仍然可解析。
-        local[number]?.let { return readFragment(it, number, PromptFragmentSource.LOCAL) }
         builtin[number]?.let { name ->
+            File(localDir, name).takeIf { it.isFile }?.let {
+                return readFragment(it, number, PromptFragmentSource.LOCAL)
+            }
             readAsset(name)?.let { content ->
                 return PromptFragment(
                     number,
@@ -407,25 +308,7 @@ class PromptFragmentCatalog @Inject constructor(
         const val ASSET_DIR = "prompts"
         const val CUSTOM_DIR = "prompts.custom"
         const val LOCAL_DIR = "prompts"
-        const val STAGING_DIR = ".reorder-staging"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
         val DESCRIPTION = Regex("^\\s*<!--\\s*(.*?)\\s*-->", RegexOption.DOT_MATCHES_ALL)
     }
-}
-
-/**
- * 拖拽落点对应的编号分配：内置片段不参与重排，其余片段按新顺序占用它们原先占据的编号集合，
- * 最后按编号升序返回。
- *
- * 与 [PromptFragmentCatalog.reorder] 共用同一套规则，保证列表乐观更新的编号与落盘结果一致。
- */
-internal fun assignReorderNumbers(reordered: List<PromptFragment>): List<PromptFragment> {
-    val slots = reordered.filter { it.source != PromptFragmentSource.BUILTIN }.map { it.number }.sorted()
-    var next = 0
-    return reordered
-        .map { fragment ->
-            if (fragment.source == PromptFragmentSource.BUILTIN) fragment
-            else fragment.copy(number = slots[next++])
-        }
-        .sortedBy { it.number }
 }

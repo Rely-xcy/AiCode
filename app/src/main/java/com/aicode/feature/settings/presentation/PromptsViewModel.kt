@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentCatalog
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
-import com.aicode.feature.agent.domain.prompt.assignReorderNumbers
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -126,14 +125,10 @@ class PromptsViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 拖拽重排：按新顺序重新编号并落盘，改变注入顺序。
-     *
-     * 编号只分配给可改名的片段（内置片段留原位），并且每条写回自己所属的层，来源徽章不变。
-     * 乐观更新本地状态，避免重读导致列表跳动。
-     */
+    /** 拖拽重排：按新顺序重新编号并落盘，改变注入顺序。乐观更新本地状态，避免重读导致列表跳动。 */
     fun reorderFragments(reordered: List<PromptFragment>) {
-        val renumbered = assignReorderNumbers(reordered)
+        val numbers = reordered.map { it.number }.sorted()
+        val renumbered = reordered.mapIndexed { index, fragment -> fragment.copy(number = numbers[index]) }
         _state.update { it.copy(fragments = renumbered) }
         viewModelScope.launch {
             val projectRoot = currentProjectRoot()
