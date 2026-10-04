@@ -199,16 +199,18 @@ class CompactionModuleTest {
      *
      * 削完落回软线附近，于是要再涨出同样的量才会再削一次——避免长会话里每轮都改消息字节、
      * 把提示词前缀缓存从改动点往后整段作废。旧实现是裸比较 `currentTokens >= softThreshold`，
-     * 第一次（26,000 ≥ 25,600）就会裁，本用例第一段断言即红。
+     * 第一次（27,010 ≥ 25,600）就会裁，本用例第一段断言即红。
      */
     @Test
     fun `软线滞回：刚到软线不裁，再长出滞回量才裁`() = runTest {
         val h = harness()
         val ctx = EngineContext(sessionId = "s1", projectRoot = "/ws")
+        // 27,000 个汉字 ≈ 27,000 token：消息本体必须自己越过软线 25,600，否则 softTrim
+        // 开头那条「估算已 ≤ targetTokens 就原样返回」的判断会让裁剪空转，闸门与滞回都测不到。
         val toolResult = AgentMessage.ToolResultMessage(
             id = "t1",
             toolName = "read",
-            result = "a".repeat(3_100)
+            result = "汉".repeat(27_000)
         )
         // 3 条用户消息把历史工具输出挡在保护线之外，historyEnd 落在它之后
         val messages = listOf(
@@ -228,11 +230,12 @@ class CompactionModuleTest {
             )
         )
 
-        // 软线 25,600；滞回 2,560。26,000 够软线但不够滞回线 → 不裁，原样返回
+        // 软线 25,600、滞回 2,560 → 动手线 28,160。判定 = max(真实 26,000, 估算 27,010) = 27,010：
+        // 越过软线但没到动手线 → 不裁，原样返回
         assertNull(call(lastInputTokens = 26_000))
         assertNull(toolResult.modelResult)
 
-        // 29,000 ≥ 28,160 → 真的裁：那条超长工具输出被换掉
+        // 真实用量 29,000 ≥ 28,160 → 够到动手线，真的裁：那条超长工具输出被换掉
         val trimmed = assertNotNull(call(lastInputTokens = 29_000))
         assertNotNull((trimmed.messages[0] as AgentMessage.ToolResultMessage).modelResult)
     }
