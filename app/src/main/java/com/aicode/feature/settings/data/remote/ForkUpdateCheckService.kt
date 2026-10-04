@@ -52,6 +52,10 @@ class ForkUpdateCheckService @Inject constructor(
         runCatching {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastId = prefs.getString(KEY_LAST_RELEASE_ID, null)?.takeIf { it.isNotBlank() }
+            // 「首次」不等于「没存过 id」：站上还没有发布版时接口给空 id，这时也存不下东西。
+            // 只用 lastId 判首次，会把「站上第一次出现发布版」当成首次而静默吃掉（存了 id 却不提示）。
+            // 所以单独记一个「已完成过一次检查」的标记：只有全新安装的第一次检查才不提示。
+            val checkedBefore = prefs.getBoolean(KEY_CHECKED_BEFORE, false)
             val url = if (lastId == null) ENDPOINT else "$ENDPOINT?id=${Uri.encode(lastId)}"
 
             val req = okhttp3.Request.Builder().url(url).get().build()
@@ -71,11 +75,16 @@ class ForkUpdateCheckService @Inject constructor(
                 if (id.isNotBlank()) {
                     prefs.edit().putString(KEY_LAST_RELEASE_ID, id).apply()
                 }
+                // 拿到一次成功响应就算「检查过」——即使这次站上还没有发布版。
+                if (!checkedBefore) {
+                    prefs.edit().putBoolean(KEY_CHECKED_BEFORE, true).apply()
+                }
 
                 val released = obj.booleanOrFalse("released")
                 val hasUpdate = obj.booleanOrFalse("hasUpdate")
-                // 首次没有 id，请求也没带 id，此时的 hasUpdate 恒为 true 不代表真有新版本 —— 只用来存 id。
-                if (!released || !hasUpdate || lastId == null) {
+                // 只有「全新安装后的第一次检查」不提示（此时没带 id，hasUpdate 恒为 true 不代表真有新版本）。
+                // 已经检查过但当时站上还没有发布版（lastId 仍为空）时，新出现的发布版应当提示。
+                if (!released || !hasUpdate || !checkedBefore) {
                     return@use UpdateCheckResult.UpToDate
                 }
 
@@ -117,6 +126,9 @@ class ForkUpdateCheckService @Inject constructor(
         /** 沿用仓库既有的更新偏好文件（见 UpdateCheckSettingsRepository），只加一个自有键。 */
         const val PREFS_NAME = "update_check_prefs"
         const val KEY_LAST_RELEASE_ID = "fork_last_release_id"
+
+        /** 是否已成功检查过至少一次（与「有没有存到 id」分开：站上无发布版时 id 存不下来，但检查确实发生过）。 */
+        const val KEY_CHECKED_BEFORE = "fork_update_checked_before"
 
         /** 与上游 UpdateCheckService 同款：只挂全局代理认证，其余走 OkHttp 默认超时（10s 连接/读取）。 */
         val SHARED_CLIENT by lazy {
