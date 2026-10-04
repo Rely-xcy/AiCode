@@ -73,6 +73,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -882,13 +884,23 @@ private fun FileBrowserTab(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = state.detail ?: stringResource(R.string.file_browser_error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(horizontal = Spacing.md)
-                )
+                ) {
+                    // 有失败原因就带上具体原因：只说「读取目录失败」分不清是断线、权限还是目录已不在。
+                    Text(
+                        text = state.detail?.let { stringResource(R.string.file_browser_refresh_failed, it) }
+                            ?: stringResource(R.string.file_browser_error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    TextButton(onClick = onRefresh) {
+                        Text(stringResource(R.string.common_retry))
+                    }
+                }
             }
 
             is FileBrowseState.Success -> {
@@ -959,8 +971,13 @@ private fun FileBrowserTab(
                 )
             }
             if (fileOpPaths.isNotEmpty() || refreshing) {
+                // 转圈本身没有文字，读屏用户只知道「有个进度条」；刷新中补一句说明它在做什么。
+                val refreshLabel = stringResource(R.string.file_browser_refreshing)
                 CircularProgressIndicator(
-                    modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
+                    modifier = Modifier
+                        .padding(end = Spacing.xs)
+                        .size(16.dp)
+                        .then(if (refreshing) Modifier.semantics { contentDescription = refreshLabel } else Modifier),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary
                 )

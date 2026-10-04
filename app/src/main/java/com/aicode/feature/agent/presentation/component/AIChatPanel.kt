@@ -107,6 +107,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1021,7 +1022,16 @@ fun AIChatPanel(
     }
 
     fun cancelUpload() {
-        uploadJob?.cancel()
+        // 只有确实有上传在跑时才提示：横条的退场动画期间按钮仍可点，重复点不该再弹一次。
+        val job = uploadJob
+        if (job != null && job.isActive) {
+            job.cancel()
+            Toast.makeText(
+                context,
+                context.getString(R.string.chat_attachment_upload_cancelled),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
