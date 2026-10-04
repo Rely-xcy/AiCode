@@ -92,13 +92,16 @@ class ForkUpdateCheckService @Inject constructor(
                     return@use UpdateCheckResult.UpToDate
                 }
 
+                // 站上那份包名就是「aicode-beta-<sha8>.apk」这种机器名，直接摆给用户看不懂：
+                // 换成「短哈希 · 发布日期」（拿不到哈希时退回去掉 .apk 的包名）。
+                val label = releaseLabel(sha = remoteSha, rawName = name, date = obj.stringOrEmpty("date"))
                 val sizeText = obj.stringOrEmpty("sizeText")
                 val note = obj.stringOrEmpty("note")
                 UpdateCheckResult.NewVersion(
                     UpdateInfo(
-                        latestTag = name,
-                        changelog = composeChangelog(name = name, sizeText = sizeText, note = note),
-                        updates = listOf(VersionUpdate(tag = name, changelog = note)),
+                        latestTag = label,
+                        changelog = composeChangelog(label = label, sizeText = sizeText, note = note),
+                        updates = listOf(VersionUpdate(tag = label, changelog = note)),
                         downloadUrl = obj.stringOrEmpty("url").takeIf { it.isNotBlank() }
                     )
                 )
@@ -106,14 +109,23 @@ class ForkUpdateCheckService @Inject constructor(
         }.getOrElse { UpdateCheckResult.Error(it.message ?: context.getString(R.string.about_network_error)) }
     }
 
-    /** 弹窗正文：首行是版本名与安装包大小，空行后接接口给的完整更新记录（可能为空）。 */
-    private fun composeChangelog(name: String, sizeText: String, note: String): String {
-        val header = if (sizeText.isBlank()) {
-            name
-        } else {
-            context.getString(R.string.fork_update_release_title, name, sizeText)
+    /** 弹窗正文：首行是版本标识与安装包大小，空行后接更新日志预览（截断规则见 [previewChangelog]）。 */
+    private fun composeChangelog(label: String, sizeText: String, note: String): String {
+        val header = when {
+            label.isBlank() -> ""
+            sizeText.isBlank() -> label
+            else -> context.getString(R.string.fork_update_release_title, label, sizeText)
         }
-        return if (note.isBlank()) header else "$header\n\n$note"
+        val preview = if (note.isBlank()) {
+            ""
+        } else {
+            previewChangelog(
+                note = note,
+                maxLines = CHANGELOG_PREVIEW_LINES,
+                truncatedHint = context.getString(R.string.fork_update_changelog_truncated, CHANGELOG_PREVIEW_LINES)
+            )
+        }
+        return listOf(header, preview).filter { it.isNotBlank() }.joinToString("\n\n")
     }
 
     private fun JsonObject.stringOrEmpty(key: String): String =
@@ -131,6 +143,9 @@ class ForkUpdateCheckService @Inject constructor(
 
         /** 上一次见到的发布 id，只在拿不到可比标识的回退路径上用（见 [hasNewVersion]）。 */
         const val KEY_LAST_RELEASE_ID = "fork_last_release_id"
+
+        /** 弹窗正文里更新日志最多显示多少行，超出部分截断（见 [previewChangelog]）。 */
+        const val CHANGELOG_PREVIEW_LINES = 16
 
         /** 与上游 UpdateCheckService 同款：只挂全局代理认证，其余走 OkHttp 默认超时（10s 连接/读取）。 */
         val SHARED_CLIENT by lazy {
@@ -198,4 +213,23 @@ internal fun hasNewVersion(
     if (localSha != null && remoteSha != null) return !isSameBuildSha(localSha, remoteSha)
     if (releaseId.isBlank()) return false
     return releaseId != lastSeenReleaseId
+}
+
+/**
+ * 弹窗里给用户看的版本标识：有构建短哈希就用「哈希 · 发布日期」，否则退回去掉 `.apk` 的包名。
+ * 站点包名（`aicode-beta-b6c45eea.apk`）是给机器看的，直接当版本号摆出来不像版本号。
+ */
+internal fun releaseLabel(sha: String?, rawName: String, date: String): String =
+    listOf(sha ?: rawName.trim().removeSuffix(".apk").trim(), date.trim())
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+
+/**
+ * 弹窗正文只取更新日志的前 [maxLines] 行：站点 note 是整份更新日志（几十行，含大量 ──── 分隔线），
+ * 整份塞进弹窗是一面墙；截断只作用于弹窗文本——update-info.json 里仍写完整 note 供 AI 读取。
+ */
+internal fun previewChangelog(note: String, maxLines: Int, truncatedHint: String): String {
+    val lines = note.trimEnd().lines()
+    if (lines.size <= maxLines) return lines.joinToString("\n")
+    return lines.take(maxLines).joinToString("\n") + "\n" + truncatedHint
 }
