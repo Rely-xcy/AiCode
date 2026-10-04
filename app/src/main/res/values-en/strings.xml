@@ -1487,6 +1487,8 @@
     <string name="workspace_name_exists">A workspace with this name already exists</string>
     <string name="workspace_remote_root_create_failed">Failed to create the remote workspace directory. Check the path and server permissions.</string>
     <string name="workspace_remote_default_create_failed">Failed to create the default remote workspace. Check server permissions and disk space.</string>
+    <string name="workspace_remote_target_dir_empty">Remote workspace path is empty or invalid. Set a concrete directory in Container &amp; Images.</string>
+    <string name="workspace_remote_not_configured">No remote connection is configured, so no workspace was loaded.</string>
     <string name="workspace_add_local_dir">Add Local Directory</string>
     <string name="workspace_external_added">Local directory workspace "%1$s" added</string>
     <string name="workspace_external_warning_title">Add local directory workspace</string>

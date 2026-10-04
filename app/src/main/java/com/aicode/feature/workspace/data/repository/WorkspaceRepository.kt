@@ -10,6 +10,7 @@ import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ConnectionState
+import com.aicode.feature.agent.domain.container.RemoteConnectionConfig
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -49,6 +50,27 @@ private val Context.workspaceDataStore by preferencesDataStore(
  * 命令 cwd、备份、凭据、记忆静默落到错地方；抛出本异常让调用方明确报错或降级。
  */
 class WorkspaceNotReadyException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+/**
+ * 远程工作区根取不到、或远程扫描没进行成时的来因。
+ *
+ * 日志文案（[WorkspaceRepository.remoteScanAbortReason]）与给用户的提示文案
+ * （[WorkspaceRepository.initialize] 里默认工作区没建出来时）都从这一份分类派生，
+ * 免得同一条链路上出现两套判据。
+ *
+ * 远程路径配成 `/`（或只有斜杠）时，结尾斜杠会被 `trimEnd('/')` 吃光得到空串，这与「压根没配
+ * 远程连接」是两回事：一个要去改路径，一个要去建连接，文案必须分开。
+ */
+internal enum class RemoteScanAbort {
+    /** 没有已保存的远程连接配置。 */
+    NotConfigured,
+
+    /** 有配置，但 remoteWorkspacePath 展开后为空，没有任何可用的工作区根。 */
+    TargetDirEmpty,
+
+    /** 工作区根取到了，失败落在连接或远端命令上。 */
+    ScanAborted
+}
 
 /**
  * 管理 App 内的"工作区/项目"。
@@ -116,6 +138,45 @@ class WorkspaceRepository @Inject constructor(
             while ("$base ($i)" in existing) i++
             return "$base ($i)"
         }
+
+        /**
+         * 远程工作区根取不到（[root] 为 null）、或扫描没进行成时的来因分类 —— 判据只有这一份。
+         *
+         * [root] 为 null 只有两种可能，且都不是「服务器上确实没有工作区目录」那种可自愈的预期情况：
+         * 没有已保存的远程连接配置，或配置的远程目标目录展开后为空。两者对用户的含义完全不同
+         * （一个要去连远程，一个要去改目标目录），日志与提示文案都必须分开。
+         *
+         * [root] 不为 null 说明根路径取到了，失败落在连接或远端命令上 —— 那两处已各自在
+         * [scanRemoteWorkspaceRoot] 里记了带上下文的 WARN，这里只说结论，避免把原因说错。
+         */
+        internal fun remoteScanAbort(cfg: RemoteConnectionConfig?, root: String?): RemoteScanAbort {
+            if (root != null) return RemoteScanAbort.ScanAborted
+            return if (cfg == null) RemoteScanAbort.NotConfigured else RemoteScanAbort.TargetDirEmpty
+        }
+
+        /** [remoteScanAbort] 的分类结果对应的失败级日志来因，带上可核对的上下文（路径 / 根目录）。 */
+        internal fun remoteScanAbortReason(cfg: RemoteConnectionConfig?, root: String?): String {
+            return when (remoteScanAbort(cfg, root)) {
+                RemoteScanAbort.ScanAborted ->
+                    "连接或远端命令未能完成扫描（原因见上一条远程工作区日志），根目录=$root"
+                RemoteScanAbort.NotConfigured -> "SSH 未配置（没有已保存的远程连接配置）"
+                RemoteScanAbort.TargetDirEmpty ->
+                    "远程目标目录为空（remoteWorkspacePath='${cfg?.remoteWorkspacePath}'）"
+            }
+        }
+
+        /**
+         * [initialize] 收尾那条日志的文案。
+         *
+         * [currentName] 为 null 表示收尾时仍没有可用工作区：这种情况下文案里不能出现「完成」——
+         * 原来不论成败都打「工作区初始化完成，当前: null」，事后翻日志只看到一条长得像成功的记录，
+         * 查不出「工作区列表为什么是空的」。
+         */
+        internal fun initCompletionMessage(currentName: String?, location: String): String {
+            val root = location.ifBlank { "未配置" }
+            if (currentName != null) return "工作区初始化完成，当前: $currentName，根目录: $root"
+            return "工作区初始化结束，无可用工作区（列表为空），根目录: $root"
+        }
     }
 
     private val currentNameKey = stringPreferencesKey("current_workspace_name")
@@ -170,19 +231,28 @@ class WorkspaceRepository @Inject constructor(
         // 远程模式：等 SSH 连接就绪后再列工作区，避免启动时序竞争
         if (!isLocal()) {
             waitForConnection()
+            val cfg = remoteSshConnection.config
             val wsRoot = remoteWorkspaceRootPath()
             val scan = wsRoot?.let { root -> scanRemoteWorkspaceRoot(root, symlinkCandidateName?.let { "$root/$it" }) }
             if (scan == null) {
-                // 未连接 / 未配置 / 根路径为空：与原来「根目录检查提前返回 + 列目录失败」一致，保持空列表
+                // 扫描没进行成：保持空列表，但必须留下失败级日志并写清是哪一种来因
+                // （未配置 / 目标目录为空 / 未连接 / 远端命令失败），否则事后只剩一句「列表为空」。
+                FileLogger.w(TAG, "远程工作区初始化中止，工作区列表置空：${remoteScanAbortReason(cfg, wsRoot)}")
                 _workspaces.value = emptyList()
             } else {
-                if (scan.rootExit != null && scan.rootExit != 0) {
+                val rootCreateFailed = scan.rootExit != null && scan.rootExit != 0
+                if (rootCreateFailed) {
                     FileLogger.w(TAG, "创建远程工作区根目录失败: $wsRoot (exit=${scan.rootExit})")
                     _initError.value = context.getString(R.string.workspace_remote_root_create_failed)
                 }
                 symlinkHandledByScan = scan.symlinkDone
                 _workspaces.value = scan.dirs.map { name ->
                     Workspace(name = name, path = "$wsRoot/$name", type = WorkspaceType.REMOTE)
+                }
+                // 「服务器上确实没有工作区目录」是可自愈的预期情况（根目录刚被 mkdir -p 建出来也一样）：
+                // 用 INFO 与上面那条 WARN 分开，紧接着的默认工作区创建会把条目补上。
+                if (scan.dirs.isEmpty() && !rootCreateFailed) {
+                    FileLogger.i(TAG, "远程工作区根下暂无子目录，按预期创建默认工作区: $wsRoot")
                 }
             }
             ensureCurrentReachable()
@@ -202,8 +272,21 @@ class WorkspaceRepository @Inject constructor(
                 val created = createRemoteWorkspaceWithoutRelist(fallbackName)
                 if (created != null) {
                     _workspaces.value = _workspaces.value + created
-                } else if (remoteSshConnection.isConnected()) {
-                    _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                } else {
+                    // 默认工作区没建出来：按同一份判据（remoteScanAbort）区分来因再决定文案。
+                    // 目标目录没配、远程连接没配这两种都指向配置，不能借「请检查服务器权限与磁盘空间」
+                    // 把用户带去查服务器；只有根路径取到了却没建成，才确实是权限或磁盘的问题。
+                    when (remoteScanAbort(remoteSshConnection.config, remoteWorkspaceRootPath())) {
+                        RemoteScanAbort.TargetDirEmpty ->
+                            _initError.value = context.getString(R.string.workspace_remote_target_dir_empty)
+                        RemoteScanAbort.NotConfigured ->
+                            _initError.value = context.getString(R.string.workspace_remote_not_configured)
+                        RemoteScanAbort.ScanAborted -> {
+                            if (remoteSshConnection.isConnected()) {
+                                _initError.value = context.getString(R.string.workspace_remote_default_create_failed)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -220,7 +303,14 @@ class WorkspaceRepository @Inject constructor(
         }
         _current.value = target
         val location = if (isLocal()) projectsRoot.absolutePath else remoteSshConnection.config?.remoteWorkspacePath ?: ""
-        FileLogger.i(TAG, "工作区初始化完成，当前: ${target?.name}，根目录: $location")
+        // 只有真的落到可用工作区才报成功形状的 INFO；否则降为 WARN 并写明「无可用工作区」，
+        // 免得日志里只留下一条「工作区初始化完成，当前: null」—— 看着像成功，实则什么都没落定。
+        val completion = initCompletionMessage(target?.name, location)
+        if (target != null) {
+            FileLogger.i(TAG, completion)
+        } else {
+            FileLogger.w(TAG, completion)
+        }
         // 远程模式：选中工作区后更新符号链接，让 Bash 的 ~/workspace 指向当前工作区
         // （若本次扫描已经指向同一个工作区并执行过，就省掉这次往返）
         if (!isLocal() && target != null && !(symlinkHandledByScan && target.name == symlinkCandidateName)) {
@@ -248,11 +338,19 @@ class WorkspaceRepository @Inject constructor(
         }
     }
 
-    /** 远程工作区根（remoteWorkspacePath 展开 ~ 后）的绝对路径；未配置或为空时 null。 */
-    private fun remoteWorkspaceRootPath(): String? {
-        val cfg = remoteSshConnection.config ?: return null
+    /**
+     * [cfg] 对应的远程工作区根绝对路径（remoteWorkspacePath 展开 ~ 后）；没有配置或展开后为空时 null。
+     *
+     * 「有没有可用的根」只此一份判据：[initialize] 与 [refreshRemoteWorkspaces] 都走它，
+     * 两边不一致时，同一份配置会在两个入口给出不同的工作区列表。
+     */
+    private fun remoteWorkspaceRootOrNull(cfg: RemoteConnectionConfig?): String? {
+        if (cfg == null) return null
         return pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/')).ifEmpty { null }
     }
+
+    /** 远程工作区根（remoteWorkspacePath 展开 ~ 后）的绝对路径；未配置或为空时 null。 */
+    private fun remoteWorkspaceRootPath(): String? = remoteWorkspaceRootOrNull(remoteSshConnection.config)
 
     /** 单次扫描远程工作区根得到的结果，见 [scanRemoteWorkspaceRoot]。 */
     private data class RemoteRootScan(
@@ -275,7 +373,10 @@ class WorkspaceRepository @Inject constructor(
      * @return null 表示连接不可用/未配置，调用方保持空列表。
      */
     private suspend fun scanRemoteWorkspaceRoot(wsRoot: String, symlinkCandidate: String?): RemoteRootScan? {
-        if (!remoteSshConnection.isConnected()) return null
+        if (!remoteSshConnection.isConnected()) {
+            FileLogger.w(TAG, "远程工作区扫描中止：SSH 未连接（连接状态=${remoteSshConnection.connectionState.value}），根目录=$wsRoot")
+            return null
+        }
         val root = shellQuote(wsRoot)
         val linkPart = if (symlinkCandidate == null) {
             "echo LN:skip"
@@ -307,7 +408,11 @@ class WorkspaceRepository @Inject constructor(
      * ——列表刚列过且为空是已知事实，条目直接本地拼（`mkdir -p` 本身幂等，名字被别的客户端抢先建出也无害）。
      */
     private suspend fun createRemoteWorkspaceWithoutRelist(name: String): Workspace? {
-        val wsRoot = remoteWorkspaceRootPath() ?: return null
+        val wsRoot = remoteWorkspaceRootPath()
+        if (wsRoot == null) {
+            FileLogger.w(TAG, "远程默认工作区创建中止：远程连接未配置或目标目录展开后为空")
+            return null
+        }
         val path = "$wsRoot/$name"
         val exit = execRemoteExit("mkdir -p ${shellQuote(path)}")
         if (exit != 0) {
@@ -354,13 +459,21 @@ class WorkspaceRepository @Inject constructor(
     private suspend fun createLocalFallbackWorkspace(): Workspace? {
         val fallbackName = uniqueName(DEFAULT_WORKSPACE, _workspaces.value.map { it.name }.toSet())
         val fallbackDir = File(projectsRoot, fallbackName)
-        if (!fallbackDir.isDirectory && !fallbackDir.mkdirs()) return null
+        if (!fallbackDir.isDirectory && !fallbackDir.mkdirs()) {
+            FileLogger.e(TAG, "创建本地默认工作区失败: ${fallbackDir.absolutePath}")
+            return null
+        }
         _workspaces.value = refreshLocalWorkspaces()
         return _workspaces.value.firstOrNull { it.name == fallbackName && it.available }
     }
 
     private suspend fun refreshLocalWorkspaces(): List<Workspace> {
-        val internal = projectsRoot.listFiles { f -> f.isDirectory }
+        val internalDirs = projectsRoot.listFiles { f -> f.isDirectory }
+        // 列不出来（返回 null）与「目录里确实没有子目录」（空数组）在列表上长得一样，日志里得分开
+        if (internalDirs == null) {
+            FileLogger.w(TAG, "本地工作区根目录列目录失败，内部工作区按空处理: ${projectsRoot.absolutePath}")
+        }
+        val internal = internalDirs
             ?.sortedBy { it.name.lowercase() }
             ?.map { Workspace(name = it.name, path = it.absolutePath) }
             ?: emptyList()
@@ -369,13 +482,20 @@ class WorkspaceRepository @Inject constructor(
         return internal + external
     }
 
-    /** exec 列出 remoteWorkspacePath 下的子目录作为工作区（不用 SFTP，避免 sshj Buffer bug）。 */
+    /**
+     * exec 列出 remoteWorkspacePath 下的子目录作为工作区（不用 SFTP，避免 sshj Buffer bug）；
+     * 没有可用的工作区根（未配置 / 目标目录展开后为空）时直接空列表，不发命令。
+     */
     private suspend fun refreshRemoteWorkspaces(): List<Workspace> {
-        val cfg = remoteSshConnection.config ?: run {
-            FileLogger.w(TAG, "远程工作区列表失败：SSH 未配置")
+        val cfg = remoteSshConnection.config
+        // 与 initialize() 共用 remoteWorkspaceRootOrNull：目标目录展开后为空时 wsRoot 为 null，
+        // 这里必须走空列表，不能再拿空串去拼命令 —— 那会拼出列远端根目录的 ls，把 /home、/tmp、
+        // /etc 这些根目录下的子目录当成工作区，和 initialize() 在同样配置下的空列表结果分叉。
+        val wsRoot = remoteWorkspaceRootOrNull(cfg)
+        if (wsRoot == null) {
+            FileLogger.w(TAG, "远程工作区列表为空：${remoteScanAbortReason(cfg, wsRoot)}")
             return emptyList()
         }
-        val wsRoot = pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/'))
         return runCatching {
             // ls -d */ 列出子目录，取基名
             val output = execRemote("ls -d ${wsRoot}/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null")
@@ -431,8 +551,9 @@ class WorkspaceRepository @Inject constructor(
 
     /**
      * 新建工作区目录。名称会被清洗为安全的文件夹名。
-     * 本地模式 mkdirs projectsRoot/name；远程模式 SFTP mkdirs remoteWorkspacePath/name。
-     * @return 创建成功的 [Workspace]；名称非法或已存在返回 null。
+     * 本地模式 mkdirs projectsRoot/name；远程模式 exec mkdir remoteWorkspacePath/name。
+     * @return 创建成功的 [Workspace]；名称非法、已存在、远程工作区根取不到（未配置 / 目标目录展开后为空）
+     *   时返回 null，后者不发任何远程命令（空根会让目标变成远端根目录下的 /<名称>）。
      */
     suspend fun createWorkspace(rawName: String): Workspace? = withContext(Dispatchers.IO) {
         val name = sanitize(rawName)
@@ -454,8 +575,18 @@ class WorkspaceRepository @Inject constructor(
             FileLogger.i(TAG, "新建工作区: $name")
             Workspace(name = name, path = dir.absolutePath)
         } else {
-            val cfg = remoteSshConnection.config ?: return@withContext null
-            val wsRoot = pathHomeResolver.expandHome(cfg.remoteWorkspacePath.trimEnd('/'))
+            val cfg = remoteSshConnection.config
+            // 与 initialize()/refreshRemoteWorkspaces/deleteWorkspace 共用 remoteWorkspaceRootOrNull 这一份判据：
+            // 根取不到（未配置 / 目标目录展开后为空）时绝不拼命令 —— 空根拼出来的是远端根目录下的
+            // /<名称>，`mkdir -p` 会在服务器根目录下建出目录（root 账号下真的建得出来）。
+            val wsRoot = remoteWorkspaceRootOrNull(cfg)
+            if (wsRoot == null) {
+                FileLogger.w(
+                    TAG,
+                    "远程新建工作区中止，未发出任何远程命令：${remoteScanAbortReason(cfg, wsRoot)}，名称='$name'"
+                )
+                return@withContext null
+            }
             val remotePath = "$wsRoot/$name"
             runCatching {
                 if (execRemoteExit("test -d ${shellQuote(remotePath)}") == 0) {
@@ -541,7 +672,9 @@ class WorkspaceRepository @Inject constructor(
 
     /** 删除工作区。内部/远程工作区连同文件与会话记录删除；外部本地工作区只解除关联，不删除物理目录，
      *  其会话记录是否一并删除由「偏好设置」中的开关决定。
-     *  若删的是当前工作区，则自动切到剩余的第一个。 */
+     *  若删的是当前工作区，则自动切到剩余的第一个。
+     *  远程模式下的工作区根取不到（未配置 / 目标目录展开后为空）时拒绝执行远程删除：
+     *  空根拼出的目标是远端根目录下的 /<名称>，一条 rm -rf 就可能删掉服务器系统目录。 */
     suspend fun deleteWorkspace(name: String) = withContext(Dispatchers.IO) {
         val target = _workspaces.value.firstOrNull { it.name == name }
         if (isLocal() && target?.type == WorkspaceType.EXTERNAL_LOCAL) {
@@ -566,8 +699,17 @@ class WorkspaceRepository @Inject constructor(
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }
         } else {
             val cfg = remoteSshConnection.config
-            if (cfg != null) {
-                val remotePath = "${pathHomeResolver.expandHome(cfg.remoteWorkspacePath).trimEnd('/')}/$name"
+            // 同一份根判据（与 initialize()/refreshRemoteWorkspaces/createWorkspace 同源）：根取不到时
+            // 不拼命令、不执行 —— 空根拼出来的是远端根目录下的 /<名称>，`rm -rf '/home'` 打在服务器
+            // 系统目录上就是真删。宁可本次远端删除什么都没做，也不把删除范围扩到工作区之外。
+            val wsRoot = remoteWorkspaceRootOrNull(cfg)
+            if (wsRoot == null) {
+                FileLogger.w(
+                    TAG,
+                    "远程删除工作区中止，未发出任何远程命令：${remoteScanAbortReason(cfg, wsRoot)}，名称='$name'"
+                )
+            } else {
+                val remotePath = "$wsRoot/$name"
                 runCatching { execRemoteExit("rm -rf ${shellQuote(remotePath)}") }
                     .onFailure { FileLogger.e(TAG, "远程删除工作区失败: $remotePath", it) }
             }
