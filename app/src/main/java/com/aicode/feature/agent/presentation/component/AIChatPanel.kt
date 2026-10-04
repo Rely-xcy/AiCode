@@ -98,6 +98,7 @@ import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
+import com.aicode.feature.workspace.presentation.remote.HostKeyConfirmDialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
 import java.io.File
@@ -1468,6 +1469,17 @@ fun AIChatPanel(
         { vm.retryRemoteConnection() }
     }
 
+    // 重连遇到「主机密钥待确认」：重连链自己从不设置这个状态，必须由重试入口把它露出来，
+    // 否则用户点「重试连接」看不到任何反应。弹窗本体与「连接配置」页共用。
+    val pendingHostKeyConfirm = settingsViewModel?.pendingHostKeyConfirm?.collectAsStateWithLifecycle()?.value
+    // 重连的其它失败原因：以前被 runCatching 吞掉，用户只能看到状态在 CONNECTING/FAILED 之间翻。
+    val remoteRetryError = settingsViewModel?.remoteRetryError?.collectAsStateWithLifecycle()?.value
+    LaunchedEffect(remoteRetryError) {
+        val message = remoteRetryError ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        settingsViewModel?.consumeRemoteRetryError()
+    }
+
     val markdownImageTransformer = remember(viewModel.fileAccess) {
         MarkdownImageTransformer(viewModel.fileAccess)
     }
@@ -1999,6 +2011,19 @@ fun AIChatPanel(
         // Dialog 是独立 window、不占父布局尺寸，挂在 Scaffold 之后即可覆盖整屏 ——
         // 平板双栏下不会只盖住聊天列，也不会被 MainActivity 画在最上层的全局背景水印压住。
         ImageViewerHost(state = imageViewerState, load = chatImageLoad)
+
+        // 主机密钥确认（首次连接/指纹变化）：与「连接配置」页同一个组件、同一份指纹文案。
+        // 确认后由 ViewModel 落盘指纹并立即再重连一次，用户不用再点一次「重试连接」。
+        // 仅远程模式弹：切回本地后没有可确认的连接，留着弹窗只会挡页面。
+        if (isRemote) {
+            pendingHostKeyConfirm?.let { pending ->
+                HostKeyConfirmDialog(
+                    pendingHostKey = pending,
+                    onConfirm = { settingsViewModel?.confirmRetryHostKey() },
+                    onReject = { settingsViewModel?.rejectRetryHostKey() }
+                )
+            }
+        }
     }
 }
 
