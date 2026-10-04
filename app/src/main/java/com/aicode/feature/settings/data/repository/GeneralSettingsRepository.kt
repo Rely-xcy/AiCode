@@ -187,7 +187,7 @@ class GeneralSettingsRepository @Inject constructor(
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
-    /** 软精简阈值（上下文窗口的百分比）：达到即先精简历史工具输出，不调 LLM；默认 40，限定 1..100。 */
+    /** 软精简阈值（上下文窗口的百分比）：略微超过即先精简历史工具输出，不调 LLM；默认 40，限定 1..100。 */
     val softCompactionThresholdPercentFlow: Flow<Int> = context.generalDataStore.data.map {
         (it[SOFT_COMPACTION_THRESHOLD_PERCENT_KEY] ?: DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT).coerceIn(1, 100)
     }

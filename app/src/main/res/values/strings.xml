@@ -38,7 +38,7 @@
     <string name="settings_compaction_threshold">自动压缩阈值</string>
     <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时，把早期对话折叠成接手摘要（短期记忆，仅本次会话）</string>
     <string name="settings_soft_compaction_threshold">软精简阈值</string>
-    <string name="settings_soft_compaction_threshold_desc">达到该比例先精简历史里的超长工具输出，不调用模型（短期记忆，仅本次会话）</string>
+    <string name="settings_soft_compaction_threshold_desc">略微超过该比例后精简历史里的超长工具输出，不调用模型（短期记忆，仅本次会话）</string>
     <string name="settings_compaction_effective_hard_capped">实际 %1$d%%（%2$s tokens，受档位上限限制）</string>
     <string name="settings_compaction_effective_soft_capped">受自动压缩阈值限制，实际按 %1$d%% 生效</string>
     <string name="settings_compaction_effective_disabled">窗口 %1$s 的档位不启用自动压缩，只做软精简</string>
