@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation
 
+import androidx.lifecycle.viewModelScope
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
 import io.mockk.every
@@ -9,6 +10,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -36,6 +38,8 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AIAgentViewModelBrowseRefreshTest {
 
+    private lateinit var viewModel: AIAgentViewModel
+
     @Before
     fun setUp() {
         // viewModelScope 走 Dispatchers.Main.immediate。
@@ -44,6 +48,9 @@ class AIAgentViewModelBrowseRefreshTest {
 
     @After
     fun tearDown() {
+        // viewModelScope 的生命周期不随测试结束：不取消它，ViewModel init 里起的 launch
+        // 与 stateIn(Eagerly) 会继续挂在 Dispatchers.Main 上，泄漏到后面的测试。
+        if (::viewModel.isInitialized) viewModel.viewModelScope.cancel()
         Dispatchers.resetMain()
     }
 
@@ -69,7 +76,7 @@ class AIAgentViewModelBrowseRefreshTest {
             }
         }
 
-        val viewModel = newFileBrowseViewModel(fileAccess)
+        viewModel = newFileBrowseViewModel(fileAccess)
         val frames = ConcurrentLinkedQueue<FileBrowseState>()
         val collectJob = launch(Dispatchers.Unconfined) { viewModel.browseState.collect { frames += it } }
 
