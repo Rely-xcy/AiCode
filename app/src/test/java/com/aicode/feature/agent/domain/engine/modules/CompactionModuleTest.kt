@@ -15,7 +15,9 @@ import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
@@ -53,13 +55,15 @@ class CompactionModuleTest {
         val summaryCallThreads: () -> List<String>
     )
 
-    private fun harness(workDispatcher: CoroutineDispatcher = Dispatchers.Default): Harness {
-        val compactor = ContextCompactor(
+    private fun harness(
+        workDispatcher: CoroutineDispatcher = Dispatchers.Default,
+        compactor: ContextCompactor = ContextCompactor(
             agentMessageDao = mockk(relaxed = true),
             systemPromptProvider = mockk(relaxed = true),
             llmCallRecordDao = mockk(relaxed = true),
             compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
         )
+    ): Harness {
         var completeCalls = 0
         val summaryCallThreads = mutableListOf<String>()
         fun failSummaryCall(): Nothing {
@@ -188,6 +192,92 @@ class CompactionModuleTest {
         assertEquals(10_000, usage.currentTokens)
         assertEquals(10_000, usage.reportedTokens)
         assertTrue(usage.currentTokens < usage.softThreshold)
+    }
+
+    /**
+     * 软线滞回：判定值刚到软线不动手，要再高出软线的 10%（[CompactionModule.SOFT_HYSTERESIS_PERCENT]）才裁。
+     *
+     * 削完落回软线附近，于是要再涨出同样的量才会再削一次——避免长会话里每轮都改消息字节、
+     * 把提示词前缀缓存从改动点往后整段作废。旧实现是裸比较 `currentTokens >= softThreshold`，
+     * 第一次（26,000 ≥ 25,600）就会裁，本用例第一段断言即红。
+     */
+    @Test
+    fun `软线滞回：刚到软线不裁，再长出滞回量才裁`() = runTest {
+        val h = harness()
+        val ctx = EngineContext(sessionId = "s1", projectRoot = "/ws")
+        val toolResult = AgentMessage.ToolResultMessage(
+            id = "t1",
+            toolName = "read",
+            result = "a".repeat(3_100)
+        )
+        // 3 条用户消息把历史工具输出挡在保护线之外，historyEnd 落在它之后
+        val messages = listOf(
+            toolResult,
+            AgentMessage.UserMessage(content = "第一轮"),
+            AgentMessage.UserMessage(content = "第二轮"),
+            AgentMessage.UserMessage(content = "第三轮")
+        )
+
+        suspend fun call(lastInputTokens: Int): LlmCall? = h.module.beforeLlmCall(
+            ctx,
+            LlmCall(
+                messages = messages,
+                windowProvider = h.provider,
+                summaryProvider = h.provider,
+                lastInputTokens = lastInputTokens
+            )
+        )
+
+        // 软线 25,600；滞回 2,560。26,000 够软线但不够滞回线 → 不裁，原样返回
+        assertNull(call(lastInputTokens = 26_000))
+        assertNull(toolResult.modelResult)
+
+        // 29,000 ≥ 28,160 → 真的裁：那条超长工具输出被换掉
+        val trimmed = assertNotNull(call(lastInputTokens = 29_000))
+        assertNotNull((trimmed.messages[0] as AgentMessage.ToolResultMessage).modelResult)
+    }
+
+    /**
+     * 同轮闸门：同一条用户消息（= 同一次用户请求）只软精简一次；用户下一轮发话才放开。
+     *
+     * 工具循环里每一轮都会带着同一条用户消息再判定一次，若没有闸门，每一轮都会再裁一刀，
+     * 而前缀缓存以第一处改动为界——每裁一次都要按 1.25× 重写改动点之后的前缀。
+     *
+     * 桩返回新列表引用：只有 `trimmed !== result` 时模块才会记下本轮身份，返回原引用测不出闸门。
+     */
+    @Test
+    fun `同一轮只软精简一次，下一轮才放开`() = runTest {
+        val compactor = mockk<ContextCompactor>(relaxed = true)
+        every { compactor.softTrim(any(), any()) } answers { firstArg<List<AgentMessage>>().toList() }
+        every { compactor.enforceWindowLimit(any(), any()) } answers { firstArg() }
+        val h = harness(compactor = compactor)
+        val ctx = EngineContext(sessionId = "s1", projectRoot = "/ws")
+
+        suspend fun call(messages: List<AgentMessage>, lastInputTokens: Int): LlmCall? =
+            h.module.beforeLlmCall(
+                ctx,
+                LlmCall(
+                    messages = messages,
+                    windowProvider = h.provider,
+                    summaryProvider = h.provider,
+                    lastInputTokens = lastInputTokens
+                )
+            )
+
+        val turn1 = listOf(
+            AgentMessage.UserMessage(id = "u1", content = "第一轮"),
+            AgentMessage.UserMessage(id = "u2", content = "第二轮"),
+            AgentMessage.UserMessage(id = "u3", content = "第三轮")
+        )
+        call(turn1, lastInputTokens = 30_000)
+        // 同一轮内判定值继续涨（越过滞回线），但轮次身份没变 → 不再裁
+        call(turn1, lastInputTokens = 35_000)
+        verify(exactly = 1) { compactor.softTrim(any(), any()) }
+
+        // 下一轮用户发话：轮次身份变了，闸门放开
+        val turn2 = turn1 + AgentMessage.UserMessage(id = "u4", content = "第四轮")
+        call(turn2, lastInputTokens = 35_000)
+        verify(exactly = 2) { compactor.softTrim(any(), any()) }
     }
 
     /**
