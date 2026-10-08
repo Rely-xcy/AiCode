@@ -785,9 +785,9 @@ class BrowserManager @Inject constructor(
 
     fun listTabs(): List<BrowserTabState> = _state.value.tabs
 
-    fun getActiveTabId(): String {
+    suspend fun getActiveTabId(): String = withContext(Dispatchers.Main) {
         ensureActiveTab()
-        return activeTabId
+        activeTabId
     }
 
     // ================= 浏览器操作 API =================
