@@ -54,10 +54,32 @@ class ToolGroupExpansionTest {
             listOf(user("u0"), tool("t1"), marker, summary, assistant("answer")),
             activeTurnKey = "turn:u0"
         )
-        assertEquals(1, rendered.count { it.turnHeader != null })
-        assertEquals("turn:u0", rendered.header().turnHeader?.key)
+        // marker / summary 都是常显项：在时间线原位切断，各成一段（不新开轮）——
+        // 所有轮头仍归 turn:u0。
+        val headers = rendered.filter { it.turnHeader != null }
+        assertEquals(2, headers.size)
+        assertTrue("常显项不新开轮，所有轮头都属于 turn:u0", headers.all { it.turnHeader?.key == "turn:u0" })
         assertTrue(rendered.any { it.message.id == "marker" })
         assertTrue(rendered.any { it.message.id == "summary" })
+    }
+
+    @Test
+    fun persistentItem_keepsTimelinePosition_notPushedToTurnEnd() {
+        // 常显项（后台通知条）应停在时间线原位，不再被推到该轮最末。
+        // 旧实现把常显项统一排在轮头之后：晚于通知的过程项（t1/t2 分组）被折进轮头、排在通知之前，
+        // 常显项因此沉在下面。这里断言通知排在携带过程项的轮头之前。
+        val notify = AgentUIMessage(
+            id = "n1",
+            role = MessageRole.USER,
+            content = "后台通知",
+            isBackgroundNotification = true,
+        )
+        val messages = listOf(user("u0"), notify, tool("t1"), tool("t2"), assistant("a1"))
+        val items = items(messages, activeTurnKey = null)
+        val notifyIndex = items.indexOfFirst { it.key == "n1" }
+        val headerIndex = items.indexOfFirst { it.turnHeader != null }
+        assertTrue("常显项应在过程项之前", notifyIndex in 0 until headerIndex)
+        assertTrue(items[headerIndex].turnProcess.any { it.key == "toolgroup:t1" })
     }
 
     // ---- 连续工具调用分组 ----
