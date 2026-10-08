@@ -1,6 +1,5 @@
 package com.aicode.feature.workspace.domain
 
-import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
@@ -42,7 +41,6 @@ class WorkspacePathMapper @Inject constructor(
         const val CONTAINER_ROOT = "~/workspace"
         /** AI 配置目录在容器内的路径，绑定到宿主 [ContainerInstaller.aicodeDir]（独立于 rootfs）。 */
         const val AICODE_ROOT = "/root/.aicode"
-        private const val TAG = "WorkspacePathMapper"
     }
 
     /**
@@ -105,7 +103,6 @@ class WorkspacePathMapper @Inject constructor(
                 ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/"))
                 else File(requireWorkspaceRoot(root), p)
         }
-        FileLogger.v(TAG, "toHostFile '$path' -> ${file.absolutePath}")
         return file
     }
 

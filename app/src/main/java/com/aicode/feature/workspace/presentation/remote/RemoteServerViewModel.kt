@@ -130,10 +130,32 @@ class RemoteServerViewModel @Inject constructor(
             val result = repository.forceUploadMount(id)
             _uiState.value = _uiState.value.copy(isLoading = false)
             if (result.isFailure) {
-                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_all_failed, result.exceptionOrNull()?.message))
+                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_failed, result.exceptionOrNull()?.message))
             } else {
-                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_all_success))
+                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_success))
             }
+        }
+    }
+
+    /** 强制全量上传：忽略本地同步记录，把全部文件重传一遍。 */
+    fun uploadMountFull(id: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            val result = repository.forceUploadMountFull(id)
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            if (result.isFailure) {
+                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_full_failed, result.exceptionOrNull()?.message))
+            } else {
+                _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_upload_full_success))
+            }
+        }
+    }
+
+    /** 清除该挂载的同步记录；下次上传将视为全部未同步。 */
+    fun clearSyncIndex(id: String) {
+        viewModelScope.launch {
+            repository.clearSyncIndex(id)
+            _uiState.value = _uiState.value.copy(error = context.getString(R.string.remote_clear_index_done))
         }
     }
 

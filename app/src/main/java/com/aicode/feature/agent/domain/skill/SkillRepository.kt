@@ -41,6 +41,9 @@ class SkillRepository @Inject constructor(
     fun listSkills(): List<Skill> =
         filterDisabled(listAllSkills(), skillConfigRepository.disabledNames()).map { it.skill }
 
+    /** 当前被禁用的技能名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
+    fun disabledNames(): Set<String> = skillConfigRepository.disabledNames()
+
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
     fun loadInstructions(name: String): String? {
         if (name.lowercase() in skillConfigRepository.disabledNames()) return null

@@ -1369,12 +1369,13 @@ class SettingsViewModel @Inject constructor(
     fun refreshSkills() {
         viewModelScope.launch {
             _skills.value = withContext(Dispatchers.IO) {
+                val disabled = skillRepository.disabledNames()
                 skillRepository.listAllSkills().map { entry ->
                     SkillUiEntry(
                         name = entry.skill.name,
                         description = entry.skill.description,
                         scope = entry.scope,
-                        disabled = skillRepository.isSkillDisabled(entry.skill.name),
+                        disabled = entry.skill.name.lowercase() in disabled,
                         instructions = entry.skill.instructions,
                         requiredTools = entry.skill.requiredTools
                     )
@@ -1502,12 +1503,13 @@ class SettingsViewModel @Inject constructor(
     fun refreshSubAgents() {
         viewModelScope.launch {
             _subAgents.value = withContext(Dispatchers.IO) {
+                val disabled = agentDefinitionRepository.disabledNames()
                 agentDefinitionRepository.listAll().map { entry ->
                     SubAgentUiEntry(
                         name = entry.definition.name,
                         description = entry.definition.description,
                         scope = entry.scope,
-                        disabled = agentDefinitionRepository.isDisabled(entry.definition.name),
+                        disabled = entry.definition.name.lowercase() in disabled,
                         providerId = entry.definition.providerId,
                         model = entry.definition.model,
                         reasoningEffort = entry.definition.reasoningEffort,

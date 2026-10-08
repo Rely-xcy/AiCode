@@ -4,6 +4,7 @@ import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.core.watch.WatchFilter
+import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.SshHostKeyStore
 import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.SshHostKeyVerifier
@@ -20,6 +21,7 @@ import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.SyncConnectionState
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
 import com.aicode.feature.workspace.domain.remote.SyncEngine
+import com.aicode.feature.workspace.domain.remote.SyncIndexStore
 import com.aicode.feature.workspace.domain.remote.ftp.FtpSyncClient
 import com.aicode.feature.workspace.domain.remote.sftp.SftpSyncClient
 import kotlinx.coroutines.CoroutineScope
@@ -51,8 +53,11 @@ class RemoteRepository @Inject constructor(
     private val hostKeyVerifier: SshHostKeyVerifier,
     private val privateKeyStore: SshPrivateKeyStore,
     private val loginKeyStore: SshLoginKeyStore,
-    private val fileChangeHub: FileChangeHub
+    private val fileChangeHub: FileChangeHub,
+    private val containerInstaller: ContainerInstaller
 ) {
+    /** 每个挂载的同步指纹索引，用于跳过未变文件；落在 app 私有的 `aicode/sync-index/` 下。 */
+    private val syncIndexStore = SyncIndexStore(File(containerInstaller.aicodeDir, "sync-index"))
     private val activeEngines = ConcurrentHashMap<String, SyncEngine>()
     private val activeEngineIds = MutableStateFlow<Set<String>>(emptySet())
 
@@ -195,6 +200,8 @@ class RemoteRepository @Inject constructor(
             localMountPath = mount.localMountPath,
             autoConnect = mount.autoConnect
         ))
+        // 本地挂载路径可能变化，旧索引的 key 不再对应，清掉让下次上传重新建立
+        syncIndexStore.clear(mount.id)
     }
     
     suspend fun deleteMount(mountId: String) {
@@ -235,7 +242,8 @@ class RemoteRepository @Inject constructor(
                 auth = auth,
                 ignoredPatternsStr = syncSettings.ignoredPatterns.value,
                 useGitIgnore = syncSettings.useGitIgnore.value,
-                maxSyncBatchSize = syncSettings.maxSyncBatchSize.value
+                maxSyncBatchSize = syncSettings.maxSyncBatchSize.value,
+                indexStore = syncIndexStore
             )
             // 移除默认的全量下载以免覆盖本地修改，交由用户手动点击同步
 
@@ -312,6 +320,22 @@ class RemoteRepository @Inject constructor(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /** 强制全量上传：忽略本地索引，把全部文件重传一遍（远端被外部清空等恢复场景）。 */
+    suspend fun forceUploadMountFull(mountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val engine = activeEngines[mountId] ?: return@withContext Result.failure(Exception("请先连接该挂载点"))
+            engine.uploadWorkspace(force = true)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** 清除某挂载的同步指纹索引；下次上传将视为全部未同步（全量）。 */
+    suspend fun clearSyncIndex(mountId: String) = withContext(Dispatchers.IO) {
+        syncIndexStore.clear(mountId)
     }
 
     suspend fun forceDownloadMount(mountId: String): Result<Unit> = withContext(Dispatchers.IO) {

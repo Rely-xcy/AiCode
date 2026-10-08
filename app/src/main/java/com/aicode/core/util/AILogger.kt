@@ -33,6 +33,15 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * 使用前需在 [android.app.Application.onCreate] 调用一次 [init]。
  */
+/**
+ * 失败异常可实现的接口：携带上游返回的**原始错误响应体**，供会话日志完整记录。
+ * 定义在 core 层，[AILogger] 只按此接口取原文，不反向依赖 feature 层的具体异常类型。
+ */
+interface UpstreamErrorBodyCarrier {
+    /** 上游错误响应体原文；为空表示无响应体可记。 */
+    val upstreamErrorBody: String?
+}
+
 object AILogger {
 
     private const val TAG = "AILogger"
@@ -105,11 +114,22 @@ object AILogger {
         }
     }
 
-    /** 记录一次请求失败（取消不算失败，不应走到这里）。[seq] 必须来自对应 [logRequest] 的返回值。 */
+    /**
+     * 记录一次请求失败（取消不算失败，不应走到这里）。[seq] 必须来自对应 [logRequest] 的返回值。
+     *
+     * 若 [throwable] 实现 [UpstreamErrorBodyCarrier] 且带原始错误响应体，会在异常信息之后
+     * 追加 `--- error response body ---` 段落记录完整原文（脱敏后），不截断。
+     */
     fun logError(sessionId: String?, provider: String, throwable: Throwable, seq: Int) {
         appendToSession(sessionId) { w ->
             w.write("${now()}  ERROR #$seq   [$provider]\n")
             w.write("${throwable.javaClass.name}: ${throwable.message ?: ""}\n")
+            val rawBody = (throwable as? UpstreamErrorBodyCarrier)?.upstreamErrorBody
+            if (!rawBody.isNullOrBlank()) {
+                w.write("--- error response body ---\n")
+                w.write(redactString(rawBody, null))
+                w.write("\n")
+            }
         }
     }
 

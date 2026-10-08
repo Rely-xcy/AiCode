@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aicode.feature.agent.data.local.database.AgentDatabase
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.BeforeClass
 import org.junit.Rule
@@ -60,6 +61,43 @@ class MigrationTest {
         // 打开即触发 Room 的 identity/schema 校验，entity 与迁移产物不符会抛异常
         db.openHelper.writableDatabase
         db.close()
+    }
+
+    /**
+     * 非正常降级会留下「user_version 落后于 migration_history」的库：旧版的
+     * fallbackToDestructiveMigration 只 DROP Room 实体表再按旧 schema 重建（migration_history
+     * 不在实体表之列因而保留），并把 user_version 置回旧值。升级时 Room 会把整条迁移链重放，
+     * 历史表写入必须幂等，否则抛 SQLiteConstraintException:
+     * UNIQUE constraint failed: migration_history.version。
+     */
+    @Test
+    fun replaying_migrations_with_prerecorded_history_rows() {
+        helper.createDatabase(dbName, 50).apply {
+            execSQL(
+                "CREATE TABLE IF NOT EXISTS migration_history (" +
+                        "version INTEGER PRIMARY KEY, script_name TEXT, executed_at INTEGER)"
+            )
+            for (version in 51..AgentDatabase.SCHEMA_VERSION) {
+                execSQL(
+                    "INSERT INTO migration_history (version, script_name, executed_at) " +
+                            "VALUES ($version, 'prerecorded', 0)"
+                )
+            }
+        }.close()
+
+        val db = Room.databaseBuilder(context, AgentDatabase::class.java, dbName)
+            .addMigrations(*MigrationLoader.loadMigrations(context))
+            .build()
+        val columns = mutableSetOf<String>()
+        db.openHelper.writableDatabase
+            .query("PRAGMA table_info(`ai_providers`)")
+            .use { cursor -> while (cursor.moveToNext()) columns += cursor.getString(1) }
+        db.close()
+
+        assertTrue(
+            "重放迁移应补回 53/54 加入的两列，实际列：$columns",
+            columns.containsAll(listOf("scriptParams", "customHeaders"))
+        )
     }
 
     /**
