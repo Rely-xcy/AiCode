@@ -291,6 +291,7 @@
     <string name="common_allow">允许</string>
     <string name="common_close">关闭</string>
     <string name="common_clear">清除</string>
+    <string name="common_more">更多</string>
     <string name="workbench_split_handle">拖动调整分栏宽度</string>
     <string name="common_other">其他</string>
     <string name="common_switch">切换</string>
@@ -1354,8 +1355,11 @@
     <string name="remote_go_add">去添加</string>
 
     <!-- Remote Server ViewModel -->
-    <string name="remote_upload_all_failed">全量上传失败：%1$s</string>
-    <string name="remote_upload_all_success">全量上传完成</string>
+    <string name="remote_upload_failed">上传失败：%1$s</string>
+    <string name="remote_upload_success">上传完成</string>
+    <string name="remote_upload_full_failed">全量上传失败：%1$s</string>
+    <string name="remote_upload_full_success">全量上传完成</string>
+    <string name="remote_clear_index_done">已清除同步记录</string>
     <string name="remote_download_all_failed">全量下载失败：%1$s</string>
     <string name="remote_download_all_success">全量下载完成</string>
     <string name="remote_connect_success">连接成功</string>
@@ -1403,7 +1407,9 @@
     <string name="status_connected">已连接</string>
     <string name="status_disconnected">未连接</string>
     <string name="status_connection_failed">连接失败</string>    <string name="sync_disconnect">断开连接</string>
-    <string name="sync_upload_all">上传全部</string>
+    <string name="sync_upload_changes">上传变更</string>
+    <string name="sync_upload_full">强制全量上传</string>
+    <string name="sync_clear_index">清除同步记录</string>
     <string name="sync_download_all">下载全部</string>
     <string name="sync_connect_and_sync">连接并同步</string>
 

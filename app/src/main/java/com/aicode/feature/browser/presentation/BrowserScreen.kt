@@ -1,5 +1,6 @@
 package com.aicode.feature.browser.presentation
 
+import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -57,6 +58,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -118,6 +120,12 @@ fun BrowserScreen(
     val activeTab = state.activeTab
     val scope = rememberCoroutineScope()
 
+    // 每个页面实例各持一个容器：NavHost 过渡期间新旧页面会短暂共存，若共用同一个 FrameLayout，
+    // 后创建的 AndroidView 会拿到仍挂在旧节点上的容器，AndroidViewHolder 构造时 addView 直接抛
+    // 「The specified child already has a parent」。各持一份即可彻底避免。
+    val context = LocalContext.current
+    val container = remember { FrameLayout(context) }
+
     var showTabsSheet by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -176,8 +184,9 @@ fun BrowserScreen(
                 .padding(padding)
         ) {
             AndroidView(
-                factory = { context ->
-                    browserManager.getOrCreateContainerView(context)
+                factory = {
+                    browserManager.attachContainerView(container)
+                    container
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -324,9 +333,9 @@ fun BrowserScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(container) {
         onDispose {
-            browserManager.detachFromViewHierarchy()
+            browserManager.detachContainerView(container)
         }
     }
 }

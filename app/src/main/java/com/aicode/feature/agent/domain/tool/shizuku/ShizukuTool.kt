@@ -20,10 +20,10 @@ import kotlinx.serialization.json.longOrNull
 import javax.inject.Inject
 
 /**
- * 通过 Shizuku 以 adb shell（uid 2000）身份执行命令的工具。
+ * 通过 Shizuku 执行命令的工具。
  *
  * 与 [com.aicode.feature.agent.domain.tool.container.ExecuteCommandTool]（本地容器 / 远程 SSH）不同，
- * 本工具直接作用于 Android 系统本身：可执行 `pm` / `am` / `cmd` 等系统命令、读写 `/sdcard` 等。
+ * 本工具直接作用于 Android 系统本身：可执行 `pm` / `am` / `cmd` 等系统命令。
  * 需用户已安装 Shizuku 并授予本应用权限，否则返回错误提示。
  *
  * UserService 的 AIDL 调用是同步、一次性的（无逐行回传），故不实现流式输出。
@@ -41,7 +41,7 @@ class ShizukuTool @Inject constructor(
     override val name = "Shizuku"
 
     override val description =
-        "通过 Shizuku 以 adb shell（uid 2000）身份在宿主 Android 系统上执行命令（等价 `adb shell`），用于 `pm`/`am`/`cmd` 等系统操作与读写 /sdcard。" +
+        "通过 Shizuku 在宿主 Android 系统上执行命令，用于辅助调试宿主系统（`pm`/`am`/`cmd` 等系统命令）。" +
             "需用户已安装并授权 Shizuku，且每次调用都会弹窗确认。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
@@ -51,7 +51,7 @@ class ShizukuTool @Inject constructor(
         "command" to ToolParameter(
             name = "command",
             type = ParameterType.STRING,
-            description = "要通过 adb shell 执行的 Shell 命令",
+            description = "要通过 Shizuku 执行的 Shell 命令",
             required = true
         ),
         "timeout" to ToolParameter(
@@ -79,7 +79,7 @@ class ShizukuTool @Inject constructor(
             toolName = name,
             title = "确认执行 Shizuku 命令",
             summary = command,
-            details = "将以 adb shell 身份在 Android 系统上执行。\n超时：${timeoutSeconds} 秒",
+            details = "将通过 Shizuku 在 Android 系统上执行。\n超时：${timeoutSeconds} 秒",
             argsPreview = argsPreview
         )
     }

@@ -1629,11 +1629,23 @@ class AIAgentViewModel @Inject constructor(
         try {
             var failed = false
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
+            val historyStartedNs = System.nanoTime()
+            FileLogger.memoryCheckpoint(
+                TAG,
+                "history.start",
+                details = "operation=$historyStartedNs requestChars=${request.length} attachments=${inputAttachments.size}"
+            )
             // 全量重建历史（读整个会话 + JSON 解码工具快照 + 图片 base64）是重活且会随会话变长变慢，
             // 留在主线程上会把这一帧的消息回显与滚动一起拖住。它是 suspend，直接切到 IO，主线程只等结果。
             val history = withContext(Dispatchers.IO) {
                 messagePersistenceUseCase.buildHistory(sessionId, SessionUseCase.PENDING_TOOL_MARKER)
             }
+            FileLogger.memoryCheckpoint(
+                TAG,
+                "history.ready",
+                elapsedMs = (System.nanoTime() - historyStartedNs) / 1_000_000,
+                details = "operation=$historyStartedNs messages=${history.size}"
+            )
             val isFirst = history.isEmpty()
 
             // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
@@ -1673,9 +1685,12 @@ class AIAgentViewModel @Inject constructor(
             val isSubAgent = sessionEntity?.parentId != null
             // 子会话的 subagentType 存的是自定义 agent 名；能查到定义时提示词与工具集都按它组装。
             // 定义是配置性事实，与子代理判定无关，不能拿它兼任。
-            val agentDefinition = sessionEntity?.subagentType
-                ?.takeIf { isSubAgent }
-                ?.let { agentDefinitionRepository.findIncludingDisabled(it) }
+            // 目录扫描（远程模式经 SFTP）切到 IO，避免阻塞主线程。
+            val agentDefinition = withContext(Dispatchers.IO) {
+                sessionEntity?.subagentType
+                    ?.takeIf { isSubAgent }
+                    ?.let { agentDefinitionRepository.findIncludingDisabled(it) }
+            }
 
             val agentContext = AgentContext(
                 currentFile = currentFile,

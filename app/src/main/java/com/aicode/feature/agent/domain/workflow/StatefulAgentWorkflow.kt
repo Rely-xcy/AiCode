@@ -67,10 +67,12 @@ import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.JsonArray
@@ -651,7 +653,17 @@ class StatefulAgentWorkflow @Inject constructor(
                 images = currentContext.inputImages
             )
         )
-        val systemPrompt = promptProvider.build(promptContext)
+        // 提示词构建会读取技能/子代理/记忆等文件（远程模式经 SFTP），必须离开收集本工作流的线程（Main），
+        // 否则远程模式下每次会话首次发消息都会在主线程做多次文件/网络往返。
+        val promptStartedNs = System.nanoTime()
+        FileLogger.memoryCheckpoint(TAG, "prompt.start", details = "operation=$promptStartedNs")
+        val systemPrompt = withContext(Dispatchers.IO) { promptProvider.build(promptContext) }
+        FileLogger.memoryCheckpoint(
+            TAG,
+            "prompt.ready",
+            elapsedMs = (System.nanoTime() - promptStartedNs) / 1_000_000,
+            details = "operation=$promptStartedNs promptChars=${systemPrompt.length}"
+        )
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
         // system prompt 与工具定义不随消息变化，循环外算一次即可。它们占的窗口是实打实的，
         // 只靠 lastInputTokens 间接体现（provider 不回传 usage 时恒为 0）会系统性低估。
@@ -1239,12 +1251,16 @@ class StatefulAgentWorkflow @Inject constructor(
             return ToolRunResult(ToolResult.Error("工具 $name 不存在", "TOOL_NOT_FOUND").toTransportString(), true)
         }
         return try {
-            val result = tool.executeWithContext(toolCall.arguments, context)
-            val attachments = if (name == "sendFile" || name == "generateImage") extractAttachments(result) else emptyList()
-            val images = if (result is ToolResult.Success) result.images else emptyList()
-            val transportResult = if (attachments.isNotEmpty()) stripAttachments(result) else result
-            val processed = toolOutputStore.process(name, toolCall.id, transportResult)
-            ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, attachments, images)
+            // 工具实现在此被调用；工作流本身在主线程收集，故统一切到 IO——避免远程模式下工具里的
+            // 同步文件/网络 IO 阻塞主线程。依赖主线程的工具（浏览器）在自身实现内已切回 Main。
+            withContext(Dispatchers.IO) {
+                val result = tool.executeWithContext(toolCall.arguments, context)
+                val attachments = if (name == "sendFile" || name == "generateImage") extractAttachments(result) else emptyList()
+                val images = if (result is ToolResult.Success) result.images else emptyList()
+                val transportResult = if (attachments.isNotEmpty()) stripAttachments(result) else result
+                val processed = toolOutputStore.process(name, toolCall.id, transportResult)
+                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, attachments, images)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1462,34 +1478,37 @@ class StatefulAgentWorkflow @Inject constructor(
         context: AgentContext,
         onEvent: suspend (AgentEvent) -> Unit
     ): ToolRunResult {
-        val live = StringBuilder()
-        var lastEmitMs = 0L
-        var finalResult: ToolResult? = null
-        try {
-            tool.executeStream(toolCall.arguments, context).collect { ev ->
-                when (ev) {
-                    is ToolStreamEvent.Progress -> {
-                        live.append(ev.chunk).append('\n')
-                        if (live.length > LIVE_TAIL_CHARS) {
-                            live.delete(0, live.length - LIVE_TAIL_CHARS)
+        return try {
+            // 同 runToolSync：流式工具也可能在主线程收集上下文里被驱动，统一切 IO。
+            withContext(Dispatchers.IO) {
+                val live = StringBuilder()
+                var lastEmitMs = 0L
+                var finalResult: ToolResult? = null
+                tool.executeStream(toolCall.arguments, context).collect { ev ->
+                    when (ev) {
+                        is ToolStreamEvent.Progress -> {
+                            live.append(ev.chunk).append('\n')
+                            if (live.length > LIVE_TAIL_CHARS) {
+                                live.delete(0, live.length - LIVE_TAIL_CHARS)
+                            }
+                            val now = System.currentTimeMillis()
+                            if (now - lastEmitMs >= PROGRESS_INTERVAL_MS) {
+                                lastEmitMs = now
+                                onEvent(AgentEvent.ToolCallProgress(toolCall.id, toolCall.name, live.toString()))
+                            }
                         }
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmitMs >= PROGRESS_INTERVAL_MS) {
-                            lastEmitMs = now
-                            onEvent(AgentEvent.ToolCallProgress(toolCall.id, toolCall.name, live.toString()))
-                        }
+                        is ToolStreamEvent.Completed -> finalResult = ev.result
                     }
-                    is ToolStreamEvent.Completed -> finalResult = ev.result
                 }
+                val result = finalResult ?: ToolResult.Error("流式工具未返回结果", "MISSING_STREAM_RESULT")
+                val processed = toolOutputStore.process(toolCall.name, toolCall.id, result)
+                val images = if (result is ToolResult.Success) result.images else emptyList()
+                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, images = images)
             }
-            val result = finalResult ?: ToolResult.Error("流式工具未返回结果", "MISSING_STREAM_RESULT")
-            val processed = toolOutputStore.process(toolCall.name, toolCall.id, result)
-            val images = if (result is ToolResult.Success) result.images else emptyList()
-            return ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, images = images)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            return ToolRunResult(ToolResult.Error("工具执行失败: ${e.message}", "TOOL_EXECUTION_FAILED").toTransportString(), true)
+            ToolRunResult(ToolResult.Error("工具执行失败: ${e.message}", "TOOL_EXECUTION_FAILED").toTransportString(), true)
         }
     }
 

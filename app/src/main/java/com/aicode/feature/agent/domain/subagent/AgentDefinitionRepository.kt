@@ -54,6 +54,9 @@ class AgentDefinitionRepository @Inject constructor(
     fun findIncludingDisabled(name: String): AgentDefinition? =
         listAll().firstOrNull { it.definition.name.equals(name, ignoreCase = true) }?.definition
 
+    /** 当前被禁用的子代理名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
+    fun disabledNames(): Set<String> = configRepository.disabledNames()
+
     /** 该子代理是否在任一作用域中被禁用。 */
     fun isDisabled(name: String): Boolean = name.lowercase() in configRepository.disabledNames()
 

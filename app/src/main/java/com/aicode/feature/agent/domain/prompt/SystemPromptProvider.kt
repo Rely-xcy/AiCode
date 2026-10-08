@@ -124,38 +124,51 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
-    private inner class ProjectRuleSource : PromptSource {
-        @Volatile private var cached: String? = null
-        private var lastModified: Long = 0
-        private var lastProjectRoot: String = ""
+    private inner class ProjectRuleSource {
+        @Volatile private var cached: ProjectRules? = null
+        private var lastSignature: String = ""
 
-        override fun build(ctx: AgentContext): String? {
-            if (ctx.projectRoot.isBlank()) return null
-            val agentsFile = File(ctx.projectRoot, AGENTS_FILE)
-            val claudeFile = File(ctx.projectRoot, CLAUDE_FILE)
-            val file = when {
-                agentsFile.isFile && agentsFile.canRead() -> agentsFile to AGENTS_FILE
-                claudeFile.isFile && claudeFile.canRead() -> claudeFile to CLAUDE_FILE
-                else -> return null
+        /**
+         * 同时读取全局规则（`~/.aicode`）与工作区规则（项目根目录）：各自 `AGENTS.md` 优先、`CLAUDE.md` 兜底。
+         * 任一来源为空则该项为 null；两处文件签名（路径 + mtime）未变时复用缓存。
+         */
+        fun build(ctx: AgentContext): ProjectRules? {
+            val global = resolveRuleFile(containerInstaller.aicodeDir)
+            val project = ctx.projectRoot.takeIf { it.isNotBlank() }?.let { resolveRuleFile(File(it)) }
+            if (global == null && project == null) return null
+
+            val signature = buildString {
+                append(global?.first?.absolutePath).append(':').append(global?.first?.lastModified() ?: 0)
+                append('|')
+                append(project?.first?.absolutePath).append(':').append(project?.first?.lastModified() ?: 0)
             }
-            
-            val currentMod = file.first.lastModified()
-            // 如果文件未修改且路径一致，直接返回快照基线，避免重复读取与格式化
-            if (ctx.projectRoot == lastProjectRoot && currentMod == lastModified && cached != null) {
-                return cached
-            }
-            
-            val text = try { file.first.readText() } catch (e: Exception) { return null }
+            if (signature == lastSignature && cached != null) return cached
+
+            val rules = ProjectRules(
+                global = global?.first?.let { readRule(it) },
+                project = project?.first?.let { readRule(it) }
+            )
+            cached = rules
+            lastSignature = signature
+            return rules
+        }
+
+        private fun resolveRuleFile(dir: File): Pair<File, String>? {
+            val agents = File(dir, AGENTS_FILE)
+            if (agents.isFile && agents.canRead()) return agents to AGENTS_FILE
+            val claude = File(dir, CLAUDE_FILE)
+            if (claude.isFile && claude.canRead()) return claude to CLAUDE_FILE
+            return null
+        }
+
+        private fun readRule(file: File): String? {
+            val text = try { file.readText() } catch (e: Exception) { return null }
             if (text.isBlank()) return null
-            
-            cached = if (text.length > MAX_AGENTS_CHARS) {
-                text.take(MAX_AGENTS_CHARS) + "\n…（${file.second} 过长，已截断）"
+            return if (text.length > MAX_AGENTS_CHARS) {
+                (text.take(MAX_AGENTS_CHARS) + "\n…（规则过长，已截断）").trim()
             } else {
-                text
-            }.trim()
-            lastModified = currentMod
-            lastProjectRoot = ctx.projectRoot
-            return cached
+                text.trim()
+            }
         }
     }
 
@@ -179,6 +192,9 @@ class SystemPromptProvider @Inject constructor(
     private inner class EngineFragmentSource : PromptSource {
         override fun build(ctx: AgentContext): String? = agentEngine.promptFragment(engineContextOf(ctx))
     }
+
+    /** 项目规则正文拆分为全局（`~/.aicode`）与工作区两组，供 `{{AICODE_PROJECT_RULES_GLOBAL}}` / `{{AICODE_PROJECT_RULES_PROJECT}}` 变量使用。 */
+    private data class ProjectRules(val global: String?, val project: String?)
 
     /**
      * 子代理固定纪律段（角色行 + 硬规则）：走 [AgentEngine.subAgentRules]，与 [EngineFragmentSource] 分开，
@@ -254,7 +270,8 @@ class SystemPromptProvider @Inject constructor(
             memories?.global,
             memories?.project,
             subAgentsContent,
-            projectRules,
+            projectRules?.global,
+            projectRules?.project,
             workspaceContent,
             environmentContent,
             currentDate()
@@ -288,6 +305,7 @@ class SystemPromptProvider @Inject constructor(
             return ""
         }
         val memories = agentEngine.memoryListGroups(engineContextOf(ctx))
+        val projectRules = projectRuleSource.build(ctx)
         return renderVariables(
             content,
             activeSkillsSource.build(ctx),
@@ -295,7 +313,8 @@ class SystemPromptProvider @Inject constructor(
             memories?.global,
             memories?.project,
             subAgentListSource.build(ctx),
-            projectRuleSource.build(ctx),
+            projectRules?.global,
+            projectRules?.project,
             workspaceSource.build(ctx),
             environmentSource.build(ctx),
             currentDate()
@@ -332,6 +351,7 @@ class SystemPromptProvider @Inject constructor(
         // 用它判会永远为真。（主代理 build() 把运行期内容全放在片段变量位上，没有这条追加路径。）
         val rawPrompt = definition.prompt
         val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
+        val projectRules = projectRuleSource.build(agentContext)
         append(
             renderVariables(
                 rawPrompt,
@@ -340,7 +360,8 @@ class SystemPromptProvider @Inject constructor(
                 memories?.global,
                 memories?.project,
                 subAgentListSource.build(agentContext),
-                projectRuleSource.build(agentContext),
+                projectRules?.global,
+                projectRules?.project,
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
                 currentDate()
@@ -365,10 +386,15 @@ class SystemPromptProvider @Inject constructor(
                 append(it)
             }
         }
-        if (InjectPart.PROJECT_RULES in definition.inject && PROJECT_RULES_VAR !in rawPrompt) {
-            projectRuleSource.build(agentContext)?.let {
+        if (InjectPart.PROJECT_RULES in definition.inject &&
+            PROJECT_RULES_VAR !in rawPrompt &&
+            PROJECT_RULES_GLOBAL_VAR !in rawPrompt &&
+            PROJECT_RULES_PROJECT_VAR !in rawPrompt
+        ) {
+            val rules = projectRuleSource.build(agentContext)
+            listOfNotNull(rules?.global, rules?.project).takeIf { it.isNotEmpty() }?.let { parts ->
                 append("\n\n")
-                append(it)
+                append(parts.joinToString("\n\n"))
             }
         }
 
@@ -405,7 +431,8 @@ class SystemPromptProvider @Inject constructor(
         memoryGlobal: String?,
         memoryProject: String?,
         subAgents: String?,
-        projectRules: String?,
+        projectRulesGlobal: String?,
+        projectRulesProject: String?,
         workspace: String,
         environment: String,
         date: String,
@@ -417,7 +444,9 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(MEMORY_GLOBAL_VAR, memoryGlobal.orEmpty())
         out = out.replace(MEMORY_PROJECT_VAR, memoryProject.orEmpty())
         out = out.replace(SUBAGENTS_VAR, subAgents.orEmpty())
-        out = out.replace(PROJECT_RULES_VAR, projectRules.orEmpty())
+        out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
+        out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
+        out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
         out = out.replace(WORKSPACE_VAR, workspace)
         out = out.replace(ENVIRONMENT_VAR, environment)
         out = out.replace(DATE_VAR, date)
@@ -477,6 +506,8 @@ class SystemPromptProvider @Inject constructor(
         const val MEMORY_PROJECT_VAR = "{{AICODE_MEMORY_PROJECT}}"
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
+        const val PROJECT_RULES_GLOBAL_VAR = "{{AICODE_PROJECT_RULES_GLOBAL}}"
+        const val PROJECT_RULES_PROJECT_VAR = "{{AICODE_PROJECT_RULES_PROJECT}}"
         const val WORKSPACE_VAR = "{{AICODE_WORKSPACE}}"
         const val ENVIRONMENT_VAR = "{{AICODE_ENVIRONMENT}}"
         const val DATE_VAR = "{{AICODE_DATE}}"

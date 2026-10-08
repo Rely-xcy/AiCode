@@ -12,8 +12,12 @@
 {{AICODE_MEMORY}}
 
 ## 项目规则
-工作区项目规则，优先级高于通用规则，务必遵守。
-{{AICODE_PROJECT_RULES}}
+项目规则来自全局（`~/.aicode`）与工作区两处，优先级高于通用规则，务必遵守；两处冲突时以工作区规则为准。
+### 全局规则
+{{AICODE_PROJECT_RULES_GLOBAL}}
+
+### 工作区规则
+{{AICODE_PROJECT_RULES_PROJECT}}
 
 ## 当前上下文
 - 项目根目录: {{AICODE_WORKSPACE}}

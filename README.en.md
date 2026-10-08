@@ -48,13 +48,12 @@ There is nothing to set up beforehand: install the app, configure a model under 
 | Icon | Description |
 |------|-------------|
 | <img src="https://www.rainyun.com/favicon.ico" width="24" alt="RainYun" /> | **[RainYun](https://www.rainyun.com/logins_)** — Sponsor of this project's server; a Chinese cloud provider specializing in VPS and game hosting (one-click Minecraft and other game servers), plus bare-metal machines and object storage; discounts for new users |
-| <img src="https://ai.onyxaxis.org/api/site/logo" width="24" alt="Axis AI" /> | **[Axis AI](https://ai.onyxaxis.org/register?invite=AICODE)** — A free non-profit AI platform offering frontier models; register with invite code `AICODE` for 7 days of Go benefits |
+| <img src="https://ai.onyxaxis.org/api/site/logo" width="24" alt="Axis AI" /> | **[Axis AI](https://ai.onyxaxis.org/register?invite=FOAICODE)** — A free non-profit AI platform offering frontier models; register with invite code `FOAICODE` for 7 days of Go benefits |
 
 ## Advertisement
 
 | Icon | Description |
 |------|-------------|
-| <img src="https://opencode.ai/favicon-96x96-v3.png" width="24" alt="OpenCode" /> | **[OpenCode Go](https://opencode.ai/go?ref=8Q5GA5B1NY)** — Low-cost subscription with generous limits and reliable access to the most capable open-source models |
 | <img src="https://www.qiniu.com/favicon.ico" width="24" alt="Qiniu" /> | **[Qiniu Cloud AI](https://s.qiniu.com/vUryau)** — New users get 3,000,000 free tokens on sign-up (valid for 2 years), covering 50+ popular models |
 
 ## Features

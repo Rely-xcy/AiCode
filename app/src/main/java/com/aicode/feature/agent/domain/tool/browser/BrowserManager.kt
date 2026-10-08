@@ -786,21 +786,31 @@ class BrowserManager @Inject constructor(
         }
     }
 
-    /** Compose UI 挂载容器 */
-    fun getOrCreateContainerView(context: Context): View {
-        // 面板打开了（页面可见），不需要保活。
-        stopKeepAlive()
-        val container = containerView ?: FrameLayout(context).also {
-            containerView = it
-        }
+    /**
+     * 登记 Compose 侧的挂载容器，并把激活 Tab 的 WebView 移入其中。
+     *
+     * 容器由 [com.aicode.feature.browser.presentation.BrowserScreen] 每个页面实例各自 remember：
+     * NavHost 过渡期间新旧页面会短暂共存，若共用同一个 FrameLayout，后创建的 AndroidView
+     * 会拿到仍挂在旧节点上的容器，`AndroidViewHolder` 构造时 `addView` 抛
+     * 「The specified child already has a parent」。各持一份即可彻底避免。
+     */
+    fun attachContainerView(container: FrameLayout) {
+        containerView = container
         ensureActiveTab()
         updateContainerView()
         _state.update { it.copy(attached = true) }
-        return container
     }
 
-    fun detachFromViewHierarchy() {
-        containerView?.removeAllViews()
+    /**
+     * 页面退出时解除容器挂载。
+     *
+     * 仅当该容器仍是当前挂载点时才真正卸载并回退到 hiddenHost，避免过渡期间退场页
+     * 把新页面正在使用的容器误清空。
+     */
+    fun detachContainerView(container: FrameLayout) {
+        container.removeAllViews()
+        if (containerView !== container) return
+
         containerView = null
         _state.update { it.copy(attached = false) }
 
@@ -883,7 +893,7 @@ class BrowserManager @Inject constructor(
         keepAliveTabIds.remove(tabId)
         // 保活集合空了（面板关着，且关掉的正是唯一要保活的那个标签）：监督协程没活儿可干了，
         // 停掉它，别每分钟空转一轮（while 里那一轮虽然什么也不做，也是一次唤醒）。
-        // 面板重新打开（getOrCreateContainerView）或面板关着时新建标签都会重新注册。
+        // 面板重新打开（attachContainerView）或面板关着时新建标签都会重新注册。
         if (keepAliveTabIds.isEmpty()) stopKeepAlive()
 
         if (tabs.isEmpty()) {

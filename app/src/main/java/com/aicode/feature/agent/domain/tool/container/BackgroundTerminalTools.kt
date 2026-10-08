@@ -79,7 +79,7 @@ class TerminalSessionTool @Inject constructor(
 
     override val name = "terminal"
     override val description =
-        "管理常驻后台终端会话（启动命令、发输入/快捷键、读输出、关闭标签）。会自行结束且需等结果的任务用 start + notify=true（结束后系统主动通知，勿轮询）；常驻服务用 notify=false，需要时再 read。中断前台进程用 key=ctrl+c。"
+        "管理常驻后台终端会话（启动命令、发输入/快捷键、读输出、关闭标签）。会自行结束且需等结果的任务用 start + notify=true：命令结束后系统主动唤醒 AI 并送达退出码与末尾输出，无需轮询或 sleep 等待。中断前台进程用 key=ctrl+c。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
 
@@ -113,7 +113,7 @@ class TerminalSessionTool @Inject constructor(
         "notify" to ToolParameter(
             name = "notify",
             type = ParameterType.BOOLEAN,
-            description = "start 可选：命令结束后是否由系统通知 AI。true 用于编译/测试等会自行结束的任务（start 只捕获约 5 秒初始输出，结束后通知，勿轮询）；false（默认）用于 dev server 等常驻服务，标签保活可复用。",
+            description = "start 可选：命令结束后是否主动唤醒 AI。true：命令退出时系统推送一条通知（含退出码与末尾输出）唤醒 AI 继续下一轮，AI 正忙则随本轮工具结果搭车送达，无需轮询或 sleep 等待；适合编译/测试等会自行结束的任务（start 只捕获约 5 秒初始输出，其余输出由结束通知带回）。false（默认）：不唤醒，需自行 read 取输出。",
             required = false
         ),
         "tab_id" to ToolParameter(

@@ -48,13 +48,12 @@ AiCode 是运行在 Android 上的通用 AI Coding Agent，把一套完整的 Li
 | 图标 | 描述 |
 |------|------|
 | <img src="https://www.rainyun.com/favicon.ico" width="24" alt="RainYun" /> | **[雨云](https://www.rainyun.com/logins_)** — 本项目服务器赞助商，国产云服务商，主营云服务器与游戏云（Minecraft 等预装服务端一键开服），兼有裸金属物理机与对象存储，新用户优惠 |
-| <img src="https://ai.onyxaxis.org/api/site/logo" width="24" alt="Axis AI" /> | **[Axis AI](https://ai.onyxaxis.org/register?invite=AICODE)** — 汇聚前沿大模型能力的免费公益 AI 平台，使用邀请码 `AICODE` 注册可享 7 天 Go 权益 |
+| <img src="https://ai.onyxaxis.org/api/site/logo" width="24" alt="Axis AI" /> | **[Axis AI](https://ai.onyxaxis.org/register?invite=FOAICODE)** — 汇聚前沿大模型能力的免费公益 AI 平台，使用邀请码 `FOAICODE` 注册可享 7 天 Go 权益 |
 
 ## 广告
 
 | 图标 | 描述 |
 |------|------|
-| <img src="https://opencode.ai/favicon-96x96-v3.png" width="24" alt="OpenCode" /> | **[OpenCode Go](https://opencode.ai/go?ref=8Q5GA5B1NY)** — 低价订阅，提供最强大开源模型的慷慨额度与可靠访问 |
 | <img src="https://www.qiniu.com/favicon.ico" width="24" alt="Qiniu" /> | **[七牛云 AI](https://s.qiniu.com/vUryau)** — 新用户注册赠 300 万 Token（2 年有效），支持 50+ 热门大模型 |
 
 ## 功能特性

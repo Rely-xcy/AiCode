@@ -111,6 +111,24 @@ object FileLogger {
         write("INFO", tag, message, null)
     }
 
+    internal fun memoryCheckpoint(
+        tag: String,
+        stage: String,
+        elapsedMs: Long? = null,
+        details: String = ""
+    ) {
+        if (!shouldLog(LogLevel.INFO)) return
+        val runtime = Runtime.getRuntime()
+        val usedKiB = (runtime.totalMemory() - runtime.freeMemory()) / 1024
+        val maxKiB = runtime.maxMemory() / 1024
+        i(tag, buildString {
+            append("[memory] stage=").append(stage)
+            append(" heapKiB=").append(usedKiB).append('/').append(maxKiB)
+            if (elapsedMs != null) append(" elapsedMs=").append(elapsedMs)
+            if (details.isNotEmpty()) append(' ').append(details)
+        })
+    }
+
     fun w(tag: String, message: String, throwable: Throwable? = null) {
         if (!shouldLog(LogLevel.WARN)) return
         Log.w(tag, message, throwable)

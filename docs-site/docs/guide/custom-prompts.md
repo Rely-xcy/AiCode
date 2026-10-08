@@ -118,7 +118,9 @@ App 里的改动与手工放文件完全等价，两种方式可以混用。
 | `{{AICODE_MEMORY}}` | 记忆引擎渲染的整块内容（记忆使用规则 + 按当前话题排序的全局/项目清单），内置片段用它 |
 | `{{AICODE_MEMORY_GLOBAL}}` | 全局记忆列表（每行一项，不排序） |
 | `{{AICODE_MEMORY_PROJECT}}` | 项目记忆列表（每行一项） |
-| `{{AICODE_PROJECT_RULES}}` | 项目规则正文（`AGENTS.md` / `CLAUDE.md`） |
+| `{{AICODE_PROJECT_RULES_GLOBAL}}` | 全局项目规则正文（`~/.aicode` 下的 `AGENTS.md` / `CLAUDE.md`） |
+| `{{AICODE_PROJECT_RULES_PROJECT}}` | 工作区项目规则正文（项目根目录下的 `AGENTS.md` / `CLAUDE.md`） |
+| `{{AICODE_PROJECT_RULES}}` | 等价于 `{{AICODE_PROJECT_RULES_PROJECT}}`，为兼容旧片段保留 |
 | `{{AICODE_WORKSPACE}}` | 项目根目录（`~/workspace`，未选工作区时为提示文本） |
 | `{{AICODE_ENVIRONMENT}}` | 当前运行环境（本地容器（PRoot） / 远程 SSH 服务器） |
 | `{{AICODE_DATE}}` | 当前日期（`yyyy-MM-dd`） |

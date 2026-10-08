@@ -68,8 +68,6 @@ import okhttp3.Connection
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
-import okhttp3.Request
-import okhttp3.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.IOException
@@ -186,25 +184,28 @@ object AgentModule {
                     private val host = call.request().url.host
                     private var callStartNanos = 0L
                     private var connectStartNanos = 0L
+                    private var connectMs: Long? = null
                     private var connectionId = "none"
                     private var protocol = "unknown"
 
-                    private fun logStage(stage: String, details: String = "") {
+                    /** 每次请求只在结束/失败时落一条；中间阶段仅记录状态，不落盘。 */
+                    private fun logResult(stage: String, details: String = "") {
                         val totalMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - callStartNanos)
                         FileLogger.i(
                             "OkHttp",
                             "call=$callId host=$host connection=$connectionId protocol=$protocol " +
-                                "stage=$stage totalMs=$totalMs$details"
+                                "stage=$stage totalMs=$totalMs" +
+                                (connectMs?.let { " connectMs=$it" } ?: "") + details
                         )
                     }
 
                     override fun callStart(call: Call) {
                         callStartNanos = System.nanoTime()
-                        logStage("callStart")
                     }
 
                     override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) {
                         connectStartNanos = System.nanoTime()
+                        connectMs = null
                         connectionId = "none"
                         protocol = "unknown"
                     }
@@ -216,8 +217,7 @@ object AgentModule {
                         protocol: Protocol?
                     ) {
                         this.protocol = protocol?.toString() ?: "unknown"
-                        val connectMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - connectStartNanos)
-                        logStage("connectEnd", " connectMs=$connectMs")
+                        connectMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - connectStartNanos)
                     }
 
                     override fun connectFailed(
@@ -228,30 +228,20 @@ object AgentModule {
                         ioe: IOException
                     ) {
                         this.protocol = protocol?.toString() ?: "unknown"
-                        val connectMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - connectStartNanos)
-                        logStage("connectFailed", " connectMs=$connectMs exception=${ioe.javaClass.name}")
+                        connectMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - connectStartNanos)
                     }
 
                     override fun connectionAcquired(call: Call, connection: Connection) {
                         connectionId = Integer.toHexString(System.identityHashCode(connection))
                         protocol = connection.protocol().toString()
-                        logStage("connectionAcquired")
-                    }
-
-                    override fun requestHeadersEnd(call: Call, request: Request) {
-                        logStage("requestHeadersEnd")
-                    }
-
-                    override fun responseHeadersEnd(call: Call, response: Response) {
-                        logStage("responseHeadersEnd")
                     }
 
                     override fun callFailed(call: Call, ioe: IOException) {
-                        logStage("callFailed", " exception=${ioe.javaClass.name}")
+                        logResult("callFailed", " exception=${ioe.javaClass.name}")
                     }
 
                     override fun callEnd(call: Call) {
-                        logStage("callEnd")
+                        logResult("callEnd")
                     }
                 }
             })

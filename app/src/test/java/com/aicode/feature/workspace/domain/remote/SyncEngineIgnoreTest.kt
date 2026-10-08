@@ -45,7 +45,8 @@ class SyncEngineIgnoreTest {
             id = "m1", connectionId = "c1",
             remotePath = remoteRoot, localMountPath = localRoot.absolutePath
         )
-        return SyncEngine(mount, connection, client, RemoteAuth.Password("p"), ignoredPatternsStr, useGitIgnore, 50)
+        val indexStore = SyncIndexStore(File(tempFolder.root, "sync-index"))
+        return SyncEngine(mount, connection, client, RemoteAuth.Password("p"), ignoredPatternsStr, useGitIgnore, 50, indexStore)
             .also { syncEngines.add(it) }
     }
 

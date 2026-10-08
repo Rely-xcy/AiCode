@@ -118,7 +118,7 @@ inject: [base, projectRules]
 | `mainRules` | 完整通用规则：与主会话保持完全一致的行为准则与规则基线 |
 | `skills` | 技能支持：注入可用技能清单，允许子代理加载并执行项目技能 |
 | `memory` | 记忆支持：注入全局与项目长期记忆摘要，见 [记忆与项目规则](/guide/memory) |
-| `projectRules` | 项目规则：注入工作区内的 `AGENTS.md` 或 `CLAUDE.md` 约束，见 [记忆与项目规则](/guide/memory) |
+| `projectRules` | 项目规则：注入全局（`~/.aicode`）与工作区内的 `AGENTS.md` 或 `CLAUDE.md` 约束，见 [记忆与项目规则](/guide/memory) |
 
 `base` 与 `mainRules` 是同一套规则的简版与完整版，**正常只选一个**。两个同时开启不会报错，但会把相互重叠的规则文本注入两遍，徒增上下文占用。
 
