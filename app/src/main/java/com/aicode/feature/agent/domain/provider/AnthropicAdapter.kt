@@ -484,14 +484,11 @@ class AnthropicAdapter @Inject constructor(
         val result = mutableListOf<AnthropicMessage>()
         // 防御性跟踪：上一个 assistant 消息是否包含 tool_use
         var lastAssistantHadToolUse = false
-        // 最后一条普通 user 消息（非 tool_result）在 result 中的索引，供 messages 断点打点。
-        var lastPlainUserIndex: Int? = null
 
         for (message in messages) {
             when (message) {
                 is AgentMessage.UserMessage -> {
                     result.add(AnthropicMessage(role = "user", content = message.toAnthropicUserContent()))
-                    lastPlainUserIndex = result.lastIndex
                     lastAssistantHadToolUse = false
                 }
                 is AgentMessage.AssistantMessage -> {
@@ -576,34 +573,46 @@ class AnthropicAdapter @Inject constructor(
             }
         }
 
-        // messages 断点：打在最后一条普通 user 消息的 text 块上（Anthropic 不允许打在 tool_result/thinking/image 块）。
-        // 工具循环中最后一条 user 是 tool_result 时不打点，保持 system+tools 两个断点即可。
+        // messages 断点：打在本轮请求最后一条「含可缓存块」的消息的最后一块上。
+        //
+        // 不能只认「最后一条普通 user 消息」：agent 工具循环里请求以 tool_result 结尾，那样打点
+        // 会让整段工具输出落在断点之后、永不入缓存——每多一步工具调用，之前累积的工具输出都要
+        // 全价重发；硬压缩插入 marker+summary 后，断点会停在尾巴里某条 user 上，摘要与最近原文
+        // 整轮不入缓存。官方推荐把断点打在本轮「最近追加那一轮的最后一块」，且 tool_result /
+        // tool_use 都允许带 cache_control（只有 thinking / redacted_thinking 不行）。
         if (addMessageBreakpoint) {
-            val idx = lastPlainUserIndex
-            if (idx != null) {
-                val msg = result[idx]
-                val newContent = when (val c = msg.content) {
-                    is String -> listOf(
-                        AnthropicContentBlock(type = "text", text = c, cache_control = CACHE_BREAKPOINT)
-                    )
-                    is List<*> -> {
-                        val blocks = c.map { it as AnthropicContentBlock }
-                        val lastText = blocks.indexOfLast { it.type == "text" }
-                        if (lastText >= 0) {
-                            blocks.mapIndexed { i, b ->
-                                if (i == lastText) b.copy(cache_control = CACHE_BREAKPOINT) else b
-                            }
-                        } else {
-                            blocks
-                        }
-                    }
-                    else -> c
-                }
-                result[idx] = msg.copy(content = newContent)
-            }
+            val idx = result.indexOfLast { it.hasCacheableBlock() }
+            if (idx >= 0) result[idx] = result[idx].withCacheBreakpointOnLastCacheableBlock()
         }
 
         return result
+    }
+
+    /** 该消息里是否存在能带 cache_control 的内容块（纯文本消息看正文非空）。 */
+    private fun AnthropicMessage.hasCacheableBlock(): Boolean = when (val c = content) {
+        is String -> c.isNotBlank()
+        is List<*> -> c.filterIsInstance<AnthropicContentBlock>().any { it.type in CACHEABLE_BLOCK_TYPES }
+        else -> false
+    }
+
+    /**
+     * 在该消息的最后一个可缓存块上打 cache_control；没有可缓存块时原样返回。
+     * 纯文本消息（无图片的 user）要转成单块 text 才能带上断点。
+     */
+    private fun AnthropicMessage.withCacheBreakpointOnLastCacheableBlock(): AnthropicMessage {
+        val newContent: Any = when (val c = content) {
+            is String -> if (c.isBlank()) c else listOf(
+                AnthropicContentBlock(type = "text", text = c, cache_control = CACHE_BREAKPOINT)
+            )
+            is List<*> -> {
+                val blocks = c.filterIsInstance<AnthropicContentBlock>()
+                val last = blocks.indexOfLast { it.type in CACHEABLE_BLOCK_TYPES }
+                if (last < 0) return this
+                blocks.mapIndexed { i, b -> if (i == last) b.copy(cache_control = CACHE_BREAKPOINT) else b }
+            }
+            else -> return this
+        }
+        return copy(content = newContent)
     }
 
     /** 显式缓存断点值：Anthropic ephemeral prompt caching。 */
@@ -675,6 +684,13 @@ class AnthropicAdapter @Inject constructor(
     private companion object {
         /** 显式缓存断点：Anthropic ephemeral prompt caching。 */
         val CACHE_BREAKPOINT = mapOf("type" to "ephemeral")
+
+        /**
+         * 可带 cache_control 的内容块类型（官方：text / image / tool_use / tool_result / document）。
+         * 刻意不含 image：带图 user 消息仍打在最后 text 块上，与既有行为一致；工具循环里图片极少，
+         * 收益小、留作后续单独评估。
+         */
+        val CACHEABLE_BLOCK_TYPES = setOf("text", "tool_use", "tool_result")
 
         /**
          * Anthropic 的 `input_tokens` 只算未命中缓存的部分，总输入还要加上 cache_read / cache_creation——

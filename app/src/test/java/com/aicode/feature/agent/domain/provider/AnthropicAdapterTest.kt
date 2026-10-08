@@ -8,6 +8,7 @@ import com.aicode.feature.agent.data.remote.anthropic.AnthropicMessageResponse
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicStopDetails
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicUsage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.tool.ToolCall
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -250,6 +251,53 @@ class AnthropicAdapterTest {
         @Suppress("UNCHECKED_CAST")
         val blocks = user.content as List<AnthropicContentBlock>
         assertEquals("ephemeral", blocks.last().cache_control?.get("type"))
+    }
+
+    @Test
+    fun cache_breakpoint_follows_tool_results_in_loop() = runTest {
+        val api = FakeApi(response())
+        adapter(api).complete(
+            "sys",
+            listOf(
+                AgentMessage.UserMessage(content = "hi"),
+                AgentMessage.AssistantMessage(content = "读文件", toolCalls = listOf(toolCall("c1"))),
+                AgentMessage.ToolResultMessage(id = "c1", toolName = "readFile", result = "a")
+            )
+        )
+
+        // 工具循环里请求以 tool_result 结尾，断点必须落在这条 tool_result 上；
+        // 只认「最后一条普通 user」会让整段工具输出落在断点之后、永不入缓存。
+        val last = api.lastRequest!!.messages.last()
+        assertEquals("user", last.role)
+        @Suppress("UNCHECKED_CAST")
+        val blocks = last.content as List<AnthropicContentBlock>
+        assertEquals("tool_result", blocks.last().type)
+        assertEquals("ephemeral", blocks.last().cache_control?.get("type"))
+    }
+
+    @Test
+    fun cache_breakpoint_lands_on_tail_not_compaction_marker() = runTest {
+        val api = FakeApi(response())
+        adapter(api).complete(
+            "sys",
+            listOf(
+                // 压缩插入的 marker 本身也是一条「普通 user 消息」；只认最后一条普通 user 的旧实现
+                // 会把断点停在尾巴里某条 user 上，摘要与最近原文整轮不入缓存。
+                AgentMessage.UserMessage(content = CONTEXT_COMPACTION_MARKER),
+                AgentMessage.AssistantMessage(content = "接手摘要"),
+                AgentMessage.UserMessage(content = "接着改"),
+                AgentMessage.AssistantMessage(content = "读文件", toolCalls = listOf(toolCall("c1"))),
+                AgentMessage.ToolResultMessage(id = "c1", toolName = "readFile", result = "a")
+            )
+        )
+
+        val messages = api.lastRequest!!.messages
+        @Suppress("UNCHECKED_CAST")
+        val lastBlocks = messages.last().content as List<AnthropicContentBlock>
+        assertEquals("tool_result", lastBlocks.last().type)
+        assertEquals("ephemeral", lastBlocks.last().cache_control?.get("type"))
+        // marker 那条仍是纯文本、无断点（断点只落一条，且不在 marker 上）。
+        assertTrue(messages.first().content is String)
     }
 
     @Test
