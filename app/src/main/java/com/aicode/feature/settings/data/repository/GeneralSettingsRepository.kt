@@ -54,6 +54,9 @@ class GeneralSettingsRepository @Inject constructor(
         /** 首字超时默认 5 分钟，与原硬编码值一致。 */
         const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 300
 
+        /** 数据块间隔超时默认 5 分钟：服务端静默时能自行断开并重试，避免本轮永久停在「执行中」。 */
+        const val DEFAULT_STREAM_IDLE_TIMEOUT_SEC = 300
+
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
@@ -108,9 +111,9 @@ class GeneralSettingsRepository @Inject constructor(
         (it[FIRST_BYTE_TIMEOUT_SEC_KEY] ?: DEFAULT_FIRST_BYTE_TIMEOUT_SEC).coerceAtLeast(0)
     }
 
-    /** 流式响应相邻数据块间隔超时（秒）；0（默认）表示不限制。 */
+    /** 流式响应相邻数据块间隔超时（秒）；0 表示不限制，未设置时回退到 300 秒。 */
     val streamIdleTimeoutSecFlow: Flow<Int> = context.generalDataStore.data.map {
-        (it[STREAM_IDLE_TIMEOUT_SEC_KEY] ?: 0).coerceAtLeast(0)
+        (it[STREAM_IDLE_TIMEOUT_SEC_KEY] ?: DEFAULT_STREAM_IDLE_TIMEOUT_SEC).coerceAtLeast(0)
     }
 
     suspend fun setFirstByteTimeoutSec(sec: Int) {
