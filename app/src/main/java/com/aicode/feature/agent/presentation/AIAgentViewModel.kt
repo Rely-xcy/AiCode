@@ -2531,6 +2531,14 @@ class AIAgentViewModel @Inject constructor(
     private val _targetRewindMessageId = MutableStateFlow<String?>(null)
     val targetRewindMessageId: StateFlow<String?> = _targetRewindMessageId.asStateFlow()
 
+    /**
+     * 回退代际：每次 [executeRewindOption] 成功执行一次回退就自增。
+     * 聊天页据此复位 UI 侧状态（跟随底部、贴底定位、流式缓冲），回退后列表立即回到干净状态，
+     * 无需手动刷新（见 AIChatPanel 对 [rewindGeneration] 的收集）。
+     */
+    private val _rewindGeneration = MutableStateFlow(0)
+    val rewindGeneration: StateFlow<Int> = _rewindGeneration.asStateFlow()
+
     fun openRewindMenu(messageId: String) {
         _targetRewindMessageId.value = messageId
     }
@@ -2596,6 +2604,8 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
         }
+        // 回退已执行（未提前 return）：通知界面复位 UI 侧状态。
+        _rewindGeneration.value++
     }
 
     /**

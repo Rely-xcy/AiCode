@@ -332,9 +332,10 @@ private fun messageRenderItems(message: AgentUIMessage): List<ChatRenderItem> {
  *
  * 三件事：**整轮任务折叠**、长文拆块、**连续工具调用分组**。
  *
- * 先按「用户消息 → 下一个用户消息之前」切成轮（见 [splitChatTurns]）：每轮依次产出「用户消息 →
- * 轮头（携带过程项，仅当该轮有过程或正在运行）→ 常显项与结果」。过程项挂在轮头 item 内，整轮展开时
- * 随折叠头一起平滑展开；压缩摘要/后台通知/带附件工具等常显项不参与折叠。
+ * 先按「用户消息 → 下一个用户消息之前」切成轮（见 [splitChatTurns]）：每轮依次产出「用户消息」与
+ * 轮内按**消息顺序**切出的段与项——连续的过程项聚成一段轮头，遇到常显项（压缩摘要/后台通知/带附件
+ * 工具等）或结果消息就在该处切断：常显项与结果正文各自在时间线原位独立成 item，不再被推到该轮最末。
+ * 过程项挂在轮头 item 内，整轮展开时随折叠头一起平滑展开；常显项不参与折叠。
  * 结果 = 轮内最后一条有可见正文的普通助手消息（其思考抽为过程项）。
  *
  * 轮头展开态：没手动记录时「末轮且 agent 忙」默认展开、其余默认收起（[activeTurnKey]）；
@@ -370,10 +371,65 @@ internal fun buildChatItems(
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
-        // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
-        val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides)
         val expanded = turnOverrides[turn.key] ?: running
-        if (process.isNotEmpty() || running) {
+        // 轮内按消息顺序产出：连续的过程项聚成一段轮头，遇到常显项或结果消息就在该处切断。
+        // 常显项与结果正文因此在时间线原位独立成 item，不再被推到该轮最末（旧实现把它们固定排在轮末，
+        // 晚于通知的助手消息又被折进轮头，结果常显项总沉在列表底部）。同一段内连续工具仍分组。
+        // 每段的展开态取同一个 expanded：整轮展开/收起对所有段一视同仁。
+        var segment = ArrayList<AgentUIMessage>()
+        var segmentTail = ArrayList<ChatRenderItem>()
+        var headerIndex = 0
+        var emittedForTurn = false
+        fun flushSegment() {
+            if (segment.isEmpty() && segmentTail.isEmpty()) return
+            val key = if (headerIndex == 0) "${turn.key}#header" else "${turn.key}#header#$headerIndex"
+            headerIndex++
+            items += ChatRenderItem(
+                message = turn.userMessage,
+                key = key,
+                contentType = TURN_HEADER_CONTENT_TYPE,
+                turnHeader = TurnHeaderState(
+                    key = turn.key,
+                    endMessageId = endAssistant?.id,
+                    running = running,
+                    expanded = expanded,
+                ),
+                turnProcess = buildTurnProcessItems(
+                    messages = segment,
+                    resultId = null,
+                    groupOverrides = groupOverrides,
+                ) + segmentTail,
+            )
+            segment = ArrayList()
+            segmentTail = ArrayList()
+            emittedForTurn = true
+        }
+        for (message in turn.messages) {
+            when {
+                message.id == resultId -> {
+                    // 结果的思考抽为过程项并入当前段；正文另作常显的顶层 item（不重复渲染思考）。
+                    if (!message.reasoning.isNullOrEmpty()) {
+                        segmentTail += ChatRenderItem(
+                            message = message,
+                            key = "${message.id}#reasoning",
+                            contentType = REASONING_CONTENT_TYPE,
+                        )
+                    }
+                    flushSegment()
+                    items += messageRenderItems(message).map { it.copy(reasoningVisible = false) }
+                    emittedForTurn = true
+                }
+                message.isPersistentInTurn() -> {
+                    flushSegment()
+                    items += messageRenderItems(message)
+                    emittedForTurn = true
+                }
+                else -> segment += message
+            }
+        }
+        flushSegment()
+        // 末轮运行中但整轮没有任何过程项、结果或常显项：仍产出一个空轮头显示「执行中」。
+        if (running && !emittedForTurn) {
             items += ChatRenderItem(
                 message = turn.userMessage,
                 key = "${turn.key}#header",
@@ -384,10 +440,9 @@ internal fun buildChatItems(
                     running = running,
                     expanded = expanded,
                 ),
-                turnProcess = process,
+                turnProcess = emptyList(),
             )
         }
-        items += buildTurnPersistentItems(turn.messages, resultId)
     }
     return items
 }
@@ -464,8 +519,8 @@ private fun AgentUIMessage.isResultCandidate(): Boolean =
 /**
  * 轮内「过程」项（保持原序）：思考、连续工具调用分组、中间助手正文。挂在轮头 item 内一起展开。
  *
- * 结果消息的思考归过程（抽为一个 [REASONING_CONTENT_TYPE] 项）；压缩摘要/后台通知/带附件工具等
- * 常显项不进过程，由 [buildTurnPersistentItems] 单独产出。
+ * 结果消息的思考归过程（抽为一个 [REASONING_CONTENT_TYPE] 项）。常显项不进过程，由
+ * [buildChatItems] 在时间线原位直接产出。
  */
 private fun buildTurnProcessItems(
     messages: List<AgentUIMessage>,
@@ -510,22 +565,6 @@ private fun buildTurnProcessItems(
             else -> out += messageRenderItems(message)
         }
         i++
-    }
-    return out
-}
-
-/** 轮内「常显」项（保持原序）：结果正文（拆块，不重复渲染思考）与压缩卡片/通知/带附件工具。 */
-private fun buildTurnPersistentItems(
-    messages: List<AgentUIMessage>,
-    resultId: String?,
-): List<ChatRenderItem> {
-    val out = ArrayList<ChatRenderItem>()
-    for (message in messages) {
-        if (message.id == resultId) {
-            messageRenderItems(message).forEach { out += it.copy(reasoningVisible = false) }
-        } else if (message.isPersistentInTurn()) {
-            out += messageRenderItems(message)
-        }
     }
     return out
 }
@@ -1202,6 +1241,23 @@ fun AIChatPanel(
                 nestedFling = false
                 return Velocity.Zero
             }
+        }
+    }
+
+    // 回退复位：ViewModel 在回退成功后自增 rewindGeneration（见 executeRewindOption）。回退只删库 +
+    // 回填输入框，不复位 UI 侧状态——不处理的话 followBottom / positionedSession / 流式缓冲会停在
+    // 回退前那一轮，列表停在旧位置（表现为「回退后内容还在、手动刷新才好」）。
+    // 用 saveable 记住已处理代际：从编辑器/终端等全屏路由返回时整棵组合重挂载，StateFlow 会把当前值
+    // 重放一遍；只按「数值前进」复位，避免返回时把浏览位置拉回底部。
+    val rewindGeneration by viewModel.rewindGeneration.collectAsStateWithLifecycle()
+    var handledRewindGeneration by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(rewindGeneration) {
+        if (rewindGeneration > handledRewindGeneration) {
+            handledRewindGeneration = rewindGeneration
+            followBottom = true
+            positionedSession = null
+            retainedStreamingText = null
+            retainedStreamingReasoning = null
         }
     }
 
