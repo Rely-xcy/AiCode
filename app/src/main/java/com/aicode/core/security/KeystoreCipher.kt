@@ -2,6 +2,8 @@ package com.aicode.core.security
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.aicode.core.util.FileLogger
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.Base64
 import javax.crypto.Cipher
@@ -19,6 +21,7 @@ import javax.crypto.spec.GCMParameterSpec
  * 明文兼容：解密入口对非密文输入原样返回，便于旧明文数据的平滑迁移。
  */
 object KeystoreCipher {
+    private const val TAG = "KeystoreCipher"
     private const val PROVIDER = "AndroidKeyStore"
     private const val ALIAS = "aicode_secret_v1"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -66,9 +69,16 @@ object KeystoreCipher {
         require(isEncryptedBytes(encrypted)) { "不是加密数据" }
         val iv = encrypted.copyOfRange(BYTE_MAGIC.size, BYTE_MAGIC.size + IV_LEN)
         val ciphertext = encrypted.copyOfRange(BYTE_MAGIC.size + IV_LEN, encrypted.size)
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
-        return cipher.doFinal(ciphertext)
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
+            cipher.doFinal(ciphertext)
+        } catch (e: GeneralSecurityException) {
+            // 密文与当前 Keystore 密钥不匹配（密钥丢失后按新密钥重建）或数据损坏。
+            // 返回空值而非抛出，避免单个坏字段把整条读取 Flow 带崩。
+            FileLogger.w(TAG, "解密失败：密文与当前 Keystore 密钥不匹配或已损坏", e)
+            ByteArray(0)
+        }
     }
 
     fun isEncryptedString(value: String?): Boolean = value != null && value.startsWith(STRING_PREFIX)
@@ -82,7 +92,12 @@ object KeystoreCipher {
     /** 解密字符串；非密文（旧明文）原样返回。 */
     fun decryptString(value: String): String {
         if (!isEncryptedString(value)) return value
-        val body = Base64.getDecoder().decode(value.removePrefix(STRING_PREFIX))
-        return String(decryptBytes(body), Charsets.UTF_8)
+        return try {
+            val body = Base64.getDecoder().decode(value.removePrefix(STRING_PREFIX))
+            String(decryptBytes(body), Charsets.UTF_8)
+        } catch (e: IllegalArgumentException) {
+            FileLogger.w(TAG, "解密失败：密文格式非法", e)
+            ""
+        }
     }
 }
