@@ -6,17 +6,22 @@ object ModelContextPolicy {
     const val MAX_PRESERVE_RECENT_TOKENS = 20_000
     const val CHARS_PER_TOKEN = 4
 
+    // 压缩分块预算的保守口径：代码/JSON 等内容的真实 token 密度高于自然语言，
+    // 4 字符/token 会低估，改用 3 并叠加 COMPACTION_BUDGET_RATIO，避免摘要请求超上游窗口。
+    const val COMPACTION_CHARS_PER_TOKEN = 3
+    const val COMPACTION_BUDGET_RATIO = 0.8
+
     fun preserveRecentTokens(usableTokens: Int): Int =
         (usableTokens / 4).coerceIn(MIN_PRESERVE_RECENT_TOKENS, MAX_PRESERVE_RECENT_TOKENS)
 
-    fun estimateTokens(chars: Int): Int =
-        chars / CHARS_PER_TOKEN + if (chars % CHARS_PER_TOKEN == 0) 0 else 1
+    fun estimateTokens(chars: Int, charsPerToken: Int = CHARS_PER_TOKEN): Int =
+        chars / charsPerToken + if (chars % charsPerToken == 0) 0 else 1
 
-    fun estimateTextTokens(text: String): Int {
+    fun estimateTextTokens(text: String, charsPerToken: Int = CHARS_PER_TOKEN): Int {
         var ascii = 0
         var other = 0
         text.forEach { if (it.code < 128) ascii++ else other++ }
-        return estimateTokens(ascii) + other
+        return estimateTokens(ascii, charsPerToken) + other
     }
 
     fun outputReserveTokens(metadata: ModelMetadata): Int {

@@ -138,7 +138,7 @@ class ContextCompactor @Inject constructor(
                 check(block < MAX_SUMMARY_BLOCKS) { "History exceeds the $MAX_SUMMARY_BLOCKS summary block limit" }
                 val instruction = prompt.replace("{{INSTRUCTION}}", buildSummaryInstruction(summary))
                 val overhead = CompactionText.tokens(SUMMARY_SYSTEM) + CompactionText.tokens(instruction) + 64
-                val available = summaryBudget - overhead
+                val available = ((summaryBudget - overhead) * ModelContextPolicy.COMPACTION_BUDGET_RATIO).toInt()
                 check(available > 0) { "Summary instructions and previous summary exceed the input budget" }
                 val chunk = cursor.next(available)
                 val request = listOf(AgentMessage.UserMessage(content = instruction + "\n\n<history-material block=\"${++block}\">\n" + chunk + "\n</history-material>"))
@@ -271,7 +271,8 @@ class ContextCompactor @Inject constructor(
 
 internal object CompactionText {
     private val dataUrl = Regex("data:(?:image|audio|video)/[^\\s;,]+;base64,[A-Za-z0-9+/=\\r\\n]+")
-    fun tokens(text: String): Int = ModelContextPolicy.estimateTextTokens(text)
+    fun tokens(text: String): Int =
+        ModelContextPolicy.estimateTextTokens(text, ModelContextPolicy.COMPACTION_CHARS_PER_TOKEN)
 
     private fun stripMedia(element: JsonElement): JsonElement = when (element) {
         is JsonObject -> JsonObject(element.filterKeys { it !in setOf("images", "base64Data") }.mapValues { stripMedia(it.value) })
@@ -298,10 +299,11 @@ internal object CompactionText {
     }
 
     fun estimateRequest(system: String, tools: List<AgentTool>, messages: List<AgentMessage>): Int {
-        return ContextTokenEstimator.estimate(system, messages, tools)
+        return ContextTokenEstimator.estimate(system, messages, tools, ModelContextPolicy.COMPACTION_CHARS_PER_TOKEN)
     }
 
-    private fun estimateMessage(message: AgentMessage): Int = ContextTokenEstimator.estimate(message)
+    private fun estimateMessage(message: AgentMessage): Int =
+        ContextTokenEstimator.estimate(message, ModelContextPolicy.COMPACTION_CHARS_PER_TOKEN)
 
     fun adjustSplitIndex(messages: List<AgentMessage>, initial: Int): Int {
         var index = initial.coerceIn(0, messages.lastIndex)
@@ -356,7 +358,7 @@ internal object CompactionText {
                 val fragment = label + remaining + "\n\n"
                 val fragmentAscii = fragment.count { it.code < 128 }
                 val fragmentOther = fragment.length - fragmentAscii
-                if (ModelContextPolicy.estimateTokens(ascii + fragmentAscii) + other + fragmentOther <= budget) {
+                if (ModelContextPolicy.estimateTokens(ascii + fragmentAscii, ModelContextPolicy.COMPACTION_CHARS_PER_TOKEN) + other + fragmentOther <= budget) {
                     result.append(fragment)
                     ascii += fragmentAscii
                     other += fragmentOther

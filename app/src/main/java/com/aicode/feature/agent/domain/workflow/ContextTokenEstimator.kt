@@ -9,15 +9,20 @@ import com.google.gson.Gson
 object ContextTokenEstimator {
     private val gson = Gson()
 
-    fun estimate(systemPrompt: String, messages: List<AgentMessage>, tools: List<AgentTool>): Int {
-        val total = ModelContextPolicy.estimateTextTokens(systemPrompt).toLong() +
+    fun estimate(
+        systemPrompt: String,
+        messages: List<AgentMessage>,
+        tools: List<AgentTool>,
+        charsPerToken: Int = ModelContextPolicy.CHARS_PER_TOKEN
+    ): Int {
+        val total = ModelContextPolicy.estimateTextTokens(systemPrompt, charsPerToken).toLong() +
             tools.sumOf { tool ->
-                ModelContextPolicy.estimateTextTokens(tool.name + tool.description + gson.toJson(tool.toJsonSchema())).toLong() + 16
-            } + messages.sumOf { estimate(it).toLong() }
+                ModelContextPolicy.estimateTextTokens(tool.name + tool.description + gson.toJson(tool.toJsonSchema()), charsPerToken).toLong() + 16
+            } + messages.sumOf { estimate(it, charsPerToken).toLong() }
         return total.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
 
-    fun estimate(message: AgentMessage): Int {
+    fun estimate(message: AgentMessage, charsPerToken: Int = ModelContextPolicy.CHARS_PER_TOKEN): Int {
         val text: String
         val images: Int
         when (message) {
@@ -34,7 +39,7 @@ object ContextTokenEstimator {
                 images = message.images.size
             }
         }
-        return (ModelContextPolicy.estimateTextTokens(text).toLong() + images * 4_096L + 12)
+        return (ModelContextPolicy.estimateTextTokens(text, charsPerToken).toLong() + images * 4_096L + 12)
             .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
 
