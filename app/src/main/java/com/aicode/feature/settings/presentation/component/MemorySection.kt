@@ -69,7 +69,7 @@ import compose.icons.feathericons.User
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  *
- * 单页自上而下：短期卡片、跨会话记忆组（开关 + 治理周期）、画像总览卡，
+ * 单页自上而下：短期卡片、跨会话记忆组（开关 + 治理周期），
  * 最后是按作用域分组的记忆清单（PROFILE 与 NOTE 混排，PROFILE 在前：自动沉淀的
  * 长期结论更稳定，排前面便于一眼看到；kind 用行图标区分）。
  */
@@ -77,7 +77,6 @@ import compose.icons.feathericons.User
 internal fun MemorySection(
     memories: List<Memory>,
     shortTerm: SessionShortTermState?,
-    profileOverview: String?,
     activeMemoryEnabled: Boolean,
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
@@ -228,9 +227,6 @@ internal fun MemorySection(
             }
         }
 
-        // 画像总览：拼接生成（无模型调用），放清单上方当作页面的整体摘要
-        ProfileOverviewCard(overview = profileOverview)
-
         if (memories.isEmpty()) {
             EmptyState(
                 icon = FeatherIcons.FileText,
@@ -303,28 +299,6 @@ private fun SessionValueText(text: String) {
         textAlign = TextAlign.End,
         modifier = Modifier.padding(start = Spacing.sm)
     )
-}
-
-/**
- * 画像总览卡：把全部画像条目合成的整体描述（[ViewModel.profileOverview]）
- * 放在一张卡片里；画像为空时显示引导文案。
- */
-@Composable
-private fun ProfileOverviewCard(overview: String?) {
-    SettingsGroupHeader(text = stringResource(R.string.memory_profile_overview_title))
-    SettingsGroup {
-        Text(
-            text = overview
-                ?: stringResource(R.string.memory_profile_overview_empty),
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (overview == null) {
-                MaterialTheme.semanticColors.subtleText
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-        )
-    }
 }
 
 /** 一栏记忆（全局或项目）：同一个分组里逐行渲染，行间加分隔线。 */

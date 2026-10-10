@@ -1002,8 +1002,6 @@
     <string name="memory_group_project">项目记忆</string>
     <string name="memory_add">新增记忆</string>
     <string name="memory_long_term_header">跨会话记忆</string>
-    <string name="memory_profile_overview_title">AI 对你的整体画像</string>
-    <string name="memory_profile_overview_empty">画像还是空的：打开主动记忆，或直接点右上角「+」补一条关于你的长期结论</string>
     <string name="memory_long_term_desc">跨会话生效：每条记忆的名称与描述都会注入后续对话的系统提示词。</string>
     <string name="memory_session_card_title">本次会话（短期）</string>
     <string name="memory_session_card_desc">只读。短期上下文随会话结束消失，不写盘、不跨会话；此处按最近更新的会话展示。</string>

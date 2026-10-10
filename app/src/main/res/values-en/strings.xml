@@ -1002,8 +1002,6 @@
     <string name="memory_group_project">Project memories</string>
     <string name="memory_add">Add memory</string>
     <string name="memory_long_term_header">Cross-session memory</string>
-    <string name="memory_profile_overview_title">AI\'s overall picture of you</string>
-    <string name="memory_profile_overview_empty">Your profile is empty: turn on active memory, or tap "+" above to add a durable conclusion about yourself</string>
     <string name="memory_long_term_desc">Applies across sessions: each memory\'s name and description are injected into the system prompt of later chats.</string>
     <string name="memory_session_card_title">This session (short-term)</string>
     <string name="memory_session_card_desc">Read-only. Short-term context disappears when the session ends; it is never written to disk or carried over. Shown for the most recently updated session.</string>

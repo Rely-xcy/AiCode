@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,22 +66,6 @@ class MemoryViewModel @Inject constructor(
 
     /** 删除失败的一次性信号（条目已不存在等）：界面提示一次后调 [clearDeleteFailed]。 */
     val deleteFailed: StateFlow<Boolean> = _deleteFailed.asStateFlow()
-
-    /**
-     * 画像总览：由全部 kind=PROFILE 条目的「名称：描述」合成的可读段落。
-     *
-     * 从 [_memories] 派生，PROFILE 为空时为 null（界面显示引导文案）。
-     */
-    val profileOverview: StateFlow<String?> = _memories
-        .map { list ->
-            list.filter { it.kind == MemoryKind.PROFILE }
-                .joinToString("\n") { entry ->
-                    val desc = entry.description.ifBlank { entry.content.lines().firstOrNull().orEmpty() }
-                    if (desc.isBlank()) entry.name else "${entry.name}：$desc"
-                }
-                .takeIf { it.isNotBlank() }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun clearDeleteFailed() {
         _deleteFailed.value = false
