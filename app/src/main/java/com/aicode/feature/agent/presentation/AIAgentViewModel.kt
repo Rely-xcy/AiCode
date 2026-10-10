@@ -1000,6 +1000,29 @@ class AIAgentViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
+     * 最近一次「承载可见正文或有思考」的助手行（每会话一条）在库里的主键；该会话尚无此类行时为无条目。
+     *
+     * 写入方：[AgentEvent.AssistantText] 在落库前生成行 id 并在此登记，以及 [stopAgentSession] 的
+     * 停止快照路径预生成行 id 后登记——两条路径都只登记「有可见正文或有 reasoning」的行。
+     * 每条新的 AssistantText 覆盖上一条（目标恒指最近一次，见 R1）。
+     * 读方：聊天界面据此认定「落库行是否已经回流」——流式 / 思考气泡靠它退休（见 AIChatPanel 的
+     * isAssistantSettled），取代此前的「前缀猜同源 + 4s 强制退休」。
+     *
+     * 为什么不登记空白工具行（无可见正文、无 reasoning）：这类行会被 [messagesState] 过滤掉，
+     * id 永远不出现在 UI 的 messages 里，登记了也认不到（见 R2）。
+     *
+     * 生命周期：正常收尾时登记的新 id 会覆盖旧值，无需在 job 收尾时清除——id 必须活到「落库行经
+     * Flow 回流、UI 认到」之后，若与流式状态同时清掉，UI 会在行回流前失去目标、气泡永不退休。
+     * 仅在「停止全部」与「删除会话」时随 [currentSessionRunningTurnAnchorId] 一并清理该会话条目。
+     */
+    private val _pendingAssistantRowIds = MutableStateFlow<Map<String, String>>(emptyMap())
+    val currentSessionPendingAssistantRowId: StateFlow<String?> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf<String?>(null) else _pendingAssistantRowIds.map { it[id] }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
      * 已被丢弃、确认不会再落库的用户消息 id 集合（队列删除 / 回退清空队列 /
      * 切换工作区停止全部 / 会话被删）。
      *
@@ -1633,6 +1656,10 @@ class AIAgentViewModel @Inject constructor(
         FileLogger.d(TAG, "stream start: sid=$sessionId prevState=${_agentStates.value[sessionId]} isAutoTrigger=$isAutoTrigger")
         acquireKeepalive()
 
+        // 本轮是否登记过可认领的助手行 id（有可见正文或 reasoning 的落库行）。job 收尾时据此判断本轮
+        // 有没有可交接的目标行（见 [_settledWithoutTargetGenerations]）。只在本轮作用域内有效。
+        var registeredPendingRowThisTurn = false
+
         try {
             var failed = false
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
@@ -1841,6 +1868,13 @@ class AIAgentViewModel @Inject constructor(
 
                         val reasoning = event.reasoning.takeIf { it.hasVisibleContent() }
                         val msgId = java.util.UUID.randomUUID().toString()
+                        // 显式登记本行 id 供 UI 认领（见 [currentSessionPendingAssistantRowId]）：
+                        // 只登记有可见正文或有 reasoning 的行——空白工具行会被 messagesState 过滤掉，
+                        // 登记了 UI 永远认不到（R2）。每条新 AssistantText 覆盖上一条（R1）。
+                        if (normalized.hasVisibleContent() || reasoning != null) {
+                            registeredPendingRowThisTurn = true
+                            _pendingAssistantRowIds.value = _pendingAssistantRowIds.value + (sessionId to msgId)
+                        }
                         if (reasoningDuration != null && reasoningDuration > 0) {
                             reasoningDurations[msgId] = reasoningDuration
                         }
@@ -2044,6 +2078,16 @@ class AIAgentViewModel @Inject constructor(
             setRetryState(sessionId, null)
             setKeySwitchState(sessionId, null)
 
+            // 本轮没有可交接的目标行：本轮若留下残留流式 / 思考气泡，没有任何落库行 id 可供界面认领，
+            // settled 判据会恒为 false → 气泡永不退休。用代际信号显式告知界面「本轮已收尾且无目标行」，
+            // 界面收到即退休残留（见 AIChatPanel 对 [settledWithoutTargetGenerations] 的收集），不引入计时器。
+            // 只在本轮无登记时自增：有登记的轮次保持靠落库行 id 回流退休（见 [_settledWithoutTargetGenerations]）。
+            // 放在 isOwnJob 守卫之外：被接替 / 被 stopAllAgents 取消的 job 同样需要这条通知。
+            if (!registeredPendingRowThisTurn) {
+                _settledWithoutTargetGenerations.value = _settledWithoutTargetGenerations.value +
+                    (sessionId to ((_settledWithoutTargetGenerations.value[sessionId] ?: 0) + 1))
+            }
+
             // 本轮未能搭车送达的后台通知：本轮结束且 job 已移除后，合并成一条发送
             flushPendingNotifications(sessionId)
 
@@ -2091,6 +2135,7 @@ class AIAgentViewModel @Inject constructor(
         sessionJobs.clear()
         // 清空所有锚点：被 cancel 的 job 里 finally 可能看不到自己（sessionJobs 已清），别的清理点不落空。
         _runningTurnAnchorIds.value = emptyMap()
+        _pendingAssistantRowIds.value = emptyMap()
         agentNotificationCenter.clearAll()
         markClientMessagesDiscarded(_queuedRequests.value.values.flatten())
         _queuedRequests.value = emptyMap()
@@ -2178,8 +2223,17 @@ class AIAgentViewModel @Inject constructor(
         _runningTools.value = _runningTools.value - sessionId
         setStreamingText(sessionId, null)
         setStreamingReasoning(sessionId, null)
+        // 与相邻的流式清理同处同步执行：preparingTool 只在流式 job 的 finally 里清
+        // （见 executeAgentRequestStream），不在这里补的话，停止后 thinkingLabel 会一直停在
+        // 工具文案（如「正在编辑文件」）直到 job 收尾。
+        setPreparingTool(sessionId, null)
         setCompacting(sessionId, false)
         setRetryState(sessionId, null)
+        // 通知聊天页：本轮是用户主动停止，残留的流式 / 思考气泡立即退休。
+        // 这是「本轮没有登记可认领的落库助手行」时的兜底（R4）；有登记行时靠 id 显式交接退休。
+        // 与上面的清理同处同步置位，UI 收到的是一次「已清空 + 已停止」的一致快照。
+        _stopGenerations.value =
+            _stopGenerations.value + (sessionId to ((_stopGenerations.value[sessionId] ?: 0) + 1))
         viewModelScope.launch {
             if (runningTools.isNotEmpty()) {
                 // 落的是工具行不是助手行：摘掉标记，免得下一轮 AssistantText 被误补「已停止」。
@@ -2210,12 +2264,19 @@ class AIAgentViewModel @Inject constructor(
                     val partial = (streamingText ?: "").trimEnd()
                     val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
                     val reasoning = streamingReasoning?.takeIf { it.hasVisibleContent() }
+                    // 预生成行 id 并登记（同 AssistantText 路径）：停止后这条落库行回流时，
+                    // UI 靠它认领并让残留流式气泡退休（见 [currentSessionPendingAssistantRowId]）。
+                    val msgId = java.util.UUID.randomUUID().toString()
                     messagePersistenceUseCase.persist(
                         sessionId = sessionId,
                         role = MessageRole.ASSISTANT,
                         content = content,
+                        id = msgId,
                         reasoning = reasoning
                     )
+                    if (content.hasVisibleContent() || reasoning != null) {
+                        _pendingAssistantRowIds.value = _pendingAssistantRowIds.value + (sessionId to msgId)
+                    }
                 }
             } else {
                 // 快照为空：要么 AssistantText 已接力（标记已消费/未消费都无关紧要——它负责
@@ -2500,6 +2561,7 @@ class AIAgentViewModel @Inject constructor(
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
             _runningTurnAnchorIds.value = _runningTurnAnchorIds.value - sid
+            _pendingAssistantRowIds.value = _pendingAssistantRowIds.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
@@ -2542,6 +2604,7 @@ class AIAgentViewModel @Inject constructor(
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
             _queuedRequests.value = _queuedRequests.value - sid
             _runningTurnAnchorIds.value = _runningTurnAnchorIds.value - sid
+            _pendingAssistantRowIds.value = _pendingAssistantRowIds.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
@@ -2583,6 +2646,33 @@ class AIAgentViewModel @Inject constructor(
      */
     private val _rewindGeneration = MutableStateFlow(0)
     val rewindGeneration: StateFlow<Int> = _rewindGeneration.asStateFlow()
+
+    /**
+     * 用户主动停止代际（按会话）：[stopAgentSession] 每真正取消一个运行中的 job 就自增。
+     *
+     * 聊天页据此把本轮残留的流式 / 思考气泡立即判为就位并清空（见 AIChatPanel 对
+     * [stopGenerations] 的收集）——停止是用户明确表达「这一轮到此为止」，不必再等落库行回流，
+     * 也不必等 4s 强制退休窗口（停止后 retained 与落库行对不上时要等满约 4.25s 才消失）。
+     * 按会话分桶：停止某个子代理会话时只清该会话的气泡，不影响正在浏览的父会话。
+     */
+    private val _stopGenerations = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val stopGenerations: StateFlow<Map<String, Int>> = _stopGenerations.asStateFlow()
+
+    /**
+     * 「本轮收尾但没有可认领助手行」代际（按会话）：一轮 job 结束时，若本轮从未登记过 pending 助手行
+     * id（本轮没有任何「有可见正文或思考」的助手行落库），自增一次。
+     *
+     * 用途：某轮以异常 / 取消结束且没落任何助手行时（[AgentEvent.AssistantText] 未到），
+     * [currentSessionPendingAssistantRowId] 为 null 或停留上一轮的旧值，界面的 settled 判据恒 false
+     * → 残留流式 / 思考气泡永不退休（旧的 4s 强制退休已删）。这条代际信号给界面一个确定性的
+     * 「本轮无目标行、可退休」通知，取代计时器。
+     *
+     * 只在本轮无登记时自增：有登记的轮次保持靠落库行 id 回流退休——job 收尾时清
+     * [currentSessionPendingAssistantRowId] 会让落库行回流前的正常路径失去目标，正是要消灭的竞态，
+     * 故此处绝不触碰它，只加这一条可区分的「无目标行」信号。
+     */
+    private val _settledWithoutTargetGenerations = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val settledWithoutTargetGenerations: StateFlow<Map<String, Int>> = _settledWithoutTargetGenerations.asStateFlow()
 
     fun openRewindMenu(messageId: String) {
         _targetRewindMessageId.value = messageId

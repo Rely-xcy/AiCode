@@ -240,118 +240,26 @@ private fun AgentUIMessage.rendersActionRow(): Boolean =
         !isCompactionMarker && !isContextSummary && !isCompactionFailure && !isBackgroundNotification &&
         (content.hasVisibleContent() || attachments.isNotEmpty())
 
-/** 流式头部指纹取样长度：拿流式内容开头这几个字符去认落库行是不是同一条。 */
-private const val STREAM_HEAD_SAMPLE_CHARS = 20
-
 /**
- * 「流式已结束但 retained 与任何落库行都对不上」时的强制退休超时（ms）。
+ * 本轮助手消息是否已经在消息列表里正式就位渲染：底部残留的流式 / 思考气泡是否该退休，靠它判定。
  *
- * 前缀 / 双向包含比对都可能失配（如 Final 重组正文、推理模型输出修订版）；失配期间 retained
- * 旧正文的 STREAMING 尾巴气泡与落库新行同屏两份。空落库行「正文一定落库」不成立（纯思考轮、
- * Final 无正文时）的形状没有可靠的对上信号，只能靠时间保底：isBusy 已转 false 说明本轮
- * 结束，超过该时长仍对不上的 retained 一律退休，不再有「永不退休」路径。
- * 取 4s：落在 3-5s 区间中位，足以容忍 messages 异步回流的常见延迟，又不至于让旧正文
- * 多停留一拍。
+ * 认「显式交接的行 id」——ViewModel 在本轮「有可见正文或有 reasoning」的助手行落库前登记该行主键
+ * （[com.aicode.feature.agent.presentation.AIAgentViewModel.currentSessionPendingAssistantRowId]），
+ * 这里只判断这个 id 是否已出现在 [messages] 里。不再做前缀 / 双向包含猜同源，也不再有 4s 强制退休。
+ *
+ * [streamingText] / [streamingReasoning] 任一非空（流式仍在写）时一律不判就位：否则新一轮正文会被
+ * 上一轮登记的 id 误判就位、在流式途中整段隐去。
  */
-private const val RETAINED_FORCE_RETIRE_MS = 4_000L
-
-/**
- * 强制退休计时到点后，额外多等这一段（ms）再触发重组合。
- *
- * 退休判据 [isAssistantOutputSettled] 读的是 System.currentTimeMillis()，但它只在重组合时求值；
- * 写计时的那次组合之后若没有新事件触发重组合，4s 到点也不会自动退休。留给重组合的余量保证
- * 自增 tick 触发的那次重组合里，「已超时」成立。
- */
-private const val RETAINED_FORCE_RETIRE_TICK_MARGIN_MS = 250L
-
-/** 归一化空白后比较：落库正文可能合并/吞掉行尾空白，逐字比对会因空白差异误判失配。 */
-private fun contentEquivalent(a: String, b: String): Boolean =
-    a.trim().replace(Regex("\\s+"), " ") == b.trim().replace(Regex("\\s+"), " ")
-
-/**
- * 落库正文与流式/retained 文本「同源」：双向包含。任意一方以另一方开头（或相等）即认作
- * 同一段内容——Final 重组正文、推理模型输出修订版改的通常是开头，但只要语义同段，
- * 头部或尾部总会有一方对得上。
- *
- * 双向包含只在流式已结束（`!isBusy`）时算同源：新一轮流式的正文恰好以列表里上一条整段为前缀时
- * （`s.startsWith(p)`），若不作门禁，正在写的新内容会被误判就位、整段隐去再冒出。
- * 归一化相等（[contentEquivalent]）不受此门禁影响。
- */
-private fun isSameContent(persisted: String, streaming: String, isBusy: Boolean): Boolean {
-    val p = persisted.trimStart()
-    val s = streaming.trimStart()
-    if (!isBusy && (p.startsWith(s) || s.startsWith(p))) return true
-    return contentEquivalent(p, s)
-}
-
-/**
- * 本轮流式输出是否已经在消息列表里正式就位（底部尾巴气泡与其跳动的点可以退休）。
- *
- * 判据：把当前流式正文 / 思考分别去比「列表里最后一条真正承载该项内容的助手消息」的头部，
- * 全部吻合即认为本轮已落库渲染。
- *
- * 比较对象按内容种类各自取「最后一条承载者」，不能取列表末尾那条：
- * - 末尾是工具结果行或用户消息时（纯工具调用轮的助手行 content 为空、被 messagesState 过滤掉），
- *   末尾那条永远不比不中，尾巴就永久卡在流式态，本轮结束后点还在跳；
- * - 末尾是「空正文 + 有思考」的助手行时，它承载的是思考不是正文，正文得继续往前找。
- * 后台通知消息（[AgentUIMessage.isBackgroundNotification]）不是本轮输出，一律不作比较对象。
- *
- * 前缀比对本身不能放开：新一轮流式开始时，列表里最近的承载者还是上一轮的助手消息，
- * 只有前缀不吻合才能把「正在写的新内容」判为尚未就位、继续留在尾巴气泡里渲染。
- *
- * 但仅靠前缀猜同源不够：Final 重组正文、推理模型输出修订版会让开头失配，retained 旧正文
- * 就永不退休（尾巴气泡与落库新行同屏两份）。因此补两条：① 双向包含同源判据
- * （[isSameContent]，equal/一方以另一方开头都算）；② 强制退休超时——流式已结束
- * （isBusy=false）且 settled 判定持续失败超过 [RETAINED_FORCE_RETIRE_MS]，一律判就位。
- * 超时的计时由调用方维护（[settledFailingSinceMs]：连续判失败的超始毫秒，判成功或新一轮
- * 开始流式时重置），本函数保持纯函数便于测试。
- */
-internal fun isAssistantOutputSettled(
-    messages: List<AgentUIMessage>,
-    currentText: String?,
-    currentReasoning: String?,
-    isBusy: Boolean,
-    settledFailingSinceMs: Long?
-): Boolean {
-    val textSettled = if (currentText.isNullOrBlank()) {
-        true
-    } else {
-        val anchor = messages.lastOrNull {
-            it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && it.content.hasVisibleContent()
-        }
-        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）；
-        // 强制退休超时由末尾统一兜底。
-        if (anchor == null) {
-            false
-        } else {
-            startsWithStreamHead(anchor.content, currentText) || isSameContent(anchor.content, currentText, isBusy)
-        }
-    }
-    val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
-        true
-    } else {
-        val anchor = messages.lastOrNull {
-            it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && !it.reasoning.isNullOrBlank()
-        }
-        // 思考不一定落库（provider 不回传时整轮都没有 reasoning 行）：没有承载者即视为已就位，
-        // 否则前缀永远比不中、缓冲永不退休，尾巴气泡与落库气泡同屏看起来就是同一条回复显示两遍。
-        // 正文那条不能这么放宽——正文一定落库。
-        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning) ||
-            isSameContent(anchor.reasoning.orEmpty(), currentReasoning, isBusy)
-    }
-    // 强制退休兜底：流式已结束（isBusy=false）且 settled 判定持续失败超过超时时长，
-    // 无论正文/思考是否对得上（含 anchor 为空、Final 重写正文、修订版正文等一切形状），
-    // 一律退休 retained，旧尾巴气泡最终必定消失，不再有「永不退休」路径。
-    val forceRetired = !isBusy && settledFailingSinceMs != null &&
-        System.currentTimeMillis() - settledFailingSinceMs >= RETAINED_FORCE_RETIRE_MS
-    return (textSettled && reasoningSettled) || forceRetired
-}
-
-/** 落库文本以「流式文本开头 [STREAM_HEAD_SAMPLE_CHARS] 个字符」开头，即认作同一条内容。 */
-private fun startsWithStreamHead(persisted: String, streaming: String): Boolean {
-    val head = streaming.trimStart().take(STREAM_HEAD_SAMPLE_CHARS)
-    return head.isEmpty() || persisted.trimStart().startsWith(head)
-}
+internal fun isAssistantSettled(
+    streamingText: String?,
+    streamingReasoning: String?,
+    pendingRowId: String?,
+    messages: List<AgentUIMessage>
+): Boolean =
+    streamingText == null &&
+        streamingReasoning == null &&
+        pendingRowId != null &&
+        messages.any { it.id == pendingRowId }
 
 /**
  * 单条消息（非工具分组）在一次渲染中占据的 item：
@@ -807,6 +715,10 @@ fun AIChatPanel(
     // 正在运行的那一轮的轮首用户行 id（运行时真值，见 AIAgentViewModel.currentSessionRunningTurnAnchorId）：
     // 「哪一轮还在跑」只认它。
     val runningTurnAnchorId by viewModel.currentSessionRunningTurnAnchorId.collectAsStateWithLifecycle()
+    // 本轮助手行（承载可见正文/思考那条）在库里的主键，由 ViewModel 在落库前显式登记
+    // （见 AIAgentViewModel.currentSessionPendingAssistantRowId）：界面靠它认定落库行是否已回流，
+    // 取代「前缀猜同源 + 4s 强制退休」。
+    val pendingAssistantRowId by viewModel.currentSessionPendingAssistantRowId.collectAsStateWithLifecycle()
     val targetRewindMessageId by viewModel.targetRewindMessageId.collectAsStateWithLifecycle()
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
     val modelMetadata = settingsViewModel?.modelMetadata?.collectAsStateWithLifecycle()?.value.orEmpty()
@@ -1227,7 +1139,7 @@ fun AIChatPanel(
 
     // 缓冲流式文本与思考过程：流式期间跟随 streamingText / streamingReasoning；流式刚结束而数据库尚未完成派发期间（messages 末尾仍是 USER/TOOL 消息），
     // 持续保留本轮完整文本与思考，撑住底部气泡，彻底杜绝「字快打完了突然整段蒸发消失（空白闪回）」或「思考块突然消失又冒出」；
-    // 一旦本轮消息在 messages 列表中正式就位（判据见 [isAssistantOutputSettled]，不要求它在列表末尾），立即清空让位。
+    // 一旦本轮登记行在 messages 列表中回流（判据见下方的 isAssistantSettled，认显式交接的行 id），立即清空让位。
     var retainedStreamingText by remember { mutableStateOf<String?>(null) }
     var retainedStreamingReasoning by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(currentSessionId) {
@@ -1235,65 +1147,72 @@ fun AIChatPanel(
         retainedStreamingReasoning = null
     }
 
-    // 本轮助手消息是否已经在消息列表中正式就位渲染：判据见 [isAssistantOutputSettled]。
-    // 比的是「最后一条承载本轮正文 / 思考的助手消息」，不是列表末尾那条——末尾是工具行、
-    // 空正文助手行、后台通知时，末尾那条永远比不中，尾巴会永久卡在流式态（本轮结束后点还在跳）。
-    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了；
-    // 另加双向包含同源判据与强制退休超时（见 [RETAINED_FORCE_RETIRE_MS]）。
-    // 连续判失败的超始时刻：正在流式（streamingText 非空）时视为新一轮，重置计时；
-    // 判成功也重置。isBusy 转 false 且持续失配超时后，无论形状一律强制退休。
-    // 复用上方已有的 isBusy（同源 agentState），不另取名字重复计算。
-    var settledFailingSinceMs by remember { mutableStateOf<Long?>(null) }
-    // 强制退休读的是 System.currentTimeMillis()，但纯函数只在重组合时求值：写计时的那次组合之后
-    // 若无新事件触发重组合，4s 到点也不会自动退休。这里在计时非空时挂一个延时，到点翻转
-    // forceRetireTick，主动触发一次重组合（它被下面的 LaunchedEffect 读取）——保证 4s 后旧尾巴一定退休。
-    var forceRetireTick by remember { mutableStateOf(0) }
-    LaunchedEffect(settledFailingSinceMs) {
-        val since = settledFailingSinceMs
-        if (since != null) {
-            delay(RETAINED_FORCE_RETIRE_MS + RETAINED_FORCE_RETIRE_TICK_MARGIN_MS)
-            forceRetireTick++
-        }
-    }
-    val isAssistantSettled = isAssistantOutputSettled(
-        messages = messages,
-        currentText = streamingText ?: retainedStreamingText,
-        currentReasoning = streamingReasoning ?: retainedStreamingReasoning,
-        isBusy = isBusy,
-        settledFailingSinceMs = settledFailingSinceMs
-    )
-    // 把 forceRetireTick 读进组合（作为 key）：它自增时触发本 Composable 重组合，
-    // 使上面的 isAssistantOutputSettled 以新的当前时刻重新求值。
-    LaunchedEffect(isAssistantSettled, streamingText, isBusy, forceRetireTick) {
-        settledFailingSinceMs = if (isAssistantSettled || streamingText != null || isBusy) {
-            null
-        } else {
-            settledFailingSinceMs ?: System.currentTimeMillis()
-        }
-    }
+    // 用户主动停止信号：ViewModel 在 stopAgentSession 里自增该会话的停止代际（见 stopGenerations）。
+    // 停止是用户明确表达「这一轮到此为止」：收到后当场清空 retained，让残留流式 / 思考气泡立即退休。
+    // 它作为兜底只在「本轮根本没有可认领的落库助手行」时才起作用（R4）——若有登记行，正常交接即可退休。
+    // saveable 记住已处理代际：全屏路由返回时 StateFlow 会重放当前值，只按「数值前进」触发一次。
+    val stopGeneration = viewModel.stopGenerations.collectAsStateWithLifecycle().value[currentSessionId] ?: 0
+    var handledStopGeneration by rememberSaveable(currentSessionId) { mutableStateOf(0) }
 
-    LaunchedEffect(streamingText, isAssistantSettled) {
+    // 本轮助手消息是否已经在消息列表中正式就位渲染：判据抽成纯函数 [isAssistantSettled]（认「显式交接
+    // 的行 id」）。ViewModel 在本轮 AssistantText（有可见正文或思考）落库前登记该行主键
+    // （currentSessionPendingAssistantRowId），这里只需判断它是否已出现在 messages 里。
+    // 不再做前缀 / 双向包含猜同源，也不再依赖 4s 强制退休窗口。
+    val assistantSettled = isAssistantSettled(
+        streamingText = streamingText,
+        streamingReasoning = streamingReasoning,
+        pendingRowId = pendingAssistantRowId,
+        messages = messages
+    )
+
+    LaunchedEffect(streamingText, assistantSettled) {
         val st = streamingText
         if (st != null && st.hasVisibleContent()) {
             retainedStreamingText = st
-        } else if (isAssistantSettled) {
+        } else if (assistantSettled) {
             retainedStreamingText = null
         }
     }
 
-    LaunchedEffect(streamingReasoning, isAssistantSettled) {
+    LaunchedEffect(streamingReasoning, assistantSettled) {
         val sr = streamingReasoning
         if (sr != null && sr.hasVisibleContent()) {
             retainedStreamingReasoning = sr
-        } else if (isAssistantSettled) {
+        } else if (assistantSettled) {
             retainedStreamingReasoning = null
         }
     }
 
-    val displayStreamingText = if (isAssistantSettled) null else (streamingText ?: retainedStreamingText)
+    // 收到停止代际后记账（只按数值前进处理一次），并顺手清空 retained：
+    // 停止路径下 retained 往往与任何落库行都对不上（本轮没有登记 id 或没有落库行），
+    // 靠这条兜底立即退休，避免残留气泡卡住。
+    LaunchedEffect(stopGeneration) {
+        if (stopGeneration > handledStopGeneration) {
+            handledStopGeneration = stopGeneration
+            retainedStreamingText = null
+            retainedStreamingReasoning = null
+        }
+    }
+
+    // 「本轮收尾但没有可认领助手行」信号：某轮以异常 / 取消结束且没落任何助手行时，pending 助手行 id
+    // 为空或停留旧值，上面的 [isAssistantSettled] 恒 false → 残留流式 / 思考气泡永不退休。
+    // 收到该信号即清空 retained 让残留退休（非计时兜底）。同 stopGeneration：saveable 记住已处理代际，
+    // 只按数值前进处理一次，避免全屏路由返回时重放。
+    val settledWithoutTargetGeneration =
+        viewModel.settledWithoutTargetGenerations.collectAsStateWithLifecycle().value[currentSessionId] ?: 0
+    var handledSettledWithoutTargetGeneration by rememberSaveable(currentSessionId) { mutableStateOf(0) }
+    LaunchedEffect(settledWithoutTargetGeneration) {
+        if (settledWithoutTargetGeneration > handledSettledWithoutTargetGeneration) {
+            handledSettledWithoutTargetGeneration = settledWithoutTargetGeneration
+            retainedStreamingText = null
+            retainedStreamingReasoning = null
+        }
+    }
+
+    val displayStreamingText = if (assistantSettled) null else (streamingText ?: retainedStreamingText)
     val showStreaming = displayStreamingText?.hasVisibleContent() == true
 
-    val displayStreamingReasoning = if (isAssistantSettled) null else (streamingReasoning ?: retainedStreamingReasoning)
+    val displayStreamingReasoning = if (assistantSettled) null else (streamingReasoning ?: retainedStreamingReasoning)
     val showReasoning = displayStreamingReasoning?.hasVisibleContent() == true
 
     // 打字机渲染进度：持有在 LazyColumn 之外，尾巴 item 滚出视口被 dispose 后进度不丢。
