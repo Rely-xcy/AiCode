@@ -4,6 +4,7 @@ import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.modules.CompactionModule
 import com.aicode.feature.agent.domain.engine.modules.MemoryModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
+import com.aicode.feature.agent.domain.engine.modules.SubAgentTeamModule
 import com.aicode.feature.agent.domain.engine.modules.TaskModule
 import dagger.Binds
 import dagger.Module
@@ -37,4 +38,8 @@ abstract class EngineBindingsModule {
     @Binds
     @IntoSet
     abstract fun bindTaskModule(module: TaskModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindSubAgentTeamModule(module: SubAgentTeamModule): EngineModule
 }
