@@ -47,7 +47,7 @@ class BrowserTool @Inject constructor(
     private val actionSchema: Map<String, Any> = mapOf(
         "type" to "string",
         "enum" to actionEnum,
-        "description" to "操作类型。navigate=导航URL(支持 http(s)/file:// 与容器路径，非网址输入按搜索关键词处理); evaluate=执行JS(支持 Promise); click/fill/hover/press=交互(兼容 React); select=下拉选择; getText/getHtml=提取内容; getBackbone=无障碍树(role/name/ref); screenshot=截图; console=控制台日志; wait=等待条件; scroll=滚动; dialog=处理confirm/prompt; back/forward/reload=导航控制; newTab/closeTab/selectTab/listTabs=标签页管理"
+        "description" to "操作类型。navigate=导航URL(支持 http(s)/file:// 与容器路径，非网址输入按搜索关键词处理); evaluate=执行JS(支持 Promise); click/fill/hover/press=交互(兼容 React); select=下拉选择; getText/getHtml=提取内容; getBackbone=无障碍树(role/name/ref); screenshot=截图; console=控制台日志; wait=等待条件; scroll=滚动; dialog=处理confirm/prompt（浏览器面板可见时由用户在界面上处理）; back/forward/reload=导航控制; newTab/closeTab/selectTab/listTabs=标签页管理"
     )
 
     override val parameters = mapOf(
@@ -366,7 +366,7 @@ class BrowserTool @Inject constructor(
     }
 
     /** 统一响应封装；存在挂起的 confirm/prompt 时附加 pendingDialog 提示 AI 处理。 */
-    private fun envelope(ok: Boolean, action: String, detail: JsonElement, tabId: String? = null): JsonObject {
+    private suspend fun envelope(ok: Boolean, action: String, detail: JsonElement, tabId: String? = null): JsonObject {
         val resolvedTabId = tabId ?: browserManager.getActiveTabId()
         val fields = LinkedHashMap<String, JsonElement>()
         fields["ok"] = JsonPrimitive(ok)
@@ -385,25 +385,25 @@ class BrowserTool @Inject constructor(
         return JsonObject(fields)
     }
 
-    private fun buildResult(ok: Boolean, action: String, detail: Map<String, JsonElement>, tabId: String? = null): ToolResult {
+    private suspend fun buildResult(ok: Boolean, action: String, detail: Map<String, JsonElement>, tabId: String? = null): ToolResult {
         return ToolResult.Success(envelope(ok, action, JsonObject(detail), tabId))
     }
 
-    private fun buildData(action: String, detail: Map<String, JsonElement>, tabId: String? = null): JsonObject {
+    private suspend fun buildData(action: String, detail: Map<String, JsonElement>, tabId: String? = null): JsonObject {
         return envelope(true, action, JsonObject(detail), tabId)
     }
 
-    private fun buildOk(action: String, detail: Map<String, JsonElement>, tabId: String? = null): ToolResult {
+    private suspend fun buildOk(action: String, detail: Map<String, JsonElement>, tabId: String? = null): ToolResult {
         return ToolResult.Success(buildData(action, detail, tabId))
     }
 
-    private fun buildFromJson(action: String, jsonStr: String, tabId: String? = null): ToolResult {
+    private suspend fun buildFromJson(action: String, jsonStr: String, tabId: String? = null): ToolResult {
         val detail = browserManager.parseEvalResult(jsonStr)
         val ok = (detail as? JsonObject)?.get("matched")?.jsonPrimitive?.contentOrNull != "false"
         return ToolResult.Success(envelope(ok, action, detail, tabId))
     }
 
-    private fun buildError(action: String, message: String, code: String, tabId: String? = null): ToolResult {
+    private suspend fun buildError(action: String, message: String, code: String, tabId: String? = null): ToolResult {
         val resolvedTabId = tabId ?: browserManager.getActiveTabId()
         return ToolResult.Success(JsonObject(mapOf(
             "ok" to JsonPrimitive(false),

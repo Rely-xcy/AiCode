@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,8 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.ChevronRotationStyle
+import com.aicode.core.ui.ExpandableChevronIcon
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.memory.Memory
@@ -55,6 +58,7 @@ import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.HelpCircle
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.User
 
@@ -77,6 +81,7 @@ import compose.icons.feathericons.User
 internal fun MemorySection(
     memories: List<Memory>,
     shortTerm: SessionShortTermState?,
+    profileOverview: String?,
     activeMemoryEnabled: Boolean,
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
@@ -243,7 +248,24 @@ internal fun MemorySection(
         val tabMemories = memories.filter {
             it.kind == if (isProfileTab) MemoryKind.PROFILE else MemoryKind.NOTE
         }
+        // 每个 tab 清单顶部一条可展开的帮助行：展开后整段说明，收起只占一行
+        var helpExpanded by remember(isProfileTab) { mutableStateOf(false) }
+        CollapsibleHelpRow(
+            title = stringResource(
+                if (isProfileTab) R.string.memory_help_profile_title
+                else R.string.memory_help_memory_title
+            ),
+            body = stringResource(
+                if (isProfileTab) R.string.memory_help_profile_body
+                else R.string.memory_help_memory_body
+            ),
+            expanded = helpExpanded,
+            onToggle = { helpExpanded = !helpExpanded }
+        )
         if (isProfileTab) {
+            // 画像 tab 独有的总览卡：把全部画像条目合成一段整体描述，置于清单之前；
+            // 画像为空时显示引导文案而不是空白卡。
+            ProfileOverviewCard(overview = profileOverview)
             // 画像 tab 顶部说明：讲清这些是从对话自动沉淀的、关于用户的长期结论
             Text(
                 text = stringResource(R.string.memory_profile_desc),
@@ -325,6 +347,79 @@ private fun SessionValueText(text: String) {
         textAlign = TextAlign.End,
         modifier = Modifier.padding(start = Spacing.sm)
     )
+}
+
+/**
+ * tab 内顶部帮助行：默认收起只占一行，点击展开后显示整段说明。
+ * 帮助内容随 tab 切换而变，展开状态按 tab 重置。
+ */
+@Composable
+private fun CollapsibleHelpRow(
+    title: String,
+    body: String,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    SettingsGroup {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(horizontal = Spacing.lg, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = FeatherIcons.HelpCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(Spacing.md))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            ExpandableChevronIcon(
+                expanded = expanded,
+                style = ChevronRotationStyle.RIGHT_DOWN,
+                size = 16.dp,
+                tint = MaterialTheme.semanticColors.subtleText
+            )
+        }
+        if (expanded) {
+            SettingsDivider()
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 画像 tab 顶部总览卡：把全部画像条目合成的整体描述（[ViewModel.profileOverview]）
+ * 放在一张卡片里；画像为空时显示引导文案。
+ */
+@Composable
+private fun ProfileOverviewCard(overview: String?) {
+    SettingsGroupHeader(text = stringResource(R.string.memory_profile_overview_title))
+    SettingsGroup {
+        Text(
+            text = overview
+                ?: stringResource(R.string.memory_profile_overview_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (overview == null) {
+                MaterialTheme.semanticColors.subtleText
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
+        )
+    }
 }
 
 /** 一栏记忆（全局或项目）：同一个分组里逐行渲染，行间加分隔线。 */

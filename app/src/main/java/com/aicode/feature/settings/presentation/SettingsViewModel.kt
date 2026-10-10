@@ -524,7 +524,7 @@ class SettingsViewModel @Inject constructor(
     private val _firstByteTimeoutSec = MutableStateFlow(300)
     val firstByteTimeoutSec: StateFlow<Int> = _firstByteTimeoutSec.asStateFlow()
 
-    private val _streamIdleTimeoutSec = MutableStateFlow(0)
+    private val _streamIdleTimeoutSec = MutableStateFlow(300)
     val streamIdleTimeoutSec: StateFlow<Int> = _streamIdleTimeoutSec.asStateFlow()
 
     private val _maxNetworkRetries = MutableStateFlow(6)

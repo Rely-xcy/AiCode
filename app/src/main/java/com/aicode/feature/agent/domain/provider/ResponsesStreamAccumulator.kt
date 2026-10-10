@@ -189,6 +189,7 @@ internal class ResponsesStreamAccumulator {
                 if (delta.isEmpty()) return null
                 budget.add(delta)
                 text.append(delta)
+                receivedContent = true
                 return ResponsesDelta.Text(delta)
             }
 
@@ -197,6 +198,7 @@ internal class ResponsesStreamAccumulator {
                 if (delta.isEmpty()) return null
                 budget.add(delta)
                 reasoning.append(delta)
+                receivedContent = true
                 return ResponsesDelta.Reasoning(delta)
             }
 
@@ -239,6 +241,8 @@ internal class ResponsesStreamAccumulator {
                 val delta = event.str("delta").orEmpty()
                 if (delta.isEmpty()) return null
                 budget.add(delta)
+                // 长工具参数流也属于「正在收到内容」，必须取消首字节超时。
+                receivedContent = true
                 calls.getOrPut(event.callKey()) { CallAcc() }.args.append(delta)
             }
 

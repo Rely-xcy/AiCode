@@ -1524,17 +1524,16 @@ class AIAgentViewModel @Inject constructor(
 
     /**
      * 把当前会话队列中某条消息立即插入正在运行的轮次：从队列移除，交给 [deliverSystemEvent]——忙碌时
-     * 作为一条用户消息排在本批工具结果之后（模型侧与落库侧都是用户消息，见
-     * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow] 的 interjections）；空闲时
-     * 作为新一轮用户消息发送。
+     * 作为一条带围栏的用户消息排在本批工具结果之后进模型 payload，同时按原 clientMessageId 落库
+     * （isInterjection=true 的行 UI 不渲染）；空闲时作为新一轮用户消息发送。
      */
     fun interjectQueuedRequest(id: String) {
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
         // 不把这条计入 [discardedClientMessageIds]：它按原 clientMessageId 落库，乐观气泡由「库里出现
-        // 同 id 的行」这条既有判据退场。标作废虽然也能让气泡消失，但用户会先看到自己的话从界面上断一线
-        // （气泡没了、落库行还没来）。
+        // 同 id 的行」这条既有判据退场（该行 isInterjection=true，UI 不再渲染它，气泡退场后不会
+        // 在时间线上同显两遍）。标作废虽然也能让气泡消失，但会留下「既没落库也不在队列」的空窗。
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
         FileLogger.d(TAG, "interjectQueuedRequest: sid=$sid clientMsgId=${req.clientMessageId} jobActive=${sessionJobs[sid]?.isActive == true}")
         deliverSystemEvent(
@@ -1951,7 +1950,7 @@ class AIAgentViewModel @Inject constructor(
                         // 它在事件流里紧跟在同批 ToolCallFinished 之后，库里顺序因此是「工具结果 → 用户消息」，
                         // 不会把用户消息夹进 assistant(tool_calls) 与 tool 结果之间而破坏配对约束。
                         // modelReminder 是运行中插话的模型侧围栏（事件自带，见 AgentEvent.UserMessageAdded），
-                        // 落库随行写入、组装请求时拼回；isInterjection 让 UI 把它归入当前轮、不开新轮头。
+                        // 落库随行写入、组装请求时拼回；该行 isInterjection=true，UI 不渲染为气泡。
                         messagePersistenceUseCase.persist(
                             sessionId,
                             MessageRole.USER,

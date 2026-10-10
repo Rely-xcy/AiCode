@@ -28,7 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * 请求体不含 API Key（密钥在 HTTP 头，本类只记录 URL 与 body），可安全留存。
  *
  * 不做长度截断：请求/响应体在写入线程里序列化后直接写盘，不构造整段大字符串；原始 SSE 分批
- * 落盘——因此长历史 / 大附件也不会 OOM，日志保持完整以便复现问题。超大 base64 媒体（图片等）
+ * 落盘——因此长历史 / 大附件也不会 OOM。单个会话文件超过 20MB 时按份滚动归档（保留最近
+ * [MAX_ARCHIVE_FILES] 份，命名 `session-<id>.log.1`、`.2`…），不清空历史。超大 base64 媒体（图片等）
  * 在写入前按 **JSON 结构**（字段名 + 值的形态）脱敏为占位符，避免单行几 MB 撑爆日志文件。
  *
  * 使用前需在 [android.app.Application.onCreate] 调用一次 [init]。
@@ -47,6 +48,8 @@ object AILogger {
     private const val TAG = "AILogger"
     private const val MAX_AGE_DAYS = 7
     private const val MAX_FILE_BYTES = 20 * 1024 * 1024 // 单会话文件上限 20MB（每轮重发完整历史，增长快）
+    /** 单个会话滚动归档保留的份数（不含当前文件）；超出即丢弃最旧一份。 */
+    private const val MAX_ARCHIVE_FILES = 3
     /** 原始 SSE 分批落盘的缓冲阈值（字符）：累积到该量即落盘，避免整段响应驻留内存。 */
     private const val SSE_FLUSH_CHARS = 64 * 1024
     /** 字段名提示为 base64 承载时，值超过该长度即视为媒体数据。 */
@@ -286,23 +289,34 @@ object AILogger {
         this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9' ||
             this == '+' || this == '/' || this == '=' || this == '_' || this == '-'
 
-    /** 在后台单线程上打开会话日志文件（追加模式）执行写入块；文件超上限则先重置。 */
+    /** 在后台单线程上打开会话日志文件（追加模式）执行写入块；文件超上限则先滚动归档。 */
     private fun appendToSession(sessionId: String?, block: (Writer) -> Unit) {
         val dir = logDir ?: return // 未初始化则直接丢弃，避免在无目录时报错刷屏
         val safeId = (sessionId ?: "unknown").replace(Regex("[^A-Za-z0-9_-]"), "_")
         ioExecutor.execute {
             runCatching {
                 val file = File(dir, "session-$safeId.log")
-                if (file.length() > MAX_FILE_BYTES) {
-                    // 超上限则截断重开，避免单文件无限增长。
-                    file.writeText("--- AI 会话日志超过 ${MAX_FILE_BYTES / 1024 / 1024}MB 已重置 ---\n")
-                }
+                if (file.length() > MAX_FILE_BYTES) rotate(file)
                 BufferedWriter(OutputStreamWriter(FileOutputStream(file, true), Charsets.UTF_8)).use { w ->
                     block(w)
                     w.flush()
                 }
             }.onFailure { Log.e(TAG, "写入 AI 会话日志失败", it) }
         }
+    }
+
+    /**
+     * 会话日志滚动归档：`session-<id>.log` → `.1` → `.2` → …，超过 [MAX_ARCHIVE_FILES] 份丢弃最旧。
+     * 在 [appendToSession] 的写入线程上调用，与追加写同线程，无并发。
+     */
+    private fun rotate(file: File) {
+        val dir = file.parentFile ?: return
+        File(dir, "${file.name}.$MAX_ARCHIVE_FILES").delete()
+        for (i in MAX_ARCHIVE_FILES - 1 downTo 1) {
+            val src = File(dir, "${file.name}.$i")
+            if (src.exists()) src.renameTo(File(dir, "${file.name}.${i + 1}"))
+        }
+        file.renameTo(File(dir, "${file.name}.1"))
     }
 
     /** 删除超过 [MAX_AGE_DAYS] 天未更新的会话日志文件。 */

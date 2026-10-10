@@ -1028,6 +1028,7 @@ fun SettingsScreen(
                         androidx.hilt.navigation.compose.hiltViewModel()
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
                     val shortTerm by memoryViewModel.shortTermSession.collectAsStateWithLifecycle()
+                    val profileOverview by memoryViewModel.profileOverview.collectAsStateWithLifecycle()
                     val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
                     val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
                     val deleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
@@ -1055,6 +1056,7 @@ fun SettingsScreen(
                     MemorySection(
                         memories = memories,
                         shortTerm = shortTerm,
+                        profileOverview = profileOverview,
                         activeMemoryEnabled = activeMemory,
                         onToggleActiveMemory = memoryViewModel::setActiveMemoryEnabled,
                         curationIntervalHours = curationInterval,

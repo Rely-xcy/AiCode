@@ -55,7 +55,7 @@
     <string name="settings_image_gen_model">生图模型</string>
     <string name="settings_mcp">MCP 服务器</string>
     <string name="settings_skills">技能</string>
-    <string name="settings_memory">长期记忆</string>
+    <string name="settings_memory">记忆</string>
     <string name="settings_container">容器与镜像</string>
     <string name="settings_log_no_files">还没有日志文件</string>
     <string name="settings_log_read_failed">读取日志失败：%1$s</string>
@@ -298,6 +298,7 @@
     <string name="common_create">创建</string>
     <string name="common_delete">删除</string>
     <string name="common_cancel">取消</string>
+    <string name="common_confirm">确定</string>
     <string name="common_retry">重试</string>
     <string name="common_go_to_settings">去设置</string>
     <string name="common_name">名称</string>
@@ -985,13 +986,17 @@
     <string name="mcp_details">详情</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">还没有长期记忆</string>
+    <string name="memory_empty">还没有记忆</string>
     <string name="memory_empty_hint">对话中让 AI 记住的长期内容会显示在这里</string>
     <string name="memory_tab_profile">用户画像</string>
     <string name="memory_tab_memory">记忆</string>
     <string name="memory_profile_desc">从对话中自动沉淀的、关于你的长期结论（偏好、习惯、纠正等），跨会话生效。</string>
     <string name="memory_profile_empty">还没有用户画像</string>
     <string name="memory_profile_empty_hint">打开主动记忆后，AI 会从对话里沉淀关于你的长期结论</string>
+    <string name="memory_help_profile_title">什么是用户画像？</string>
+    <string name="memory_help_profile_body">用户画像是 AI 从对话中自动沉淀的关于你的长期结论（偏好、习惯、纠正等），跨会话生效。它与记忆的区别：画像只关于「你这个人」，记忆则覆盖任务、偏好、项目等其它长期信息。点条目可以查看和编辑，左滑删除；AI 之后的对话还会继续更新画像。</string>
+    <string name="memory_help_memory_title">什么是跨会话记忆？</string>
+    <string name="memory_help_memory_body">这里的记忆每轮都会注入系统提示词，跨会话生效。点右上角「+」可手动新增；打开「置顶」开关的记忆会被无条件注入，不受相关度挑选影响。</string>
     <string name="memory_active_memory">主动记忆</string>
     <string name="memory_active_memory_desc">打开后模型会在对话中主动沉淀长期记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>
@@ -1002,7 +1007,9 @@
     <string name="memory_group_global">全局记忆</string>
     <string name="memory_group_project">项目记忆</string>
     <string name="memory_add">新增记忆</string>
-    <string name="memory_long_term_header">长期记忆（跨会话）</string>
+    <string name="memory_long_term_header">跨会话记忆</string>
+    <string name="memory_profile_overview_title">AI 对你的整体画像</string>
+    <string name="memory_profile_overview_empty">画像还是空的：打开主动记忆，或直接点右上角「+」补一条关于你的长期结论</string>
     <string name="memory_long_term_desc">跨会话生效：每条记忆的名称与描述都会注入后续对话的系统提示词。</string>
     <string name="memory_session_card_title">本次会话（短期）</string>
     <string name="memory_session_card_desc">只读。短期上下文随会话结束消失，不写盘、不跨会话；此处按最近更新的会话展示。</string>
@@ -1027,7 +1034,7 @@
     <string name="memory_pinned">置顶</string>
     <string name="memory_pinned_desc">每轮都会注入，不参与话题竞争；适合用户画像这类跨项目偏好</string>
     <string name="memory_field_name_locked">名称是记忆的唯一标识，创建后不可修改</string>
-    <string name="memory_delete_confirm_title">删除长期记忆</string>
+    <string name="memory_delete_confirm_title">删除记忆</string>
     <string name="memory_delete_confirm_message">将删除「%1$s」，此操作不可恢复。确定删除？</string>
     <string name="memory_delete_failed">删除失败，该条目可能已不存在</string>
     <string name="memory_save_failed">保存失败，未写入任何文件：项目级记忆需要工作区就绪（或文件写入失败）</string>
@@ -1170,8 +1177,8 @@
     <string name="subagent_inject_main_rules_hint">与「子代理基线」二选一即可；两个都开会重复注入规则、多占上下文</string>
     <string name="subagent_inject_skills">技能清单</string>
     <string name="subagent_inject_skills_hint">允许它加载并执行项目技能</string>
-    <string name="subagent_inject_memory">长期记忆</string>
-    <string name="subagent_inject_memory_hint">注入全局与项目长期记忆（跨会话）</string>
+    <string name="subagent_inject_memory">记忆</string>
+    <string name="subagent_inject_memory_hint">注入全局与项目记忆（跨会话）</string>
     <string name="subagent_inject_project_rules">项目规则</string>
     <string name="subagent_inject_project_rules_hint">注入 AGENTS.md 或 CLAUDE.md</string>
 
@@ -1680,4 +1687,7 @@
     <string name="browser_night_mode_on">关闭夜间模式</string>
     <string name="browser_night_mode_off">开启夜间模式</string>
     <string name="browser_devtools">开发者工具</string>
+    <string name="browser_dialog_alert_title">网页提示</string>
+    <string name="browser_dialog_confirm_title">网页确认</string>
+    <string name="browser_dialog_prompt_title">网页输入</string>
 </resources>

@@ -31,7 +31,7 @@ class RunningTurnAfterInterjectionTest {
         timestamp = ts
     )
 
-    /** 运行中插话：落库时 isInterjection = true（UI 据此不开新轮头）。 */
+    /** 运行中插话：落库时 isInterjection = true，UI 不渲染、不进时间线。 */
     private fun interjection(id: String, ts: Long) =
         user(id, ts).copy(isInterjection = true)
 
@@ -62,7 +62,8 @@ class RunningTurnAfterInterjectionTest {
      *
      * 注意 i1 的落库位置在工具行之后（workflow 先发 ToolCallFinished 再发 UserMessageAdded），
      * 这是真实顺序，不是构造出来的方便形状。
-     * 插话不再开新轮：i1 现在带 isInterjection = true，归入 turn:u0 的正文，时间线原位显示。
+     * 插话不渲染为气泡、不进时间线（buildChatItems 在 splitChatTurns 里剔除它），但会保留在
+     * 传入列表里——正是真实库里读出来的形状，用来钉「残留插话行不污染轮次」。
      */
     private fun messagesWithInterjection() = listOf(
         user(anchorId, 1_000),
@@ -87,12 +88,11 @@ class RunningTurnAfterInterjectionTest {
     // ---- 折叠头：正在跑的那一轮不翻「已完成」 ----
 
     /**
-     * 插话带 isInterjection = true 时不开新轮头：整个运行只有 turn:u0 一轮，插话与后续工具、
-     * 正文都归入该轮。插话作为常显项在时间线原位切断该轮的过程，会切出多段轮头，但段头 key 全为
-     * turn:u0——旧实现（插话开新轮）下会出现 turn:i1 的段头，断言即红。
+     * 插话落库但 UI 不渲染：插话行不出现在任何 item 里，且不切断/顶掉当前轮——
+     * 整个运行仍然只有 turn:u0 一轮（旧行为会把插话画成时间线上的普通用户气泡）。
      */
     @Test
-    fun `插话不开新轮头，仍归入当前轮`() {
+    fun `插话不渲染为气泡，仍归入当前轮`() {
         val items = buildChatItems(
             messages = messagesWithInterjection(),
             groupOverrides = emptyMap(),
@@ -105,10 +105,10 @@ class RunningTurnAfterInterjectionTest {
             headers.isNotEmpty() && headers.all { it.key == "turn:u0" }
         )
         assertTrue("本轮必须是进行中", headers.all { it.running })
-        // 插话在时间线原位：不是轮首用户行（turn.userMessage），而是轮内一条普通用户气泡。
-        val bubble = items.first { it.message.id == interjectionId }
-        assertEquals(interjectionId, bubble.key)
-        assertTrue("插话仍是普通用户气泡", bubble.message.role == MessageRole.USER)
+        assertFalse(
+            "插话行不渲染为独立气泡",
+            items.any { it.message.id == interjectionId }
+        )
     }
 
     /** 普通用户消息（isInterjection = false）仍开新轮：这是插话豁免的对照组。 */
@@ -210,21 +210,21 @@ class RunningTurnAfterInterjectionTest {
         assertEquals(3_000L, durations["a2"])
     }
 
-    // ---- 插话本身：仍是普通用户消息，不降级 ----
+    // ---- 插话本身：落库但 UI 不渲染 ----
 
-    /** 此为「没退回」钉子（两版实现都绿）：插话照常作为一条普通用户消息渲染，不是后台通知条。 */
+    /** 旧行为钉子反转为新行为钉子：插话行不再作为任何 item（包括普通用户气泡）出现在时间线上。 */
     @Test
-    fun `插话照常作为普通用户消息存在`() {
+    fun `插话不渲染为普通用户消息气泡`() {
         val items = buildChatItems(
             messages = messagesWithInterjection(),
             groupOverrides = emptyMap(),
             turnOverrides = emptyMap(),
             activeTurnKey = turnKeyOf(anchorId)
         )
-        val bubble = items.first { it.message.id == interjectionId }
-        assertEquals(MessageRole.USER, bubble.message.role)
-        assertFalse("插话不是后台通知条", bubble.message.isBackgroundNotification)
-        assertTrue("插话带 isInterjection 标记", bubble.message.isInterjection)
+        assertFalse(
+            "插话行不出现在时间线上",
+            items.any { it.message.id == interjectionId }
+        )
     }
 
     /** 收工后（空闲）带插话的历史：本轮从 u0 到 a2 只结一次，插话不产生第二次结算。 */

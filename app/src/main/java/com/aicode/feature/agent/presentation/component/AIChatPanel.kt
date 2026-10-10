@@ -321,7 +321,7 @@ internal fun buildChatItems(
      *
      * 判定是「等于它、或排在它之后」：运行期间若出现后续轮（本轮之后新起的轮），
      * 同属这次运行、同样还没跑完，按进行中渲染（不显示「已完成」、不把进行中的正文当结果）。
-     * 运行中插话不开新轮（见 [splitChatTurns]），归入当前轮时间线，不在此列。
+     * 运行中插话不开新轮（见 [splitChatTurns]），且不渲染（已在 splitChatTurns 剔除）。
      */
     activeTurnKey: String? = null,
 ): List<ChatRenderItem> {
@@ -334,7 +334,7 @@ internal fun buildChatItems(
         // 「正在跑」= 「activeTurnKey 起、往后都算」，不是「等于 activeTurnKey」：运行期间若出现后续轮，
         // 它同样没跑完。只认相等的话，后续轮一落库就会把正在跑的那一轮顶成「已完成」，
         // 进行中的正文也会被当成最终回答（见上面的 activeTurnKey）。
-        // 运行中插话不开新轮（见 splitChatTurns），不会在这里把本轮顶掉。
+        // 运行中插话不开新轮且不渲染（见 splitChatTurns），不会在这里把本轮顶掉。
         if (activeTurnKey != null && turn.key == activeTurnKey) runningFromHere = true
         val running = runningFromHere
         items += messageRenderItems(turn.userMessage)
@@ -429,17 +429,17 @@ private class ChatTurn(
  * 按「用户消息」切成轮。返回 (轮首之前的散消息, 轮列表)。
  *
  * 后台通知虽可能是 USER 角色，但它是系统注入的提示条而非用户输入，不作为轮起点（归入当前轮内容）。
- * 运行中插话同理：它是对当前任务的补充，归入当前轮，不开新轮头。
+ * 运行中插话（isInterjection）在入口处整体剔除：忙碌插话落库只为记录与进模型 payload，
+ * 不渲染为用户气泡、不进时间线（留在这儿会被当成轮内常显项原位画出来）。
  */
-private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMessage>, List<ChatTurn>> {
+private fun splitChatTurns(allMessages: List<AgentUIMessage>): Pair<List<AgentUIMessage>, List<ChatTurn>> {
+    val messages = allMessages.filterNot { it.isInterjection }
     val leading = ArrayList<AgentUIMessage>()
     val turns = ArrayList<ChatTurn>()
     var user: AgentUIMessage? = null
     var body: MutableList<AgentUIMessage>? = null
     for (message in messages) {
-        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker &&
-            !message.isInterjection
-        ) {
+        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker) {
             user?.let { turns += ChatTurn(turnKeyOf(it.id), it, body?.toList().orEmpty()) }
             user = message
             body = ArrayList()
@@ -455,8 +455,8 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
  * 可以挂「复制 / 更多」操作行的消息 id 集合（每个已收尾轮次的末条可挂消息，含开头的散消息）。
  *
  * 轮次是否收尾只看 [activeTurnKey]：它以及排在它之后的轮都属于正在跑的那次运行，一律不挂——否则本轮
- * 进行中的正文会被当成最终回答，生成中途就冒出操作行。运行中插话不开新轮（见 [splitChatTurns]），
- * 不影响这里的轮次归属。
+ * 进行中的正文会被当成最终回答，生成中途就冒出操作行。运行中插话不开新轮也不渲染
+ * （见 [splitChatTurns]），不影响这里的轮次归属。
  * [busy] 为真但 [activeTurnKey] 为空（本轮没有轮首用户行，或它还没被加载进来）时退回旧判据
  * 「除末轮外都算收尾」，与改动前一致。
  */
@@ -485,12 +485,12 @@ internal fun actionableResultIds(
 /**
  * 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。
  *
- * 运行中插话（[AgentUIMessage.isInterjection]）也是常显项：它归入当前轮但不开新轮头，
- * 必须作为顶层 item 在时间线原位渲染，绝不折进轮头——否则轮一收起，用户自己发的插话就不见了。
+ * 运行中插话（[AgentUIMessage.isInterjection]）不在此列：它落库但 UI 不渲染（splitChatTurns 已剔除），
+ * 不作为时间线上的独立气泡出现。
  */
 private fun AgentUIMessage.isPersistentInTurn(): Boolean =
     isCompactionMarker || isContextSummary || isCompactionFailure || isBackgroundNotification ||
-        isInterjection || (role == MessageRole.TOOL && attachments.isNotEmpty())
+        (role == MessageRole.TOOL && attachments.isNotEmpty())
 
 /** 能否作为一轮的「结果」：最后一条有可见正文的普通助手消息。 */
 private fun AgentUIMessage.isResultCandidate(): Boolean =
@@ -840,21 +840,19 @@ fun AIChatPanel(
     // 末轮且 agent 忙 = 当前正在跑的那一轮：它的折叠头默认展开（显示「执行中」），收工后自动收起。
     //
     // 定位用运行时真值——本轮轮首用户行 id（VM 在本轮用户行落库时登记，见 AIAgentViewModel 的
-    // currentSessionRunningTurnAnchorId）。不能按「最后一条用户消息」定位：本轮中途的插话也是一条普通
-    // 用户消息，它一落库就会把正在跑的那一轮顶掉，折叠头当场翻成「已完成」、进行中的正文被当成最终
-    // 回答——用户看到的就是「一点插话，这一轮被结束了」。
-    // 锚点还没出现在已加载的消息里（分页把它翻出去了），或本轮本来就没有轮首用户行（自动触发轮次、
-    // 后台通知轮次）时退回旧判据：这些情况的行为与改前一致。
+    // currentSessionRunningTurnAnchorId）。不能按「最后一条用户消息」定位；插话不渲染（splitChatTurns
+    // 已剔除），本就不参与候选。锚点还没出现在已加载的消息里（分页把它翻出去了），或本轮本来就没有
+    // 轮首用户行（自动触发轮次、后台通知轮次）时退回旧判据：这些情况的行为与改前一致。
     val activeTurnKey = remember(messages, isBusy, runningTurnAnchorId) {
         if (!isBusy) {
             null
         } else {
             val anchor = runningTurnAnchorId?.let { id ->
                 messages.firstOrNull { it.id == id }
-                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection }
+                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker }
             }
             val anchorMessage = anchor ?: messages.lastOrNull {
-                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection
+                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker
             }
             anchorMessage?.let { turnKeyOf(it.id) }
         }

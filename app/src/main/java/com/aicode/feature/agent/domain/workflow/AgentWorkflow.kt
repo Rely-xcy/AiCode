@@ -64,11 +64,12 @@ sealed class AgentEvent {
      *
      * 它按用户消息处理，不降级成系统通知：模型侧位置在当前这批工具结果之后（见
      * [StatefulAgentWorkflow][com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），
-     * UI 与落库也按普通用户消息采（落库行 id 即 [id]，乐观气泡据此退场）。
+     * 落库按普通用户消息采（落库行 id 即 [id]，乐观气泡据此退场）；该行带 [isInterjection]，
+     * UI 不把它渲染为时间线上的气泡。
      *
      * @param id 界面侧预生成的消息行 id（无界面 id 时为随序号生成的稳定 id）
      * @param content 用户原文，不经任何包装
-     * @param isInterjection 这是运行中插话（非新任务的第一条用户消息）：UI 归入当前轮、不开新轮头。
+     * @param isInterjection 这是运行中插话：落库行 UI 不渲染，仅作为记录与模型 payload。
      * @param modelReminder 运行中插话的模型侧围栏（随行落库，组装请求时拼回）；非插话恒为 null。
      */
     data class UserMessageAdded(
