@@ -880,7 +880,7 @@ class StatefulAgentWorkflow @Inject constructor(
                             // 放在确认 toolCalls 非空之后：本轮到此收尾（无工具）时不动队列，
                             // 插话留给 flushPendingNotifications 开新轮送达（那时它就是正常的新任务）。
                             if (aiResponse.toolCalls.isNotEmpty()) {
-                                deliverInterjectionsToState()
+                                state = state.copy(pendingInterjections = state.pendingInterjections + deliverInterjectionsToState(currentContext.sessionId) { send(it) })
                             }
                             actionQueue.addLast(
                                 AgentAction.LlmResponse(
@@ -938,7 +938,7 @@ class StatefulAgentWorkflow @Inject constructor(
                     is AgentSideEffect.RequestPermission -> {
                         // 权限弹窗可能挂起任意久：先把等在队列里的插话送出去（UI/落库+ack，
                         // 模型侧记进 state，仍由本批 ToolBatchFinished 拼在工具结果后）。
-                        deliverInterjectionsToState()
+                        state = state.copy(pendingInterjections = state.pendingInterjections + deliverInterjectionsToState(currentContext.sessionId) { send(it) })
                         val tool = toolRegistry.getTool(effect.toolCall.name)
                         val argsPreview = JsonObject(effect.toolCall.arguments).toString().take(500)
                         val checkResult = requestPermissionIfNeeded(
@@ -1098,7 +1098,7 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 早前检查点（权限弹窗前 / LLM 流式后）已送达、还挂在本批之后的插话先拼上，
                         // 再取本批边界新到的：两段合起来都落在工具结果之后。
                         val pendingDelivered = state.pendingInterjections
-                        val delivered = deliverInterjections(notifySessionId)
+                        val delivered = deliverInterjections(notifySessionId) { send(it) }
                         val notifications = if (notifySessionId != null) {
                             agentNotificationCenter.peek(notifySessionId)
                         } else {
@@ -1191,7 +1191,10 @@ class StatefulAgentWorkflow @Inject constructor(
      * 返回取出的通知与对应的模型侧消息（带运行中围栏）。事件发出后、ack 前被取消最多重送同一条
      * （同 clientMessageId 落库幂等），不会丢消息；先发后 ack 与既有工具批次路径一致。
      */
-    private suspend fun deliverInterjections(sessionId: String?): List<DeliveredInterjection> {
+    private suspend fun deliverInterjections(
+        sessionId: String?,
+        sendEvent: suspend (AgentEvent) -> Unit
+    ): List<DeliveredInterjection> {
         if (sessionId == null) return emptyList()
         val notifications = agentNotificationCenter.peek(sessionId)
         val delivered = notifications
@@ -1209,7 +1212,7 @@ class StatefulAgentWorkflow @Inject constructor(
             }
         if (delivered.isEmpty()) return emptyList()
         delivered.forEach {
-            send(
+            sendEvent(
                 AgentEvent.UserMessageAdded(
                     it.message.id,
                     it.message.content,
@@ -1233,13 +1236,11 @@ class StatefulAgentWorkflow @Inject constructor(
      * state.pendingInterjections，由本批 ToolBatchFinished 再拼到工具结果之后
      * （不破坏 assistant(tool_calls) 与 tool 结果的配对约束，也不提前重复进上下文）。
      */
-    private suspend fun deliverInterjectionsToState() {
-        val delivered = deliverInterjections(currentContext.sessionId)
-        if (delivered.isEmpty()) return
-        state = state.copy(
-            pendingInterjections = state.pendingInterjections + delivered.map { it.message }
-        )
-    }
+    private suspend fun deliverInterjectionsToState(
+        sessionId: String?,
+        sendEvent: suspend (AgentEvent) -> Unit
+    ): List<AgentMessage.UserMessage> =
+        deliverInterjections(sessionId, sendEvent).map { it.message }
 
     /**
      * 写类工具的执行前准入检查（写范围租约）——**子代理路径**。

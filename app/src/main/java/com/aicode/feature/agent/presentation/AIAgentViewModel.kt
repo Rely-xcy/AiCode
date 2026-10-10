@@ -2206,7 +2206,7 @@ class AIAgentViewModel @Inject constructor(
                 //   再落就是「完整回复 + ……已停止」两条相邻，直接跳过；
                 // ② 流被 cancel 中断、Final 永远不会来 → 由本路径落「已停止」行（老行为）。
                 // 区别只能靠标记是否已被消费判断，标记同步摘除，避免下轮 AssistantText 再补后缀。
-                if (!pendingAssistantTextStop.remove(sessionId)) {
+                if (pendingAssistantTextStop.remove(sessionId) != true) {
                     val partial = (streamingText ?: "").trimEnd()
                     val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
                     val reasoning = streamingReasoning?.takeIf { it.hasVisibleContent() }
