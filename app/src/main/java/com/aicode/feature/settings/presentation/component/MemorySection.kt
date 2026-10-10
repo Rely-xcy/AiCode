@@ -1,7 +1,6 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,8 +44,6 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
-import com.aicode.core.ui.ChevronRotationStyle
-import com.aicode.core.ui.ExpandableChevronIcon
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.memory.Memory
@@ -72,10 +69,15 @@ import compose.icons.feathericons.User
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  *
- * 顶部两档切换「用户画像 / 记忆」：前者只列自动沉淀的长期结论（kind=PROFILE），后者只列对话中
- * 记录的内容（kind=NOTE）。短期卡片、主动记忆开关、治理周期与 kind 无关，留在 tab 之外始终可见。
+ * 顶部两档切换「记忆 / 用户画像」，进页默认落在「记忆」：tab 之下只放该 tab 自己的内容——
+ * 记忆 tab 列短期卡片、主动记忆开关、治理周期与 kind=NOTE 的清单；画像 tab 只列自动沉淀的
+ * 长期结论（kind=PROFILE）与总览卡，不放开关：画像随「主动记忆」总开关启停（联动是既有领域
+ * 语义：画像沉淀走开关注入的 ACTIVE_MEMORY_RULE，见 MemoryModule），帮助文案里说明这一点。
  *
  * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
+ * @param selectedTab 当前选中的 tab（0 = 记忆，1 = 用户画像）；状态由上层持有，
+ *   顶栏的帮助图标随它换文案，所以不能在本组件内部 remember。
+ * @param onSelectTab 切换 tab 的回调。
  */
 @Composable
 internal fun MemorySection(
@@ -86,6 +88,8 @@ internal fun MemorySection(
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
     onSelectCurationInterval: (Int) -> Unit,
+    selectedTab: Int,
+    onSelectTab: (Int) -> Unit,
     onOpenDetail: (Memory) -> Unit,
     onEdit: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
@@ -94,8 +98,6 @@ internal fun MemorySection(
     var actionMemory by remember { mutableStateOf<Memory?>(null) }
     // 自定义治理周期输入弹窗
     var showCustomIntervalDialog by remember { mutableStateOf(false) }
-    // 顶部两档：0 = 用户画像（PROFILE），1 = 记忆（NOTE）
-    var selectedTab by remember { mutableStateOf(0) }
 
     Column(
         modifier = Modifier
@@ -105,163 +107,17 @@ internal fun MemorySection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 顶部两档切换：与 kind 无关的块（短期卡片、主动记忆开关、治理周期）留在 tab 之外始终可见，
-        // tab 只切下方长期记忆清单。
+        // 顶部两档切换：tab 之下只放该 tab 自己的内容，画像 tab 不再出现开关与治理周期。
         SegmentedTabs(
             selected = selectedTab,
             labels = listOf(
-                stringResource(R.string.memory_tab_profile),
-                stringResource(R.string.memory_tab_memory)
+                stringResource(R.string.memory_tab_memory),
+                stringResource(R.string.memory_tab_profile)
             ),
-            onSelect = { selectedTab = it }
+            onSelect = onSelectTab
         )
 
-        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
-        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
-        if (shortTerm != null) {
-            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
-            SettingsGroup {
-                SettingsRow(
-                    icon = null,
-                    title = shortTerm.title,
-                    subtitle = stringResource(R.string.memory_session_card_desc)
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_context_label),
-                    trailing = {
-                        SessionValueText(
-                            stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
-                        )
-                    }
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_fold_label),
-                    trailing = {
-                        SessionValueText(
-                            if (shortTerm.foldCount == 0) {
-                                stringResource(R.string.memory_session_no_fold)
-                            } else {
-                                stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
-                            }
-                        )
-                    }
-                )
-                // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
-                if (shortTerm.lastInputTokens > 0) {
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = null,
-                        title = stringResource(R.string.memory_session_input_label),
-                        trailing = {
-                            SessionValueText(
-                                // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
-                                // 与聊天页指示器的「估算/真实」用同一对文案。
-                                stringResource(
-                                    R.string.memory_session_input_value,
-                                    shortTerm.lastInputTokens,
-                                    stringResource(R.string.common_token_source_reported)
-                                )
-                            )
-                        }
-                    )
-                }
-            }
-        }
-
-        SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
-        SettingsGroup {
-            // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
-            Text(
-                text = stringResource(R.string.memory_long_term_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.memory_active_memory),
-                subtitle = stringResource(R.string.memory_active_memory_desc),
-                trailing = {
-                    AppSwitch(
-                        checked = activeMemoryEnabled,
-                        onCheckedChange = onToggleActiveMemory
-                    )
-                }
-            )
-            SettingsDivider()
-            // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
-            // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
-            // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.semanticColors.cardSurface)
-                    .padding(horizontal = Spacing.lg, vertical = 12.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.memory_curation_interval),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.memory_curation_interval_desc),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(Spacing.sm))
-                SegmentedTabs(
-                    selected = curationIntervalIndex(curationIntervalHours),
-                    labels = listOf(
-                        stringResource(R.string.memory_curation_interval_off_short),
-                        stringResource(R.string.memory_curation_interval_1d),
-                        stringResource(R.string.memory_curation_interval_7d),
-                        stringResource(R.string.memory_curation_interval_custom)
-                    ),
-                    onSelect = { index ->
-                        when (index) {
-                            0 -> onSelectCurationInterval(0)
-                            1 -> onSelectCurationInterval(24)
-                            2 -> onSelectCurationInterval(168)
-                            else -> showCustomIntervalDialog = true
-                        }
-                    }
-                )
-                // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
-                val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
-                if (isCustom) {
-                    Text(
-                        text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText,
-                        modifier = Modifier.padding(top = Spacing.xs)
-                    )
-                }
-            }
-        }
-
-        val isProfileTab = selectedTab == 0
-        val tabMemories = memories.filter {
-            it.kind == if (isProfileTab) MemoryKind.PROFILE else MemoryKind.NOTE
-        }
-        // 每个 tab 清单顶部一条可展开的帮助行：展开后整段说明，收起只占一行
-        var helpExpanded by remember(isProfileTab) { mutableStateOf(false) }
-        CollapsibleHelpRow(
-            title = stringResource(
-                if (isProfileTab) R.string.memory_help_profile_title
-                else R.string.memory_help_memory_title
-            ),
-            body = stringResource(
-                if (isProfileTab) R.string.memory_help_profile_body
-                else R.string.memory_help_memory_body
-            ),
-            expanded = helpExpanded,
-            onToggle = { helpExpanded = !helpExpanded }
-        )
+        val isProfileTab = selectedTab == 1
         if (isProfileTab) {
             // 画像 tab 独有的总览卡：把全部画像条目合成一段整体描述，置于清单之前；
             // 画像为空时显示引导文案而不是空白卡。
@@ -273,6 +129,137 @@ internal fun MemorySection(
                 color = MaterialTheme.semanticColors.subtleText,
                 modifier = Modifier.padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm)
             )
+        } else {
+            // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
+            // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
+            if (shortTerm != null) {
+                SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+                SettingsGroup {
+                    SettingsRow(
+                        icon = null,
+                        title = shortTerm.title,
+                        subtitle = stringResource(R.string.memory_session_card_desc)
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = null,
+                        title = stringResource(R.string.memory_session_context_label),
+                        trailing = {
+                            SessionValueText(
+                                stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
+                            )
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = null,
+                        title = stringResource(R.string.memory_session_fold_label),
+                        trailing = {
+                            SessionValueText(
+                                if (shortTerm.foldCount == 0) {
+                                    stringResource(R.string.memory_session_no_fold)
+                                } else {
+                                    stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
+                                }
+                            )
+                        }
+                    )
+                    // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
+                    if (shortTerm.lastInputTokens > 0) {
+                        SettingsDivider()
+                        SettingsRow(
+                            icon = null,
+                            title = stringResource(R.string.memory_session_input_label),
+                            trailing = {
+                                SessionValueText(
+                                    // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
+                                    // 与聊天页指示器的「估算/真实」用同一对文案。
+                                    stringResource(
+                                        R.string.memory_session_input_value,
+                                        shortTerm.lastInputTokens,
+                                        stringResource(R.string.common_token_source_reported)
+                                    )
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
+            SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
+            SettingsGroup {
+                // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
+                Text(
+                    text = stringResource(R.string.memory_long_term_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.semanticColors.subtleText,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_active_memory),
+                    subtitle = stringResource(R.string.memory_active_memory_desc),
+                    trailing = {
+                        AppSwitch(
+                            checked = activeMemoryEnabled,
+                            onCheckedChange = onToggleActiveMemory
+                        )
+                    }
+                )
+                SettingsDivider()
+                // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
+                // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
+                // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.semanticColors.cardSurface)
+                        .padding(horizontal = Spacing.lg, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.memory_curation_interval),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(R.string.memory_curation_interval_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    SegmentedTabs(
+                        selected = curationIntervalIndex(curationIntervalHours),
+                        labels = listOf(
+                            stringResource(R.string.memory_curation_interval_off_short),
+                            stringResource(R.string.memory_curation_interval_1d),
+                            stringResource(R.string.memory_curation_interval_7d),
+                            stringResource(R.string.memory_curation_interval_custom)
+                        ),
+                        onSelect = { index ->
+                            when (index) {
+                                0 -> onSelectCurationInterval(0)
+                                1 -> onSelectCurationInterval(24)
+                                2 -> onSelectCurationInterval(168)
+                                else -> showCustomIntervalDialog = true
+                            }
+                        }
+                    )
+                    // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
+                    val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
+                    if (isCustom) {
+                        Text(
+                            text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            modifier = Modifier.padding(top = Spacing.xs)
+                        )
+                    }
+                }
+            }
+        }
+        val tabMemories = memories.filter {
+            it.kind == if (isProfileTab) MemoryKind.PROFILE else MemoryKind.NOTE
         }
         if (tabMemories.isEmpty()) {
             EmptyState(
@@ -347,57 +334,6 @@ private fun SessionValueText(text: String) {
         textAlign = TextAlign.End,
         modifier = Modifier.padding(start = Spacing.sm)
     )
-}
-
-/**
- * tab 内顶部帮助行：默认收起只占一行，点击展开后显示整段说明。
- * 帮助内容随 tab 切换而变，展开状态按 tab 重置。
- */
-@Composable
-private fun CollapsibleHelpRow(
-    title: String,
-    body: String,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
-    SettingsGroup {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(horizontal = Spacing.lg, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = FeatherIcons.HelpCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(Spacing.md))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            ExpandableChevronIcon(
-                expanded = expanded,
-                style = ChevronRotationStyle.RIGHT_DOWN,
-                size = 16.dp,
-                tint = MaterialTheme.semanticColors.subtleText
-            )
-        }
-        if (expanded) {
-            SettingsDivider()
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-            )
-        }
-    }
 }
 
 /**
