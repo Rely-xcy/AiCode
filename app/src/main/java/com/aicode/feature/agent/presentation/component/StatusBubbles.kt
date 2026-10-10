@@ -459,7 +459,7 @@ internal data class TypewriterText(val text: String)
  *
  * 上游结束（[active] 变 false）**不再一帧补全**：剩余那一小段按 [typewriterDrainRate] 匀速
  * 打完（约 0.2 秒，硬上限 [TYPEWRITER_DRAIN_HARD_MS] 兜底），打完即返回完整文本。
- * 流式尾巴与落库消息之间的接力由调用方判定（AIChatPanel 的 isAssistantOutputSettled），
+ * 流式尾巴与落库消息之间的接力由调用方判定（AIChatPanel 中认落库行 id 的 isAssistantSettled），
  * 本函数不参与——用户看不到「整段突然跳出」，也看不到同一段文字重复两份。
  *
  * 调用方应在 LazyColumn 之外持有本状态，避免尾巴 item 滚出视口被 dispose 后
