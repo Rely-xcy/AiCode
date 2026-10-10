@@ -500,6 +500,8 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 按 batchToolCalls 原始顺序为所有调用补上 tool 响应（不重复不遗漏），
                         // 否则 assistant(toolCalls=N) 后只有部分 tool 消息，OpenAI 会报 400
                         // "insufficient tool messages following tool_calls"。
+                        // 早前检查点已送达的插话同样拼在取消补发的工具结果之后（与 ToolBatchFinished 同口径）：
+                        // 它们的事件已落库，若模型侧不带，Anthropic 会因 tool_result 与用户消息错位而丢结果（潜在 400）。
                         val cancelled = newState.batchToolCalls.map { call ->
                             AgentMessage.ToolResultMessage(
                                 id = call.id,
@@ -511,10 +513,11 @@ class StatefulAgentWorkflow @Inject constructor(
                             )
                         }
                         newState = state.copy(
-                            messages = state.messages + cancelled,
+                            messages = state.messages + cancelled + state.pendingInterjections,
                             batchToolCalls = emptyList(),
                             pendingPermissionCalls = emptyList(),
                             approvedToolCalls = emptyList(),
+                            pendingInterjections = emptyList(),
                             isFinished = true
                         )
                         // 已批准未执行（已收到 ToolCallStarted）的工具需补发完成事件，

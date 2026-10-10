@@ -88,7 +88,8 @@ class RunningTurnAfterInterjectionTest {
 
     /**
      * 插话带 isInterjection = true 时不开新轮头：整个运行只有 turn:u0 一轮，插话与后续工具、
-     * 正文都归入该轮。旧实现（插话开新轮）下 items 会出现第二个轮头，第一条断言即红。
+     * 正文都归入该轮。插话作为常显项在时间线原位切断该轮的过程，会切出多段轮头，但段头 key 全为
+     * turn:u0——旧实现（插话开新轮）下会出现 turn:i1 的段头，断言即红。
      */
     @Test
     fun `插话不开新轮头，仍归入当前轮`() {
@@ -99,8 +100,11 @@ class RunningTurnAfterInterjectionTest {
             activeTurnKey = turnKeyOf(anchorId)
         )
         val headers = items.mapNotNull { it.turnHeader }
-        assertEquals("插话不开新轮，整个运行只有本轮一个轮头", listOf("turn:u0"), headers.map { it.key })
-        assertTrue("本轮必须是进行中", headers.single().running)
+        assertTrue(
+            "插话不开新轮：所有轮头都属于 turn:u0",
+            headers.isNotEmpty() && headers.all { it.key == "turn:u0" }
+        )
+        assertTrue("本轮必须是进行中", headers.all { it.running })
         // 插话在时间线原位：不是轮首用户行（turn.userMessage），而是轮内一条普通用户气泡。
         val bubble = items.first { it.message.id == interjectionId }
         assertEquals(interjectionId, bubble.key)
@@ -159,11 +163,11 @@ class RunningTurnAfterInterjectionTest {
         assertTrue("本轮还没收工，任何一条都不该挂复制 / 更多", ids.isEmpty())
     }
 
-    /** 收工后（空闲、无锚点）历史照旧：每一轮的末条正文都能挂操作行。此为「没退回」钉子，两版实现都绿。 */
+    /** 收工后（空闲、无锚点）历史照旧：每轮的末条正文能挂操作行。插话不开新轮，只剩 turn:u0 一轮，故只有末条 a2。 */
     @Test
     fun `收工后历史上每轮的末条正文照常能挂操作行`() {
         val ids = actionableResultIds(messagesWithInterjection(), activeTurnKey = null, busy = false)
-        assertEquals(setOf("a1", "a2"), ids)
+        assertEquals(setOf("a2"), ids)
     }
 
     // ---- 耗时 / 用量：正在跑的轮不结算 ----

@@ -280,4 +280,36 @@ class AssistantOutputSettledTest {
             )
         )
     }
+
+    /**
+     * 新一轮正在流式、正文恰好以上一轮整段为前缀（`s.startsWith(p)`）：双向包含此时不能判同源，
+     * 否则正在写的新内容被提前判就位、整段隐去再冒出。双向包含在 isBusy 时必须被门禁关掉，
+     * 只有流式结束后才作为同源兜底生效。
+     */
+    @Test
+    fun newTurnTextExtendsPreviousAnchor_whileBusy_isNotSettled() {
+        val messages = listOf(
+            user("第一个问题"),
+            assistant("上一轮的回复内容")
+        )
+        assertFalse(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "上一轮的回复内容，这是本轮继续输出的新正文",
+                currentReasoning = null,
+                isBusy = true,
+                settledFailingSinceMs = null
+            )
+        )
+        // 同形状、但流式已结束（isBusy=false）：双向包含兜底重新生效，判就位。
+        assertTrue(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "上一轮的回复内容，这是本轮继续输出的新正文",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
+            )
+        )
+    }
 }

@@ -177,8 +177,8 @@ class AIAgentViewModel @Inject constructor(
      * 各会话「停止前 AssistantText 尚未落库」的挂起标记。
      *
      * stopAgent 与事件 collect 都跑在主线程（viewModelScope 默认 Dispatchers.Main.immediate），
-     * 不需要额外互斥：置位发生在 job.cancel() 之后、而 collect 对 Final/AssistantText 的处理
-     * 也都在主线程串行执行，谁先到谁先看到标记，不存在丢窗口。
+     * 不需要额外互斥：置位在 job.cancel() 之前完成，谁先到谁先看到标记，不存在丢窗口。
+     * （置位必须在 cancel 之前：cancel 可能同步驱动 AssistantText 处理。）
      */
     private val pendingAssistantTextStop = mutableMapOf<String, Boolean>()
     private val sessionJobs = mutableMapOf<String, Job>()
@@ -2146,6 +2146,14 @@ class AIAgentViewModel @Inject constructor(
         val stoppedText = context.getString(R.string.agent_stopped_by_user)
         val pendingNotifs = agentNotificationCenter.pendingCount(sessionId)
         FileLogger.d(TAG, "stopAgent: sid=$sessionId runningTools=${runningTools.size} pendingPerm=${pendingPermission?.id} pendingNotifs=$pendingNotifs state=${_agentStates.value[sessionId]}")
+        // 用户点了停止：若本轮 Final 的 AssistantText 在 stopAgent 之前已落库（streamingText
+        // 还没来得及清），快照路径会与落库行同源、重复落库；若尚未落库，则由 stopRequested
+        // 标记让 AssistantText 路径补「已停止」。两边串行消费同一个标记，只有一边会真正落库。
+        //
+        // 置位必须在 job.cancel() 之前：cancel() 在 Dispatchers.Main.immediate 上可能立即恢复
+        // 挂起协程（如 awaitApproval 的 CompletableDeferred.await），若取消同步驱动了 AssistantText
+        // 处理，标记还没置位就会漏掉「已停止」后缀。
+        pendingAssistantTextStop[sessionId] = true
         // cancel() 在 Dispatchers.Main.immediate 上可能立即恢复挂起协程
         // （如 awaitApproval 的 CompletableDeferred.await），旧 job 的 finally →
         // flushPendingNotifications 在 cancel() 调用栈内同步执行并可能启动新 job。
@@ -2154,10 +2162,6 @@ class AIAgentViewModel @Inject constructor(
         // （用户点的是「停止任务」，不是「丢掉我的消息 / 后台完成通知」），
         // 而 finally 里的 flushPendingNotifications 无论如何都会把它们作为消息送出去。
         job.cancel()
-        // 用户点了停止：若本轮 Final 的 AssistantText 在 stopAgent 之前已落库（streamingText
-        // 还没来得及清），快照路径会与落库行同源、重复落库；若尚未落库，则由 stopRequested
-        // 标记让 AssistantText 路径补「已停止」。两边串行消费同一个标记，只有一边会真正落库。
-        pendingAssistantTextStop[sessionId] = true
         // cancel 可能已同步执行完 finally（flush 启动了新 job 并注册到 sessionJobs），
         // 此时不能再覆盖新 job 的状态；仅当无新 job 接管时才做状态清理。
         val newJobTookOver = sessionJobs[sessionId]?.isActive == true
