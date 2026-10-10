@@ -107,10 +107,8 @@ internal data class TurnUsage(
  *
  * [runningTurnStartId] 是正在运行的那一轮的轮首用户行 id（无运行轮次时为空）：它以及排在它之后的
  * 轮一律不结算。本轮中途的插话也是一条普通用户消息，若按「下一个用户消息即轮末」算，正在跑的那一轮
- * 会被插话提前结算出耗时/用量；它之后由插话开的那些轮同属本次运行，同样不结算。
- *
- * 上下文压缩插入的锚点/摘要落在轮内（压缩发生在请求前），若参与划分会把轮起点算到压缩
- * 时刻上，故先剔除。
+ * 会被插话提前结算出耗时/用量。插话行（isInterjection）UI 不渲染（AIChatPanel.splitChatTurns 已剔除），
+ * 但仍从时间轴上剔除以免污染轮次切分：它不是轮起点，也不打断本轮。
  */
 private fun splitTurns(
     messages: List<AgentUIMessage>,
@@ -118,7 +116,7 @@ private fun splitTurns(
     runningTurnStartId: String? = null
 ): List<AgentTurn> {
     val turnMessages = messages.filter {
-        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure
+        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure && !it.isInterjection
     }
     if (turnMessages.isEmpty()) return emptyList()
     val turns = mutableListOf<AgentTurn>()
@@ -128,12 +126,9 @@ private fun splitTurns(
     turnMessages.forEachIndexed { index, message ->
         when (message.role) {
             MessageRole.USER -> {
-                // 运行中插话不是轮起点：归入当前轮，不重置起算时刻，也不影响轮末判定。
-                if (!message.isInterjection) {
-                    turnStart = message.timestamp
-                    assistants = mutableListOf()
-                    if (runningTurnStartId != null && message.id == runningTurnStartId) running = true
-                }
+                turnStart = message.timestamp
+                assistants = mutableListOf()
+                if (runningTurnStartId != null && message.id == runningTurnStartId) running = true
             }
             MessageRole.ASSISTANT -> {
                 val start = turnStart ?: return@forEachIndexed
@@ -141,8 +136,8 @@ private fun splitTurns(
                 val isTurnEnd = when {
                     running -> false
                     index == turnMessages.lastIndex -> lastTurnFinished
-                    // 运行中插话不打断本轮：下一条用户消息若是插话，本轮继续。
-                    turnMessages[index + 1].role == MessageRole.USER && !turnMessages[index + 1].isInterjection -> true
+                    // 下一条用户消息会开新轮，本轮到此结束。
+                    turnMessages[index + 1].role == MessageRole.USER -> true
                     else -> false
                 }
                 if (isTurnEnd) {
