@@ -66,7 +66,10 @@ data class AgentMessageEntity(
     // 仅 USER 行：这是运行中插话（非新一轮任务的第一条用户消息）。UI 据此归入当前轮、不开轮头。
     // 追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
     @ColumnInfo(defaultValue = "0")
-    val isInterjection: Boolean = false
+    val isInterjection: Boolean = false,
+    // 仅 TOOL 行：软精简写下的「喂模型那份」投影文本（result 保持原文，永不改写）。
+    // 回放时优先取它，界面与落库读 result。追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
+    val modelResult: String? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)

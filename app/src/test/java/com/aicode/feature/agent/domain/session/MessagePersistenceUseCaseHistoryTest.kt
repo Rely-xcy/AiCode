@@ -7,11 +7,21 @@ import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
+import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.presentation.MessageRole
+import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -31,6 +41,8 @@ class MessagePersistenceUseCaseHistoryTest {
 
     private lateinit var db: AgentDatabase
     private lateinit var useCase: MessagePersistenceUseCase
+
+    private val json = Json
 
     companion object {
         private const val SESSION = "session-1"
@@ -155,6 +167,80 @@ class MessagePersistenceUseCaseHistoryTest {
 
         assertEquals(2, history.size)
         assertEquals(history.size, stats.retainedMessages)
+    }
+
+    /**
+     * 软精简投影落库后跨轮回放：带出的是投影版（modelResult / modelArguments），
+     * 而原文（result / arguments）一字未动——“模型可见那份 / 落库那份”分离在回放侧仍成立。
+     *
+     * 同时钉住“投影前沿跨轮次保留”的前提：回放拿到的必须是投影版，否则下一轮会把已落库的
+     * 投影当新内容重算。
+     */
+    @Test
+    fun softTrimProjectionPersistsAndSurvivesReplay() = runTest {
+        val dao = db.agentMessageDao()
+        val callId = "call-1"
+        val bigText = "a".repeat(5_000)
+        dao.insertAll(
+            listOf(
+                AgentMessageEntity(
+                    id = "assistant-1",
+                    sessionId = SESSION,
+                    role = MessageRole.ASSISTANT.name,
+                    content = "",
+                    timestamp = 100,
+                    toolCallsJson = json.encodeToString(
+                        listOf(
+                            ToolCall(
+                                id = callId,
+                                name = "writeFile",
+                                arguments = mapOf(
+                                    "path" to JsonPrimitive("a.txt"),
+                                    "content" to JsonPrimitive(bigText)
+                                )
+                            )
+                        )
+                    )
+                ),
+                AgentMessageEntity(
+                    id = "tool_$callId",
+                    sessionId = SESSION,
+                    role = MessageRole.TOOL.name,
+                    content = bigText,
+                    timestamp = 101,
+                    toolCallId = callId,
+                    toolName = "writeFile"
+                ),
+                // 三条用户消息把上面两条推到最近三轮保护线之外，软精简才会动它们。
+                user("u1", timestamp = 200, content = "一"),
+                user("u2", timestamp = 300, content = "二"),
+                user("u3", timestamp = 400, content = "三")
+            )
+        )
+
+        val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
+        val compactor = ContextCompactor(
+            agentMessageDao = dao,
+            systemPromptProvider = mockk(relaxed = true),
+            llmCallRecordDao = mockk(relaxed = true),
+            compactedHistoryArchive = mockk(relaxed = true)
+        )
+        // targetTokens=1 逼出软精简：保护线之前的两条（工具参数与工具结果）都会被削并写回库。
+        // 落库走的是非挂起 DAO（生产路径在 Dispatchers.Default 上），测试要切到 IO 才不撞
+        // Room 的主线程检查。
+        val trimmed = withContext(Dispatchers.IO) { compactor.softTrim(history, targetTokens = 1) }
+        assertTrue(trimmed !== history)
+
+        // 换一个实例绕过 buildHistory 的内存缓存，读回库里的最新形态。
+        val replayed = MessagePersistenceUseCase(dao, db).buildHistory(SESSION, NO_PENDING_MARKER)
+
+        val tool = replayed.filterIsInstance<AgentMessage.ToolResultMessage>().single()
+        assertNotNull("落库后回放应带出 modelResult 投影", tool.modelResult)
+        assertEquals(bigText, tool.result)
+
+        val call = replayed.filterIsInstance<AgentMessage.AssistantMessage>().single().toolCalls.single()
+        assertNotNull("落库后回放应带出 modelArguments 投影", call.modelArguments)
+        assertEquals(bigText, (call.arguments["content"] as JsonPrimitive).content)
     }
 
     private fun AgentMessage.text(): String = when (this) {

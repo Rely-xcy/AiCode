@@ -142,6 +142,24 @@ interface AgentMessageDao {
     @Query("UPDATE agent_messages SET modelReminder = :reminder WHERE id = :id")
     suspend fun updateModelReminder(id: String, reminder: String)
 
+    /**
+     * 写回工具结果的模型投影（仅 TOOL 行，软精简落库用）。
+     *
+     * 非挂起：调用点 [com.aicode.feature.agent.domain.workflow.ContextCompactor.softTrim] 是同步变换，
+     * 固定跑在 [com.aicode.di.CompactionWork] 的后台调度器（Dispatchers.Default）上，
+     * 不会撞上 Room 的主线程检查。content 保持原文。
+     */
+    @Query("UPDATE agent_messages SET modelResult = :modelResult WHERE id = :id")
+    fun updateModelResult(id: String, modelResult: String?)
+
+    /**
+     * 写回工具调用的模型投影（仅 ASSISTANT 行，软精简落库用）。
+     *
+     * 与 [updateModelResult] 同理为非挂起。arguments 仍是原文，只多出 modelArguments。
+     */
+    @Query("UPDATE agent_messages SET toolCallsJson = :toolCallsJson WHERE id = :id")
+    fun updateToolCallsJson(id: String, toolCallsJson: String)
+
     @Query("DELETE FROM agent_messages WHERE id = :id")
     suspend fun deleteMessageById(id: String)
 
