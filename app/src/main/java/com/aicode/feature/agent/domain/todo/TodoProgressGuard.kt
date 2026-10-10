@@ -71,6 +71,15 @@ object TodoProgressGuard {
     const val TOUCHED_MINUTES = 20
 
     /**
+     * 清单全部完成后，距最后一次变动又过了这么久，才判定「该清空」——与
+     * `TaskModule.ALL_DONE_QUIET_MINUTES` **必须保持一致**：一边是注入块、一边是收尾边界，
+     * 两处要同一口径，否则同一份清单会在两处得到相反结论。模块依赖方向决定这里不能直接引用
+     * 那个常量（`TaskModule` 已依赖 `domain.todo`，反向引用会成环，且它是 private），
+     * 故各自钉一份，改动时两边同步。
+     */
+    const val ALL_DONE_QUIET_MINUTES = 30L
+
+    /**
      * 收尾性表述：中文。只认「这一轮把活干到什么程度」的声明（已完成 / 改好了 / 做完了…），
      * 不认只描述时间顺序（下一步 / 接下来 / 后续）或剩余量（剩下的 / 还剩 / 剩余）的词——
      * 那几个词在正常叙述里到处都是，认下来等于每个干过活的回合都白拦一次。
@@ -162,25 +171,33 @@ object TodoProgressGuard {
      * 1. 清单存在且非空（空清单或快照未就绪都没什么可清的）；
      * 2. 清单里每一项都是 COMPLETED；
      * 3. 回复在收尾（没在收尾就还会继续干，清早了下一件事又得重建清单）；
-     * 4. **本轮真的更新过清单**（`todoMutations > 0`）——要拦的是「刚把最后几项打完勾、
-     *    扭头就要收尾、却忘了清空」的那个回合。刻意**不**做成「本轮没动过清单」：那样会把
-     *    上一轮就完成、这一轮只是顺带收尾的陈旧清单也反复拦（该情形归 TaskModule 的 freshness
-     *    静默期管，30 分钟后提示「该清空或建新清单」），而在模型刚打勾的回合反而不命中——
-     *    而那正是要治的场景。代价：纯对话轮（本轮没碰清单）里一张全完成的旧清单不会被这里拦下，
-     *    这是有意的收窄。
+     * 4. 距最后一次变动已静默 ≥ [ALL_DONE_QUIET_MINUTES]——与 `TaskModule.renderBlock` 的全完成
+     *    新鲜度**同一口径**（都取 `now - max(updatedAt)`，阈值同源）。刚做完那一轮刻意不念，
+     *    免得同一件事在注入块与收尾边界上同时开火、把刚打勾的回合当场拦下。
      * 5. 本轮没有已经 `clear` 过。快照是异步刷新的，本轮刚清空时快照可能还停在「全完成」，
      *    不排掉这一条会把「刚清空」误判成「全完成却没清」而白拦一次。
      */
     fun needsAllDoneCleanup(
         items: List<TodoItem>?,
         history: List<AgentMessage>,
-        finalText: String
+        finalText: String,
+        now: Long = System.currentTimeMillis()
     ): Boolean {
         if (items == null || items.isEmpty()) return false
         if (items.any { it.status != TodoStatus.COMPLETED }) return false
         if (!claimsWrapUp(finalText)) return false
-        if (currentTurnStats(history).todoMutations == 0) return false
+        if (!allDoneQuietEnough(items, now)) return false
         return !clearedListThisTurn(history)
+    }
+
+    /**
+     * 全完成的清单是否已静默够久。口径与 `TaskModule.renderBlock` 的全完成新鲜度一致：
+     * 以最后变动的一项（`max(updatedAt)`）为准算 `now - max(updatedAt)`，与 [ALL_DONE_QUIET_MINUTES] 比。
+     * 二者必须同源：不然同一份清单会在注入块里「还早」、在边界上却「该清」。
+     */
+    private fun allDoneQuietEnough(items: List<TodoItem>, now: Long): Boolean {
+        val minutes = ((now - items.maxOf { it.updatedAt }) / 60_000L).coerceAtLeast(0)
+        return minutes >= ALL_DONE_QUIET_MINUTES
     }
 
     /**

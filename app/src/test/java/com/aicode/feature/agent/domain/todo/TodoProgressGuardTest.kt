@@ -199,15 +199,27 @@ class TodoProgressGuardTest {
     // ------------------------------------------------------------ 全完成清空判据
 
     @Test
-    fun needsAllDoneCleanup_firesWhenAllCompletedThisTurnAndWrappingUp() {
+    fun needsAllDoneCleanup_firesWhenAllDoneAndLongQuiet() {
+        val items = listOf(
+            item("重写 TodoTool", TodoStatus.COMPLETED, minutesAgo = 45),
+            item("跑测试", TodoStatus.COMPLETED, minutesAgo = 45)
+        )
+        // 全部完成、收尾、且已静默 45 分钟（≥ 30 的静默期）→ 拦
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
+
+        assertTrue(TodoProgressGuard.needsAllDoneCleanup(items, history, "两件事都完成了。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietWhenJustCompleted() {
+        // 刚完成、静默期没过：与注入块「刚做完那一轮不念」同一口径 → 不拦
         val items = listOf(
             item("重写 TodoTool", TodoStatus.COMPLETED),
             item("跑测试", TodoStatus.COMPLETED)
         )
-        // 本轮刚把最后一项打完勾（todoMutations > 0），收尾却没清空 → 拦
         val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
 
-        assertTrue(TodoProgressGuard.needsAllDoneCleanup(items, history, "两件事都完成了。"))
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "两件事都完成了。"))
     }
 
     @Test
@@ -251,17 +263,18 @@ class TodoProgressGuardTest {
     }
 
     @Test
-    fun needsAllDoneCleanup_staysQuietWhenListUntouchedThisTurn() {
-        // 本轮没碰清单（全完成是上一轮遗留）：不在本支处理，交给 TaskModule 的 freshness 静默期
-        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED))
+    fun needsAllDoneCleanup_firesWhenAllDoneLongQuietWithoutMutationsThisTurn() {
+        // 新口径不看本轮有没有动过清单：全完成 + 够静默 + 收尾就拦，哪怕本轮根本没碰过清单
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED, minutesAgo = 45))
 
-        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, turnHistory(currentToolCalls = 3), "都完成了。"))
+        assertTrue(TodoProgressGuard.needsAllDoneCleanup(items, turnHistory(currentToolCalls = 3), "都完成了。"))
     }
 
     @Test
     fun needsAllDoneCleanup_staysQuietWhenAlreadyClearedThisTurn() {
-        // 快照异步刷新：本轮刚 clear，快照可能还停在「全完成」，不能因此白拦一次
-        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED))
+        // 快照异步刷新：本轮刚 clear，快照可能还停在「全完成」，不能因此白拦一次。
+        // 清单够静默（45 分钟），若无 clear 本该命中，这里由「本轮没 clear」这一条拦住 → 不拦
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED, minutesAgo = 45))
         val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoCleared("c1")))
 
         assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "都完成了。"))
