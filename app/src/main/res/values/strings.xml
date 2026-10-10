@@ -292,6 +292,7 @@
     <string name="common_create">创建</string>
     <string name="common_delete">删除</string>
     <string name="common_cancel">取消</string>
+    <string name="common_confirm">确定</string>
     <string name="common_go_to_settings">去设置</string>
     <string name="common_name">名称</string>
     <string name="common_image_preview">图片预览</string>
@@ -1609,4 +1610,7 @@
     <string name="browser_night_mode_on">关闭夜间模式</string>
     <string name="browser_night_mode_off">开启夜间模式</string>
     <string name="browser_devtools">开发者工具</string>
+    <string name="browser_dialog_alert_title">网页提示</string>
+    <string name="browser_dialog_confirm_title">网页确认</string>
+    <string name="browser_dialog_prompt_title">网页输入</string>
 </resources>

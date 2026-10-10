@@ -292,6 +292,7 @@
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_cancel">Cancel</string>
+    <string name="common_confirm">Confirm</string>
     <string name="common_go_to_settings">Go to Settings</string>
     <string name="common_name">Name</string>
     <string name="common_image_preview">Image Preview</string>
@@ -1610,4 +1611,7 @@
     <string name="browser_night_mode_on">Turn off night mode</string>
     <string name="browser_night_mode_off">Turn on night mode</string>
     <string name="browser_devtools">Developer tools</string>
+    <string name="browser_dialog_alert_title">Page Alert</string>
+    <string name="browser_dialog_confirm_title">Page Confirmation</string>
+    <string name="browser_dialog_prompt_title">Page Input</string>
 </resources>

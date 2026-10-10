@@ -60,10 +60,15 @@ AI 可通过 `browser` 工具控制浏览器执行以下操作：
 | `console` | 取页面控制台日志（可过滤级别、可清空） |
 | `wait` | 等待条件满足（`text=` / `text*=` / `selector=` / `domStable`，可设 `timeout`） |
 | `scroll` | 滚动页面（滚动到指定元素或滚到底部） |
-| `dialog` | 处理挂起的 `confirm`/`prompt` 对话框（接受或取消） |
+| `dialog` | 处理挂起的 `confirm`/`prompt` 对话框（接受或取消）；浏览器面板可见时由用户在界面上处理 |
 | `back` / `forward` / `reload` | 浏览器导航控制，back/forward 会等待导航完成 |
 
-页面弹出 `confirm`/`prompt` 时会被挂起，工具响应里会出现 `pendingDialog` 字段，用 `dialog` action 接受或取消（30 秒未处理会自动取消）。
+页面弹出 `alert`/`confirm`/`prompt` 时的处理方式取决于浏览器面板是否打开：
+
+- **面板已打开**：在面板内弹出「网页提示 / 网页确认 / 网页输入」对话框，由你直接选择确定或取消（标题已标明来自网页）。此时 AI 不会代答，需要你处理。
+- **面板未打开（AI 后台操作）**：`confirm`/`prompt` 会被挂起，工具响应里出现 `pendingDialog` 字段，由 AI 用 `dialog` action 接受或取消（30 秒未处理会自动取消）；`alert` 直接确认，不阻塞。
+
+**注意**：浏览器面板未打开时，网页无法弹出任何原生界面（下拉列表、对话框等）——这是有意为之，避免后台页面把弹窗伪装成 App 自己的界面。
 
 ## 选择器格式
 
