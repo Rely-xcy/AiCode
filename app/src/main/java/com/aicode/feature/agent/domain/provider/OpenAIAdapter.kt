@@ -188,6 +188,8 @@ class OpenAIAdapter @Inject constructor(
         val isDeepSeek = model.contains("deepseek", ignoreCase = true)
         val request = mutableMapOf<String, Any?>(
             "model" to model,
+            // 官方默认 store=true，会把整份代码上下文留在服务端 ≥30 天；本地 messages 表才是唯一事实源。
+            "store" to false,
             "input" to buildResponsesInput(
                 systemPrompt = systemPrompt,
                 systemRole = systemRoleForModel(),
@@ -264,6 +266,7 @@ class OpenAIAdapter @Inject constructor(
             inputTokens = usage.inputTokens,
             outputTokens = usage.outputTokens,
             cachedInputTokens = usage.cachedInputTokens,
+            cacheCreationTokens = usage.cacheCreationTokens,
             images = parsed.images
         )
     }

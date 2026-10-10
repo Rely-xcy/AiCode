@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +42,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -73,7 +75,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.tool.browser.BrowserDialog
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
 import com.aicode.feature.agent.domain.tool.browser.BrowserTabState
 import compose.icons.FeatherIcons
@@ -139,6 +144,16 @@ fun BrowserScreen(
     // 拦截物理/手势返回键：若处于地址栏编辑态，优先退出编辑态
     BackHandler(enabled = isEditingAddress) {
         isEditingAddress = false
+    }
+
+    // 网页对话框：面板可见时交给用户处理（UI 优先，AI 的 dialog action 会被拒）
+    state.pendingDialog?.let { dialog ->
+        BrowserJsDialog(
+            dialog = dialog,
+            onResolve = { accept, text ->
+                scope.launchBrowserOp { browserManager.resolveDialogFromUi(accept, text) }
+            }
+        )
     }
 
     Scaffold(
@@ -778,4 +793,60 @@ private fun BrowserTabItemCard(
             )
         }
     }
+}
+
+/**
+ * 网页弹出的 alert/confirm/prompt。只在浏览器面板可见时展示，且必须由用户显式选择：
+ * 点击外部不关闭，否则 JsResult 一直悬空，页面 JS 会持续阻塞到 30 秒超时。
+ */
+@Composable
+private fun BrowserJsDialog(
+    dialog: BrowserDialog,
+    onResolve: (accept: Boolean, text: String?) -> Unit
+) {
+    var text by remember(dialog) { mutableStateOf(dialog.defaultValue.orEmpty()) }
+
+    val title = when (dialog.type) {
+        "confirm" -> stringResource(R.string.browser_dialog_confirm_title)
+        "prompt" -> stringResource(R.string.browser_dialog_prompt_title)
+        else -> stringResource(R.string.browser_dialog_alert_title)
+    }
+
+    AlertDialog(
+        onDismissRequest = { },
+        title = { Text(text = title) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = dialog.message,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (dialog.type == "prompt") {
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    AppTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        singleLine = false,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        colors = dialogTextFieldColors()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onResolve(true, text) }) {
+                Text(stringResource(R.string.common_confirm))
+            }
+        },
+        dismissButton = if (dialog.type == "alert") {
+            null
+        } else {
+            {
+                TextButton(onClick = { onResolve(false, null) }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        }
+    )
 }

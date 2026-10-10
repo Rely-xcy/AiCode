@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.browser
 
 import android.content.Context
+import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -71,7 +72,9 @@ data class BrowserState(
     val tabs: List<BrowserTabState> = emptyList(),
     val activeTabId: String = "",
     val attached: Boolean = false,
-    val nightMode: Boolean = false
+    val nightMode: Boolean = false,
+    /** 面板可见时等待用户处理的网页对话框（alert/confirm/prompt）。 */
+    val pendingDialog: BrowserDialog? = null
 ) {
     val activeTab: BrowserTabState? get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.firstOrNull()
     val url: String get() = activeTab?.url.orEmpty()
@@ -107,6 +110,8 @@ class BrowserManager @Inject constructor(
         private const val EVAL_TIMEOUT_MS = 30_000L
         private const val WAIT_POLL_INTERVAL_MS = 500L
         private const val SCREENSHOT_QUALITY = 80
+        private const val SCREENSHOT_LOAD_TIMEOUT_MS = 10_000L
+        private const val SCREENSHOT_SETTLE_MS = 250L
         private const val MAX_CONTENT_CHARS = 100_000
         private const val MAX_BACKBONE_NODES = 600
         private const val DOM_STABLE_QUIET_MS = 500L
@@ -156,6 +161,9 @@ class BrowserManager @Inject constructor(
         val id: String,
         val webView: WebView,
         val themedContext: ContextThemeWrapper,
+        /** WebView context 的基座：有 Activity 时切为 Activity context，
+         *  `<select>` 下拉、JS 对话框等依赖 Activity 窗口的能力才不会失效。 */
+        val contextWrapper: MutableContextWrapper,
         var url: String = "",
         var title: String = "",
         var loading: Boolean = false,
@@ -371,9 +379,14 @@ class BrowserManager @Inject constructor(
             override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
                 val tab = tabHolderRef() ?: return false
                 if (result == null) return false
-                tab.pendingDialog = BrowserDialog("alert", message.orEmpty(), null)
-                tab.pendingDialogResult = null
-                result.confirm()
+                // 面板可见时弹给用户处理；离屏（AI 后台操作）时直接确认，避免页面阻塞
+                if (containerView != null) {
+                    holdDialog(tab, "alert", message.orEmpty(), null, result)
+                } else {
+                    tab.pendingDialog = BrowserDialog("alert", message.orEmpty(), null)
+                    tab.pendingDialogResult = null
+                    result.confirm()
+                }
                 return true
             }
 
@@ -429,18 +442,24 @@ class BrowserManager @Inject constructor(
                 tab.pendingDialogResult = null
                 tab.pendingDialog = null
                 result.cancel()
+                publishState()
             }
         }
         tab.dialogTimeout = timeout
         mainHandler.postDelayed(timeout, DIALOG_TIMEOUT_MS)
+        publishState()
     }
 
     private fun createTabInternal(id: String, initialUrl: String?): TabHolder {
-        // WebView 依据其上下文主题的 isLightTheme 向网页报告 prefers-color-scheme，必须用专用主题构建
-        val themedContext = ContextThemeWrapper(appContext, webViewThemeRes(nightMode))
+        // WebView 依据其上下文主题的 isLightTheme 向网页报告 prefers-color-scheme，必须用专用主题构建；
+        // context 基座用 MutableContextWrapper：只有面板可见（用户正在看浏览器）时才挂 Activity context，
+        // 让 `<select>` 下拉等依赖 Activity 窗口的能力可用；离屏时退回 Application context，
+        // 这样后台页面弹不出原生 UI，无法伪装成 App 自己的弹窗。
+        val contextWrapper = MutableContextWrapper(containerView?.context ?: appContext)
+        val themedContext = ContextThemeWrapper(contextWrapper, webViewThemeRes(nightMode))
         val wv = WebView(themedContext)
         configureWebView(wv, id)
-        val tab = TabHolder(id = id, webView = wv, themedContext = themedContext)
+        val tab = TabHolder(id = id, webView = wv, themedContext = themedContext, contextWrapper = contextWrapper)
         tabs.add(tab)
         activeTabId = id
 
@@ -464,12 +483,16 @@ class BrowserManager @Inject constructor(
     }
 
     private fun publishState() {
+        val active = findTab(activeTabId)
+        // 只有面板可见且确实存在未处理的对话框时才交给界面展示；离屏时由 AI 的 dialog action 兜底
+        val uiDialog = if (containerView != null && active?.pendingDialogResult != null) active.pendingDialog else null
         _state.update {
             it.copy(
                 tabs = tabs.map { t -> t.toState() },
                 activeTabId = activeTabId,
                 attached = containerView != null,
-                nightMode = nightMode
+                nightMode = nightMode,
+                pendingDialog = uiDialog
             )
         }
     }
@@ -663,24 +686,27 @@ class BrowserManager @Inject constructor(
     }
 
     private fun updateContainerView() {
-        val container = containerView ?: return
-        val active = findTab(activeTabId) ?: return
-        if (active.webView.parent === container) return
+        val container = containerView
+        val active = findTab(activeTabId)
 
-        container.removeAllViews()
-        (active.webView.parent as? ViewGroup)?.removeView(active.webView)
-        container.addView(
-            active.webView,
-            ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
+        if (container != null && active != null && active.webView.parent !== container) {
+            container.removeAllViews()
+            (active.webView.parent as? ViewGroup)?.removeView(active.webView)
+            container.addView(
+                active.webView,
+                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+        }
 
-        // 把其他非激活 Tab 放回 hiddenHost，保持渲染管线处于就绪状态
+        // 离屏的 Tab 一律挂回 hiddenHost：面板未打开时是全部 Tab（含激活 Tab），面板打开时是非激活 Tab。
+        // 只有 attached 到窗口的 WebView 才被视为可见，否则页面被判为 hidden、Chromium 不合成，截图会整张空白。
         hiddenHost?.let { host ->
             val density = appContext.resources.displayMetrics.density
             val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
             val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
             tabs.forEach { t ->
-                if (t.id != activeTabId && t.webView.parent !== host) {
+                val offscreen = container == null || t.id != activeTabId
+                if (offscreen && t.webView.parent !== host) {
                     (t.webView.parent as? ViewGroup)?.removeView(t.webView)
                     host.addView(t.webView, ViewGroup.LayoutParams(width, height))
                 }
@@ -691,6 +717,9 @@ class BrowserManager @Inject constructor(
     /** 注册 Activity 级的隐藏宿主容器，让离屏 WebView 在后台也能触发 onAttachedToWindow 激活光栅化渲染。 */
     fun attachHiddenHost(host: ViewGroup) {
         hiddenHost = host
+        // 面板未打开（离屏）一律用 Application context：WebView 弹不出原生 UI（如下拉列表、对话框），
+        // 后台页面就无法把弹窗伪装成 App 自己的界面
+        tabs.forEach { it.contextWrapper.baseContext = appContext }
         val density = appContext.resources.displayMetrics.density
         val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
         val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
@@ -704,6 +733,9 @@ class BrowserManager @Inject constructor(
     fun detachHiddenHost() {
         hiddenHost?.removeAllViews()
         hiddenHost = null
+        // 面板已关闭，WebView 退回 Application context：离屏页面弹不出原生 UI，
+        // 无法把弹窗伪装成 App 自己的界面（上游 3a490dac，与 fork 保活机制并存）。
+        tabs.forEach { it.contextWrapper.baseContext = appContext }
         // 宿主没了就没有可唤醒的对象：停掉保活，免得监督协程对着已销毁的 WebView 空转。
         stopKeepAlive()
     }
@@ -796,9 +828,11 @@ class BrowserManager @Inject constructor(
      */
     fun attachContainerView(container: FrameLayout) {
         containerView = container
+        // 面板可见时才挂 Activity context，`<select>` 下拉等依赖 Activity 窗口的能力才能生效
+        tabs.forEach { it.contextWrapper.baseContext = container.context }
         ensureActiveTab()
         updateContainerView()
-        _state.update { it.copy(attached = true) }
+        publishState()
     }
 
     /**
@@ -812,7 +846,9 @@ class BrowserManager @Inject constructor(
         if (containerView !== container) return
 
         containerView = null
-        _state.update { it.copy(attached = false) }
+        // 面板已关闭，WebView 退回 Application context，避免离屏页面弹出原生 UI
+        tabs.forEach { it.contextWrapper.baseContext = appContext }
+        publishState()
 
         // 前端面板关闭后，把当前激活 Tab 移回 hiddenHost 保持渲染管线激活，
         // 并注册保活：WebView 不可见 5-7 分钟后渲染层会被冻结，届时 AI 的
@@ -924,9 +960,9 @@ class BrowserManager @Inject constructor(
 
     fun listTabs(): List<BrowserTabState> = _state.value.tabs
 
-    fun getActiveTabId(): String {
+    suspend fun getActiveTabId(): String = withContext(Dispatchers.Main) {
         ensureActiveTab()
-        return activeTabId
+        activeTabId
     }
 
     // ================= 浏览器操作 API =================
@@ -1222,7 +1258,20 @@ class BrowserManager @Inject constructor(
 
     fun pendingDialogInfo(tabId: String? = null): BrowserDialog? = findTab(tabId ?: activeTabId)?.pendingDialog
 
-    suspend fun resolveDialog(accept: Boolean, text: String?, tabId: String? = null): String = withContext(Dispatchers.Main) {
+    /**
+     * AI 侧处理挂起的对话框。面板可见时一律交给用户在界面上处理，
+     * 避免 AI 把用户正要点的对话框抢先关掉。
+     */
+    suspend fun resolveDialog(accept: Boolean, text: String?, tabId: String? = null): String {
+        if (containerView != null) return """{"handled":false,"reason":"awaiting-ui"}"""
+        return doResolveDialog(accept, text, tabId)
+    }
+
+    /** 界面侧处理对话框（用户点击按钮时调用）。 */
+    suspend fun resolveDialogFromUi(accept: Boolean, text: String?): String =
+        doResolveDialog(accept, text, activeTabId)
+
+    private suspend fun doResolveDialog(accept: Boolean, text: String?, tabId: String?): String = withContext(Dispatchers.Main) {
         val tab = findTab(tabId ?: activeTabId)
         val result = tab?.pendingDialogResult
         val dialog = tab?.pendingDialog
@@ -1246,6 +1295,7 @@ class BrowserManager @Inject constructor(
         } catch (e: Exception) {
             FileLogger.e(TAG, "resolveDialog failed", e)
         }
+        publishState()
         """{"handled":true,"type":"${dialog.type}","accepted":$accept}"""
     }
 
@@ -1611,6 +1661,9 @@ class BrowserManager @Inject constructor(
         val tab = resolveTab(tabId)
         val wv = tab.webView
 
+        // 导航进行中 WebView 显示的仍是上一个页面，此时绘制会截到旧画面，先等加载结束
+        awaitPageLoaded(tab)
+
         // 离屏兜底尺寸：若未被系统布局过（w/h <= 0），手动测量布局
         if (wv.width <= 0 || wv.height <= 0) {
             val density = appContext.resources.displayMetrics.density
@@ -1635,6 +1688,8 @@ class BrowserManager @Inject constructor(
         val oldLayerType = wv.layerType
         wv.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         try {
+            // 切层会触发一次重绘；等视觉状态与最新内容一致后再绘制，否则会截到切换前的旧帧
+            waitForVisualState(wv)
             wv.draw(canvas)
         } finally {
             wv.setLayerType(oldLayerType, null)
@@ -1646,7 +1701,17 @@ class BrowserManager @Inject constructor(
         AgentImage(mimeType = "image/jpeg", base64Data = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
     }
 
-    private suspend fun waitForVisualState(wv: WebView, timeoutMs: Long = 500L) {
+    /** 页面仍在加载时等待其结束：导航过程中 WebView 呈现的还是上一个页面，直接绘制会截到旧内容。 */
+    private suspend fun awaitPageLoaded(tab: TabHolder, timeoutMs: Long = SCREENSHOT_LOAD_TIMEOUT_MS) {
+        // 导航可能刚被触发、loading 状态还没来得及更新，先让出一小段再判断
+        delay(SCREENSHOT_SETTLE_MS)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (tab.loading && System.currentTimeMillis() < deadline) {
+            delay(GO_POLL_MS)
+        }
+    }
+
+    private suspend fun waitForVisualState(wv: WebView, timeoutMs: Long = 1_000L) {
         val deferred = CompletableDeferred<Unit>()
         wv.postVisualStateCallback(1L, object : WebView.VisualStateCallback() {
             override fun onComplete(requestId: Long) {
