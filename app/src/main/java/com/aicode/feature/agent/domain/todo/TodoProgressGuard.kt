@@ -25,6 +25,11 @@ import kotlinx.serialization.json.contentOrNull
  *   代价是只交代「下一步做什么」而不声称任何完成度的收尾不再触发本守卫（实测约占干活回合的 1/6）。
  *   这不是盲区：跨轮的慢性落后由 `TaskModule.freshness` 兜着，它只看「连续几轮干活没更新清单」，
  *   与本词表无关；本守卫负责的是当轮立刻纠正，不是唯一的兜底。
+ *
+ * 第二条判据（用户新口径）：规矩不是「完成一项就清」，而是**整张清单全部完成后一次性清空**
+ * （完成项先留在清单里，以便看整体进度）。所以除了上面「还有未完成项、清单却没更新」，还要补一支
+ * 「清单已全部完成、收尾时却没收尾清空」——见 [needsAllDoneCleanup]。两支互斥：一支要求有未完成项，
+ * 一支要求一项不剩。
  */
 object TodoProgressGuard {
 
@@ -33,6 +38,13 @@ object TodoProgressGuard {
 
     /** 工具结果传输文本里的失败标记（见 `ToolResult` 的类判别字段）。 */
     private const val STATUS_ERROR = "error"
+
+    /**
+     * `clear` 动作成功文案的开头（见 `TodoTool.clearAll` 的 `buildSuccess("已清空清单", …)`，
+     * 后面还拼「；清单现在是空的」）。TodoTool 不归本守卫维护，故这里独立钉一份前缀；
+     * 改 TodoTool 的这条文案要同步过来。
+     */
+    private const val CLEAR_ACTION_MESSAGE = "已清空清单"
 
     /** 本轮至少这么多次工具调用才算「在推进任务」：1 次的轮次多是看文件、查一下的问答。 */
     const val MIN_TURN_TOOL_CALLS = 2
@@ -143,6 +155,35 @@ object TodoProgressGuard {
     }
 
     /**
+     * 第二条判据：清单里的任务已经全部完成、模型又在收尾，但还没把清单清空。
+     *
+     * 与 [needsReminder] 互补且互斥——那一支要求清单里还有未完成项，这一支要求一项不剩；
+     * 两支合起来覆盖「收尾时清单该动却没动」的两种情形。判据：
+     * 1. 清单存在且非空（空清单或快照未就绪都没什么可清的）；
+     * 2. 清单里每一项都是 COMPLETED；
+     * 3. 回复在收尾（没在收尾就还会继续干，清早了下一件事又得重建清单）；
+     * 4. **本轮真的更新过清单**（`todoMutations > 0`）——要拦的是「刚把最后几项打完勾、
+     *    扭头就要收尾、却忘了清空」的那个回合。刻意**不**做成「本轮没动过清单」：那样会把
+     *    上一轮就完成、这一轮只是顺带收尾的陈旧清单也反复拦（该情形归 TaskModule 的 freshness
+     *    静默期管，30 分钟后提示「该清空或建新清单」），而在模型刚打勾的回合反而不命中——
+     *    而那正是要治的场景。代价：纯对话轮（本轮没碰清单）里一张全完成的旧清单不会被这里拦下，
+     *    这是有意的收窄。
+     * 5. 本轮没有已经 `clear` 过。快照是异步刷新的，本轮刚清空时快照可能还停在「全完成」，
+     *    不排掉这一条会把「刚清空」误判成「全完成却没清」而白拦一次。
+     */
+    fun needsAllDoneCleanup(
+        items: List<TodoItem>?,
+        history: List<AgentMessage>,
+        finalText: String
+    ): Boolean {
+        if (items == null || items.isEmpty()) return false
+        if (items.any { it.status != TodoStatus.COMPLETED }) return false
+        if (!claimsWrapUp(finalText)) return false
+        if (currentTurnStats(history).todoMutations == 0) return false
+        return !clearedListThisTurn(history)
+    }
+
+    /**
      * 收尾守卫的提醒正文：先把「本轮干了多少活、清单里还剩什么」摆出来，再给逐个动作。
      * 调用方必须先过 [needsReminder]（清单里没有未完成项时这段没有意义）。
      */
@@ -176,6 +217,21 @@ object TodoProgressGuard {
             append("② 正在做的置 in_progress；本轮放弃的置回 pending 或 todo(action=\"remove\")。\n")
             append("③ 清单确实不用动（例如刚才那些调用只是查看、没产生新进度）：不要编造状态，只回一句「清单已对齐」。\n")
             append("然后重新给出收尾回复：只写结论与下一步，不要重复上一段。")
+        }
+    }
+
+    /**
+     * 「清单全完成却没清空」那一支的提醒正文。调用方必须先过 [needsAllDoneCleanup]。
+     * 与 [buildReminder] 分开写：那一支讲「还有几项没完成」，这一支只讲「全完成、收尾前清空」。
+     */
+    fun buildAllDoneReminder(items: List<TodoItem>): String {
+        val listed = items.take(MAX_ITEMS_IN_REMINDER).joinToString("\n") { item -> TodoListText.line(item) }
+        val hidden = items.size - MAX_ITEMS_IN_REMINDER
+        return buildString {
+            append("[清单守卫] 清单里 ${items.size} 项都完成了，收尾前用 todo(action=\"clear\") 清空整张清单、不留残余条目：\n")
+            append(listed)
+            if (hidden > 0) append("\n…（另有 $hidden 项未列出）")
+            append("\n完成项留在清单里是为了看整体进度，全部完成后就该整张清掉；清空后重新给出收尾回复。")
         }
     }
 
@@ -223,5 +279,25 @@ object TodoProgressGuard {
         val data = obj["data"] as? JsonObject ?: return true
         val message = (data["message"] as? JsonPrimitive)?.contentOrNull ?: return true
         return !message.startsWith(TodoListText.LIST_ACTION_MESSAGE)
+    }
+
+    /** 本轮是否已经执行过 `clear` 把清单清空（快照异步刷新，刚清空的回合要能识别出来）。 */
+    private fun clearedListThisTurn(history: List<AgentMessage>): Boolean =
+        currentTurnSegment(history).any {
+            it is AgentMessage.ToolResultMessage && it.toolName == TOOL_NAME && clearedList(it.result)
+        }
+
+    /**
+     * 这次 todo 调用的结果是不是 `clear` 成功。认的是成功文案前缀（[CLEAR_ACTION_MESSAGE]）；
+     * 结果读不懂时按「没清空」处理——与 [mutatedList] 方向相反：这里宁可多拦一次（提醒里已点名 clear），
+     * 也不要把真正全完成却没清的回合放过去。
+     */
+    private fun clearedList(result: String): Boolean {
+        val obj = runCatching { guardJson.parseToJsonElement(result) as? JsonObject }.getOrNull() ?: return false
+        val status = (obj["status"] as? JsonPrimitive)?.contentOrNull
+        if (status == STATUS_ERROR) return false
+        val data = obj["data"] as? JsonObject ?: return false
+        val message = (data["message"] as? JsonPrimitive)?.contentOrNull ?: return false
+        return message.startsWith(CLEAR_ACTION_MESSAGE)
     }
 }

@@ -54,8 +54,8 @@ class TodoTool @Inject constructor(
         "③ 开始下一项时 update 成 in_progress；" +
         "④ 计划或需求变了（用户改主意、发现新问题、放弃某项）当场同步清单；" +
         "⑤ 一轮收尾前对照清单：回复里说「已完成 / 下一步」的每一项，清单里必须已经对上；" +
-        "⑥ 已完成的项及时清掉（remove；一个阶段做完就 clear 一次），别让清单攒成一长串 completed——" +
-        "清单要反映「还剩什么」，不是「干过什么」。" +
+        "⑥ 完成一项就把它留在清单里（update 成 completed，不要逐项删）；**清单里的任务全部完成后**，" +
+        "用 clear 把整张清单一次清空、不留残余条目。清单要能看出整体进度。" +
         "status 取值 pending / in_progress / completed。清单每轮都会重新注入系统提示词，压缩上下文不会丢。"
 
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE

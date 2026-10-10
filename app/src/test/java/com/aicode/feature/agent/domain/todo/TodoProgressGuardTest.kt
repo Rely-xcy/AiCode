@@ -196,6 +196,77 @@ class TodoProgressGuardTest {
         )
     }
 
+    // ------------------------------------------------------------ 全完成清空判据
+
+    @Test
+    fun needsAllDoneCleanup_firesWhenAllCompletedThisTurnAndWrappingUp() {
+        val items = listOf(
+            item("重写 TodoTool", TodoStatus.COMPLETED),
+            item("跑测试", TodoStatus.COMPLETED)
+        )
+        // 本轮刚把最后一项打完勾（todoMutations > 0），收尾却没清空 → 拦
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
+
+        assertTrue(TodoProgressGuard.needsAllDoneCleanup(items, history, "两件事都完成了。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietWhileIncompleteItemsRemain() {
+        val items = listOf(
+            item("重写 TodoTool", TodoStatus.COMPLETED),
+            item("跑测试", TodoStatus.PENDING)
+        )
+        val history = turnHistory(currentToolCalls = 3)
+
+        // 还有未完成项：新支不触发
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "都完成了。"))
+        // 同一份清单、同一段收尾：归旧支（还有未完成项 + 本轮没动过清单）——两支互斥
+        assertTrue(TodoProgressGuard.needsReminder(items, history, "都完成了。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_ignoresEmptyOrMissingList() {
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
+
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(emptyList(), history, "都完成了。"))
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(null, history, "都完成了。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietWhenReplyIsNotWrappingUp() {
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED))
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
+
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "我先看看这个文件。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietForAllDoneListWithPlainTalk() {
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED), item("跑测试", TodoStatus.COMPLETED))
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoMutated("t1")))
+
+        // 清单非空且全完成、本轮也动过，但正文没有任何收尾表述 → 不拦
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, ""))
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "这个报错是什么意思？"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietWhenListUntouchedThisTurn() {
+        // 本轮没碰清单（全完成是上一轮遗留）：不在本支处理，交给 TaskModule 的 freshness 静默期
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED))
+
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, turnHistory(currentToolCalls = 3), "都完成了。"))
+    }
+
+    @Test
+    fun needsAllDoneCleanup_staysQuietWhenAlreadyClearedThisTurn() {
+        // 快照异步刷新：本轮刚 clear，快照可能还停在「全完成」，不能因此白拦一次
+        val items = listOf(item("重写 TodoTool", TodoStatus.COMPLETED))
+        val history = turnHistory(currentToolCalls = 2, currentTodoResults = listOf(todoCleared("c1")))
+
+        assertFalse(TodoProgressGuard.needsAllDoneCleanup(items, history, "都完成了。"))
+    }
+
     // ------------------------------------------------------------ 提醒正文
 
     @Test
@@ -240,6 +311,22 @@ class TodoProgressGuardTest {
         assertTrue(reminder.contains("另有 4 项未列出"))
     }
 
+    @Test
+    fun allDoneReminder_namesCountAndAsksToClear() {
+        val items = listOf(
+            item("重写 TodoTool", TodoStatus.COMPLETED),
+            item("跑测试", TodoStatus.COMPLETED)
+        )
+
+        val reminder = TodoProgressGuard.buildAllDoneReminder(items)
+
+        assertTrue(reminder.contains("[清单守卫]"))
+        assertTrue(reminder.contains("2 项都完成了"))
+        assertTrue(reminder.contains("todo(action=\"clear\")"))
+        assertTrue(reminder.contains("[x] 重写 TodoTool"))
+        assertTrue(reminder.contains("[x] 跑测试"))
+    }
+
     // ------------------------------------------------------------ 辅助
 
     private fun item(
@@ -271,6 +358,12 @@ class TodoProgressGuardTest {
         id = id,
         toolName = TODO,
         result = """{"status":"success","data":{"message":"已更新「重写 TodoTool」：completed（已完成）；清单全部完成","text":"[x] 重写 TodoTool"}}"""
+    )
+
+    private fun todoCleared(id: String) = AgentMessage.ToolResultMessage(
+        id = id,
+        toolName = TODO,
+        result = """{"status":"success","data":{"message":"已清空清单；清单现在是空的","text":""}}"""
     )
 
     private fun todoFailed(id: String) = AgentMessage.ToolResultMessage(
