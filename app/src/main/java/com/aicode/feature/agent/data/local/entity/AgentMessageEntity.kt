@@ -62,7 +62,11 @@ data class AgentMessageEntity(
     val isContextExcluded: Boolean = false,
     // 本行是被哪份摘要折叠掉的（摘要行 id）；折叠时写入，回退恢复据此判断归属，
     // 见 AgentMessageDao.restoreCompactedRowsAfterRewind。无归属时为 null。
-    val compactedBySummaryId: String? = null
+    val compactedBySummaryId: String? = null,
+    // 仅 USER 行：这是运行中插话（非新一轮任务的第一条用户消息）。UI 据此归入当前轮、不开轮头。
+    // 追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
+    @ColumnInfo(defaultValue = "0")
+    val isInterjection: Boolean = false
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)
@@ -83,6 +87,7 @@ data class AgentMessageEntity(
             isCompactionFailure = roleEnum == MessageRole.TOOL && toolName == COMPACTION_FAILURE_TOOL_NAME,
             isBackgroundNotification = roleEnum == MessageRole.USER &&
                 content.startsWith(BACKGROUND_NOTIFICATION_PREFIX),
+            isInterjection = roleEnum == MessageRole.USER && isInterjection,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             cachedInputTokens = cachedInputTokens,

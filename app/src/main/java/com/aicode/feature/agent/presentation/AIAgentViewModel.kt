@@ -173,8 +173,15 @@ class AIAgentViewModel @Inject constructor(
      */
     val contextUsage: StateFlow<Map<String?, ContextUsage>> = contextUsageHolder.usage
 
+    /**
+     * 各会话「停止前 AssistantText 尚未落库」的挂起标记。
+     *
+     * stopAgent 与事件 collect 都跑在主线程（viewModelScope 默认 Dispatchers.Main.immediate），
+     * 不需要额外互斥：置位发生在 job.cancel() 之后、而 collect 对 Final/AssistantText 的处理
+     * 也都在主线程串行执行，谁先到谁先看到标记，不存在丢窗口。
+     */
+    private val pendingAssistantTextStop = mutableMapOf<String, Boolean>()
     private val sessionJobs = mutableMapOf<String, Job>()
-
     /**
      * agent 执行期间持有的 CPU 唤醒锁：熄屏后系统会挂起进程，使流式响应中断、工具调用卡死。
      * 不计数（setReferenceCounted(false)），多会话共用一把锁，最后一个任务结束时统一释放。
@@ -1813,6 +1820,17 @@ class AIAgentViewModel @Inject constructor(
                         currentReasoningStart = null
                         currentReasoningEnd = null
 
+                        // 用户已点停止：本轮正文由本路径落库，补上「已停止」后缀；
+                        // 同时摘掉标记，让 stopAgent 的快照路径不再重复落库（竞态详见 stopAgentSession）。
+                        val stopPending = pendingAssistantTextStop.remove(sessionId) == true
+                        val normalized0 = if (event.content.hasVisibleContent()) event.content else ""
+                        val normalized = if (stopPending && normalized0.isNotEmpty()) {
+                            "$normalized0\n\n${context.getString(R.string.agent_stopped_by_user)}"
+                        } else if (stopPending) {
+                            context.getString(R.string.agent_stopped_by_user)
+                        } else {
+                            normalized0
+                        }
                         // 流式收尾：在落库并触发 UI messages 更新之前，先同步清空流式状态，
                         // 避免落库消息先行发射导致 UI 出现「落库消息与流式气泡同屏并存」的时差。
                         setStreamingReasoning(sessionId, null)
@@ -1821,7 +1839,6 @@ class AIAgentViewModel @Inject constructor(
                             setPreparingTool(sessionId, null)
                         }
 
-                        val normalized = if (event.content.hasVisibleContent()) event.content else ""
                         val reasoning = event.reasoning.takeIf { it.hasVisibleContent() }
                         val msgId = java.util.UUID.randomUUID().toString()
                         if (reasoningDuration != null && reasoningDuration > 0) {
@@ -1899,11 +1916,15 @@ class AIAgentViewModel @Inject constructor(
                         // 用户插话：按普通用户消息落库，行 id 就是界面预生成的那个（乐观气泡据此退场）。
                         // 它在事件流里紧跟在同批 ToolCallFinished 之后，库里顺序因此是「工具结果 → 用户消息」，
                         // 不会把用户消息夹进 assistant(tool_calls) 与 tool 结果之间而破坏配对约束。
+                        // modelReminder 是运行中插话的模型侧围栏（事件自带，见 AgentEvent.UserMessageAdded），
+                        // 落库随行写入、组装请求时拼回；isInterjection 让 UI 把它归入当前轮、不开新轮头。
                         messagePersistenceUseCase.persist(
                             sessionId,
                             MessageRole.USER,
                             event.content,
-                            id = event.id
+                            id = event.id,
+                            modelReminder = event.modelReminder,
+                            isInterjection = event.isInterjection
                         )
                     }
                     is AgentEvent.PermissionRememberFailed -> {
@@ -2078,6 +2099,7 @@ class AIAgentViewModel @Inject constructor(
         _streamingTexts.value = emptyMap()
         _streamingReasonings.value = emptyMap()
         _reasoningTimings.value = emptyMap()
+        pendingAssistantTextStop.clear()
         _runningTools.value = emptyMap()
         _retryStates.value = emptyMap()
         releaseKeepalive()
@@ -2132,6 +2154,10 @@ class AIAgentViewModel @Inject constructor(
         // （用户点的是「停止任务」，不是「丢掉我的消息 / 后台完成通知」），
         // 而 finally 里的 flushPendingNotifications 无论如何都会把它们作为消息送出去。
         job.cancel()
+        // 用户点了停止：若本轮 Final 的 AssistantText 在 stopAgent 之前已落库（streamingText
+        // 还没来得及清），快照路径会与落库行同源、重复落库；若尚未落库，则由 stopRequested
+        // 标记让 AssistantText 路径补「已停止」。两边串行消费同一个标记，只有一边会真正落库。
+        pendingAssistantTextStop[sessionId] = true
         // cancel 可能已同步执行完 finally（flush 启动了新 job 并注册到 sessionJobs），
         // 此时不能再覆盖新 job 的状态；仅当无新 job 接管时才做状态清理。
         val newJobTookOver = sessionJobs[sessionId]?.isActive == true
@@ -2152,6 +2178,8 @@ class AIAgentViewModel @Inject constructor(
         setRetryState(sessionId, null)
         viewModelScope.launch {
             if (runningTools.isNotEmpty()) {
+                // 落的是工具行不是助手行：摘掉标记，免得下一轮 AssistantText 被误补「已停止」。
+                pendingAssistantTextStop.remove(sessionId)
                 // 并行执行被中止：所有未完成的工具都落库为「已停止」
                 runningTools.forEach { running ->
                     val partial = running.text.trimEnd()
@@ -2169,15 +2197,26 @@ class AIAgentViewModel @Inject constructor(
                     toolArgsByMsgId.remove(running.messageId)
                 }
             } else if (!streamingText.isNullOrEmpty() || !streamingReasoning.isNullOrEmpty()) {
-                val partial = (streamingText ?: "").trimEnd()
-                val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
-                val reasoning = streamingReasoning?.takeIf { it.hasVisibleContent() }
-                messagePersistenceUseCase.persist(
-                    sessionId = sessionId,
-                    role = MessageRole.ASSISTANT,
-                    content = content,
-                    reasoning = reasoning
-                )
+                // stopRequested 标记仍挂着且快照非空，分两种：
+                // ① AssistantText 已在本 cancel 前落库（同源完整正文，已补「已停止」）→ 只剩快照没清，
+                //   再落就是「完整回复 + ……已停止」两条相邻，直接跳过；
+                // ② 流被 cancel 中断、Final 永远不会来 → 由本路径落「已停止」行（老行为）。
+                // 区别只能靠标记是否已被消费判断，标记同步摘除，避免下轮 AssistantText 再补后缀。
+                if (!pendingAssistantTextStop.remove(sessionId)) {
+                    val partial = (streamingText ?: "").trimEnd()
+                    val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
+                    val reasoning = streamingReasoning?.takeIf { it.hasVisibleContent() }
+                    messagePersistenceUseCase.persist(
+                        sessionId = sessionId,
+                        role = MessageRole.ASSISTANT,
+                        content = content,
+                        reasoning = reasoning
+                    )
+                }
+            } else {
+                // 快照为空：要么 AssistantText 已接力（标记已消费/未消费都无关紧要——它负责
+                // 补后缀），要么本轮没有流式内容。摘掉标记防止残留到下一轮。
+                pendingAssistantTextStop.remove(sessionId)
             }
             // 授权弹窗挂起中的工具调用：awaitApproval 挂起期间 _runningTools 为空
             // （ToolCallStarted 在授权通过后才发出），但 AssistantText 已落库了带
@@ -2451,6 +2490,7 @@ class AIAgentViewModel @Inject constructor(
             _agentStates.value = _agentStates.value - sid
             _streamingTexts.value = _streamingTexts.value - sid
             setStreamingReasoning(sid, null)
+            pendingAssistantTextStop.remove(sid)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
@@ -2492,6 +2532,7 @@ class AIAgentViewModel @Inject constructor(
             _agentStates.value = _agentStates.value - sid
             _streamingTexts.value = _streamingTexts.value - sid
             setStreamingReasoning(sid, null)
+            pendingAssistantTextStop.remove(sid)
             _runningTools.value = _runningTools.value - sid
             _retryStates.value = _retryStates.value - sid
             markClientMessagesDiscarded(_queuedRequests.value[sid].orEmpty())
@@ -2570,6 +2611,7 @@ class AIAgentViewModel @Inject constructor(
         _runningTools.value = _runningTools.value - sessionId
         setStreamingText(sessionId, null)
         setStreamingReasoning(sessionId, null)
+        pendingAssistantTextStop.remove(sessionId)
         setCompacting(sessionId, false)
         setRetryState(sessionId, null)
         checkpointManager.setActiveCheckpointId(sessionId, null)

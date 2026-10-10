@@ -128,9 +128,12 @@ private fun splitTurns(
     turnMessages.forEachIndexed { index, message ->
         when (message.role) {
             MessageRole.USER -> {
-                turnStart = message.timestamp
-                assistants = mutableListOf()
-                if (runningTurnStartId != null && message.id == runningTurnStartId) running = true
+                // 运行中插话不是轮起点：归入当前轮，不重置起算时刻，也不影响轮末判定。
+                if (!message.isInterjection) {
+                    turnStart = message.timestamp
+                    assistants = mutableListOf()
+                    if (runningTurnStartId != null && message.id == runningTurnStartId) running = true
+                }
             }
             MessageRole.ASSISTANT -> {
                 val start = turnStart ?: return@forEachIndexed
@@ -138,7 +141,9 @@ private fun splitTurns(
                 val isTurnEnd = when {
                     running -> false
                     index == turnMessages.lastIndex -> lastTurnFinished
-                    else -> turnMessages[index + 1].role == MessageRole.USER
+                    // 运行中插话不打断本轮：下一条用户消息若是插话，本轮继续。
+                    turnMessages[index + 1].role == MessageRole.USER && !turnMessages[index + 1].isInterjection -> true
+                    else -> false
                 }
                 if (isTurnEnd) {
                     turns += AgentTurn(start, assistants.toList(), message)

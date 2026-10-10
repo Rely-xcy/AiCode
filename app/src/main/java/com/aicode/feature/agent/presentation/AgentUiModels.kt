@@ -131,6 +131,8 @@ data class AgentUIMessage(
     val isCompactionFailure: Boolean = false,
     // 后台任务完成通知：参与模型上下文但不显示为普通用户气泡，渲染为轻量提示条。
     val isBackgroundNotification: Boolean = false,
+    // 运行中插话（仅 USER 消息）：不开新轮头，归入当前轮内容，仍按普通用户气泡渲染。
+    val isInterjection: Boolean = false,
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,
     // 仅 ASSISTANT 消息：本次调用输入中命中服务端缓存的 token 数，气泡下方据此算缓存命中率。

@@ -244,6 +244,33 @@ private fun AgentUIMessage.rendersActionRow(): Boolean =
 private const val STREAM_HEAD_SAMPLE_CHARS = 20
 
 /**
+ * 「流式已结束但 retained 与任何落库行都对不上」时的强制退休超时（ms）。
+ *
+ * 前缀 / 双向包含比对都可能失配（如 Final 重组正文、推理模型输出修订版）；失配期间 retained
+ * 旧正文的 STREAMING 尾巴气泡与落库新行同屏两份。空落库行「正文一定落库」不成立（纯思考轮、
+ * Final 无正文时）的形状没有可靠的对上信号，只能靠时间保底：isBusy 已转 false 说明本轮
+ * 结束，超过该时长仍对不上的 retained 一律退休，不再有「永不退休」路径。
+ * 取 4s：落在 3-5s 区间中位，足以容忍 messages 异步回流的常见延迟，又不至于让旧正文
+ * 多停留一拍。
+ */
+private const val RETAINED_FORCE_RETIRE_MS = 4_000L
+
+/** 归一化空白后比较：落库正文可能合并/吞掉行尾空白，逐字比对会因空白差异误判失配。 */
+private fun contentEquivalent(a: String, b: String): Boolean =
+    a.trim().replace(Regex("\\s+"), " ") == b.trim().replace(Regex("\\s+"), " ")
+
+/**
+ * 落库正文与流式/retained 文本「同源」：双向包含。任意一方以另一方开头（或相等）即认作
+ * 同一段内容——Final 重组正文、推理模型输出修订版改的通常是开头，但只要语义同段，
+ * 头部或尾部总会有一方对得上。
+ */
+private fun isSameContent(persisted: String, streaming: String): Boolean {
+    val p = persisted.trimStart()
+    val s = streaming.trimStart()
+    return p.startsWith(s) || s.startsWith(p) || contentEquivalent(p, s)
+}
+
+/**
  * 本轮流式输出是否已经在消息列表里正式就位（底部尾巴气泡与其跳动的点可以退休）。
  *
  * 判据：把当前流式正文 / 思考分别去比「列表里最后一条真正承载该项内容的助手消息」的头部，
@@ -257,11 +284,20 @@ private const val STREAM_HEAD_SAMPLE_CHARS = 20
  *
  * 前缀比对本身不能放开：新一轮流式开始时，列表里最近的承载者还是上一轮的助手消息，
  * 只有前缀不吻合才能把「正在写的新内容」判为尚未就位、继续留在尾巴气泡里渲染。
+ *
+ * 但仅靠前缀猜同源不够：Final 重组正文、推理模型输出修订版会让开头失配，retained 旧正文
+ * 就永不退休（尾巴气泡与落库新行同屏两份）。因此补两条：① 双向包含同源判据
+ * （[isSameContent]，equal/一方以另一方开头都算）；② 强制退休超时——流式已结束
+ * （isBusy=false）且 settled 判定持续失败超过 [RETAINED_FORCE_RETIRE_MS]，一律判就位。
+ * 超时的计时由调用方维护（[settledFailingSinceMs]：连续判失败的超始毫秒，判成功或新一轮
+ * 开始流式时重置），本函数保持纯函数便于测试。
  */
 internal fun isAssistantOutputSettled(
     messages: List<AgentUIMessage>,
     currentText: String?,
-    currentReasoning: String?
+    currentReasoning: String?,
+    isBusy: Boolean,
+    settledFailingSinceMs: Long?
 ): Boolean {
     val textSettled = if (currentText.isNullOrBlank()) {
         true
@@ -269,8 +305,13 @@ internal fun isAssistantOutputSettled(
         val anchor = messages.lastOrNull {
             it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && it.content.hasVisibleContent()
         }
-        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）
-        anchor != null && startsWithStreamHead(anchor.content, currentText)
+        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）；
+        // 强制退休超时由末尾统一兜底。
+        if (anchor == null) {
+            false
+        } else {
+            startsWithStreamHead(anchor.content, currentText) || isSameContent(anchor.content, currentText)
+        }
     }
     val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
         true
@@ -281,9 +322,15 @@ internal fun isAssistantOutputSettled(
         // 思考不一定落库（provider 不回传时整轮都没有 reasoning 行）：没有承载者即视为已就位，
         // 否则前缀永远比不中、缓冲永不退休，尾巴气泡与落库气泡同屏看起来就是同一条回复显示两遍。
         // 正文那条不能这么放宽——正文一定落库。
-        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning)
+        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning) ||
+            isSameContent(anchor.reasoning.orEmpty(), currentReasoning)
     }
-    return textSettled && reasoningSettled
+    // 强制退休兜底：流式已结束（isBusy=false）且 settled 判定持续失败超过超时时长，
+    // 无论正文/思考是否对得上（含 anchor 为空、Final 重写正文、修订版正文等一切形状），
+    // 一律退休 retained，旧尾巴气泡最终必定消失，不再有「永不退休」路径。
+    val forceRetired = !isBusy && settledFailingSinceMs != null &&
+        System.currentTimeMillis() - settledFailingSinceMs >= RETAINED_FORCE_RETIRE_MS
+    return (textSettled && reasoningSettled) || forceRetired
 }
 
 /** 落库文本以「流式文本开头 [STREAM_HEAD_SAMPLE_CHARS] 个字符」开头，即认作同一条内容。 */
@@ -458,6 +505,7 @@ private class ChatTurn(
  * 按「用户消息」切成轮。返回 (轮首之前的散消息, 轮列表)。
  *
  * 后台通知虽可能是 USER 角色，但它是系统注入的提示条而非用户输入，不作为轮起点（归入当前轮内容）。
+ * 运行中插话同理：它是对当前任务的补充，归入当前轮，不开新轮头。
  */
 private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMessage>, List<ChatTurn>> {
     val leading = ArrayList<AgentUIMessage>()
@@ -465,7 +513,9 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
     var user: AgentUIMessage? = null
     var body: MutableList<AgentUIMessage>? = null
     for (message in messages) {
-        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker) {
+        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker &&
+            !message.isInterjection
+        ) {
             user?.let { turns += ChatTurn(turnKeyOf(it.id), it, body?.toList().orEmpty()) }
             user = message
             body = ArrayList()
@@ -867,10 +917,10 @@ fun AIChatPanel(
         } else {
             val anchor = runningTurnAnchorId?.let { id ->
                 messages.firstOrNull { it.id == id }
-                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker }
+                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection }
             }
             val anchorMessage = anchor ?: messages.lastOrNull {
-                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker
+                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection
             }
             anchorMessage?.let { turnKeyOf(it.id) }
         }
@@ -1166,12 +1216,26 @@ fun AIChatPanel(
     // 本轮助手消息是否已经在消息列表中正式就位渲染：判据见 [isAssistantOutputSettled]。
     // 比的是「最后一条承载本轮正文 / 思考的助手消息」，不是列表末尾那条——末尾是工具行、
     // 空正文助手行、后台通知时，末尾那条永远比不中，尾巴会永久卡在流式态（本轮结束后点还在跳）。
-    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了。
+    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了；
+    // 另加双向包含同源判据与强制退休超时（见 [RETAINED_FORCE_RETIRE_MS]）。
+    // 连续判失败的超始时刻：正在流式（streamingText 非空）时视为新一轮，重置计时；
+    // 判成功也重置。isBusy 转 false 且持续失配超时后，无论形状一律强制退休。
+    // 复用上方已有的 isBusy（同源 agentState），不另取名字重复计算。
+    var settledFailingSinceMs by remember { mutableStateOf<Long?>(null) }
     val isAssistantSettled = isAssistantOutputSettled(
         messages = messages,
         currentText = streamingText ?: retainedStreamingText,
-        currentReasoning = streamingReasoning ?: retainedStreamingReasoning
+        currentReasoning = streamingReasoning ?: retainedStreamingReasoning,
+        isBusy = isBusy,
+        settledFailingSinceMs = settledFailingSinceMs
     )
+    LaunchedEffect(isAssistantSettled, streamingText, isBusy) {
+        settledFailingSinceMs = if (isAssistantSettled || streamingText != null || isBusy) {
+            null
+        } else {
+            settledFailingSinceMs ?: System.currentTimeMillis()
+        }
+    }
 
     LaunchedEffect(streamingText, isAssistantSettled) {
         val st = streamingText

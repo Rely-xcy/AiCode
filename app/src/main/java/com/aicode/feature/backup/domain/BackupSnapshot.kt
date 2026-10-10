@@ -270,7 +270,9 @@ data class AgentMessageDto(
     /** 仅用于把「老的 /usage 行」排除出上下文（不回退恢复），与压缩归属分开记。 */
     val isContextExcluded: Boolean = false,
     /** 本行被哪份摘要折叠掉的（摘要行 id）；回退恢复据此判断归属，丢了它备份恢复后的回退就找不回原文。 */
-    val compactedBySummaryId: String? = null
+    val compactedBySummaryId: String? = null,
+    /** 仅 USER 行：运行中插话（非新任务第一条用户消息），UI 归入当前轮、不开轮头。 */
+    val isInterjection: Boolean = false
 )
 
 @Serializable

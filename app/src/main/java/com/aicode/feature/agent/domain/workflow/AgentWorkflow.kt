@@ -68,8 +68,15 @@ sealed class AgentEvent {
      *
      * @param id 界面侧预生成的消息行 id（无界面 id 时为随序号生成的稳定 id）
      * @param content 用户原文，不经任何包装
+     * @param isInterjection 这是运行中插话（非新任务的第一条用户消息）：UI 归入当前轮、不开新轮头。
+     * @param modelReminder 运行中插话的模型侧围栏（随行落库，组装请求时拼回）；非插话恒为 null。
      */
-    data class UserMessageAdded(val id: String, val content: String) : AgentEvent()
+    data class UserMessageAdded(
+        val id: String,
+        val content: String,
+        val isInterjection: Boolean = false,
+        val modelReminder: String? = null
+    ) : AgentEvent()
 
     /**
      * 用户在授权弹窗里选了「始终允许」，但规则没能落到项目级文件（工作区在弹窗挂起期间变得未就绪，
