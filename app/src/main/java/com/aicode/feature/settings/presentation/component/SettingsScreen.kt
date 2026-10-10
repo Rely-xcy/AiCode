@@ -650,8 +650,8 @@ fun SettingsScreen(
                     androidx.hilt.navigation.compose.hiltViewModel()
                 MemoryEditorScreen(
                     memory = memoryEditorTarget?.memory,
-                    onSave = { name, description, content, scope ->
-                        memoryViewModel.save(memoryEditorTarget?.memory, name, description, content, scope)
+                    onSave = { name, description, content, scope, pinned ->
+                        memoryViewModel.save(memoryEditorTarget?.memory, name, description, content, scope, pinned)
                         memoryEditorTarget = null
                         section = SettingsSection.Memory
                     },

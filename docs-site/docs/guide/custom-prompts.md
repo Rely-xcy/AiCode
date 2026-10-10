@@ -115,7 +115,7 @@ App 里的改动与手工放文件完全等价，两种方式可以混用。
 | --- | --- |
 | `{{AICODE_SKILLS}}` | 可用技能列表（每行一项） |
 | `{{AICODE_SUBAGENTS}}` | 可用子代理列表（每行一项） |
-| `{{AICODE_MEMORY}}` | 记忆引擎渲染的整块内容（记忆使用规则 + 按当前话题排序的全局/项目清单），内置片段用它 |
+| `{{AICODE_MEMORY}}` | 记忆引擎渲染的整块内容（记忆使用规则 + 置顶/全局保底 + 按当前话题排序的清单），内置片段用它 |
 | `{{AICODE_MEMORY_GLOBAL}}` | 全局记忆列表（每行一项，不排序） |
 | `{{AICODE_MEMORY_PROJECT}}` | 项目记忆列表（每行一项） |
 | `{{AICODE_PROJECT_RULES_GLOBAL}}` | 全局项目规则正文（`~/.aicode` 下的 `AGENTS.md` / `CLAUDE.md`） |

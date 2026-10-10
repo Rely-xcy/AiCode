@@ -118,7 +118,9 @@ class TaskModuleTest {
             ctx = ctx()
         )
 
-        assertFalse(block.contains("todo(action=\"clear\")"))
+        // 断言 freshness 那句没出现：DISCIPLINE_RULE 是每轮常驻的规则、本就含 clear 的写法，
+        // 用裸子串 todo(action="clear") 断言会把规则文本也算进去。
+        assertFalse(block.contains("清单已全部完成"))
     }
 
     @Test

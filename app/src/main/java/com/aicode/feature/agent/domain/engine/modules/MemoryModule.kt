@@ -128,8 +128,11 @@ class MemoryModule @Inject constructor(
     /**
      * 清单快照：会话内只读一次盘，两个入口共用。
      *
-     * 读盘成功就记账，是因为「被用上」的判据是读到的内容被注入或列进变量；
-     * 失败不缓存，否则一次瞬时 I/O 错误会让整会话都没记忆。
+     * 读盘成功就记账，且只对**真正被注入**的那些（[listedFrom] 的召回结果）记账——hitCount
+     * 的口径是「这条记忆被注入过几个会话」，[MemoryCurator] 判死条目正是拿它当输入。
+     * `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 两个变量里列出的是全部条目
+     * （见 [groupsOf]），若把它们也记上，hitCount 会退化成「出现在清单里几次」（几乎每轮都 +1），
+     * 判死就永远不触发。失败不缓存，否则一次瞬时 I/O 错误会让整会话都没记忆。
      */
     private fun listSnapshot(ctx: EngineContext): ListSnapshot {
         val key = ListCacheKey(ctx.sessionId, ctx.projectRoot)
@@ -200,9 +203,14 @@ class MemoryModule @Inject constructor(
         return content
     }
 
-    /** 按当轮话题从清单里挑出要注入的那些（召回排序 + 描述长度预算）。 */
+    /**
+     * 按当轮话题从清单里挑出要注入的那些（置顶 + 全局保底 + 话题召回 + 描述长度预算）。
+     *
+     * 用 [MemoryRanker.select] 而非 [MemoryRanker.rank]：置顶条目无条件进、全局（用户画像）
+     * 保底若干坑位，避免项目记忆的字面分把画像整批挤掉。
+     */
     private fun listedFrom(ctx: EngineContext, memories: List<Memory>): List<Memory> =
-        withinDescriptionBudget(MemoryRanker.rank(memories, queryOf(ctx), MAX_INJECTED_MEMORIES))
+        withinDescriptionBudget(MemoryRanker.select(memories, queryOf(ctx), MAX_INJECTED_MEMORIES))
 
     /**
      * 按描述长度预算裁剪已排序的记忆：前 [MIN_INJECTED_MEMORIES] 条无条件保留，

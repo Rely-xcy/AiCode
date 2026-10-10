@@ -24,7 +24,8 @@ import javax.inject.Singleton
  * 1. **注入**——每轮把清单连同新鲜度放进系统提示词，让进度在上下文压到多深时都看得见
  *    （清单存在独立表里而不是消息历史里，就是为了这个）；
  * 2. **收尾守卫**——模型要给出本轮最终回复时在边界上拦一次：这一轮在推进任务、清单里还有
- *    未完成项、清单却整轮没被动过，就把「清单落后」这件事当场告诉它（判据见 [TodoProgressGuard]）。
+ *    未完成项、清单却整轮没被动过，或清单已全部完成、收尾时却没清空，就把「清单该动却没动」
+ *    这件事当场告诉它（判据见 [TodoProgressGuard]）。
  *    以前只有第一件事，靠提示词里的「提醒 + 统计」推动更新，实测治不住——提醒是描述，边界是动作。
  *
  * 为什么需要同步快照：系统提示词是同步拼接的（[EngineModule.promptFragment] 不是 suspend），
@@ -82,18 +83,28 @@ class TaskModule @Inject constructor(
         DISCIPLINE_RULE.takeIf { ctx.isSubAgent }
 
     /**
-     * 收尾守卫：模型要给出本轮最终回复时，若这一轮在推进任务、清单里还有未完成项、而清单整轮没被动过，
-     * 就拦下并给一条点名到项级的提醒（判据与文案在 [TodoProgressGuard]）。
+     * 收尾守卫：模型要给出本轮最终回复时，拦一次「清单该动却没动」——两支判据（
+     * 还有未完成项却没更新、或已全部完成却没清空，见 [TodoProgressGuard]），命中就给对应的点名提醒。
+     *
+     * 「一轮最多拦一次」由调用方 `StatefulAgentWorkflow` 的状态位 `todoReminderSent` 保证：它只在
+     * 「本轮最终回复、且本轮还没拦过」时调用本方法（见 shouldAskTodoGuard），命中后置位、本轮不再问。
+     * 两支共用这同一个状态位——本方法每次调用最多返回一条提醒，不存在同轮两拦。
      *
      * 快照没就绪就补读一次库；读失败直接抛给 [AgentEngine] 兜（记日志、本轮放行）——守卫不能把对话弄挂。
      */
     override suspend fun finalResponseGuard(ctx: EngineContext, finalText: String): String? {
         val sessionId = ctx.sessionId ?: return null
         val items = snapshotOf(sessionId) ?: todoItemDao.getBySessionOnce(sessionId).map { it.toDomain() }
-        if (!TodoProgressGuard.needsReminder(items, ctx.history, finalText)) return null
-        val streak = TodoProgressGuard.missedStreak(ctx.history).missedTurns + 1
-        FileLogger.w(TAG, "收尾守卫拦下本轮回复：清单未随本轮工作更新（连续第 $streak 轮）")
-        return TodoProgressGuard.buildReminder(items, ctx.history)
+        if (TodoProgressGuard.needsReminder(items, ctx.history, finalText)) {
+            val streak = TodoProgressGuard.missedStreak(ctx.history).missedTurns + 1
+            FileLogger.w(TAG, "收尾守卫拦下本轮回复：清单未随本轮工作更新（连续第 $streak 轮）")
+            return TodoProgressGuard.buildReminder(items, ctx.history)
+        }
+        if (TodoProgressGuard.needsAllDoneCleanup(items, ctx.history, finalText)) {
+            FileLogger.w(TAG, "收尾守卫拦下本轮回复：清单已全部完成但未清空")
+            return TodoProgressGuard.buildAllDoneReminder(items)
+        }
+        return null
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
@@ -190,6 +201,7 @@ class TaskModule @Inject constructor(
             ③ 开始下一项时把它置为 in_progress。
             ④ 计划或需求变了（用户改主意、发现新问题、放弃某项）当场同步清单。
             ⑤ 一轮收尾前对照清单：回复里说「已完成 / 下一步」的每一项，清单里必须已经对上。
+            ⑥ 清单里的任务全部完成后，用 todo(action="clear") 把整张清单一次清空、不留残余条目（完成项先留着，看得出整体进度）。
             只改一项就只发那一项，不要重发整张清单；先调用工具、再写回复。
         """.trimIndent()
     }

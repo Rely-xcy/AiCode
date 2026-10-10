@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.agent.domain.memory.Memory
@@ -46,14 +47,15 @@ internal data class MemoryEditorTarget(val memory: Memory? = null)
  * 保存动作在顶栏右上角，表单按「基本信息 / 内容」分两张卡片。
  *
  * @param memory 编辑目标；null 表示新建一条。
- * @param onSave 保存回调，参数已 trim（正文保留原样，Markdown 里的首尾空行有意义）。
+ * @param onSave 保存回调，参数已 trim（正文保留原样，Markdown 里的首尾空行有意义）；
+ *   [pinned] 是本次保存显式设定的置顶状态。
  * @param onNavigateBack 返回上一页；有未保存修改时由本页先弹确认，确认后才回调。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MemoryEditorScreen(
     memory: Memory?,
-    onSave: (name: String, description: String, content: String, scope: MemoryScope) -> Unit,
+    onSave: (name: String, description: String, content: String, scope: MemoryScope, pinned: Boolean) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     val isNew = memory == null
@@ -61,6 +63,7 @@ internal fun MemoryEditorScreen(
     val initialDescription = memory?.description.orEmpty()
     val initialContent = memory?.content.orEmpty()
     val initialScope = memory?.scope ?: MemoryScope.GLOBAL
+    val initialPinned = memory?.pinned ?: false
 
     // 换编辑目标（改完 A 再改 B）时整页会重建，但保险起见仍按 memory 取值重置表单。
     var name by remember(memory) { mutableStateOf(initialName) }
@@ -68,13 +71,16 @@ internal fun MemoryEditorScreen(
     var content by remember(memory) { mutableStateOf(initialContent) }
     // 作用域决定记忆文件落在哪个目录，改已有条目的作用域等于搬家，只允许新建时选（与子代理编辑页同一套规则）。
     var scope by remember(memory) { mutableStateOf(initialScope) }
+    // 置顶：新建/编辑都可改，取消勾选即取消置顶
+    var pinned by remember(memory) { mutableStateOf(initialPinned) }
 
     var showDiscardDialog by remember { mutableStateOf(false) }
 
     val isDirty = name.trim() != initialName ||
         description != initialDescription ||
         content != initialContent ||
-        scope != initialScope
+        scope != initialScope ||
+        pinned != initialPinned
 
     // 顶栏返回箭头与系统返回键共用这一份判定，不再各写一套（与设置页返回目标那处同一个理由）。
     val requestBack: () -> Unit = {
@@ -107,7 +113,7 @@ internal fun MemoryEditorScreen(
                     // 名称是记忆的唯一标识（文件名），空名保存会写出一个没有名字的条目
                     TextButton(
                         enabled = name.isNotBlank(),
-                        onClick = { onSave(name.trim(), description.trim(), content, scope) }
+                        onClick = { onSave(name.trim(), description.trim(), content, scope, pinned) }
                     ) {
                         Text(stringResource(R.string.common_save))
                     }
@@ -184,6 +190,18 @@ internal fun MemoryEditorScreen(
                         }
                     }
                 }
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_pinned),
+                    subtitle = stringResource(R.string.memory_pinned_desc),
+                    trailing = {
+                        AppSwitch(
+                            checked = pinned,
+                            onCheckedChange = { pinned = it }
+                        )
+                    }
+                )
             }
 
             SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))

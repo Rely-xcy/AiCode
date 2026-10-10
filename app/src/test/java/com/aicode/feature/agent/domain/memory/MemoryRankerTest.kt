@@ -6,14 +6,22 @@ import kotlin.test.assertTrue
 
 class MemoryRankerTest {
 
-    private fun memory(name: String, description: String = "", content: String = "", modifiedAt: Long = 0L) =
+    private fun memory(
+        name: String,
+        description: String = "",
+        content: String = "",
+        modifiedAt: Long = 0L,
+        scope: MemoryScope = MemoryScope.GLOBAL,
+        pinned: Boolean = false
+    ) =
         Memory(
             name = name,
             description = description,
-            scope = MemoryScope.GLOBAL,
+            scope = scope,
             file = FakeFile(modifiedAt),
             content = content,
-            kind = MemoryKind.PROFILE
+            kind = MemoryKind.PROFILE,
+            pinned = pinned
         )
 
     @Test
@@ -107,6 +115,60 @@ class MemoryRankerTest {
         assertTrue("键位" in tokens)
         // 单字不成词
         assertTrue("用" !in tokens)
+    }
+
+    @Test
+    fun `select：置顶记忆无条件入选`() {
+        val memories = listOf(
+            memory("unrelated-pinned", "完全无关的置顶条目", pinned = true),
+            memory("topic-a", "话题相关 A"),
+            memory("topic-b", "话题相关 B"),
+            memory("topic-c", "话题相关 C"),
+            memory("topic-d", "话题相关 D")
+        )
+
+        val picked = MemoryRanker.select(memories, "话题", limit = 2, globalReserved = 0)
+
+        assertEquals(2, picked.size)
+        assertEquals("unrelated-pinned", picked.first().name)
+    }
+
+    @Test
+    fun `select：全局记忆保底若干坑位`() {
+        val memories = listOf(
+            memory("proj-a", "项目里的构建约定", scope = MemoryScope.PROJECT),
+            memory("proj-b", "项目里的发布约定", scope = MemoryScope.PROJECT),
+            memory("proj-c", "项目里的测试约定", scope = MemoryScope.PROJECT),
+            memory("proj-d", "项目里的目录约定", scope = MemoryScope.PROJECT),
+            memory("profile", "用户画像：偏好简洁", scope = MemoryScope.GLOBAL)
+        )
+
+        // 话题只命中项目记忆的字面；全局画像字面不重合，但保底 1 个坑位仍要进来
+        val picked = MemoryRanker.select(memories, "项目的构建约定怎么定的", limit = 3, globalReserved = 1)
+
+        assertEquals(3, picked.size)
+        assertTrue(picked.any { it.name == "profile" })
+    }
+
+    @Test
+    fun `select：无全局记忆时保底退化为话题召回`() {
+        val memories = listOf(
+            memory("proj-a", "构建约定", scope = MemoryScope.PROJECT),
+            memory("proj-b", "发布约定", scope = MemoryScope.PROJECT),
+            memory("proj-c", "测试约定", scope = MemoryScope.PROJECT),
+            memory("proj-d", "目录约定", scope = MemoryScope.PROJECT)
+        )
+
+        val picked = MemoryRanker.select(memories, "构建约定", limit = 2, globalReserved = 2)
+
+        assertEquals(2, picked.size)
+        assertEquals("proj-a", picked.first().name)
+    }
+
+    @Test
+    fun `select：条数不超上限时原样返回`() {
+        val list = listOf(memory("a"), memory("b", pinned = true))
+        assertEquals(list, MemoryRanker.select(list, "随便问点什么", limit = 3))
     }
 }
 

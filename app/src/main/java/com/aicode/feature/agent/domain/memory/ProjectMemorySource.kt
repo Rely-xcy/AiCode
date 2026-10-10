@@ -52,7 +52,8 @@ class ProjectMemorySource(
         content: String,
         kind: MemoryKind,
         source: String,
-        createdAt: Long
+        createdAt: Long,
+        pinned: Boolean?
     ): Boolean {
         if (projectRoot.isBlank()) return false
         return try {
@@ -73,7 +74,9 @@ class ProjectMemorySource(
                         source = source,
                         createdAt = created,
                         hitCount = previous?.hitCount ?: 0,
-                        lastHitAt = previous?.lastHitAt ?: 0L
+                        lastHitAt = previous?.lastHitAt ?: 0L,
+                        // 调用方未指定置顶时沿用原值，避免模型工具覆盖正文时把置顶状态抹掉
+                        pinned = pinned ?: previous?.pinned ?: false
                     )
                 )
             }

@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.aicode.feature.settings.presentation.SessionShortTermState
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +56,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.User
 
 /**
  * 记忆页（长期记忆）：顶部一张只读的「本次会话（短期）」卡片，下面才是主动记忆开关 +
@@ -65,6 +67,9 @@ import compose.icons.feathericons.Trash2
  *
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
+ *
+ * 顶部两档切换「用户画像 / 记忆」：前者只列自动沉淀的长期结论（kind=PROFILE），后者只列对话中
+ * 记录的内容（kind=NOTE）。短期卡片、主动记忆开关、治理周期与 kind 无关，留在 tab 之外始终可见。
  *
  * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
  */
@@ -84,6 +89,8 @@ internal fun MemorySection(
     var actionMemory by remember { mutableStateOf<Memory?>(null) }
     // 自定义治理周期输入弹窗
     var showCustomIntervalDialog by remember { mutableStateOf(false) }
+    // 顶部两档：0 = 用户画像（PROFILE），1 = 记忆（NOTE）
+    var selectedTab by remember { mutableStateOf(0) }
 
     Column(
         modifier = Modifier
@@ -93,6 +100,17 @@ internal fun MemorySection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        // 顶部两档切换：与 kind 无关的块（短期卡片、主动记忆开关、治理周期）留在 tab 之外始终可见，
+        // tab 只切下方长期记忆清单。
+        SegmentedTabs(
+            selected = selectedTab,
+            labels = listOf(
+                stringResource(R.string.memory_tab_profile),
+                stringResource(R.string.memory_tab_memory)
+            ),
+            onSelect = { selectedTab = it }
+        )
+
         // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
         // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
         if (shortTerm != null) {
@@ -221,11 +239,32 @@ internal fun MemorySection(
             }
         }
 
-        if (memories.isEmpty()) {
-            EmptyState()
+        val isProfileTab = selectedTab == 0
+        val tabMemories = memories.filter {
+            it.kind == if (isProfileTab) MemoryKind.PROFILE else MemoryKind.NOTE
+        }
+        if (isProfileTab) {
+            // 画像 tab 顶部说明：讲清这些是从对话自动沉淀的、关于用户的长期结论
+            Text(
+                text = stringResource(R.string.memory_profile_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.semanticColors.subtleText,
+                modifier = Modifier.padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm)
+            )
+        }
+        if (tabMemories.isEmpty()) {
+            EmptyState(
+                icon = if (isProfileTab) FeatherIcons.User else FeatherIcons.FileText,
+                title = stringResource(
+                    if (isProfileTab) R.string.memory_profile_empty else R.string.memory_empty
+                ),
+                hint = stringResource(
+                    if (isProfileTab) R.string.memory_profile_empty_hint else R.string.memory_empty_hint
+                )
+            )
         } else {
-            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
-            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
+            val globalMemories = tabMemories.filter { it.scope == MemoryScope.GLOBAL }
+            val projectMemories = tabMemories.filter { it.scope == MemoryScope.PROJECT }
             if (globalMemories.isNotEmpty()) {
                 SettingsGroupHeader(text = stringResource(R.string.memory_group_global))
                 MemoryGroup(
@@ -314,8 +353,13 @@ private fun MemoryGroup(
     }
 }
 
+/** 空态：图标 + 标题 + 说明。画像与记忆两个 tab 各用自己的文案与图标。 */
 @Composable
-private fun EmptyState() {
+private fun EmptyState(
+    icon: ImageVector,
+    title: String,
+    hint: String
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -330,19 +374,19 @@ private fun EmptyState() {
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                FeatherIcons.FileText,
+                icon,
                 contentDescription = null,
                 modifier = Modifier.size(28.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Text(
-            text = stringResource(R.string.memory_empty),
+            text = title,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-            text = stringResource(R.string.memory_empty_hint),
+            text = hint,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -373,12 +417,17 @@ private fun MemoryRow(
                     .size(36.dp)
                     .background(
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(Radius.sm)
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = FeatherIcons.FileText,
+                    // 行图标按类型区分：画像用 User，记忆用 FileText，与顶部 tab 一致
+                    imageVector = if (memory.kind == MemoryKind.PROFILE) {
+                        FeatherIcons.User
+                    } else {
+                        FeatherIcons.FileText
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -399,6 +448,15 @@ private fun MemoryRow(
                     )
                     Spacer(modifier = Modifier.width(Spacing.xs))
                     MemoryScopePill(scope = memory.scope)
+                    // 置顶标识：与作用域/来源同一套 McpPill，不另造视觉
+                    if (memory.pinned) {
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        McpPill(
+                            text = stringResource(R.string.memory_pinned),
+                            textColor = MaterialTheme.colorScheme.tertiary,
+                            backgroundColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                        )
+                    }
                     // 来源只给自动沉淀类挂：NOTE 全是「对话中记录」，每行都挂就是噪音。
                     // 不要求 source 非空：旧条目（source 字段是后来才加的）会按 kind 回退成「自动沉淀」，
                     // 否则升级上来的用户会看到这些条目一个来源都没有。

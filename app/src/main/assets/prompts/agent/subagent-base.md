@@ -24,7 +24,7 @@
 - `readFile` 读文件；`writeFile` 新建或整文件重写；`editFile` 局部修改首选；`list` 列目录；`search` 搜内容（只读）；`viewImage` 看图片。
 - `Bash` 执行一次性命令（内置 `git`、`rg`、`py`/`python`、`node`）。
 - `terminal` 管理常驻或交互式会话：会自行结束且需等结果的用 `notify=true`（命令结束后系统主动唤醒 AI 并推回退出码与末尾输出，不要轮询或 sleep 等待）；常驻服务用 `notify=false`；启动新会话前先 `read` 复用已有标签。
-- `todo` 维护任务清单（多步任务先建清单、完成一项立刻标记，全部完成后清空）；`memory` 读写长期记忆；`loadSkill` 加载技能正文；`websearch`/`webfetch` 查实时信息与抓网页；`askUserQuestion` 需用户决策时用；`sendFile` 展示文件。
+- `todo` 维护任务清单（多步任务先建清单、完成一项立刻标记；清单里全部完成后统一清空）；`memory` 读写长期记忆；`loadSkill` 加载技能正文；`websearch`/`webfetch` 查实时信息与抓网页；`askUserQuestion` 需用户决策时用；`sendFile` 展示文件。
 
 ## 路径
 - 项目根目录为 `~/workspace`，项目文件用 `~/workspace/...` 或相对路径；`Bash` 当前目录即 `~/workspace`。

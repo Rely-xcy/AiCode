@@ -170,8 +170,16 @@ class MemoryViewModel @Inject constructor(
      * [target] 为 null 表示新建：作用域用调用方选的 [scope]（全局或项目），类型为手动记录（[MemoryKind.NOTE]）。
      * 非 null 表示编辑已有条目：沿用它的作用域、类型、来源与创建时间，名称不可改
      * （名称是记忆的唯一标识，换名就是新建另一条）。
+     * [pinned] 是本次保存显式设定的置顶状态（新建或编辑都直接落盘，取消勾选即取消置顶）。
      */
-    fun save(target: Memory?, name: String, description: String, content: String, scope: MemoryScope) {
+    fun save(
+        target: Memory?,
+        name: String,
+        description: String,
+        content: String,
+        scope: MemoryScope,
+        pinned: Boolean
+    ) {
         viewModelScope.launch {
             val projectRoot = workspaceRepository.currentPathOrNull()
             val saved = withContext(Dispatchers.IO) {
@@ -183,7 +191,8 @@ class MemoryViewModel @Inject constructor(
                     projectRoot = projectRoot,
                     kind = target?.kind ?: MemoryKind.NOTE,
                     source = target?.source.orEmpty(),
-                    createdAt = target?.createdAt ?: 0L
+                    createdAt = target?.createdAt ?: 0L,
+                    pinned = pinned
                 )
             }
             // 存失败不能静静吞掉：编辑器已经关了，只 refresh 的话用户看到的是「列表里没这条」
