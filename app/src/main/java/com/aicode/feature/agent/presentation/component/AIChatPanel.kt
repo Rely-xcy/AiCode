@@ -981,6 +981,19 @@ fun AIChatPanel(
         }
     }
 
+    // isAssistantSettled 依赖「末尾恰好是 ASSISTANT 且前缀吻合」，但至少三类路径走不到它：
+    // 用户停止后内容未落库（末尾还是 USER）、整轮只有思考没有正文（workflow 不发 AssistantText，
+    // 什么都不落库）、以及带工具调用的回合里 TOOL 消息先落库把末尾顶掉。此时流式状态已被
+    // ViewModel 清空，retained 里只剩旧文：整轮结束（isBusy 翻 false）或末尾已是本轮工具
+    // 结果（说明正文早已落库）时必须兜底清空，否则旧思考/正文会一直挂在尾巴上，
+    // 计时器还在走表（「正在思考（耗时 N 秒）」），下一轮又像重复出现。
+    LaunchedEffect(isBusy, lastMsg?.role) {
+        if (!isBusy || lastMsg?.role == MessageRole.TOOL) {
+            retainedStreamingText = null
+            retainedStreamingReasoning = null
+        }
+    }
+
     val displayStreamingText = if (isAssistantSettled) null else (streamingText ?: retainedStreamingText)
     val showStreaming = displayStreamingText?.hasVisibleContent() == true
 

@@ -1833,6 +1833,13 @@ class AIAgentViewModel @Inject constructor(
             setCompacting(sessionId, false)
             setRetryState(sessionId, null)
             setKeySwitchState(sessionId, null)
+            // 取消/失败路径不会走到 AssistantDelta 的 finishReasoning：
+            // 这里把未结束的计时封口，否则思考气泡上的「正在思考（耗时 N 秒）会一直走表。
+            val timing = _reasoningTimings.value[sessionId]
+            if (timing != null && timing.second == null) {
+                _reasoningTimings.value = _reasoningTimings.value +
+                    (sessionId to (timing.first to System.currentTimeMillis()))
+            }
 
             // 本轮未能搭车送达的后台通知：本轮结束且 job 已移除后，合并成一条发送
             flushPendingNotifications(sessionId)
