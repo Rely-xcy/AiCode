@@ -363,9 +363,8 @@ fun SettingsScreen(
     var memoryEditorTarget by remember { mutableStateOf<MemoryEditorTarget?>(null) }
     // 待确认删除的记忆：左滑点删除只记下来，确认后才真删（与技能/子代理一致）。
     var memoryToDelete by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
-    // 记忆页顶栏帮助弹窗：显示哪个 tab 的说明随当前选中 tab 而变（MemorySection 把选中 tab 上提到此）。
+    // 记忆页顶栏帮助弹窗：单页后只有一份合并的「什么是记忆与用户画像」说明。
     var showMemoryHelp by remember { mutableStateOf(false) }
-    var memorySelectedTab by remember { mutableStateOf(0) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
@@ -874,25 +873,17 @@ fun SettingsScreen(
                             }
                         }
                         SettingsSection.Memory -> {
-                            // 帮助图标随当前 tab 换文案（记忆 / 画像两套说明），点击弹出说明弹窗
+                            // 帮助图标弹出合并后的说明弹窗（记忆与画像各一段）
                             IconButton(onClick = { showMemoryHelp = true }) {
                                 Icon(
                                     FeatherIcons.HelpCircle,
-                                    contentDescription = stringResource(
-                                        if (memorySelectedTab == 0) {
-                                            R.string.memory_help_memory_title
-                                        } else {
-                                            R.string.memory_help_profile_title
-                                        }
-                                    ),
+                                    contentDescription = stringResource(R.string.memory_help_title),
                                     tint = MaterialTheme.colorScheme.onBackground,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
-                            // 「+」只在记忆 tab 显示：手动新增固定落为 kind=NOTE（见 MemoryViewModel.save），
-                            // 画像条目只能自动沉淀，画像 tab 没有新建入口。
-                            if (memorySelectedTab == 0) {
-                                IconButton(onClick = {
+                            // 手动新增固定落为 kind=NOTE（见 MemoryViewModel.save）
+                            IconButton(onClick = {
                                     memoryEditorTarget = MemoryEditorTarget()
                                     section = SettingsSection.MemoryEditor
                                 }) {
@@ -903,7 +894,6 @@ fun SettingsScreen(
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                            }
                         }
                         SettingsSection.Storage -> {
                             IconButton(onClick = { storageViewModel?.refresh() }) {
@@ -1086,8 +1076,6 @@ fun SettingsScreen(
                         onToggleActiveMemory = memoryViewModel::setActiveMemoryEnabled,
                         curationIntervalHours = curationInterval,
                         onSelectCurationInterval = memoryViewModel::setCurationIntervalHours,
-                        selectedTab = memorySelectedTab,
-                        onSelectTab = { memorySelectedTab = it },
                         onOpenDetail = { detailMemory = it },
                         onEdit = {
                             memoryEditorTarget = MemoryEditorTarget(it)
@@ -1435,7 +1423,7 @@ fun SettingsScreen(
 
     SkillImportResultDialog(state = skillImportState, onDismiss = { viewModel.clearSkillImportState() })
 
-    // 记忆页顶栏帮助弹窗：按当前 tab 显示对应的说明段落（与容器/提示词页公告弹窗同一套写法）。
+    // 记忆页顶栏帮助弹窗：合并后的说明（与容器/提示词页公告弹窗同一套写法）。
     if (showMemoryHelp) {
         Dialog(onDismissRequest = { showMemoryHelp = false }) {
             Surface(
@@ -1451,24 +1439,18 @@ fun SettingsScreen(
                         .padding(20.dp)
                 ) {
                     Text(
-                        text = stringResource(
-                            if (memorySelectedTab == 0) {
-                                R.string.memory_help_memory_title
-                            } else {
-                                R.string.memory_help_profile_title
-                            }
-                        ),
+                        text = stringResource(R.string.memory_help_title),
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = stringResource(
-                            if (memorySelectedTab == 0) {
-                                R.string.memory_help_memory_body
-                            } else {
-                                R.string.memory_help_profile_body
-                            }
-                        ),
+                        text = stringResource(R.string.memory_help_profile_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.memory_help_memory_body),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp, bottom = Spacing.lg)

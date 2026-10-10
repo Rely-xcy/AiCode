@@ -988,14 +988,8 @@
     <!-- Memory Settings -->
     <string name="memory_empty">还没有记忆</string>
     <string name="memory_empty_hint">对话中让 AI 记住的长期内容会显示在这里</string>
-    <string name="memory_tab_profile">用户画像</string>
-    <string name="memory_tab_memory">记忆</string>
-    <string name="memory_profile_desc">从对话中自动沉淀的、关于你的长期结论（偏好、习惯、纠正等），跨会话生效。</string>
-    <string name="memory_profile_empty">还没有用户画像</string>
-    <string name="memory_profile_empty_hint">打开主动记忆后，AI 会从对话里沉淀关于你的长期结论</string>
-    <string name="memory_help_profile_title">什么是用户画像？</string>
+    <string name="memory_help_title">什么是记忆与用户画像？</string>
     <string name="memory_help_profile_body">用户画像是 AI 从对话中自动沉淀的关于你的长期结论（偏好、习惯、纠正等），跨会话生效。它与记忆的区别：画像只关于「你这个人」，记忆则覆盖任务、偏好、项目等其它长期信息。点条目可以查看和编辑，左滑删除；AI 之后的对话还会继续更新画像。画像随记忆页的「主动记忆」总开关启停：关闭后不再沉淀与更新，已有条目仍会保留。</string>
-    <string name="memory_help_memory_title">什么是跨会话记忆？</string>
     <string name="memory_help_memory_body">这里的记忆每轮都会注入系统提示词，跨会话生效。点右上角「+」可手动新增；打开「置顶」开关的记忆会被无条件注入，不受相关度挑选影响。「主动记忆」开关打开后，AI 会在对话中主动沉淀长期记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）。关闭开关只是不再主动沉淀，治理周期仍按设定运行。</string>
     <string name="memory_active_memory">主动记忆</string>
     <string name="memory_active_memory_desc">对话中主动沉淀长期记忆；声称记住却没调用工具会提醒补记</string>

@@ -69,15 +69,9 @@ import compose.icons.feathericons.User
  * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  *
- * 顶部两档切换「记忆 / 用户画像」，进页默认落在「记忆」：tab 之下只放该 tab 自己的内容——
- * 记忆 tab 列短期卡片、主动记忆开关、治理周期与 kind=NOTE 的清单；画像 tab 只列自动沉淀的
- * 长期结论（kind=PROFILE）与总览卡，不放开关：画像随「主动记忆」总开关启停（联动是既有领域
- * 语义：画像沉淀走开关注入的 ACTIVE_MEMORY_RULE，见 MemoryModule），帮助文案里说明这一点。
- *
- * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
- * @param selectedTab 当前选中的 tab（0 = 记忆，1 = 用户画像）；状态由上层持有，
- *   顶栏的帮助图标随它换文案，所以不能在本组件内部 remember。
- * @param onSelectTab 切换 tab 的回调。
+ * 单页自上而下：短期卡片、跨会话记忆组（开关 + 治理周期）、画像总览卡，
+ * 最后是按作用域分组的记忆清单（PROFILE 与 NOTE 混排，PROFILE 在前：自动沉淀的
+ * 长期结论更稳定，排前面便于一眼看到；kind 用行图标区分）。
  */
 @Composable
 internal fun MemorySection(
@@ -88,8 +82,6 @@ internal fun MemorySection(
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
     onSelectCurationInterval: (Int) -> Unit,
-    selectedTab: Int,
-    onSelectTab: (Int) -> Unit,
     onOpenDetail: (Memory) -> Unit,
     onEdit: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
@@ -107,33 +99,10 @@ internal fun MemorySection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 顶部两档切换：tab 之下只放该 tab 自己的内容，画像 tab 不再出现开关与治理周期。
-        SegmentedTabs(
-            selected = selectedTab,
-            labels = listOf(
-                stringResource(R.string.memory_tab_memory),
-                stringResource(R.string.memory_tab_profile)
-            ),
-            onSelect = onSelectTab
-        )
-
-        val isProfileTab = selectedTab == 1
-        if (isProfileTab) {
-            // 画像 tab 独有的总览卡：把全部画像条目合成一段整体描述，置于清单之前；
-            // 画像为空时显示引导文案而不是空白卡。
-            ProfileOverviewCard(overview = profileOverview)
-            // 画像 tab 顶部说明：讲清这些是从对话自动沉淀的、关于用户的长期结论
-            Text(
-                text = stringResource(R.string.memory_profile_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier.padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm)
-            )
-        } else {
-            // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
-            // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
-            if (shortTerm != null) {
-                SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
+        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
+        if (shortTerm != null) {
+            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
                 SettingsGroup {
                     SettingsRow(
                         icon = null,
@@ -258,22 +227,22 @@ internal fun MemorySection(
                 }
             }
         }
-        val tabMemories = memories.filter {
-            it.kind == if (isProfileTab) MemoryKind.PROFILE else MemoryKind.NOTE
-        }
-        if (tabMemories.isEmpty()) {
+
+        // 画像总览：拼接生成（无模型调用），放清单上方当作页面的整体摘要
+        ProfileOverviewCard(overview = profileOverview)
+
+        if (memories.isEmpty()) {
             EmptyState(
-                icon = if (isProfileTab) FeatherIcons.User else FeatherIcons.FileText,
-                title = stringResource(
-                    if (isProfileTab) R.string.memory_profile_empty else R.string.memory_empty
-                ),
-                hint = stringResource(
-                    if (isProfileTab) R.string.memory_profile_empty_hint else R.string.memory_empty_hint
-                )
+                icon = FeatherIcons.FileText,
+                title = stringResource(R.string.memory_empty),
+                hint = stringResource(R.string.memory_empty_hint)
             )
         } else {
-            val globalMemories = tabMemories.filter { it.scope == MemoryScope.GLOBAL }
-            val projectMemories = tabMemories.filter { it.scope == MemoryScope.PROJECT }
+            // 单一清单里 PROFILE 与 NOTE 混排：同组内 PROFILE 在前（自动沉淀的长期结论更稳定，排前面便于一眼看到）
+            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
+                .sortedByDescending { it.kind == MemoryKind.PROFILE }
+            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
+                .sortedByDescending { it.kind == MemoryKind.PROFILE }
             if (globalMemories.isNotEmpty()) {
                 SettingsGroupHeader(text = stringResource(R.string.memory_group_global))
                 MemoryGroup(
@@ -337,7 +306,7 @@ private fun SessionValueText(text: String) {
 }
 
 /**
- * 画像 tab 顶部总览卡：把全部画像条目合成的整体描述（[ViewModel.profileOverview]）
+ * 画像总览卡：把全部画像条目合成的整体描述（[ViewModel.profileOverview]）
  * 放在一张卡片里；画像为空时显示引导文案。
  */
 @Composable
