@@ -55,7 +55,7 @@
     <string name="settings_image_gen_model">Image Generation Model</string>
     <string name="settings_mcp">MCP Servers</string>
     <string name="settings_skills">Skills</string>
-    <string name="settings_memory">Memory</string>
+    <string name="settings_memory">Long-term memory</string>
     <string name="settings_container">Container &amp; Images</string>
     <string name="settings_log_no_files">No log files yet</string>
     <string name="settings_log_read_failed">Failed to read log: %1$s</string>
@@ -986,13 +986,10 @@
     <string name="mcp_details">Details</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">No memories yet</string>
+    <string name="memory_empty">No long-term memories yet</string>
     <string name="memory_empty_hint">Whatever you ask the assistant to remember long-term shows up here</string>
-    <string name="memory_help_title">What are memories &amp; the profile?</string>
-    <string name="memory_help_profile_body">The profile holds durable conclusions about you that the assistant distills automatically from chats (preferences, habits, corrections), applied across sessions. It differs from memories: the profile is only about who you are, while memories cover tasks, preferences, projects and other long-term information. Tap an entry to view or edit it, swipe left to delete; later chats keep updating the profile. The profile follows the master "Active memory" switch on the memories page: when it is off nothing is distilled or updated, and existing entries are kept.</string>
-    <string name="memory_help_memory_body">Each entry here is injected into the system prompt every turn and survives across sessions. Tap "+" above to add one manually; memories with "Pinned" enabled are always injected, regardless of relevance ranking. With the "Active memory" switch on, the model distills durable memories during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default). Turning the switch off only stops active distillation; curation still runs on its schedule.</string>
     <string name="memory_active_memory">Active memory</string>
-    <string name="memory_active_memory_desc">Distills durable memories during chat; reminds the model to save it if it claims to remember without calling the tool</string>
+    <string name="memory_active_memory_desc">When on, the model records durable conclusions as long-term memory during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
     <string name="memory_source_auto">Auto-saved</string>
     <string name="memory_source_pre_fold">Salvaged before compaction</string>
     <string name="memory_source_manual">Saved during chat</string>
@@ -1001,7 +998,7 @@
     <string name="memory_group_global">Global memories</string>
     <string name="memory_group_project">Project memories</string>
     <string name="memory_add">Add memory</string>
-    <string name="memory_long_term_header">Cross-session memory</string>
+    <string name="memory_long_term_header">Long-term memory (cross-session)</string>
     <string name="memory_long_term_desc">Applies across sessions: each memory\'s name and description are injected into the system prompt of later chats.</string>
     <string name="memory_session_card_title">This session (short-term)</string>
     <string name="memory_session_card_desc">Read-only. Short-term context disappears when the session ends; it is never written to disk or carried over. Shown for the most recently updated session.</string>
@@ -1026,7 +1023,7 @@
     <string name="memory_pinned">Pinned</string>
     <string name="memory_pinned_desc">Always injected every turn, skipping topic ranking; good for cross-project preferences such as a user profile</string>
     <string name="memory_field_name_locked">The name is the memory\'s unique id; it can\'t be changed after creation</string>
-    <string name="memory_delete_confirm_title">Delete memory</string>
+    <string name="memory_delete_confirm_title">Delete long-term memory</string>
     <string name="memory_delete_confirm_message">This will delete \"%1$s\". This action cannot be undone. Delete?</string>
     <string name="memory_delete_failed">Delete failed; the entry may no longer exist</string>
     <string name="memory_save_failed">Save failed; nothing was written: project-scope memories need a ready workspace (or the file write failed)</string>
@@ -1169,8 +1166,8 @@
     <string name="subagent_inject_main_rules_hint">Pick either this or the subagent baseline; enabling both injects overlapping rules</string>
     <string name="subagent_inject_skills">Skill list</string>
     <string name="subagent_inject_skills_hint">Lets it load and run project skills</string>
-    <string name="subagent_inject_memory">Memory</string>
-    <string name="subagent_inject_memory_hint">Injects global and project memories (cross-session)</string>
+    <string name="subagent_inject_memory">Long-term memory</string>
+    <string name="subagent_inject_memory_hint">Injects global and project long-term memories (cross-session)</string>
     <string name="subagent_inject_project_rules">Project rules</string>
     <string name="subagent_inject_project_rules_hint">Injects AGENTS.md or CLAUDE.md</string>
 

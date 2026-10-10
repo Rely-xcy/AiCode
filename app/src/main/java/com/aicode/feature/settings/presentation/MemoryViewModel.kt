@@ -168,7 +168,6 @@ class MemoryViewModel @Inject constructor(
      * 保存一条记忆。
      *
      * [target] 为 null 表示新建：作用域用调用方选的 [scope]（全局或项目），类型为手动记录（[MemoryKind.NOTE]）。
-     * 编辑 PROFILE 条目时 kind 沿用原值（target?.kind），画像与记忆走同一条保存路径。
      * 非 null 表示编辑已有条目：沿用它的作用域、类型、来源与创建时间，名称不可改
      * （名称是记忆的唯一标识，换名就是新建另一条）。
      * [pinned] 是本次保存显式设定的置顶状态（新建或编辑都直接落盘，取消勾选即取消置顶）。
