@@ -5,7 +5,7 @@ import org.junit.Test
 
 class ModelContextPolicyTest {
 
-    // ---------- preserveRecentTokens：usableTokens / 4 后 clamp 到 [2000, 20000] ----------
+    // ---------- preserveRecentTokens：usableTokens / 8 后 clamp 到 [2000, 128000] ----------
 
     @Test
     fun preserveRecentTokens_zero_clampedToMinimum() {
@@ -15,35 +15,34 @@ class ModelContextPolicyTest {
     /** 低于下界（整除后不足 2000）时被 clamp 到下界。 */
     @Test
     fun preserveRecentTokens_belowMinimum_clampedToMinimum() {
-        assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(7_999))
+        assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(15_999))
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(1))
     }
 
     /** 恰好落在下界：无需 clamp。 */
     @Test
     fun preserveRecentTokens_atMinimum_boundary() {
-        assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(8_000))
+        assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(16_000))
     }
 
-    /** 区间内正常整除 4。 */
+    /** 区间内正常整除 8。 */
     @Test
-    fun preserveRecentTokens_inRange_quarterDown() {
-        assertEquals(2_500, ModelContextPolicy.preserveRecentTokens(10_000))
-        assertEquals(19_999, ModelContextPolicy.preserveRecentTokens(79_999))
+    fun preserveRecentTokens_inRange_eighthDown() {
+        assertEquals(2_500, ModelContextPolicy.preserveRecentTokens(20_000))
+        assertEquals(9_999, ModelContextPolicy.preserveRecentTokens(79_999))
     }
 
-    /** 上界边界：整除后恰好 20000 以及略超（整除截断仍为 20000）。 */
+    /** 上界边界：整除后恰好 128000 以及略超（整除截断仍为 128000）。 */
     @Test
     fun preserveRecentTokens_atMaximum_boundary() {
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(80_000))
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(80_001))
+        assertEquals(128_000, ModelContextPolicy.preserveRecentTokens(1_024_000))
+        assertEquals(128_000, ModelContextPolicy.preserveRecentTokens(1_024_001))
     }
 
     /** 超过上界时 clamp 到上界，包括超大值与 Int.MAX_VALUE。 */
     @Test
     fun preserveRecentTokens_aboveMaximum_clampedToMaximum() {
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(128_000))
-        assertEquals(20_000, ModelContextPolicy.preserveRecentTokens(Int.MAX_VALUE))
+        assertEquals(128_000, ModelContextPolicy.preserveRecentTokens(Int.MAX_VALUE))
     }
 
     /** 负数（理论上不会出现）同样被 clamp 到下界。 */
