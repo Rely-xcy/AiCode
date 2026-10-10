@@ -151,13 +151,14 @@ class MemoryRepository @Inject constructor(
         projectRoot: String?,
         kind: MemoryKind = MemoryKind.NOTE,
         source: String = "",
-        createdAt: Long = 0L
+        createdAt: Long = 0L,
+        pinned: Boolean? = null
     ): Boolean {
         val saved = when (scope) {
-            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(name, description, content, kind, source, createdAt)
+            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(name, description, content, kind, source, createdAt, pinned)
             MemoryScope.PROJECT -> {
                 if (projectRoot.isNullOrBlank()) false
-                else projectSource(projectRoot).saveMemory(name, description, content, kind, source, createdAt)
+                else projectSource(projectRoot).saveMemory(name, description, content, kind, source, createdAt, pinned)
             }
         }
         if (saved) notifyChanged()

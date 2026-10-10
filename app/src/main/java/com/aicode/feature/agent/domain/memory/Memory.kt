@@ -14,6 +14,8 @@ import java.io.File
  * @param createdAt 创建时间（epoch millis）；0 表示未标注（旧文件），此时回退用文件修改时间
  * @param hitCount 被注入进上下文的会话数；0 表示从未被用过
  * @param lastHitAt 最近一次被注入/读取的时间（epoch millis）；0 表示从未
+ * @param pinned 置顶：为 true 时每轮无条件注入，不参与话题相关度竞争（用户画像这类
+ *   跨项目偏好常被项目记忆的字面分挤掉，置顶给它们一个稳定位置）；缺省 false，旧文件无此字段
  */
 data class Memory(
     val name: String,
@@ -25,7 +27,8 @@ data class Memory(
     val source: String = "",
     val createdAt: Long = 0L,
     val hitCount: Int = 0,
-    val lastHitAt: Long = 0L
+    val lastHitAt: Long = 0L,
+    val pinned: Boolean = false
 )
 
 enum class MemoryScope {

@@ -31,6 +31,8 @@ object MemoryParser {
         val createdAt = frontmatter["created_at"]?.toString()?.trim()?.toLongOrNull() ?: 0L
         val hitCount = frontmatter["hit_count"]?.toString()?.trim()?.toIntOrNull() ?: 0
         val lastHitAt = frontmatter["last_hit_at"]?.toString()?.trim()?.toLongOrNull() ?: 0L
+        // 缺失或非法值（非 "true"）一律当 false：旧文件没有这个字段
+        val pinned = frontmatter["pinned"]?.toString()?.trim()?.equals("true", ignoreCase = true) ?: false
 
         return Memory(
             name = name,
@@ -42,7 +44,8 @@ object MemoryParser {
             source = source,
             createdAt = createdAt,
             hitCount = hitCount,
-            lastHitAt = lastHitAt
+            lastHitAt = lastHitAt,
+            pinned = pinned
         )
     }
 
@@ -51,6 +54,7 @@ object MemoryParser {
      *
      * [kind]/[source]/[createdAt] 为空或 0 时**不写该行**——[MemoryKind.NOTE] 的旧记忆文件
      * 必须保持字节不变，不能因为新增元数据把所有历史文件都重写一遍。
+     * [pinned] 同理：false 时不写，旧文件形态不变；只有置顶才写 `pinned: true`。
      */
     fun format(
         name: String,
@@ -60,16 +64,18 @@ object MemoryParser {
         source: String = "",
         createdAt: Long = 0L,
         hitCount: Int = 0,
-        lastHitAt: Long = 0L
+        lastHitAt: Long = 0L,
+        pinned: Boolean = false
     ): String {
         val safeName = YamlScalar.quote(name)
         val safeDesc = YamlScalar.quote(description)
+        val pinnedLine = if (pinned) "pinned: true\n" else ""
         val kindLine = if (kind == MemoryKind.PROFILE) "kind: profile\n" else ""
         val sourceLine = if (source.isNotBlank()) "source: ${YamlScalar.quote(source)}\n" else ""
         val createdLine = if (createdAt > 0) "created_at: $createdAt\n" else ""
         val hitCountLine = if (hitCount > 0) "hit_count: $hitCount\n" else ""
         val lastHitLine = if (lastHitAt > 0) "last_hit_at: $lastHitAt\n" else ""
-        return "---\nname: $safeName\ndescription: $safeDesc\n$kindLine$sourceLine$createdLine$hitCountLine$lastHitLine---\n$content"
+        return "---\nname: $safeName\ndescription: $safeDesc\n$pinnedLine$kindLine$sourceLine$createdLine$hitCountLine$lastHitLine---\n$content"
     }
 
     private fun splitAndParseFrontmatter(text: String): Pair<Map<String, Any>, String> {

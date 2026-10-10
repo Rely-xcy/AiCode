@@ -82,4 +82,36 @@ class MemoryParserTest {
         weird.writeText("---\nname: weird\nkind: something-else\n---\nbody")
         assertEquals(MemoryKind.NOTE, MemoryParser.parse(weird, MemoryScope.GLOBAL)?.kind)
     }
+
+    @Test
+    fun pinned_roundtripsThroughFrontmatter() {
+        val formatted = MemoryParser.format("profile", "用户画像", "body", pinned = true)
+        assertTrue(formatted.contains("pinned: true"))
+
+        val file = tempFolder.newFile("profile.md")
+        file.writeText(formatted)
+
+        assertEquals(true, MemoryParser.parse(file, MemoryScope.GLOBAL)?.pinned)
+    }
+
+    @Test
+    fun pinnedFalse_doesNotWriteField_andMissingOrInvalidDefaultsToFalse() {
+        // 不置顶时不写字段：旧文件形态不变
+        val formatted = MemoryParser.format("plain", "plain note", "body")
+        assertFalse(formatted.contains("pinned:"))
+
+        val file = tempFolder.newFile("plain.md")
+        file.writeText(formatted)
+        assertEquals(false, MemoryParser.parse(file, MemoryScope.GLOBAL)?.pinned)
+
+        // 缺失该字段的旧文件 → false
+        val legacy = tempFolder.newFile("legacy.md")
+        legacy.writeText("---\nname: legacy\ndescription: old file\n---\nbody")
+        assertEquals(false, MemoryParser.parse(legacy, MemoryScope.GLOBAL)?.pinned)
+
+        // 非法值（非 "true"）也当 false
+        val weird = tempFolder.newFile("weird.md")
+        weird.writeText("---\nname: weird\npinned: maybe\n---\nbody")
+        assertEquals(false, MemoryParser.parse(weird, MemoryScope.GLOBAL)?.pinned)
+    }
 }

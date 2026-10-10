@@ -23,6 +23,16 @@ object MemoryRanker {
      */
     const val INJECTION_SLOTS = 5
 
+    /**
+     * 全局作用域（用户画像 / 跨项目偏好）的保底坑位数。
+     *
+     * 画像与普通记忆混在同一清单、同一次召回里竞争，而召回按「与当前话题的字面重合度」排序：
+     * 项目记忆天然更容易命中当前话题（术语、路径、模块名都在里面），全局画像常被整批挤掉——
+     * 画像描述的是「用户是谁」，本就不该靠话题命中才有存在感。留 2 个坑位给它兜底；
+     * 剩余坑位仍按话题相关度从项目记忆里取。可调：调大更保画像，调小更省窗口。
+     */
+    const val GLOBAL_RESERVED_SLOTS = 2
+
     private const val NAME_WEIGHT = 3
     private const val DESCRIPTION_WEIGHT = 2
     private const val CONTENT_WEIGHT = 1
@@ -53,8 +63,69 @@ object MemoryRanker {
     ): List<Memory> {
         if (limit <= 0) return emptyList()
         if (memories.size <= limit) return memories
+        return dedupe(rankWithin(memories, query, now)).take(limit)
+    }
+
+    /**
+     * 挑选注入项（[MemoryModule] 注入路径用）：置顶 > 全局保底 > 话题相关度。
+     *
+     * 为什么不能只按话题相关度排（[rank]）：召回按「与当前话题的字面重合度」打分，
+     * 项目记忆天然更容易命中当前话题（模块名、路径、术语都在里面），用户画像这类全局条目
+     * 常被整批挤掉——画像描述的是「用户是谁」，不该靠话题命中才有存在感。所以：
+     *
+     * 1. [Memory.pinned] 的记忆无条件排在前面（仍受 [limit] 约束）；
+     * 2. 全局（[MemoryScope.GLOBAL]）记忆保底 [globalReserved] 个坑位；
+     * 3. 剩余坑位才按话题相关度从其余记忆（含项目记忆）里取。
+     *
+     * 条数不超过 [limit] 时原样返回，与 [rank] 一致——每条都每轮参与竞争，
+     * `hitCount == 0` 才仍能说明「它没被选中过」（见 [INJECTION_SLOTS] 与 MemoryCurator）。
+     * 置顶或全局条目不足时退化：空出来的坑位继续按话题相关度分配，不注入空条目。
+     */
+    fun select(
+        memories: List<Memory>,
+        query: String,
+        limit: Int = INJECTION_SLOTS,
+        globalReserved: Int = GLOBAL_RESERVED_SLOTS,
+        now: Long = System.currentTimeMillis()
+    ): List<Memory> {
+        if (limit <= 0) return emptyList()
+        if (memories.size <= limit) return memories
+
+        val picked = mutableListOf<Memory>()
+        val pickedNames = mutableSetOf<String>()
+        val signatures = mutableListOf<Set<String>>()
+
+        fun take(candidate: Memory, dedupe: Boolean) {
+            if (picked.size >= limit) return
+            if (!pickedNames.add(candidate.name)) return
+            val signature = signatureOf(candidate)
+            if (dedupe && signature.isNotEmpty() && signatures.any { similar(it, signature) }) return
+            if (signature.isNotEmpty()) signatures.add(signature)
+            picked += candidate
+        }
+
+        // 1) 置顶：无条件，按话题相关度排序只是决定它们的先后
+        rankWithin(memories.filter { it.pinned }, query, now).forEach { take(it, dedupe = false) }
+
+        // 2) 全局保底：置顶里已含的全局条目也算数，避免重复占位
+        val globalsNeeded = (globalReserved - picked.count { it.scope == MemoryScope.GLOBAL }).coerceAtLeast(0)
+        if (globalsNeeded > 0) {
+            rankWithin(memories.filter { it.scope == MemoryScope.GLOBAL && !it.pinned }, query, now)
+                .take(globalsNeeded)
+                .forEach { take(it, dedupe = true) }
+        }
+
+        // 3) 剩余坑位按话题相关度
+        rankWithin(memories.filterNot { it.pinned }, query, now).forEach { take(it, dedupe = true) }
+
+        return picked
+    }
+
+    /** 按话题相关度排序（不做去重与截断）：[rank] 与 [select] 共用同一套排序口径。 */
+    private fun rankWithin(memories: List<Memory>, query: String, now: Long): List<Memory> {
+        if (memories.isEmpty()) return emptyList()
         val tokens = tokenize(query)
-        val ordered = if (tokens.isEmpty()) {
+        return if (tokens.isEmpty()) {
             byRecency(memories)
         } else {
             memories.sortedWith(
@@ -63,7 +134,6 @@ object MemoryRanker {
                     .thenBy { it.name }
             )
         }
-        return dedupe(ordered).take(limit)
     }
 
     /**
@@ -76,15 +146,17 @@ object MemoryRanker {
         val picked = mutableListOf<Memory>()
         val signatures = mutableListOf<Set<String>>()
         for (memory in ordered) {
-            val signature = tokenize(
-                "${memory.name} ${memory.description} ${memory.content.take(CONTENT_SCAN_CHARS)}"
-            )
+            val signature = signatureOf(memory)
             if (signature.isNotEmpty() && signatures.any { similar(it, signature) }) continue
             picked.add(memory)
             if (signature.isNotEmpty()) signatures.add(signature)
         }
         return picked
     }
+
+    /** 去重用的 token 签名：名称 + 描述 + 正文前若干字符，与打分口径共用同一套分词。 */
+    private fun signatureOf(memory: Memory): Set<String> =
+        tokenize("${memory.name} ${memory.description} ${memory.content.take(CONTENT_SCAN_CHARS)}")
 
     private fun similar(a: Set<String>, b: Set<String>): Boolean {
         val intersection = a.count { it in b }

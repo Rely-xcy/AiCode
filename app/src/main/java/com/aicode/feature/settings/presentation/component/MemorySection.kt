@@ -399,6 +399,15 @@ private fun MemoryRow(
                     )
                     Spacer(modifier = Modifier.width(Spacing.xs))
                     MemoryScopePill(scope = memory.scope)
+                    // 置顶标识：与作用域/来源同一套 McpPill，不另造视觉
+                    if (memory.pinned) {
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        McpPill(
+                            text = stringResource(R.string.memory_pinned),
+                            textColor = MaterialTheme.colorScheme.tertiary,
+                            backgroundColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                        )
+                    }
                     // 来源只给自动沉淀类挂：NOTE 全是「对话中记录」，每行都挂就是噪音。
                     // 不要求 source 非空：旧条目（source 字段是后来才加的）会按 kind 回退成「自动沉淀」，
                     // 否则升级上来的用户会看到这些条目一个来源都没有。

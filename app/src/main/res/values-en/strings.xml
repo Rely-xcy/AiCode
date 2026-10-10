@@ -1015,6 +1015,8 @@
     <string name="memory_field_scope">Scope</string>
     <string name="memory_scope_global">Global</string>
     <string name="memory_scope_project">Project</string>
+    <string name="memory_pinned">Pinned</string>
+    <string name="memory_pinned_desc">Always injected every turn, skipping topic ranking; good for cross-project preferences such as a user profile</string>
     <string name="memory_field_name_locked">The name is the memory\'s unique id; it can\'t be changed after creation</string>
     <string name="memory_delete_confirm_title">Delete long-term memory</string>
     <string name="memory_delete_confirm_message">This will delete \"%1$s\". This action cannot be undone. Delete?</string>

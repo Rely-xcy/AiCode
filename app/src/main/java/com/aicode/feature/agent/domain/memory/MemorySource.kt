@@ -38,6 +38,9 @@ interface MemorySource {
      *
      * 覆盖时旧版本会先被归档到 `.superseded/`——记忆是「越改越准」的题目，
      * 但改错了要能拿回原来的结论，所以不做静默覆盖。
+     *
+     * [pinned] 为 null 表示调用方未指定（如模型工具、自动沉淀）：覆盖时沿用原值，新建时为 false；
+     * 非 null 表示显式设定（编辑页的置顶开关）。
      */
     fun saveMemory(
         name: String,
@@ -45,7 +48,8 @@ interface MemorySource {
         content: String,
         kind: MemoryKind = MemoryKind.NOTE,
         source: String = "",
-        createdAt: Long = 0L
+        createdAt: Long = 0L,
+        pinned: Boolean? = null
     ): Boolean
 
     /**
@@ -93,7 +97,7 @@ interface MemorySource {
             // （saveMemory 一直有这一步，editMemory 原来没有）
             withFileLock(file) {
                 archiveBeforeOverwrite(root, file)
-                writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt))
+                writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt, pinned = memory.pinned))
             }
             MemoryEditResult.Success
         } catch (e: Exception) {
