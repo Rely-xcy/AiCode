@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,6 +67,22 @@ class MemoryViewModel @Inject constructor(
 
     /** 删除失败的一次性信号（条目已不存在等）：界面提示一次后调 [clearDeleteFailed]。 */
     val deleteFailed: StateFlow<Boolean> = _deleteFailed.asStateFlow()
+
+    /**
+     * 画像总览：由全部 kind=PROFILE 条目的「名称：描述」合成的可读段落。
+     *
+     * 从 [_memories] 派生，PROFILE 为空时为 null（界面显示引导文案）。
+     */
+    val profileOverview: StateFlow<String?> = _memories
+        .map { list ->
+            list.filter { it.kind == MemoryKind.PROFILE }
+                .joinToString("\n") { entry ->
+                    val desc = entry.description.ifBlank { entry.content.lines().firstOrNull().orEmpty() }
+                    if (desc.isBlank()) entry.name else "${entry.name}：$desc"
+                }
+                .takeIf { it.isNotBlank() }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun clearDeleteFailed() {
         _deleteFailed.value = false
@@ -168,6 +185,7 @@ class MemoryViewModel @Inject constructor(
      * 保存一条记忆。
      *
      * [target] 为 null 表示新建：作用域用调用方选的 [scope]（全局或项目），类型为手动记录（[MemoryKind.NOTE]）。
+     * 编辑 PROFILE 条目时 kind 沿用原值（target?.kind），画像与记忆走同一条保存路径。
      * 非 null 表示编辑已有条目：沿用它的作用域、类型、来源与创建时间，名称不可改
      * （名称是记忆的唯一标识，换名就是新建另一条）。
      * [pinned] 是本次保存显式设定的置顶状态（新建或编辑都直接落盘，取消勾选即取消置顶）。
