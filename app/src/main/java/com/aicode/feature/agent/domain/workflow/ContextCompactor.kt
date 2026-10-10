@@ -14,6 +14,8 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.presentation.MessageRole
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -26,10 +28,10 @@ import javax.inject.Singleton
  * 上下文变换器：只负责「怎么改消息」，不负责「什么时候改」。
  *
  * 阈值、档位、软硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
- * 本类只提供三个纯变换，便于单独验证：
- * - [softTrim]：不调模型的投影式精简（只改喂模型的 modelResult）；
+ * 本类只提供三个变换，便于单独验证：
+ * - [softTrim]：不调模型的投影式精简（只改喂模型的 modelResult / modelArguments，并把改动写回库行，见 [persistProjections]）；
  * - [compact]：调摘要模型折叠早期对话，并把结果落库；
- * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求。
+ * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库）。
  *
  * 三个变换都不读设置、不解析模型目录：预算由调用方算好传进来。
  */
@@ -43,6 +45,9 @@ class ContextCompactor @Inject constructor(
 
     private companion object {
         const val TAG = "ContextCompactor"
+
+        /** 落库工具调用投影用的编码器；与回放侧的 `Json { ignoreUnknownKeys = true }` 同形。 */
+        val JSON = Json
 
         /** 软精简时单条工具输出的保留上限（比硬压缩宽松，尽量少丢信息）。 */
         const val SOFT_TRIM_TOOL_CHARS = 3_000
@@ -70,6 +75,7 @@ class ContextCompactor @Inject constructor(
      * 四个要点：
      * 1. 只改喂模型的那一份，不动落库/UI 的内容：工具输出改 `modelResult`（`result` 保持完整），
      *    工具参数改 `modelArguments`（`arguments` 保持完整），两者都是 copy() 出新对象，原对象不动；
+     *    改动的几条随行写回库行（见 [persistProjections]），回放才能把投影带出、前沿跨轮次保留；
      * 2. **只削已结束的轮次**：范围是本轮起点（最后一条用户消息）之前的历史；本轮的工具调用
      *    与工具输出一律不动——刚写进去的文件正文体积最大，只看体量会把它排在第一个削掉，
      *    而下一次调用最需要的恰恰是它（也是"占位符被拄回磁盘"那个 bug 的根源）。
@@ -169,7 +175,60 @@ class ContextCompactor @Inject constructor(
                     deferred.joinToString("、", limit = 8) { describeToolMessage(messages[it]) }
             )
         }
+        // 投影落库：只写本轮真正改动的几条，让投影前沿跨轮次保留（见 [persistProjections]）。
+        if (changed) persistProjections(result, trimmedIndices)
+
         return if (changed) result else messages
+    }
+
+    /**
+     * 把本轮真正改动的投影写回库行（只写软精简这一条线）。
+     *
+     * 为什么落库：投影此前只活在内存态——每轮重建历史即丢失，软精简要从头重算，投影前沿恒为 -1，
+     * 「改动点只前进」也就只在单轮内成立。写回后回放能把投影带出（见 MessagePersistenceUseCase），
+     * 前沿跨轮次保留，前缀缓存的失效范围才真正逐次收窄。
+     *
+     * 只处理 [indices] 里真正被改的那几条：发送前兜底的截断不在此列（它走 [enforceWindowLimit]，
+     * 不落库）——兜底是逼近窗口时的应急硬截，落库会把应急形态永久冻住。
+     *
+     * 只写模型可见的那一份：工具结果写 modelResult（result 保持原文），工具参数写回该行的
+     * toolCallsJson（arguments 仍是原文，只多出 modelArguments）。执行、权限、界面、落库正文
+     * 读的都是 arguments / result，一字不动。
+     *
+     * 库行 id：assistant 行就是消息 id；tool 行是 "tool_<callId>"（见界面落库侧）。本轮新造、
+     * 尚未落库的消息 id 为空，且都在软精简区间之外，跳过即可。
+     *
+     * 用非挂起的 DAO 方法：softTrim 是同步变换，调用点固定跑在 [com.aicode.di.CompactionWork]
+     * 的后台调度器上（Dispatchers.Default），不会撞上 Room 的主线程检查。写失败只记日志——
+     * 投影本身仍照常返回，不影响本次请求。
+     *
+     * 已知取舍：投影一旦落库，回放时它就是「已投影」，而前沿只前进、不回收——用户换成更大窗口的
+     * 模型后，这些旧投影仍按原样发出去（不会因为窗口变大而自动还原全文）。这不是硬伤：投影本身
+     * 留了头尾可读内容与 readFile 回读指针（见 [bulkArgumentExcerptOf]），模型需要时能读回原文，
+     * 只是上下文里少了一部分冗余正文；真要还原，开新会话或回退到投影之前即可。
+     */
+    private fun persistProjections(messages: List<AgentMessage>, indices: Set<Int>) {
+        for (index in indices) {
+            when (val message = messages.getOrNull(index)) {
+                is AgentMessage.AssistantMessage ->
+                    if (message.id.isNotBlank() && message.toolCalls.any { it.modelArguments != null }) {
+                        runCatching {
+                            agentMessageDao.updateToolCallsJson(message.id, JSON.encodeToString(message.toolCalls))
+                        }.onFailure { FileLogger.w(TAG, "写回工具参数投影失败（行 ${message.id}）", it) }
+                    }
+
+                is AgentMessage.ToolResultMessage -> {
+                    val projection = message.modelResult
+                    if (message.id.isNotBlank() && projection != null) {
+                        runCatching {
+                            agentMessageDao.updateModelResult("tool_${message.id}", projection)
+                        }.onFailure { FileLogger.w(TAG, "写回工具结果投影失败（行 tool_${message.id}）", it) }
+                    }
+                }
+
+                is AgentMessage.UserMessage -> Unit
+            }
+        }
     }
 
     /**
