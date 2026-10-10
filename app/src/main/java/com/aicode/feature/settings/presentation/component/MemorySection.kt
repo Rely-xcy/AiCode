@@ -225,7 +225,6 @@ internal fun MemorySection(
                     }
                 }
             }
-        }
 
         if (memories.isEmpty()) {
             EmptyState(
