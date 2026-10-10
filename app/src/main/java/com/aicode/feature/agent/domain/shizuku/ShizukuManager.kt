@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +61,38 @@ data class ShizukuPeerInfo(
 )
 
 /**
+ * 绑定 UserService 失败的原因类别，供上层映射成可操作提示。
+ *
+ * 与 [ShizukuState] 的区别：[ShizukuState] 是绑定前从 binder 推导的「当前可用性」，
+ * 而这里是「绑定尝试为什么失败」——后两者（UserService 起不来、连接断开）在绑定前无法预知，
+ * 只能由绑定过程本身判定。
+ */
+enum class ShizukuBindFailure {
+    /** binder 未就绪：服务未启动，或设备上没有可用的管理器。 */
+    NOT_RUNNING,
+
+    /** 服务运行中，但本应用尚未获得授权。 */
+    PERMISSION_DENIED,
+
+    /** 已授权，但 UserService 起不来（绑定超时）。 */
+    USER_SERVICE_UNAVAILABLE,
+
+    /** 绑定途中连接断开（binder 死亡或 UserService 掉线）。 */
+    DISCONNECTED
+}
+
+/**
+ * 绑定 UserService 失败。[failure] 是可供上层按类映射文案的原因类别。
+ *
+ * 继承 [IllegalStateException] 以兼容既有的 `catch (Exception)` 调用方。
+ */
+class ShizukuBindException(
+    val failure: ShizukuBindFailure,
+    message: String,
+    cause: Throwable? = null
+) : IllegalStateException(message, cause)
+
+/**
  * Shizuku 后端：以 adb shell（uid 2000）身份执行命令。
  *
  * 通过 UserService（[ShizukuShellService]）而非已弃用的 `Shizuku#newProcess` 执行命令：
@@ -98,8 +131,14 @@ class ShizukuManager @Inject constructor(
         /** 服务身份 tag：不设时用类名，类名经 R8 混淆后不稳定，故显式固定。 */
         const val SERVICE_TAG = "shizuku_shell"
 
-        /** 绑定 UserService 的等待上限（毫秒）。Shizuku 启动服务自身超时为 30 秒。 */
+        /** 首次绑定 UserService 的等待上限（毫秒）。Shizuku 启动服务自身超时为 30 秒。 */
         const val BIND_TIMEOUT_MS = 30_000L
+
+        /**
+         * 超时解绑后重绑一次的等待上限（毫秒）。较首次更短：前面已经等满 30 秒，
+         * 缩短是为了让两次尝试总等待不超过 45 秒（AI 侧工具调用会一直等到绑定结束）。
+         */
+        const val BIND_RETRY_TIMEOUT_MS = 15_000L
 
         /** 命令超时上限（毫秒），与 [com.aicode.feature.agent.domain.container.CommandEngine.MAX_TIMEOUT_MS] 对齐。 */
         const val MAX_TIMEOUT_MS = 1_800_000L
@@ -122,7 +161,9 @@ class ShizukuManager @Inject constructor(
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
         shellService = null
-        pendingBind?.completeExceptionally(IllegalStateException("Shizuku 服务已断开"))
+        pendingBind?.completeExceptionally(
+            ShizukuBindException(ShizukuBindFailure.DISCONNECTED, "Shizuku 服务已断开")
+        )
         pendingBind = null
         refreshState()
     }
@@ -141,7 +182,9 @@ class ShizukuManager @Inject constructor(
 
         override fun onServiceDisconnected(name: ComponentName?) {
             shellService = null
-            pendingBind?.completeExceptionally(IllegalStateException("Shizuku UserService 已断开"))
+            pendingBind?.completeExceptionally(
+                ShizukuBindException(ShizukuBindFailure.DISCONNECTED, "Shizuku UserService 已断开")
+            )
             pendingBind = null
             refreshState()
         }
@@ -306,16 +349,107 @@ class ShizukuManager @Inject constructor(
         shellService?.let { return it }
         return bindMutex.withLock {
             shellService?.let { return@withLock it }
-            if (computeState() != ShizukuState.READY) {
-                throw IllegalStateException("Shizuku 未就绪（${_state.value}）")
+            bindWithRetry()
+        }
+    }
+
+    /**
+     * 绑定 UserService，失败时解绑并重试一次。
+     *
+     * 最多两次尝试：首次 [BIND_TIMEOUT_MS]，超时后先 [Shizuku.unbindUserService] 解绑再以
+     * [BIND_RETRY_TIMEOUT_MS] 重绑；两次都超时才抛
+     * [ShizukuBindFailure.USER_SERVICE_UNAVAILABLE]。只重试一次是取舍：UserService 起不来
+     * 多因 Shizuku 服务版本不符、服务进程被杀或 `.version(...)` 触发重装失败，多试无益，
+     * 而 AI 侧工具调用会一直等到绑定结束，重试越多等待越久。
+     *
+     * 全程持 [bindMutex]，保证同一时刻最多一次绑定尝试（并发调用串行等待）。
+     */
+    private suspend fun bindWithRetry(): IShizukuShellService {
+        requireReady()
+        logBindSignal()
+
+        awaitBind(BIND_TIMEOUT_MS)?.let { return it }
+        // 迟到的 onServiceConnected 可能在超时判定后才填上 shellService，别把它重绑掉。
+        shellService?.let { return it }
+
+        FileLogger.w(TAG, "绑定 Shizuku UserService 超时，解绑后重试一次")
+        try {
+            withContext(Dispatchers.Main) {
+                Shizuku.unbindUserService(userServiceArgs, serviceConnection, false)
             }
-            val deferred = CompletableDeferred<IShizukuShellService>()
-            pendingBind = deferred
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "解绑 Shizuku UserService 失败: ${e.message}")
+        }
+
+        // 解绑或等待期间服务可能已停 / 掉授权，重新校验，避免重试白等。
+        requireReady()
+
+        awaitBind(BIND_RETRY_TIMEOUT_MS)?.let { return it }
+        shellService?.let { return it }
+
+        throw ShizukuBindException(
+            ShizukuBindFailure.USER_SERVICE_UNAVAILABLE,
+            "Shizuku UserService 绑定超时（已重试一次）"
+        )
+    }
+
+    /**
+     * 发起一次绑定并等待 [timeoutMs]，返回代理；超时返回 null。
+     *
+     * 每次尝试都用全新的 [CompletableDeferred]，并在结束（成功/超时/异常）时把 [pendingBind]
+     * 复位，避免上一次遗留的 deferred 被后续回调完成、污染状态。连接断开时 deferred 以
+     * [ShizukuBindException]（[ShizukuBindFailure.DISCONNECTED]）完成，异常原样抛出、不重试。
+     */
+    private suspend fun awaitBind(timeoutMs: Long): IShizukuShellService? {
+        val deferred = CompletableDeferred<IShizukuShellService>()
+        pendingBind = deferred
+        try {
             withContext(Dispatchers.Main) {
                 Shizuku.bindUserService(userServiceArgs, serviceConnection)
             }
-            withTimeoutOrNull(BIND_TIMEOUT_MS) { deferred.await() }
-                ?: throw IllegalStateException("绑定 Shizuku 服务超时")
+        } catch (e: CancellationException) {
+            clearPendingBind(deferred)
+            throw e
+        } catch (e: Exception) {
+            clearPendingBind(deferred)
+            throw ShizukuBindException(ShizukuBindFailure.DISCONNECTED, "绑定 Shizuku UserService 失败", e)
         }
+        return try {
+            withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } finally {
+            // 成功时回调已清空 pendingBind，这里是空操作；超时时清理遗留 deferred。
+            clearPendingBind(deferred)
+        }
+    }
+
+    /** 只清空仍是本次尝试的 [pendingBind]，避免误清后续尝试设置的 deferred。 */
+    private fun clearPendingBind(deferred: CompletableDeferred<IShizukuShellService>) {
+        if (pendingBind === deferred) pendingBind = null
+    }
+
+    /** 校验当前状态，非 READY 时抛带原因类别的 [ShizukuBindException]。 */
+    private fun requireReady() {
+        val state = computeState()
+        when (state) {
+            ShizukuState.READY -> return
+            ShizukuState.PERMISSION_DENIED -> throw ShizukuBindException(
+                ShizukuBindFailure.PERMISSION_DENIED,
+                "Shizuku 尚未获得授权（$state）"
+            )
+            ShizukuState.NOT_RUNNING -> throw ShizukuBindException(
+                ShizukuBindFailure.NOT_RUNNING,
+                "Shizuku 未运行（$state）"
+            )
+        }
+    }
+
+    /** 记录绑定前的服务端信号（uid / API 版本），供排查 UserService 起不来的原因。 */
+    private fun logBindSignal() {
+        val signal = peerInfo()?.let {
+            "uid=${it.uid} version=${it.version} adb=${it.isAdb} root=${it.isRoot}"
+        } ?: "不可用"
+        FileLogger.i(TAG, "绑定 Shizuku UserService 前置信号：$signal")
     }
 }

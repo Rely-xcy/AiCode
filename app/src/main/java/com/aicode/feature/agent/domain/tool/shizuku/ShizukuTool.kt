@@ -2,6 +2,8 @@ package com.aicode.feature.agent.domain.tool.shizuku
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.BoundedOutput
+import com.aicode.feature.agent.domain.shizuku.ShizukuBindException
+import com.aicode.feature.agent.domain.shizuku.ShizukuBindFailure
 import com.aicode.feature.agent.domain.shizuku.ShizukuManager
 import com.aicode.feature.agent.domain.shizuku.ShizukuState
 import com.aicode.feature.agent.domain.tool.AgentTool
@@ -102,6 +104,9 @@ class ShizukuTool @Inject constructor(
             ToolResult.Success(JsonPrimitive(output))
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ShizukuBindException) {
+            FileLogger.e(TAG, "Shizuku 绑定失败（${e.failure}）", e)
+            ToolResult.Error(shizukuBindFailureHint(e.failure), code = "SHIZUKU_BIND_FAILED")
         } catch (e: Exception) {
             FileLogger.e(TAG, "Shizuku exec 失败: $command", e)
             ToolResult.Error("执行 Shizuku 命令失败：${e.message}")
@@ -113,4 +118,21 @@ class ShizukuTool @Inject constructor(
         ShizukuState.PERMISSION_DENIED -> "本应用尚未获得 Shizuku 授权，请在设置中授予"
         ShizukuState.READY -> ""
     }
+}
+
+/**
+ * 把绑定失败的原因类别映射成可照做的中文提示。
+ *
+ * 只作为工具返回文本给 AI 读、不进 UI，故与 [ShizukuTool.stateHint] 一致硬编码、不进 strings.xml。
+ */
+internal fun shizukuBindFailureHint(failure: ShizukuBindFailure): String = when (failure) {
+    ShizukuBindFailure.NOT_RUNNING ->
+        "Shizuku 服务未运行。请在「设置 → 软件权限 → Shizuku」打开并启动 Shizuku 服务后重试。"
+    ShizukuBindFailure.PERMISSION_DENIED ->
+        "本应用尚未获得 Shizuku 授权。请在「设置 → 软件权限 → Shizuku」点击申请授权并选择「允许」后重试。"
+    ShizukuBindFailure.USER_SERVICE_UNAVAILABLE ->
+        "Shizuku 服务起不来（UserService 绑定超时，已重试一次）。" +
+            "请在 Shizuku 应用内重启服务，或更新 / 重装 Shizuku 后重试。"
+    ShizukuBindFailure.DISCONNECTED ->
+        "Shizuku 连接已断开。请重新打开 Shizuku 应用并确认服务仍在运行后重试。"
 }
