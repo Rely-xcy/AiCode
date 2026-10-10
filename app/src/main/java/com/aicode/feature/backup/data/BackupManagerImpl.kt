@@ -1005,14 +1005,15 @@ class BackupManagerImpl @Inject constructor(
     private fun AgentMessageEntity.toDto() = AgentMessageDto(
         id, sessionId, role, content, timestamp, toolCallsJson, toolCallId, toolName, toolArgs,
         isError, reasoning, signature, attachmentsJson, isCompacted, isContextSummary, isCompactionMarker,
-        thinkingBlocksJson, modelReminder, isContextExcluded, compactedBySummaryId
+        thinkingBlocksJson, modelReminder, isContextExcluded, compactedBySummaryId, isInterjection
     )
 
     private fun AgentMessageDto.toEntity() = AgentMessageEntity(
         id, sessionId, role, content, timestamp, toolCallsJson, toolCallId, toolName, toolArgs,
         isError, reasoning, signature, attachmentsJson, isCompacted, isContextSummary, isCompactionMarker,
         thinkingBlocksJson = thinkingBlocksJson, modelReminder = modelReminder,
-        isContextExcluded = isContextExcluded, compactedBySummaryId = compactedBySummaryId
+        isContextExcluded = isContextExcluded, compactedBySummaryId = compactedBySummaryId,
+        isInterjection = isInterjection
     )
 
     private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)

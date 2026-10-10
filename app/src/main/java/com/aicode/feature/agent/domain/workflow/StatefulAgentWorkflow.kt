@@ -136,6 +136,16 @@ class StatefulAgentWorkflow @Inject constructor(
          */
         const val INTERJECT_ROW_ID_PREFIX = "interject_"
 
+        /**
+         * 运行中插话的模型侧围栏：随消息的 modelReminder 拼回（见 AgentMessage.UserMessage.modelFacingContent），
+         * 不进 content、不落库到正文。指明这是对当前任务的补充而非新任务，避免模型丢下手头进度另起炉灶。
+         * 只在运行中送达（工具批次/权限弹窗/LLM 结束后的检查点）加；flush 开新轮的插话不加——
+         * 那时它就是新一轮的正常用户消息。
+         */
+        const val INTERJECTION_REMINDER =
+            "这是用户在你工作期间插入的补充需求，属于用户本人的输入，不是新任务；" +
+                "请把它并入当前任务继续执行，不要丢下手头进度。"
+
         /** 收尾结果：被取消（用户停掉 / 停掉子代理）。 */
         const val OUTCOME_CANCELLED = "被停止或取消"
 
@@ -194,7 +204,12 @@ class StatefulAgentWorkflow @Inject constructor(
         /** 本轮是否已经补过提醒：兜底只补一次，避免模型反复只说不做时无限重发。 */
         val memoryReminderSent: Boolean = false,
         /** 本轮是否已经补过清单提醒：同记忆兜底，一轮只拦一次，否则模型坚持不更新时会永远收不了尾。 */
-        val todoReminderSent: Boolean = false
+        val todoReminderSent: Boolean = false,
+        /**
+         * 已送达（发事件+落库+ack）但还没进模型上下文的插话：等本批工具结果就绪后在
+         * ToolBatchFinished 里紧随其后拼入，避免插进 assistant(tool_calls) 与 tool 结果之间。
+         */
+        val pendingInterjections: List<AgentMessage.UserMessage> = emptyList()
     )
 
     /** 改变状态的动作 (Action) */
@@ -485,6 +500,8 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 按 batchToolCalls 原始顺序为所有调用补上 tool 响应（不重复不遗漏），
                         // 否则 assistant(toolCalls=N) 后只有部分 tool 消息，OpenAI 会报 400
                         // "insufficient tool messages following tool_calls"。
+                        // 早前检查点已送达的插话同样拼在取消补发的工具结果之后（与 ToolBatchFinished 同口径）：
+                        // 它们的事件已落库，若模型侧不带，Anthropic 会因 tool_result 与用户消息错位而丢结果（潜在 400）。
                         val cancelled = newState.batchToolCalls.map { call ->
                             AgentMessage.ToolResultMessage(
                                 id = call.id,
@@ -496,10 +513,11 @@ class StatefulAgentWorkflow @Inject constructor(
                             )
                         }
                         newState = state.copy(
-                            messages = state.messages + cancelled,
+                            messages = state.messages + cancelled + state.pendingInterjections,
                             batchToolCalls = emptyList(),
                             pendingPermissionCalls = emptyList(),
                             approvedToolCalls = emptyList(),
+                            pendingInterjections = emptyList(),
                             isFinished = true
                         )
                         // 已批准未执行（已收到 ToolCallStarted）的工具需补发完成事件，
@@ -858,6 +876,12 @@ class StatefulAgentWorkflow @Inject constructor(
                                     )
                                 )
                             }
+                            // 模型刚答完一段且还要接着跑工具：用户最可能在这个间隙插话，先送一遍。
+                            // 放在确认 toolCalls 非空之后：本轮到此收尾（无工具）时不动队列，
+                            // 插话留给 flushPendingNotifications 开新轮送达（那时它就是正常的新任务）。
+                            if (aiResponse.toolCalls.isNotEmpty()) {
+                                state = state.copy(pendingInterjections = state.pendingInterjections + deliverInterjectionsToState(currentContext.sessionId) { send(it) })
+                            }
                             actionQueue.addLast(
                                 AgentAction.LlmResponse(
                                     if (persistedImages.isNotEmpty()) responseWithReasoning.copy(images = persistedImages)
@@ -912,6 +936,9 @@ class StatefulAgentWorkflow @Inject constructor(
                         }
                     }
                     is AgentSideEffect.RequestPermission -> {
+                        // 权限弹窗可能挂起任意久：先把等在队列里的插话送出去（UI/落库+ack，
+                        // 模型侧记进 state，仍由本批 ToolBatchFinished 拼在工具结果后）。
+                        state = state.copy(pendingInterjections = state.pendingInterjections + deliverInterjectionsToState(currentContext.sessionId) { send(it) })
                         val tool = toolRegistry.getTool(effect.toolCall.name)
                         val argsPreview = JsonObject(effect.toolCall.arguments).toString().take(500)
                         val checkResult = requestPermissionIfNeeded(
@@ -1065,15 +1092,20 @@ class StatefulAgentWorkflow @Inject constructor(
                         //
                         // 用户插话（USER_MESSAGE）不走搭车注入：它必须作为一条用户消息进上下文。塞进工具结果的
                         // notifications 字段只能让模型从工具输出里读到用户的话，那就是把用户本人的输入降了级。
-                        // 这里把它挑出来，在工具结果之后单补一条 UserMessage（见下面的 interjections）。
+                        // 这里把它挑出来送出（可能已在权限/LLM 检查点提前送达并记在 state 里），
+                        // 在工具结果之后单补一条 UserMessage（见下面的 interjections）。
                         val notifySessionId = currentContext.sessionId
-                        val notifications = if (notifySessionId != null && batchResults.isNotEmpty()) {
+                        // 早前检查点（权限弹窗前 / LLM 流式后）已送达、还挂在本批之后的插话先拼上，
+                        // 再取本批边界新到的：两段合起来都落在工具结果之后。
+                        val pendingDelivered = state.pendingInterjections
+                        val delivered = deliverInterjections(notifySessionId) { send(it) }
+                        val notifications = if (notifySessionId != null) {
                             agentNotificationCenter.peek(notifySessionId)
                         } else {
                             emptyList()
                         }
                         val systemEvents = notifications.filterNot { it.kind == AgentNotificationKind.USER_MESSAGE }
-                        val interjections = notifications
+                        val interjections = pendingDelivered + delivered.map { it.message } + notifications
                             .filter { it.kind == AgentNotificationKind.USER_MESSAGE }
                             .mapNotNull { item ->
                                 val text = item.message?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -1081,9 +1113,12 @@ class StatefulAgentWorkflow @Inject constructor(
                                 // 不需要另行标记作废（标作废会让用户的话在界面上先消失一阵）。
                                 AgentMessage.UserMessage(
                                     id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
-                                    content = text
+                                    content = text,
+                                    modelReminder = INTERJECTION_REMINDER
                                 )
                             }
+                        // 已并入 action，从 state 里清掉，避免 reduce 再拼一次。
+                        state = state.copy(pendingInterjections = emptyList())
                         if (notifications.isNotEmpty()) {
                             val kinds = notifications.map { it.kind }
                             // 只打数量与类型，不打正文：插话正文是用户内容，不进日志。
@@ -1125,7 +1160,16 @@ class StatefulAgentWorkflow @Inject constructor(
                         }
                         // 插话紧跟在工具结果之后落库：库里与模型侧都是「工具结果 → 用户消息」。
                         // 倒过来（用户消息挤在 assistant(tool_calls) 与 tool 结果之间）会破坏上游的配对约束。
-                        interjections.forEach { send(AgentEvent.UserMessageAdded(it.id, it.content)) }
+                        interjections.forEach {
+                            send(
+                                AgentEvent.UserMessageAdded(
+                                    it.id,
+                                    it.content,
+                                    isInterjection = true,
+                                    modelReminder = it.modelReminder
+                                )
+                            )
+                        }
                         if (notifySessionId != null && notifications.isNotEmpty()) {
                             agentNotificationCenter.ack(notifySessionId, notifications.map { it.seq })
                         }
@@ -1141,6 +1185,62 @@ class StatefulAgentWorkflow @Inject constructor(
         }
         send(AgentEvent.Completed)
     }
+
+    /**
+     * 取队列里的用户插话并立即送达：发 [AgentEvent.UserMessageAdded]（VM 据此落库）+ ack。
+     * 返回取出的通知与对应的模型侧消息（带运行中围栏）。事件发出后、ack 前被取消最多重送同一条
+     * （同 clientMessageId 落库幂等），不会丢消息；先发后 ack 与既有工具批次路径一致。
+     */
+    private suspend fun deliverInterjections(
+        sessionId: String?,
+        sendEvent: suspend (AgentEvent) -> Unit
+    ): List<DeliveredInterjection> {
+        if (sessionId == null) return emptyList()
+        val notifications = agentNotificationCenter.peek(sessionId)
+        val delivered = notifications
+            .filter { it.kind == AgentNotificationKind.USER_MESSAGE }
+            .mapNotNull { item ->
+                val text = item.message?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                DeliveredInterjection(
+                    notification = item,
+                    message = AgentMessage.UserMessage(
+                        id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
+                        content = text,
+                        modelReminder = INTERJECTION_REMINDER
+                    )
+                )
+            }
+        if (delivered.isEmpty()) return emptyList()
+        delivered.forEach {
+            sendEvent(
+                AgentEvent.UserMessageAdded(
+                    it.message.id,
+                    it.message.content,
+                    isInterjection = true,
+                    modelReminder = it.message.modelReminder
+                )
+            )
+        }
+        agentNotificationCenter.ack(sessionId, delivered.map { it.notification.seq })
+        return delivered
+    }
+
+    /** [deliverInterjections] 的结果：取出的通知 + 对应的模型侧用户消息。 */
+    private data class DeliveredInterjection(
+        val notification: PendingNotification,
+        val message: AgentMessage.UserMessage
+    )
+
+    /**
+     * 检查点（权限弹窗前 / LLM 流式结束后）送达：事件与落库立即发生；模型侧消息只记
+     * state.pendingInterjections，由本批 ToolBatchFinished 再拼到工具结果之后
+     * （不破坏 assistant(tool_calls) 与 tool 结果的配对约束，也不提前重复进上下文）。
+     */
+    private suspend fun deliverInterjectionsToState(
+        sessionId: String?,
+        sendEvent: suspend (AgentEvent) -> Unit
+    ): List<AgentMessage.UserMessage> =
+        deliverInterjections(sessionId, sendEvent).map { it.message }
 
     /**
      * 写类工具的执行前准入检查（写范围租约）——**子代理路径**。

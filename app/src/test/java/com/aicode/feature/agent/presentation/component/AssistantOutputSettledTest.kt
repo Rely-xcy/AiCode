@@ -49,7 +49,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = null
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -67,7 +69,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = "我先确认一下调用方"
+                currentReasoning = "我先确认一下调用方",
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -84,7 +88,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = null
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -101,7 +107,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "这一轮正在输出的正文",
-                currentReasoning = null
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -114,7 +122,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "这一轮正在输出的正文",
-                currentReasoning = null
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -136,7 +146,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "本轮正在输出的正文",
-                currentReasoning = "本轮正在思考"
+                currentReasoning = "本轮正在思考",
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -152,7 +164,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = "完全不同的另一段思考"
+                currentReasoning = "完全不同的另一段思考",
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -168,7 +182,9 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = "先读文件确认结构"
+                currentReasoning = "先读文件确认结构",
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }
@@ -184,7 +200,115 @@ class AssistantOutputSettledTest {
             isAssistantOutputSettled(
                 messages = messages,
                 currentText = "我先看下相关代码",
-                currentReasoning = null
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
+            )
+        )
+    }
+
+    /** Final 重写正文后与 retained 相等（normalize 空白）：双向包含判同源，判就位。 */
+    @Test
+    fun retainedEqualsNormalizedAnchor_isSettled() {
+        val messages = listOf(
+            user("第一个问题"),
+            assistant("  我先看下相关代码，\n然后修掉。  ")
+        )
+        assertTrue(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "我先看下相关代码， 然后修掉。",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
+            )
+        )
+    }
+
+    /** anchor 正文以 retained 开头（Final 比流式累积更长/重写）：同源，判就位。 */
+    @Test
+    fun anchorStartsWithRetained_isSettled() {
+        val messages = listOf(
+            user("第一个问题"),
+            assistant("Final 重组后的完整回复正文开头")
+        )
+        assertTrue(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "Final 重组后的完整回复",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
+            )
+        )
+    }
+
+    /** 失配持续且 isBusy 已转 false 超过强制退休超时：无条件判就位（旧尾巴必须消失）。 */
+    @Test
+    fun mismatchedIdleBeyondForceRetireTimeout_isSettled() {
+        val messages = listOf(
+            user("第一个问题"),
+            assistant("落库的正文")
+        )
+        assertTrue(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "与落库完全无关的 retained 旧正文",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = System.currentTimeMillis() - 10_000L
+            )
+        )
+        // 同形状、但超时未到：仍然不算就位（不能让失配的正文提前退休造成空白闪回）。
+        assertFalse(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "与落库完全无关的 retained 旧正文",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = System.currentTimeMillis() - 1_000L
+            )
+        )
+        // isBusy 仍为 true（新一轮还在流式）：超时兜底不生效，不能把正在写的内容误判成就位。
+        assertFalse(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "与落库完全无关的 retained 旧正文",
+                currentReasoning = null,
+                isBusy = true,
+                settledFailingSinceMs = System.currentTimeMillis() - 10_000L
+            )
+        )
+    }
+
+    /**
+     * 新一轮正在流式、正文恰好以上一轮整段为前缀（`s.startsWith(p)`）：双向包含此时不能判同源，
+     * 否则正在写的新内容被提前判就位、整段隐去再冒出。双向包含在 isBusy 时必须被门禁关掉，
+     * 只有流式结束后才作为同源兜底生效。
+     */
+    @Test
+    fun newTurnTextExtendsPreviousAnchor_whileBusy_isNotSettled() {
+        val messages = listOf(
+            user("第一个问题"),
+            assistant("上一轮的回复内容")
+        )
+        assertFalse(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "上一轮的回复内容，这是本轮继续输出的新正文",
+                currentReasoning = null,
+                isBusy = true,
+                settledFailingSinceMs = null
+            )
+        )
+        // 同形状、但流式已结束（isBusy=false）：双向包含兜底重新生效，判就位。
+        assertTrue(
+            isAssistantOutputSettled(
+                messages = messages,
+                currentText = "上一轮的回复内容，这是本轮继续输出的新正文",
+                currentReasoning = null,
+                isBusy = false,
+                settledFailingSinceMs = null
             )
         )
     }

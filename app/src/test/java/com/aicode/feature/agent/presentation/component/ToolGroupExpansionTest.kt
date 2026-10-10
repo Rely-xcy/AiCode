@@ -249,6 +249,18 @@ class ToolGroupExpansionTest {
     }
 
     @Test
+    fun interjectionDoesNotStartNewTurn() {
+        // 运行中插话（isInterjection = true）不开新轮：归入当前轮内容，插话气泡原位显示。
+        // 插话是常显项，会就地切断该轮过程、切出多段轮头，但段头 key 全为 turn:u0。
+        val interjection = user("i1").copy(isInterjection = true)
+        val messages = listOf(user("u0"), tool("t1"), interjection, tool("t2"), assistant("a1"))
+        val items = items(messages, activeTurnKey = "turn:u0")
+        val headers = items.mapNotNull { it.turnHeader }
+        assertTrue("插话不开新轮头，所有轮头都属于 turn:u0", headers.isNotEmpty() && headers.all { it.key == "turn:u0" })
+        assertTrue("插话在时间线原位显示为普通用户气泡", items.any { it.key == "i1" })
+    }
+
+    @Test
     fun resultReasoning_becomesProcessItem() {
         // 轮末助手的思考抽为过程项；结果正文块不再重复渲染思考
         val messages = listOf(

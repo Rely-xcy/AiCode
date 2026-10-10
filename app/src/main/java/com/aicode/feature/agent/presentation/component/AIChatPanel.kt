@@ -244,6 +244,47 @@ private fun AgentUIMessage.rendersActionRow(): Boolean =
 private const val STREAM_HEAD_SAMPLE_CHARS = 20
 
 /**
+ * 「流式已结束但 retained 与任何落库行都对不上」时的强制退休超时（ms）。
+ *
+ * 前缀 / 双向包含比对都可能失配（如 Final 重组正文、推理模型输出修订版）；失配期间 retained
+ * 旧正文的 STREAMING 尾巴气泡与落库新行同屏两份。空落库行「正文一定落库」不成立（纯思考轮、
+ * Final 无正文时）的形状没有可靠的对上信号，只能靠时间保底：isBusy 已转 false 说明本轮
+ * 结束，超过该时长仍对不上的 retained 一律退休，不再有「永不退休」路径。
+ * 取 4s：落在 3-5s 区间中位，足以容忍 messages 异步回流的常见延迟，又不至于让旧正文
+ * 多停留一拍。
+ */
+private const val RETAINED_FORCE_RETIRE_MS = 4_000L
+
+/**
+ * 强制退休计时到点后，额外多等这一段（ms）再触发重组合。
+ *
+ * 退休判据 [isAssistantOutputSettled] 读的是 System.currentTimeMillis()，但它只在重组合时求值；
+ * 写计时的那次组合之后若没有新事件触发重组合，4s 到点也不会自动退休。留给重组合的余量保证
+ * 自增 tick 触发的那次重组合里，「已超时」成立。
+ */
+private const val RETAINED_FORCE_RETIRE_TICK_MARGIN_MS = 250L
+
+/** 归一化空白后比较：落库正文可能合并/吞掉行尾空白，逐字比对会因空白差异误判失配。 */
+private fun contentEquivalent(a: String, b: String): Boolean =
+    a.trim().replace(Regex("\\s+"), " ") == b.trim().replace(Regex("\\s+"), " ")
+
+/**
+ * 落库正文与流式/retained 文本「同源」：双向包含。任意一方以另一方开头（或相等）即认作
+ * 同一段内容——Final 重组正文、推理模型输出修订版改的通常是开头，但只要语义同段，
+ * 头部或尾部总会有一方对得上。
+ *
+ * 双向包含只在流式已结束（`!isBusy`）时算同源：新一轮流式的正文恰好以列表里上一条整段为前缀时
+ * （`s.startsWith(p)`），若不作门禁，正在写的新内容会被误判就位、整段隐去再冒出。
+ * 归一化相等（[contentEquivalent]）不受此门禁影响。
+ */
+private fun isSameContent(persisted: String, streaming: String, isBusy: Boolean): Boolean {
+    val p = persisted.trimStart()
+    val s = streaming.trimStart()
+    if (!isBusy && (p.startsWith(s) || s.startsWith(p))) return true
+    return contentEquivalent(p, s)
+}
+
+/**
  * 本轮流式输出是否已经在消息列表里正式就位（底部尾巴气泡与其跳动的点可以退休）。
  *
  * 判据：把当前流式正文 / 思考分别去比「列表里最后一条真正承载该项内容的助手消息」的头部，
@@ -257,11 +298,20 @@ private const val STREAM_HEAD_SAMPLE_CHARS = 20
  *
  * 前缀比对本身不能放开：新一轮流式开始时，列表里最近的承载者还是上一轮的助手消息，
  * 只有前缀不吻合才能把「正在写的新内容」判为尚未就位、继续留在尾巴气泡里渲染。
+ *
+ * 但仅靠前缀猜同源不够：Final 重组正文、推理模型输出修订版会让开头失配，retained 旧正文
+ * 就永不退休（尾巴气泡与落库新行同屏两份）。因此补两条：① 双向包含同源判据
+ * （[isSameContent]，equal/一方以另一方开头都算）；② 强制退休超时——流式已结束
+ * （isBusy=false）且 settled 判定持续失败超过 [RETAINED_FORCE_RETIRE_MS]，一律判就位。
+ * 超时的计时由调用方维护（[settledFailingSinceMs]：连续判失败的超始毫秒，判成功或新一轮
+ * 开始流式时重置），本函数保持纯函数便于测试。
  */
 internal fun isAssistantOutputSettled(
     messages: List<AgentUIMessage>,
     currentText: String?,
-    currentReasoning: String?
+    currentReasoning: String?,
+    isBusy: Boolean,
+    settledFailingSinceMs: Long?
 ): Boolean {
     val textSettled = if (currentText.isNullOrBlank()) {
         true
@@ -269,8 +319,13 @@ internal fun isAssistantOutputSettled(
         val anchor = messages.lastOrNull {
             it.role == MessageRole.ASSISTANT && !it.isBackgroundNotification && it.content.hasVisibleContent()
         }
-        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）
-        anchor != null && startsWithStreamHead(anchor.content, currentText)
+        // 列表里还没有承载正文的助手行 → 什么都还没落库，谈不上就位（首轮流式期间正是这个状态）；
+        // 强制退休超时由末尾统一兜底。
+        if (anchor == null) {
+            false
+        } else {
+            startsWithStreamHead(anchor.content, currentText) || isSameContent(anchor.content, currentText, isBusy)
+        }
     }
     val reasoningSettled = if (currentReasoning.isNullOrBlank()) {
         true
@@ -281,9 +336,15 @@ internal fun isAssistantOutputSettled(
         // 思考不一定落库（provider 不回传时整轮都没有 reasoning 行）：没有承载者即视为已就位，
         // 否则前缀永远比不中、缓冲永不退休，尾巴气泡与落库气泡同屏看起来就是同一条回复显示两遍。
         // 正文那条不能这么放宽——正文一定落库。
-        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning)
+        anchor == null || startsWithStreamHead(anchor.reasoning.orEmpty(), currentReasoning) ||
+            isSameContent(anchor.reasoning.orEmpty(), currentReasoning, isBusy)
     }
-    return textSettled && reasoningSettled
+    // 强制退休兜底：流式已结束（isBusy=false）且 settled 判定持续失败超过超时时长，
+    // 无论正文/思考是否对得上（含 anchor 为空、Final 重写正文、修订版正文等一切形状），
+    // 一律退休 retained，旧尾巴气泡最终必定消失，不再有「永不退休」路径。
+    val forceRetired = !isBusy && settledFailingSinceMs != null &&
+        System.currentTimeMillis() - settledFailingSinceMs >= RETAINED_FORCE_RETIRE_MS
+    return (textSettled && reasoningSettled) || forceRetired
 }
 
 /** 落库文本以「流式文本开头 [STREAM_HEAD_SAMPLE_CHARS] 个字符」开头，即认作同一条内容。 */
@@ -350,8 +411,9 @@ internal fun buildChatItems(
     /**
      * 当前正在跑的那一轮的轮首用户行对应 key（空闲时为 null）。
      *
-     * 判定是「等于它、或排在它之后」：本轮中途的插话会在同一次运行里再开一轮，那些轮还没跑完，
-     * 同样按进行中渲染（不显示「已完成」、不把进行中的正文当结果）。
+     * 判定是「等于它、或排在它之后」：运行期间若出现后续轮（本轮之后新起的轮），
+     * 同属这次运行、同样还没跑完，按进行中渲染（不显示「已完成」、不把进行中的正文当结果）。
+     * 运行中插话不开新轮（见 [splitChatTurns]），归入当前轮时间线，不在此列。
      */
     activeTurnKey: String? = null,
 ): List<ChatRenderItem> {
@@ -361,9 +423,10 @@ internal fun buildChatItems(
     leading.forEach { items += messageRenderItems(it) }
     var runningFromHere = false
     for (turn in turns) {
-        // 「正在跑」= 「activeTurnKey 起、往后都算」，不是「等于 activeTurnKey」：本轮中途的插话会在同一次
-        // 运行里再开一轮，它同样没跑完。只认相等的话，插话一落库就会把正在跑的那一轮顶成「已完成」，
+        // 「正在跑」= 「activeTurnKey 起、往后都算」，不是「等于 activeTurnKey」：运行期间若出现后续轮，
+        // 它同样没跑完。只认相等的话，后续轮一落库就会把正在跑的那一轮顶成「已完成」，
         // 进行中的正文也会被当成最终回答（见上面的 activeTurnKey）。
+        // 运行中插话不开新轮（见 splitChatTurns），不会在这里把本轮顶掉。
         if (activeTurnKey != null && turn.key == activeTurnKey) runningFromHere = true
         val running = runningFromHere
         items += messageRenderItems(turn.userMessage)
@@ -458,6 +521,7 @@ private class ChatTurn(
  * 按「用户消息」切成轮。返回 (轮首之前的散消息, 轮列表)。
  *
  * 后台通知虽可能是 USER 角色，但它是系统注入的提示条而非用户输入，不作为轮起点（归入当前轮内容）。
+ * 运行中插话同理：它是对当前任务的补充，归入当前轮，不开新轮头。
  */
 private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMessage>, List<ChatTurn>> {
     val leading = ArrayList<AgentUIMessage>()
@@ -465,7 +529,9 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
     var user: AgentUIMessage? = null
     var body: MutableList<AgentUIMessage>? = null
     for (message in messages) {
-        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker) {
+        if (message.role == MessageRole.USER && !message.isBackgroundNotification && !message.isCompactionMarker &&
+            !message.isInterjection
+        ) {
             user?.let { turns += ChatTurn(turnKeyOf(it.id), it, body?.toList().orEmpty()) }
             user = message
             body = ArrayList()
@@ -480,8 +546,9 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
 /**
  * 可以挂「复制 / 更多」操作行的消息 id 集合（每个已收尾轮次的末条可挂消息，含开头的散消息）。
  *
- * 轮次是否收尾只看 [activeTurnKey]：它以及排在它之后的轮都属于正在跑的那次运行（本轮中途插话会在
- * 同一次运行里再开一轮），一律不挂——否则本轮进行中的正文会被当成最终回答，生成中途就冒出操作行。
+ * 轮次是否收尾只看 [activeTurnKey]：它以及排在它之后的轮都属于正在跑的那次运行，一律不挂——否则本轮
+ * 进行中的正文会被当成最终回答，生成中途就冒出操作行。运行中插话不开新轮（见 [splitChatTurns]），
+ * 不影响这里的轮次归属。
  * [busy] 为真但 [activeTurnKey] 为空（本轮没有轮首用户行，或它还没被加载进来）时退回旧判据
  * 「除末轮外都算收尾」，与改动前一致。
  */
@@ -507,10 +574,15 @@ internal fun actionableResultIds(
     return ids
 }
 
-/** 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。 */
+/**
+ * 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。
+ *
+ * 运行中插话（[AgentUIMessage.isInterjection]）也是常显项：它归入当前轮但不开新轮头，
+ * 必须作为顶层 item 在时间线原位渲染，绝不折进轮头——否则轮一收起，用户自己发的插话就不见了。
+ */
 private fun AgentUIMessage.isPersistentInTurn(): Boolean =
     isCompactionMarker || isContextSummary || isCompactionFailure || isBackgroundNotification ||
-        (role == MessageRole.TOOL && attachments.isNotEmpty())
+        isInterjection || (role == MessageRole.TOOL && attachments.isNotEmpty())
 
 /** 能否作为一轮的「结果」：最后一条有可见正文的普通助手消息。 */
 private fun AgentUIMessage.isResultCandidate(): Boolean =
@@ -867,10 +939,10 @@ fun AIChatPanel(
         } else {
             val anchor = runningTurnAnchorId?.let { id ->
                 messages.firstOrNull { it.id == id }
-                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker }
+                    ?.takeIf { it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection }
             }
             val anchorMessage = anchor ?: messages.lastOrNull {
-                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker
+                it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker && !it.isInterjection
             }
             anchorMessage?.let { turnKeyOf(it.id) }
         }
@@ -884,8 +956,8 @@ fun AIChatPanel(
         )
     }
     // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方。
-    // 正在跑的那一轮（以及本轮中途插话在同一次运行里开的后续轮）不给结论：耗时与用量都要等本轮收工
-    // 才成立。按轮首用户行 id 传入（与 activeTurnKey 同一个运行时真值），插话才顶不掉它。
+    // 正在跑的那一轮（以及运行期间出现的后续轮）不给结论：耗时与用量都要等本轮收工才成立。
+    // 按轮首用户行 id 传入（与 activeTurnKey 同一个运行时真值），插话才顶不掉它。
     val runningTurnStartId = if (isBusy) runningTurnAnchorId else null
     val taskDurations = remember(messages, isBusy, runningTurnStartId) {
         computeTaskDurations(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
@@ -897,7 +969,7 @@ fun AIChatPanel(
     // 方案 A：每轮正常收尾的最终回复（包括历史所有轮次的回复）均挂操作行（复制/更多），
     // 彻底解决依赖内存集合导致重启 App 后历史消息丢失操作按钮的 Bug。
     // 仅在最新一轮正在生成（isBusy == true）时暂不挂出，避免生成中途按钮乱跳；
-    // 「正在跑的那一轮」按 activeTurnKey 定位（见上），中途插话开的后续轮同属本次运行，也不挂。
+    // 「正在跑的那一轮」按 activeTurnKey 定位（见上），运行期间出现的后续轮同属本次运行，也不挂。
     val actionableMessageIds = remember(messages, isBusy, activeTurnKey) {
         actionableResultIds(messages, activeTurnKey, isBusy)
     }
@@ -1166,12 +1238,39 @@ fun AIChatPanel(
     // 本轮助手消息是否已经在消息列表中正式就位渲染：判据见 [isAssistantOutputSettled]。
     // 比的是「最后一条承载本轮正文 / 思考的助手消息」，不是列表末尾那条——末尾是工具行、
     // 空正文助手行、后台通知时，末尾那条永远比不中，尾巴会永久卡在流式态（本轮结束后点还在跳）。
-    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了。
+    // 同 origin/fix/chat-duplicate-reply（929d8684）的前缀判定，只是比较对象换了；
+    // 另加双向包含同源判据与强制退休超时（见 [RETAINED_FORCE_RETIRE_MS]）。
+    // 连续判失败的超始时刻：正在流式（streamingText 非空）时视为新一轮，重置计时；
+    // 判成功也重置。isBusy 转 false 且持续失配超时后，无论形状一律强制退休。
+    // 复用上方已有的 isBusy（同源 agentState），不另取名字重复计算。
+    var settledFailingSinceMs by remember { mutableStateOf<Long?>(null) }
+    // 强制退休读的是 System.currentTimeMillis()，但纯函数只在重组合时求值：写计时的那次组合之后
+    // 若无新事件触发重组合，4s 到点也不会自动退休。这里在计时非空时挂一个延时，到点翻转
+    // forceRetireTick，主动触发一次重组合（它被下面的 LaunchedEffect 读取）——保证 4s 后旧尾巴一定退休。
+    var forceRetireTick by remember { mutableStateOf(0) }
+    LaunchedEffect(settledFailingSinceMs) {
+        val since = settledFailingSinceMs
+        if (since != null) {
+            delay(RETAINED_FORCE_RETIRE_MS + RETAINED_FORCE_RETIRE_TICK_MARGIN_MS)
+            forceRetireTick++
+        }
+    }
     val isAssistantSettled = isAssistantOutputSettled(
         messages = messages,
         currentText = streamingText ?: retainedStreamingText,
-        currentReasoning = streamingReasoning ?: retainedStreamingReasoning
+        currentReasoning = streamingReasoning ?: retainedStreamingReasoning,
+        isBusy = isBusy,
+        settledFailingSinceMs = settledFailingSinceMs
     )
+    // 把 forceRetireTick 读进组合（作为 key）：它自增时触发本 Composable 重组合，
+    // 使上面的 isAssistantOutputSettled 以新的当前时刻重新求值。
+    LaunchedEffect(isAssistantSettled, streamingText, isBusy, forceRetireTick) {
+        settledFailingSinceMs = if (isAssistantSettled || streamingText != null || isBusy) {
+            null
+        } else {
+            settledFailingSinceMs ?: System.currentTimeMillis()
+        }
+    }
 
     LaunchedEffect(streamingText, isAssistantSettled) {
         val st = streamingText
