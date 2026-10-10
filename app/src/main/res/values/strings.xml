@@ -983,6 +983,11 @@
     <!-- Memory Settings -->
     <string name="memory_empty">还没有长期记忆</string>
     <string name="memory_empty_hint">对话中让 AI 记住的长期内容会显示在这里</string>
+    <string name="memory_tab_profile">用户画像</string>
+    <string name="memory_tab_memory">记忆</string>
+    <string name="memory_profile_desc">从对话中自动沉淀的、关于你的长期结论（偏好、习惯、纠正等），跨会话生效。</string>
+    <string name="memory_profile_empty">还没有用户画像</string>
+    <string name="memory_profile_empty_hint">打开主动记忆后，AI 会从对话里沉淀关于你的长期结论</string>
     <string name="memory_active_memory">主动记忆</string>
     <string name="memory_active_memory_desc">打开后模型会在对话中主动沉淀长期记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>

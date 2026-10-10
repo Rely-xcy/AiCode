@@ -983,6 +983,11 @@
     <!-- Memory Settings -->
     <string name="memory_empty">No long-term memories yet</string>
     <string name="memory_empty_hint">Whatever you ask the assistant to remember long-term shows up here</string>
+    <string name="memory_tab_profile">Profile</string>
+    <string name="memory_tab_memory">Memories</string>
+    <string name="memory_profile_desc">Long-term conclusions about you, distilled automatically from chats (preferences, habits, corrections); applied across sessions.</string>
+    <string name="memory_profile_empty">No profile yet</string>
+    <string name="memory_profile_empty_hint">With active memory on, the assistant distills durable conclusions about you from chats</string>
     <string name="memory_active_memory">Active memory</string>
     <string name="memory_active_memory_desc">When on, the model records durable conclusions as long-term memory during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
     <string name="memory_source_auto">Auto-saved</string>
