@@ -61,7 +61,9 @@ import com.aicode.feature.agent.domain.provider.fixedTemperature
 import com.aicode.feature.agent.domain.provider.GeminiAdapter
 import com.aicode.feature.agent.domain.provider.AllKeysFailedException
 import com.aicode.feature.agent.domain.provider.KeySwitchOutcome
+import com.aicode.feature.agent.domain.provider.isContextWindowOverflowError
 import com.aicode.feature.agent.domain.provider.isKeySwitchFailure
+import com.aicode.feature.agent.domain.provider.parseContextWindowLimit
 import com.aicode.feature.agent.domain.provider.OpenAIAdapter
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -153,6 +155,15 @@ class StatefulAgentWorkflow @Inject constructor(
         const val OUTCOME_FAILED = "运行失败"
 
         /**
+         * 上下文超窗失败的原因码。
+         *
+         * 复用 Anthropic `stop_reason=model_context_window_exceeded` 的取值，是为了直接命中界面既有的
+         * 本地化映射（见 AIAgentViewModel.describeFailure），无需新增文案；界面会在这条本地化说明后
+         * 附上原始错误正文，模型真实上限就在其中。
+         */
+        const val CONTEXT_OVERFLOW_REASON_CODE = "model_context_window_exceeded"
+
+        /**
          * 能绕过工具层准入直接改文件的 shell 类工具（重定向、`sed -i`、rm 等）：
          * 拿不到命令实际写了哪个路径，只能在执行前后比对「租约内具体文件」的指纹来事后发现。
          */
@@ -227,7 +238,7 @@ class StatefulAgentWorkflow @Inject constructor(
              */
             val todoGuardReminder: String? = null
         ) : AgentAction
-        data class LlmError(val error: String) : AgentAction
+        data class LlmError(val error: String, val errorCode: String? = null) : AgentAction
         data class PermissionEvaluated(
             val toolCall: ToolCall,
             val approved: Boolean,
@@ -477,7 +488,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 }
             }
             is AgentAction.LlmError -> {
-                newState = state.copy(isFinished = true, error = action.error)
+                newState = state.copy(isFinished = true, error = action.error, errorCode = action.errorCode)
             }
             is AgentAction.PermissionEvaluated -> {
                 if (action.approved) {
@@ -759,9 +770,9 @@ class StatefulAgentWorkflow @Inject constructor(
                         var finalResponse: AIResponse? = null
 
                         // 调用统计埋点：记录请求发出/首字/结束时刻与 usage，失败与取消同样留痕。
-                        val callStartElapsed = SystemClock.elapsedRealtime()
-                        val callStartWall = System.currentTimeMillis()
                         val callKind = "chat"
+                        var callStartElapsed = SystemClock.elapsedRealtime()
+                        var callStartWall = System.currentTimeMillis()
                         var ttfbElapsed: Long? = null
                         var callError: String? = null
                         var callCompleted = false
@@ -787,10 +798,29 @@ class StatefulAgentWorkflow @Inject constructor(
                             send(AgentEvent.ReasoningDelta(text))
                         }
 
+                        // 发送前按实际模型的视觉能力处理图片（同 execute 路径）。
+                        val supportsVision = activeModelSupportsVision(currentContext.sessionId)
+                        var messagesToSend = sanitizeImagesForModel(compactedMessages, supportsVision)
+                        // 上下文超窗 400 的自愈只给一次机会：写回真实窗口 → 重压 → 复用同一批参数重试一次。
+                        // 循环体里除了「再发一次」没有额外副作用；未触发自愈时与改动前逐字一致。
+                        var overflowRetried = false
+                        llmAttempt@ while (true) {
+                            // 每次尝试都从干净状态开始：上一次的累积文本、节流残留与计时不能带进重试，
+                            // 否则重试成功后会把上一次的残文重复发给界面，审计记录也会把两次耗时混在一起。
+                            callStartElapsed = SystemClock.elapsedRealtime()
+                            callStartWall = System.currentTimeMillis()
+                            acc.setLength(0)
+                            reasoningAcc.setLength(0)
+                            finalResponse = null
+                            callError = null
+                            callCompleted = false
+                            ttfbElapsed = null
+                            retryAttempts = 0
+                            pendingTextDelta = null
+                            pendingReasoningDelta = null
+                            lastTextDeltaSentAt = 0L
+                            lastReasoningDeltaSentAt = 0L
                         try {
-                            // 发送前按实际模型的视觉能力处理图片（同 execute 路径）。
-                            val supportsVision = activeModelSupportsVision(currentContext.sessionId)
-                            val messagesToSend = sanitizeImagesForModel(compactedMessages, supportsVision)
                             providerInUse.completeStream(systemPrompt, messagesToSend, currentTools, currentContext.reasoningEffort).collect { chunk ->
                                 when (chunk) {
                                     is AIStreamChunk.TextDelta -> {
@@ -888,9 +918,40 @@ class StatefulAgentWorkflow @Inject constructor(
                                     else responseWithReasoning
                                 )
                             )
+                            break@llmAttempt
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            // 上下文超窗 400：先按供应商给出的真实窗口重压一次再重发。
+                            // 这条分支不发 AssistantText、不投 LlmError，避免把半截内容或一次失败
+                            // 变成用户可见的重复消息/错误。
+                            if (!overflowRetried && e.isContextWindowOverflowError()) {
+                                overflowRetried = true
+                                callError = e.message ?: e.javaClass.simpleName
+                                val recovered = try {
+                                    recoverFromContextOverflow(
+                                        error = e,
+                                        provider = providerInUse,
+                                        ctx = currentContext,
+                                        baseMessages = state.messages,
+                                        summaryProvider = compactionProvider,
+                                        overheadTokens = baseOverheadTokens,
+                                        lastInputTokens = sessionLastInputTokens,
+                                        onEvent = { event -> send(event) }
+                                    )
+                                } catch (cancel: CancellationException) {
+                                    throw cancel
+                                } catch (recoveryError: Exception) {
+                                    // 自愈本身失败不能把本轮对话拖挂：记一笔，退回原来的报错路径。
+                                    FileLogger.w(TAG, "上下文超窗自愈失败，按原始错误上报", recoveryError)
+                                    null
+                                }
+                                if (recovered != null) {
+                                    state = state.copy(messages = recovered)
+                                    messagesToSend = sanitizeImagesForModel(recovered, supportsVision)
+                                    continue@llmAttempt
+                                }
+                            }
                             val partial = acc.toString()
                             val reasoning = reasoningAcc.toString()
                             // 流式被中断时也要落库已收到的思考：否则下方 finally 会清空流式思考气泡，
@@ -902,7 +963,15 @@ class StatefulAgentWorkflow @Inject constructor(
                             // 多 Key 的自动切换与重发已在 adapter 内完成（见 AIProvider.keySwitcher）；
                             // 走到这里说明不是 Key 问题、或候选 Key 已全部失败，直接上报原始错误。
                             val errorText = "LLM 调用失败: ${e.message}"
-                            actionQueue.addLast(AgentAction.LlmError(errorText))
+                            // 超窗时带上原因码：界面据此把「本次输入超出模型上下文窗口」这段本地化说明
+                            // 拼在原始错误前（复用既有 model_context_window_exceeded 的映射），
+                            // 模型真实上限本就在原始错误正文里。
+                            actionQueue.addLast(
+                                AgentAction.LlmError(
+                                    errorText,
+                                    if (e.isContextWindowOverflowError()) CONTEXT_OVERFLOW_REASON_CODE else null
+                                )
+                            )
                             callError = e.message ?: e.javaClass.simpleName
                         } finally {
                             val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
@@ -934,6 +1003,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                 )
                             }
                         }
+                        } // llmAttempt：成功 break / 最终失败跳出
                     }
                     is AgentSideEffect.RequestPermission -> {
                         // 权限弹窗可能挂起任意久：先把等在队列里的插话送出去（UI/落库+ack，
@@ -1395,6 +1465,60 @@ class StatefulAgentWorkflow @Inject constructor(
                 is AgentMessage.AssistantMessage -> msg
             }
         }
+    }
+
+    /**
+     * 上下文超窗 400 的一次性自愈：解析真实上限 → 写回模型窗口 → 按新窗口强制重压 → 返回可重发的消息。
+     *
+     * 返回 null 表示这次没能腾出空间（拿不到配置、或重压后消息没变且没写回窗口），调用方按原样上报错误。
+     * 只改内存里的消息列表，不落库：重压产出的消息与正常压缩走同一条路径，是否持久化由后续 LlmResponse
+     * 决定，因此不会产生重复消息。
+     */
+    private suspend fun recoverFromContextOverflow(
+        error: Throwable,
+        provider: AIProvider,
+        ctx: AgentContext,
+        baseMessages: List<AgentMessage>,
+        summaryProvider: AIProvider?,
+        overheadTokens: Int,
+        lastInputTokens: Int,
+        onEvent: suspend (AgentEvent) -> Unit
+    ): List<AgentMessage>? {
+        val config = resolveProviderConfig(ctx.sessionId)
+        val limit = error.parseContextWindowLimit()
+        val wroteLimit = config != null && limit != null
+        if (config != null && limit != null) {
+            runCatching {
+                modelMetadataService.setContextTokens(config.id, config.type, config.effectiveModel, limit)
+            }.onFailure { FileLogger.w(TAG, "上下文超窗自愈：写回模型窗口失败（$limit tokens）", it) }
+        }
+        FileLogger.w(
+            TAG,
+            "会话 ${ctx.sessionId ?: "-"} 请求超上下文窗口（模型 ${provider.model}，" +
+                (if (wroteLimit) "解析到真实上限 $limit tokens 并写回" else "未能解析出真实上限，未写回") +
+                "），按新窗口重压后重试一次"
+        )
+        val recompacted = agentEngine.beforeLlmCall(
+            EngineContext(
+                sessionId = ctx.sessionId,
+                projectRoot = ctx.projectRoot,
+                mode = ctx.mode,
+                isSubAgent = ctx.isSubAgent
+            ),
+            LlmCall(
+                messages = baseMessages,
+                windowProvider = provider,
+                summaryProvider = summaryProvider,
+                lastInputTokens = lastInputTokens,
+                overheadTokens = overheadTokens,
+                force = true,
+                onEvent = onEvent
+            )
+        ).messages
+        if (recompacted.isEmpty()) return null
+        // 写回窗口后即便消息没被改动也值得重发一次：守卫预算已按新窗口重算。
+        if (wroteLimit) return recompacted
+        return recompacted.takeIf { it !== baseMessages }
     }
 
     /**

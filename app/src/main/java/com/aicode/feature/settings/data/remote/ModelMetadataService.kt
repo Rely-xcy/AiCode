@@ -59,6 +59,24 @@ class ModelMetadataService @Inject constructor(
             }
         }
 
+    /**
+     * 把某个模型的实际上下文窗口写回自定义元数据（覆盖此前那条默认值）。
+     *
+     * 用途：供应商拒掉超窗请求时，400 正文里带着真实上限；把它落盘后，压缩守卫按新窗口
+     * 重算预算，不会再放行超窗请求。写入的是「自动解析结果 + 新窗口」的完整记录，
+     * 只改窗口、不动能力位——只带窗口的裸记录会把 supportsTools 等能力位覆盖成 false（见 [mergeModelMetadata]）。
+     * 非法入参（providerId/modelId 为空、窗口非正）直接忽略，不写脏数据。
+     */
+    suspend fun setContextTokens(providerId: String, type: ProviderType, modelId: String, tokens: Int) {
+        if (providerId.isBlank() || modelId.isBlank() || tokens <= 0) return
+        withContext(Dispatchers.IO) {
+            val auto = findMetadata(loadCatalog(), type, modelId) ?: default(type, modelId)
+            val existing = customModelMetadataStore.get(providerId, modelId)
+            val merged = mergeModelMetadata(modelId, auto, existing)
+            customModelMetadataStore.put(providerId, modelId, merged.copy(contextTokens = tokens))
+        }
+    }
+
     /** 自定义元数据优先于自动解析（拉取/内置）结果；providerId 为空（未关联配置）时跳过合并。 */
     private suspend fun mergeCustom(providerId: String, modelId: String, auto: ModelMetadata): ModelMetadata {
         if (providerId.isBlank()) return auto
