@@ -227,6 +227,8 @@ class ContextCompactor @Inject constructor(
                 }
 
                 is AgentMessage.UserMessage -> Unit
+
+                null -> Unit
             }
         }
     }
