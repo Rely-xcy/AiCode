@@ -392,4 +392,20 @@ class ContextBudgetPolicyTest {
         assertTrue(maxOf(380_000, calibrated) < thresholds.soft) // 真实 38 万仍在线下
         assertTrue(maxOf(500_000, calibrated) >= thresholds.soft) // 真实 50 万 → 越线
     }
+    /** 多行正文：摘录切点按行对齐，给守卫测试用一份头尾可辨认的文本。 */
+    private fun longFileText(): String = buildString {
+        appendLine("fun main() {")
+        repeat(400) { appendLine("    val value$it = \"${ "x".repeat(30) }\"") }
+        append("// 文件结束")
+    }
+
+    private fun tool(text: String, id: String = "", toolName: String = "read") =
+        AgentMessage.ToolResultMessage(id = id, toolName = toolName, result = text)
+
+    private fun compactor() = ContextCompactor(
+        agentMessageDao = mockk(relaxed = true),
+        systemPromptProvider = mockk(relaxed = true),
+        llmCallRecordDao = mockk(relaxed = true),
+        compactedHistoryArchive = mockk(relaxed = true)
+    )
 }

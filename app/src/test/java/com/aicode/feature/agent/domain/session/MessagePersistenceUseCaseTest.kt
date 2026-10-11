@@ -2,7 +2,7 @@ package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.workflow.ContextCompactor
+import com.aicode.feature.agent.domain.workflow.projectToolOutput
 import com.aicode.feature.agent.presentation.MessageRole
 import io.mockk.mockk
 import kotlinx.serialization.json.JsonPrimitive
@@ -145,17 +145,11 @@ class MessagePersistenceUseCaseTest {
      */
     @Test
     fun toolOutputProjectionOnlyAboveThresholdAndKeepsHeadTail() {
-        val compactor = ContextCompactor(
-            agentMessageDao = mockk(relaxed = true),
-            systemPromptProvider = mockk(relaxed = true),
-            llmCallRecordDao = mockk(relaxed = true),
-            compactedHistoryArchive = mockk(relaxed = true)
-        )
         val marker = "\n[工具输出已精简以节省上下文]"
 
         // 未超阈值：不投影（persist 侧直接写 null modelResult）
         val within = "a".repeat(MessagePersistenceUseCase.OUTPUT_PROJECTION_CHARS)
-        assertNull(compactor.projectToolOutput(within).takeIf { it != within })
+        assertNull(projectToolOutput(within).takeIf { it != within })
         // 阈值本身（含）不投影：判定是严格大于
         assertEquals(within.length, MessagePersistenceUseCase.OUTPUT_PROJECTION_CHARS)
 
@@ -163,7 +157,7 @@ class MessagePersistenceUseCaseTest {
         val head = "HEAD-LINE\n"
         val tail = "\nTAIL-LINE"
         val oversized = head + "a".repeat(6_000) + tail
-        val projected = compactor.projectToolOutput(oversized)
+        val projected = projectToolOutput(oversized)
 
         assertTrue(projected.endsWith(marker))
         assertTrue(projected.length < oversized.length)
