@@ -46,10 +46,8 @@ class ContextCompactor @Inject constructor(
         const val TAG = "ContextCompactor"
 
         /** 输出投影时单条工具输出的保留上限（头尾合计）。 */
-        const val OUTPUT_PROJECTION_CHARS = 3_000
 
         /** 投影尾部追加的标记，供回放与 TokenEstimator 识别「这条已投影」。 */
-        const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
 
         /** 兜底截断的单条消息下限：再短就没法干活了，宁可让它超窗。 */
         const val MIN_MESSAGE_TOKENS = 64
@@ -830,6 +828,12 @@ internal fun omittedBulkArgumentKeyOf(arguments: Map<String, JsonElement>): Stri
             (value as? JsonPrimitive)?.contentOrNull?.let { isOmittedArgumentValue(it) } == true
     }?.key
 
+/** 输出投影时单条工具输出的保留上限（头尾合计）。 */
+private const val OUTPUT_PROJECTION_CHARS = 3_000
+
+/** 投影尾部标记：回放侧 isSoftProjected 认它（TokenEstimator 等处同样认领）。 */
+private const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
+
 /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
 internal fun headTailTrimText(text: String, maxChars: Int): String {
     if (text.length <= maxChars) return text
@@ -847,4 +851,4 @@ internal fun headTailTrimText(text: String, maxChars: Int): String {
  * （headTailTrim 场景）共用同一定稿规则，落库层不注入本类（会引入 DAO/引擎依赖）。
  */
 fun projectToolOutput(result: String): String =
-    headTailTrim(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
+    headTailTrimText(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
