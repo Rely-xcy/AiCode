@@ -69,7 +69,11 @@ data class AgentMessageEntity(
     val isInterjection: Boolean = false,
     // 仅 TOOL 行：软精简写下的「喂模型那份」投影文本（result 保持原文，永不改写）。
     // 回放时优先取它，界面与落库读 result。追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
-    val modelResult: String? = null
+    val modelResult: String? = null,
+    // 仅 isContextSummary 行：本摘要块覆盖的原文边界（被折叠的最后一条消息的 timestamp）。
+    // 回放据此裁窗口（该边界之前的原文由摘要块链代表，不再重复回放）。追加在末尾：备份 DTO 按位置映射。
+    @ColumnInfo(defaultValue = "0")
+    val foldsUpToTimestamp: Long = 0
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)

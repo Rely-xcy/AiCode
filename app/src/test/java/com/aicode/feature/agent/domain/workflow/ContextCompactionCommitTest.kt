@@ -4,6 +4,7 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
@@ -27,7 +28,8 @@ import org.junit.Test
  *
  * 1. 摘要响应完整性——空 / 被截断 / 被中止 / 带工具调用，一律不落库（半份摘要换掉整段历史是负收益）；
  * 2. 「真的更小了」——折叠后的估值必须小于折叠前，否则不提交（白花一次调用还换来更差的历史）；
- * 3. 提交时把 `compactedBySummaryId` 写成本次摘要行 id，回退恢复靠它把原文找回来。
+ * 3. 提交时以 marker + summary 两行**追加**摘要块（head 不标 isCompacted、旧块不回收），
+ *    summary 行带覆盖边界 foldsUpToTimestamp（= head 最后一条的库行时间戳，此测试里全部为 500）。
  *
  * 每个「不落库」用例都同时断言 `records.insert` 恰好一次：证明摘要调用**成功返回过**、
  * 我们是在拿到完整响应之后主动拒绝的，而不是调用抛异常导致的提前返回。
@@ -71,6 +73,42 @@ class ContextCompactionCommitTest {
         AgentMessage.UserMessage(id = "c", content = "汉".repeat(590)),
         AgentMessage.UserMessage(id = "goal", content = "继续")
     )
+
+    @Test
+    fun `二次折叠时旧块保留且链成两块`() = runTest {
+        prepare()
+        stubSummary(AIResponse("Second handoff", stopReason = "stop"))
+        // 库里已有上一次折叠的旧块（未淘汰）
+        coEvery { dao.getMessagesBySessionOnce("s") } returns
+            rows("a", "b", "c", "goal") + listOf(
+                AgentMessageEntity(
+                    id = "old-marker", sessionId = "s", role = "USER",
+                    content = "marker", timestamp = 100, isCompactionMarker = true
+                ),
+                AgentMessageEntity(
+                    id = "old-summary", sessionId = "s", role = "ASSISTANT",
+                    content = "旧摘要", timestamp = 101, isContextSummary = true, foldsUpToTimestamp = 400
+                )
+            )
+        // head 前缀带上旧块：新语义下旧块是冻结的独立块，折叠结果必须原样保留它们
+        val historyWithOldBlock =
+            listOf<AgentMessage>(
+                AgentMessage.UserMessage(id = "old-marker", content = CONTEXT_COMPACTION_MARKER),
+                AgentMessage.AssistantMessage(id = "old-summary", content = "旧摘要")
+            ) + history()
+
+        val result = compact(historyWithOldBlock)
+
+        assertNotNull(result)
+        // 旧块（2 条）+ 新 marker + 摘要 + tail（goal）
+        assertEquals(5, result!!.size)
+        assertEquals("旧摘要", (result[1] as AgentMessage.AssistantMessage).content)
+        assertTrue((result[3] as AgentMessage.AssistantMessage).content.contains("Second handoff"))
+        // 两次插入：marker + 摘要；不标 head、不回收旧块
+        coVerify(exactly = 2) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
+        coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
+    }
 
     private fun rows(vararg ids: String): List<AgentMessageEntity> = ids.map { id ->
         AgentMessageEntity(
@@ -158,22 +196,27 @@ class ContextCompactionCommitTest {
         coVerify(exactly = 0) { dao.insert(any()) }
     }
 
-    // ---------- 闸门三：提交时写归属 ----------
+    // ---------- 闸门三：提交时写覆盖边界 ----------
 
     @Test
-    fun `提交时把摘要行 id 写成被折叠行的归属`() = runTest {
+    fun `提交时追加摘要块并写入覆盖边界`() = runTest {
         prepare()
         stubSummary(AIResponse("Concise handoff", stopReason = "stop"))
 
         val result = compact(history())
 
         assertNotNull(result)
-        // marker + 摘要 + 尾部
+        // 旧块（无）+ 新 marker + 摘要 + 尾部
         assertEquals(3, result!!.size)
         assertTrue(result[1] is AgentMessage.AssistantMessage)
         assertTrue((result[1] as AgentMessage.AssistantMessage).content.contains("Concise handoff"))
         coVerify(exactly = 2) { dao.insert(any()) }
-        // 最后一次插入的是摘要行；被折叠的 head 必须把它的 id 写成归属，回退恢复才有据可依
-        coVerify { dao.markMessagesCompactedBeforeTimestamp("s", any(), inserted.captured.id) }
+        // 新语义：head 不标 isCompacted、旧摘要不回收——库对折叠是纯追加
+        coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
+        coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
+        // 摘要行带覆盖边界（foldsUpToTimestamp），回放据此裁窗口
+        val summaryRow = inserted.captured
+        assertTrue(summaryRow.isContextSummary)
+        assertEquals(500L, summaryRow.foldsUpToTimestamp)
     }
 }

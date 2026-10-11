@@ -30,8 +30,8 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * 回放历史的摘要去重：库里可能残留多对 marker + 接手摘要（旧的要等下一次折叠才会被标
- * isCompacted），模型可见的那份历史只应带最新一对。
+ * 回放历史的摘要块链（阶段 0 新语义）：未淘汰的摘要块全部按序前置，原文窗口按最大块边界
+ * （foldsUpToTimestamp）裁剪；旧单块（边界 0）走兼容路径只取最新一对，不重复回放。
  *
  * 用 Robolectric 在 JVM 上跑真实 SQLite（与 [com.aicode.core.db.MigrationTest] 同一套环境约束）：
  * 容器/PRoot 里加载不了 Robolectric 的 native 库，直接跳过；跳过不算失败，CI 上真实执行。
@@ -79,6 +79,35 @@ class MessagePersistenceUseCaseHistoryTest {
         dao.insertAll(
             listOf(
                 marker("m1", timestamp = 100),
+                summary("s1", timestamp = 101, content = "旧摘要", foldsUpTo = 150),
+                marker("m2", timestamp = 200),
+                summary("s2", timestamp = 201, content = "新摘要", foldsUpTo = 250),
+                user("u1", timestamp = 150, content = "中间的话"),
+                user("u2", timestamp = 300, content = "最新的话")
+            )
+        )
+
+        val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
+
+        // 新语义：全部未淘汰块按序前置，边界制裁窗口——u1(150) 在最大边界 250 之前被裁掉，
+        // u2(300) 在边界之后保留。库不动、无任何行标 isCompacted。
+        assertEquals(
+            listOf(CONTEXT_COMPACTION_MARKER, "旧摘要", CONTEXT_COMPACTION_MARKER, "新摘要", "最新的话"),
+            history.map { it.text() }
+        )
+        val rows = dao.getMessagesBySessionOnce(SESSION)
+        assertEquals(6, rows.size)
+        assertFalse(rows.any { it.isCompacted })
+    }
+
+    /** 旧单块兼容（foldsUpToTimestamp=0，迁移 62 前的库）：走旧规则只取最新一对，且不重复回放。 */
+    @Test
+    fun legacyZeroBoundaryBlockFallsBackToLatestPairOnly() = runTest {
+        val dao = db.agentMessageDao()
+        dao.insertAll(
+            listOf(
+                user("u0", timestamp = 50, content = "早已折叠的话").copy(isCompacted = true),
+                marker("m1", timestamp = 100),
                 summary("s1", timestamp = 101, content = "旧摘要"),
                 user("u1", timestamp = 150, content = "中间的话"),
                 marker("m2", timestamp = 200),
@@ -89,24 +118,18 @@ class MessagePersistenceUseCaseHistoryTest {
 
         val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
 
-        // 去重只跳过多余的 marker/summary 对，不碰普通消息：
-        // u1(ts=150) 排在 m2(ts=200) 之前，所以它在历史里、而且位于最前。
+        // 旧块（边界 0）不抬窗口边界：旧语义下 head 已标 isCompacted 被滤掉，
+        // 这里用「只取最新一对」的兼容规则，u0 不回放也不重复回放旧摘要。
         assertEquals(
-            // 读侧顺序来自上游 orderHistoryEntities（marker/summary 提到最前）；写侧会把
-            // marker 之前的所有行标成 isCompacted，回放时滤掉，故正常路径下与时间序等价。
             listOf(CONTEXT_COMPACTION_MARKER, "新摘要", "中间的话", "最新的话"),
             history.map { it.text() }
         )
-        // 只读：库里的行一条不少，也没有任何行被标 isCompacted
-        val rows = dao.getMessagesBySessionOnce(SESSION)
-        assertEquals(6, rows.size)
-        assertFalse(rows.any { it.isCompacted })
     }
 
     @Test
     fun keepsSinglePairWhenPairsShareTimestamps() = runTest {
         val dao = db.agentMessageDao()
-        // 连续折叠的残留形态：两对的时间戳完全相同（同一保留区起点），按 ts 比不出先后
+        // 连续折叠的残留形态（旧库）：两对的时间戳完全相同（同一保留区起点），按 ts 比不出先后
         dao.insertAll(
             listOf(
                 marker("m1", timestamp = 100),
@@ -259,13 +282,14 @@ class MessagePersistenceUseCaseHistoryTest {
         isCompacted = compacted
     )
 
-    private fun summary(id: String, timestamp: Long, content: String) = AgentMessageEntity(
+    private fun summary(id: String, timestamp: Long, content: String, foldsUpTo: Long = 0L) = AgentMessageEntity(
         id = id,
         sessionId = SESSION,
         role = MessageRole.ASSISTANT.name,
         content = content,
         timestamp = timestamp,
-        isContextSummary = true
+        isContextSummary = true,
+        foldsUpToTimestamp = foldsUpTo
     )
 
     private fun user(id: String, timestamp: Long, content: String) = AgentMessageEntity(
