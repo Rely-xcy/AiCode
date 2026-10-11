@@ -71,6 +71,15 @@ object TodoProgressGuard {
     const val TOUCHED_MINUTES = 20
 
     /**
+     * 清单全部完成后，距最后一次变动又过了这么久，才判定「该清空」——与
+     * `TaskModule.ALL_DONE_QUIET_MINUTES` **必须保持一致**：一边是注入块、一边是收尾边界，
+     * 两处要同一口径，否则同一份清单会在两处得到相反结论。模块依赖方向决定这里不能直接引用
+     * 那个常量（`TaskModule` 已依赖 `domain.todo`，反向引用会成环，且它是 private），
+     * 故各自钉一份，改动时两边同步。
+     */
+    const val ALL_DONE_QUIET_MINUTES = 30L
+
+    /**
      * 收尾性表述：中文。只认「这一轮把活干到什么程度」的声明（已完成 / 改好了 / 做完了…），
      * 不认只描述时间顺序（下一步 / 接下来 / 后续）或剩余量（剩下的 / 还剩 / 剩余）的词——
      * 那几个词在正常叙述里到处都是，认下来等于每个干过活的回合都白拦一次。
@@ -162,20 +171,33 @@ object TodoProgressGuard {
      * 1. 清单存在且非空（空清单或快照未就绪都没什么可清的）；
      * 2. 清单里每一项都是 COMPLETED；
      * 3. 回复在收尾（没在收尾就还会继续干，清早了下一件事又得重建清单）；
-     * 4. 本轮没有已经 `clear` 过。快照是异步刷新的，本轮刚清空时快照可能还停在「全完成」，
+     * 4. 距最后一次变动已静默 ≥ [ALL_DONE_QUIET_MINUTES]——与 `TaskModule.renderBlock` 的全完成
+     *    新鲜度**同一口径**（都取 `now - max(updatedAt)`，阈值同源）。刚做完那一轮刻意不念，
+     *    免得同一件事在注入块与收尾边界上同时开火、把刚打勾的回合当场拦下。
+     * 5. 本轮没有已经 `clear` 过。快照是异步刷新的，本轮刚清空时快照可能还停在「全完成」，
      *    不排掉这一条会把「刚清空」误判成「全完成却没清」而白拦一次。
-     *    刻意**不**看静默期：刚打勾的收尾正是漏掉 clear 的时刻，要当场拦下才治得住；
-     *    慢性的背景提醒（静默 ≥30 分钟才念）归 `TaskModule.renderBlock` 的 freshness 管，两处口径不同。
      */
     fun needsAllDoneCleanup(
         items: List<TodoItem>?,
         history: List<AgentMessage>,
-        finalText: String
+        finalText: String,
+        now: Long = System.currentTimeMillis()
     ): Boolean {
         if (items == null || items.isEmpty()) return false
         if (items.any { it.status != TodoStatus.COMPLETED }) return false
         if (!claimsWrapUp(finalText)) return false
+        if (!allDoneQuietEnough(items, now)) return false
         return !clearedListThisTurn(history)
+    }
+
+    /**
+     * 全完成的清单是否已静默够久。口径与 `TaskModule.renderBlock` 的全完成新鲜度一致：
+     * 以最后变动的一项（`max(updatedAt)`）为准算 `now - max(updatedAt)`，与 [ALL_DONE_QUIET_MINUTES] 比。
+     * 二者必须同源：不然同一份清单会在注入块里「还早」、在边界上却「该清」。
+     */
+    private fun allDoneQuietEnough(items: List<TodoItem>, now: Long): Boolean {
+        val minutes = ((now - items.maxOf { it.updatedAt }) / 60_000L).coerceAtLeast(0)
+        return minutes >= ALL_DONE_QUIET_MINUTES
     }
 
     /**
@@ -223,11 +245,10 @@ object TodoProgressGuard {
         val listed = items.take(MAX_ITEMS_IN_REMINDER).joinToString("\n") { item -> TodoListText.line(item) }
         val hidden = items.size - MAX_ITEMS_IN_REMINDER
         return buildString {
-            append("[清单守卫] 清单里 ${items.size} 项已全部完成：收尾前用 todo(action=\"clear\") 清空整张清单" +
-                "（已完成的项随清空一起移除，不用逐项删）：\n")
+            append("[清单守卫] 清单里 ${items.size} 项都完成了，收尾前用 todo(action=\"clear\") 清空整张清单、不留残余条目：\n")
             append(listed)
             if (hidden > 0) append("\n…（另有 $hidden 项未列出）")
-            append("\n清空后重新给出收尾回复：只写结论与下一步，不要重复上一段。")
+            append("\n完成项留在清单里是为了看整体进度，全部完成后就该整张清掉；清空后重新给出收尾回复。")
         }
     }
 

@@ -179,27 +179,10 @@ class TaskModuleTest {
     }
 
     @Test
-    fun guard_firesAllDoneReminderWhenWrappingUpWithoutClearing() = runTest {
+    fun guard_staysQuietWhenListIsAllDone() = runTest {
         seed("重写 TodoTool", TodoStatus.COMPLETED)
 
-        val reminder = module.finalResponseGuard(ctx(history = guardHistory(currentToolCalls = 3)), "已完成主要改动。")
-
-        // 全完成 + 收尾 + 本轮没 clear：当场拦，提醒里点名 clear（静默期归注入块的 freshness，边界不等）
-        assertNotNull(reminder)
-        assertTrue(reminder.orEmpty().contains("todo(action=\"clear\")"))
-    }
-
-    @Test
-    fun guard_allDoneStaysQuietWhenAlreadyClearedThisTurn() = runTest {
-        seed("重写 TodoTool", TodoStatus.COMPLETED)
-
-        val reminder = module.finalResponseGuard(
-            ctx(history = guardHistory(currentToolCalls = 3, todoResults = listOf(clearedTodo("c1")))),
-            "已完成主要改动。"
-        )
-
-        // 快照异步刷新：本轮刚 clear，不能把「刚清空」误判成「全完成却没清」
-        assertNull(reminder)
+        assertNull(module.finalResponseGuard(ctx(history = guardHistory(currentToolCalls = 3)), "已完成主要改动。"))
     }
 
     @Test
@@ -281,12 +264,6 @@ class TaskModuleTest {
         id = id,
         toolName = "todo",
         result = """{"status":"success","data":{"message":"已更新「重写 TodoTool」：completed（已完成）；清单全部完成","text":"[x] 重写 TodoTool"}}"""
-    )
-
-    private fun clearedTodo(id: String): AgentMessage.ToolResultMessage = AgentMessage.ToolResultMessage(
-        id = id,
-        toolName = "todo",
-        result = """{"status":"success","data":{"message":"已清空清单；清单现在是空的","text":""}}"""
     )
 
     private fun todo(

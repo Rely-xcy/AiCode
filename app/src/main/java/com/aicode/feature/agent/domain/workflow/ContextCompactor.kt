@@ -90,6 +90,7 @@ class ContextCompactor @Inject constructor(
      *
      * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
      */
+<<<<<<< HEAD
     fun softTrim(messages: List<AgentMessage>, targetTokens: Int): List<AgentMessage> {
         if (messages.isEmpty()) return messages
         var estimate = TokenEstimator.estimateMessages(messages)
@@ -348,6 +349,13 @@ class ContextCompactor @Inject constructor(
 
     /**
      * 发送前兜底：软精简/硬压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
+=======
+    fun projectToolOutput(result: String): String =
+        headTailTrim(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
+
+    /**
+     * 发送前兜底：压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
+>>>>>>> parent of 685e7d76 (fix(agent): projectToolOutput 提为顶层函数（persist 无法注入 ContextCompactor 实例）)
      *
      * 压缩只能把老消息收进摘要，动不了「单条消息本身就超窗」——tail 至少要保留一条，
      * 而那条可能是一次巨大的工具输出或超长粘贴。不兜底就只能让请求硬撞窗口上限。
@@ -810,8 +818,14 @@ class ContextCompactor @Inject constructor(
     private val BULK_ARG_LIMIT_CHARS = 4_000
 
     /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
-    private fun headTailTrim(text: String, maxChars: Int): String =
-        headTailTrimText(text, maxChars)
+    private fun headTailTrim(text: String, maxChars: Int): String {
+        if (text.length <= maxChars) return text
+        val head = maxChars * 2 / 3
+        val tail = maxChars - head
+        return text.take(head) +
+            "\n...[内容过长，已省略中间 ${text.length - maxChars} 字符]...\n" +
+            text.takeLast(tail)
+    }
 
     /**
      * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
@@ -1106,6 +1120,7 @@ internal fun omittedBulkArgumentKeyOf(arguments: Map<String, JsonElement>): Stri
         key.lowercase() in BULK_ARG_KEYS &&
             (value as? JsonPrimitive)?.contentOrNull?.let { isOmittedArgumentValue(it) } == true
     }?.key
+<<<<<<< HEAD
 
 /** 输出投影时单条工具输出的保留上限（头尾合计）。 */
 private const val OUTPUT_PROJECTION_CHARS = 3_000
@@ -1133,3 +1148,5 @@ fun projectToolOutput(result: String): String {
     if (result.length <= OUTPUT_PROJECTION_CHARS) return result
     return headTailTrimText(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
 }
+=======
+>>>>>>> parent of 685e7d76 (fix(agent): projectToolOutput 提为顶层函数（persist 无法注入 ContextCompactor 实例）)
