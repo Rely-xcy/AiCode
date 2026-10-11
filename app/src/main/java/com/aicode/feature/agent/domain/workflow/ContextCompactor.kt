@@ -566,14 +566,15 @@ class ContextCompactor @Inject constructor(
             return null
         }
 
+        // 折叠后的摘要链状态（记账用，见下文日志）：声明在函数体顶层——
+        // 落库块在 if(sessionId) 里，而记账日志在它之后的外层，声明在块内会作用域不可见（CI 已踩过）。
+        var chainBlockCount = 0
+        var latestBoundary = 0L
+        var stablePrefixTokens = 0
+
         if (sessionId != null) {
             // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
             var markerPersisted = false
-            // 折叠后的摘要链状态（记账用，见下文日志）：块数与前缀稳定段估算。声明在 try 外
-            // 才能在 try 后的记账日志里读到；落库失败时保持初始值，日志里体现为缺省。
-            var chainBlockCount = 0
-            var latestBoundary = 0L
-            var stablePrefixTokens = 0
             try {
                 val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
                 // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
@@ -669,6 +670,7 @@ class ContextCompactor @Inject constructor(
                 "耗时=${durationMillis}ms 折叠条数=${trimmedHead.size} 保留条数=${tail.size} " +
                 "摘要长度=${summaryResponse.length}"
         )
+        // 摘要链观测（阶段 0）：块数/边界/前缀稳定段从库行计（dbEntities 含本次新块），见 :629-632。
         if (chainBlockCount > 0) {
             // 摘要链观测值（阶段 0 新增）：块数 k 与最新边界用来观察合并频率（阶段 3 引入合并时的参数依据）；
             // 「前缀稳定段」估算 = 摘要块链部分（S0..Sk）的 token，用于验证缓存收益
