@@ -850,5 +850,7 @@ internal fun headTailTrimText(text: String, maxChars: Int): String {
  * 纯函数（只依赖常量），实现为顶层：落库层（MessagePersistenceUseCase.persist）与本类
  * （headTailTrim 场景）共用同一定稿规则，落库层不注入本类（会引入 DAO/引擎依赖）。
  */
-fun projectToolOutput(result: String): String =
-    headTailTrimText(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
+fun projectToolOutput(result: String): String {
+    if (result.length <= OUTPUT_PROJECTION_CHARS) return result
+    return headTailTrimText(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
+}
