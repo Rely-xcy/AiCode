@@ -68,10 +68,8 @@ class ContextCompactor @Inject constructor(
      *
      * 不做递进多档：投完后估算仍超窗交给硬压缩与 [enforceWindowLimit] 兜底。
      */
-    fun projectToolOutput(result: String): String =
-        headTailTrim(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
-
     /**
+     * 发送前兜底：压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
      * 发送前兜底：压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
      *
      * 压缩只能把老消息收进摘要，动不了「单条消息本身就超窗」——tail 至少要保留一条，
@@ -535,14 +533,8 @@ class ContextCompactor @Inject constructor(
     private val BULK_ARG_LIMIT_CHARS = 4_000
 
     /** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
-    private fun headTailTrim(text: String, maxChars: Int): String {
-        if (text.length <= maxChars) return text
-        val head = maxChars * 2 / 3
-        val tail = maxChars - head
-        return text.take(head) +
-            "\n...[内容过长，已省略中间 ${text.length - maxChars} 字符]...\n" +
-            text.takeLast(tail)
-    }
+    private fun headTailTrim(text: String, maxChars: Int): String =
+        headTailTrimText(text, maxChars)
 
     /**
      * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
@@ -837,3 +829,22 @@ internal fun omittedBulkArgumentKeyOf(arguments: Map<String, JsonElement>): Stri
         key.lowercase() in BULK_ARG_KEYS &&
             (value as? JsonPrimitive)?.contentOrNull?.let { isOmittedArgumentValue(it) } == true
     }?.key
+
+/** 保留头尾、中间省略：两端通常含命令/路径与结论，中段是重复的正文。 */
+internal fun headTailTrimText(text: String, maxChars: Int): String {
+    if (text.length <= maxChars) return text
+    val head = maxChars * 2 / 3
+    val tail = maxChars - head
+    return text.take(head) +
+        "\n...[内容过长，已省略中间 ${text.length - maxChars} 字符]...\n" +
+        text.takeLast(tail)
+}
+
+/**
+ * 输出投影（一次性定稿）：把超长工具结果正文裁成「头 + 尾 + 标记」的模型侧形态。
+ *
+ * 纯函数（只依赖常量），实现为顶层：落库层（MessagePersistenceUseCase.persist）与本类
+ * （headTailTrim 场景）共用同一定稿规则，落库层不注入本类（会引入 DAO/引擎依赖）。
+ */
+fun projectToolOutput(result: String): String =
+    headTailTrim(result, OUTPUT_PROJECTION_CHARS) + SOFT_TRIM_MARKER
