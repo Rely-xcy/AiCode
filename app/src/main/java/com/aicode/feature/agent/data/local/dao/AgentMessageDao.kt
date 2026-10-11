@@ -31,8 +31,8 @@ interface AgentMessageDao {
      * - `isContextExcluded = 1`：从不属于对话（/usage 统计行，迁移 58 把历史行也是这么归的）。
      *   漏了后者，1.12 之前用过 /usage 的会话会把统计行算进「短期上下文」，卡片比回放多算。
      *
-     * 每次折叠写入一条 isContextSummary 行，但旧摘要会被下一次折叠回收（标 isCompacted），
-     * 所以 foldCount 是「当前生效的摘要份数」，不是累计折叠次数。
+     * 每次折叠追加一条 isContextSummary 行（新语义不回收旧块），所以 foldCount 是「仍在上下文
+     * 里的摘要块数」，与回放侧前置的块链一致（旧单块残留对也已计入，不再被下一轮折叠回收）。
      */
     @Query(
         """

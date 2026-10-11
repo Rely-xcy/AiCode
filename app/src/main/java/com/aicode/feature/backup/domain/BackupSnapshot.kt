@@ -272,7 +272,9 @@ data class AgentMessageDto(
     /** 本行被哪份摘要折叠掉的（摘要行 id）；回退恢复据此判断归属，丢了它备份恢复后的回退就找不回原文。 */
     val compactedBySummaryId: String? = null,
     /** 仅 USER 行：运行中插话（非新任务第一条用户消息），UI 归入当前轮、不开轮头。 */
-    val isInterjection: Boolean = false
+    val isInterjection: Boolean = false,
+    /** 仅 isContextSummary 行：摘要块覆盖的原文边界（被折叠的最后一条消息的 timestamp），回放裁窗口用。 */
+    val foldsUpToTimestamp: Long = 0
 )
 
 @Serializable

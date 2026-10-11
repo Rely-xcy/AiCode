@@ -94,7 +94,7 @@ class AgentMessageDaoSessionContextStatsTest {
 
         val stats = dao.sessionContextStats(SESSION)
 
-        // 折叠两次后：两对 marker+summary 加最后一段未折叠的历史仍在上下文里
+        // 折叠两次后（新语义不回收旧块）：两对 marker+summary 加最后一段未折叠的历史仍在上下文里
         assertEquals(5, stats.retainedMessages)
         assertEquals(2, stats.foldCount)
     }

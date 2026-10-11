@@ -174,7 +174,8 @@ class MessagePersistenceUseCase @Inject constructor(
         private val INLINE_BASE64_IMAGE = Regex("""data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+""")
 
         internal fun orderHistoryEntities(entities: List<AgentMessageEntity>): List<AgentMessageEntity> {
-            // 聊天按压缩触发时间展示；模型必须先读摘要，再读保留历史。
+            // 输入现在是「边界裁剪后的普通原文行」（不含摘要/marker），时间序即回放序。
+            // 保持原实现以防上游仍传入摘要行时顺序不乱（摘要前置）。
             val (compaction, retained) = entities.partition { it.isCompactionMarker || it.isContextSummary }
             return compaction + retained
         }
@@ -232,6 +233,10 @@ class MessagePersistenceUseCase @Inject constructor(
      * 如 /usage 统计行）都不参与回放。两个标志看的是两件事：前者是「折进摘要、回退时可能恢复」，
      * 后者是「从来不属于对话」（迁移 58 把已升级用户的旧 /usage 行归入后者，这里不看它就会把
      * 统计表格回放进上下文）。
+     *
+     * 摘要块链：未淘汰的新语义摘要块（foldsUpToTimestamp>0）全部按序前置，原文窗口按最大块
+     * 边界裁剪；旧单块（边界为 0）走兼容路径（只取最新一个，原文窗口不裁——head 已被旧规则
+     * 标 isCompacted 滤掉，不会重复回放）。
      */
     suspend fun buildHistory(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
         // 版本化缓存：agent_messages 表无变更且 marker 相同时直接复用上次重建结果，
@@ -267,9 +272,38 @@ class MessagePersistenceUseCase @Inject constructor(
     }
 
     private suspend fun buildHistoryUncached(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
-        val entities = agentMessageDao.getMessagesBySessionOnce(sessionId)
+        val allEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
             .filter { !it.isCompacted && !it.isContextExcluded }
-            .let { orderHistoryEntities(it) }
+
+        // 摘要块：isContextSummary 行（含其配对 marker）按 timestamp 升序就是块链的顺序。
+        // 已被淘汰的摘要行（isCompacted=1）在上面已被滤掉，不会参与回放。
+        // 窗口起点：参与回放的新语义块（foldsUpToTimestamp>0）里最大的覆盖边界。该边界之前的
+        // 原文已由摘要块链代表，不再回放；无用块时 boundary = 0，窗口 = 全部原文。
+        // 注意旧单块（foldsUpToTimestamp=0，兼容路径）不抬边界：旧语义下 head 已标 isCompacted
+        // 被上面滤掉，boundary=0 的过滤不会重复回放它们；把 boundary 抬到旧块的回填边界反而在
+        // 残留对共享边界时把新折进去的原文误裁掉，所以旧块一律不参与边界计算。
+        val allSummaryPairs = collectSummaryPairs(allEntities)
+        val modernSummaryPairs = allSummaryPairs.filter { it.summary.foldsUpToTimestamp > 0L }
+        val boundary = modernSummaryPairs.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L
+
+        // 保留原文：边界之后的普通行（非摘要/marker）。悬挂 tool 配对过滤在下面第二遍完成。
+        val entities = orderHistoryEntities(
+            allEntities.filter {
+                !(it.isCompactionMarker || it.isContextSummary) && it.timestamp > boundary
+            }
+        )
+
+        // 旧摘要块兼容（foldsUpToTimestamp == 0）：库里的行还是旧语义（单摘要、head 标 isCompacted、
+        // 保留区起点未动时残留多对同时间戳的旧对）。这类块不能按新规则多块前置——残留的旧对与存活对
+        // 内容重复且过时，多块前置会重复回放。退化为旧规则：只取最新一个旧块。
+        val legacyPairs = allSummaryPairs.filter { it.summary.foldsUpToTimestamp == 0L }
+        // 新旧混合（升级后同会话里既有旧块又折了新块）：旧块覆盖的是新块边界之前的原文（head 已被
+        // 旧规则标掉），新块边界之后的原文只有一份，两边不会重复回放；纯旧块场景同理只取最新一个。
+        val replayedPairs = if (legacyPairs.isEmpty()) {
+            modernSummaryPairs
+        } else {
+            modernSummaryPairs + listOf(legacyPairs.last())
+        }
 
         // 第一遍：求 assistant 声明的 toolCallId 与 tool 结果 toolCallId 的交集。
         val declaredIds = mutableSetOf<String>()
@@ -293,35 +327,36 @@ class MessagePersistenceUseCase @Inject constructor(
         }
         val validIds = declaredIds intersect resultIds
 
-        // 读侧去重：模型可见的历史里只留最新的一对（marker + 接手摘要）。
-        // 旧摘要的行不会立刻从库里消失——下一次折叠才把它们标 isCompacted，在那之前多份摘要
-        // 会一起进上下文（内容重复且过时）。这里只跳过更早的那些行：库不动、isCompacted 不碰、
-        // 聊天页不受影响（UI 走 paged 查询）。
-        // 判据用「最后出现的一条摘要 + 紧贴它前面的那条 marker」，不比较时间戳：连续折叠产生的
-        // 残留对时间戳会完全相同（同一保留区起点），按 ts 比不出先后。配对 marker 取不到时
-        // （那行已被标掉或缺失），下面的合成逻辑会给摘要补一条无 id 的 marker。
-        val keptSummaryIndex = entities.indexOfLast { it.isContextSummary }
-        val keptSummary = entities.getOrNull(keptSummaryIndex)
-        val keptMarker = keptSummary
-            ?.let { entities.getOrNull(keptSummaryIndex - 1) }
-            ?.takeIf { it.isCompactionMarker }
-
         // 第二遍：构建消息，过滤掉无法配对的工具调用 / 工具结果。
         val result = mutableListOf<AgentMessage>()
+
+        // 先拼摘要块链：S0..Sk 按序前置（§4.2）。每个块 = marker（缺则合成）+ 摘要。
+        for (pair in replayedPairs) {
+            result.add(
+                AgentMessage.UserMessage(
+                    id = pair.marker?.id ?: "",
+                    content = CONTEXT_COMPACTION_MARKER
+                )
+            )
+            result.add(
+                AgentMessage.AssistantMessage(
+                    id = pair.summary.id,
+                    content = pair.summary.content.removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart(),
+                    reasoning = pair.summary.reasoning ?: "",
+                    signature = pair.summary.signature ?: "",
+                    thinkingBlocksJson = pair.summary.thinkingBlocksJson ?: ""
+                )
+            )
+        }
+
         for (e in entities) {
-            if (keptSummary != null) {
-                if (e.isContextSummary && e.id != keptSummary.id) continue
-                if (e.isCompactionMarker && e.id != keptMarker?.id) continue
-            }
             when (MessageRole.valueOf(e.role)) {
                 MessageRole.USER -> {
-                    val rawContent = if (e.isCompactionMarker) CONTEXT_COMPACTION_MARKER else e.content
-                    val attachments = if (!e.isCompactionMarker) {
-                        e.attachmentsJson?.let {
-                            runCatching { json.decodeFromString<List<AgentAttachment>>(it) }.getOrNull()
-                        } ?: emptyList()
-                    } else emptyList()
+                    val attachments = e.attachmentsJson?.let {
+                        runCatching { json.decodeFromString<List<AgentAttachment>>(it) }.getOrNull()
+                    } ?: emptyList()
 
+                    val rawContent = e.content
                     val finalContent = if (attachments.isNotEmpty()) {
                         val attachmentText = buildString {
                             append("附件：")
@@ -357,13 +392,6 @@ class MessagePersistenceUseCase @Inject constructor(
                         runCatching { json.decodeFromString<List<AgentAttachment>>(it) }.getOrNull()
                     }.orEmpty()
                     if (e.content.isNotBlank() || toolCalls.isNotEmpty() || imageAttachments.isNotEmpty()) {
-                        val previous = result.lastOrNull()
-                        if (
-                            e.isContextSummary &&
-                            !(previous is AgentMessage.UserMessage && previous.content == CONTEXT_COMPACTION_MARKER)
-                        ) {
-                            result.add(AgentMessage.UserMessage(content = CONTEXT_COMPACTION_MARKER))
-                        }
                         result.add(
                             AgentMessage.AssistantMessage(
                                 id = e.id,
@@ -395,6 +423,26 @@ class MessagePersistenceUseCase @Inject constructor(
             }
         }
         return result
+    }
+
+    /** 参与回放的一个摘要块：摘要行 + 紧贴它前面的 marker 行（缺失时为 null，拼装时合成）。 */
+    private data class SummaryPair(val summary: AgentMessageEntity, val marker: AgentMessageEntity?)
+
+    /**
+     * 收集参与回放的摘要块：isContextSummary 行按 timestamp 升序，每块带上紧贴它前面的
+     * isCompactionMarker 行（缺失或错位时为 null，拼装侧合成无 id 的 marker，沿用旧兑底）。
+     *
+     * 判据只认标志位与相邻关系，不比较时间戳：残留对与存活对可能共享同一保留区起点，
+     * 按 ts 比不出先后（与旧实现同一坑）。
+     */
+    private fun collectSummaryPairs(entities: List<AgentMessageEntity>): List<SummaryPair> {
+        val pairs = mutableListOf<SummaryPair>()
+        for ((index, e) in entities.withIndex()) {
+            if (!e.isContextSummary) continue
+            val marker = entities.getOrNull(index - 1)?.takeIf { it.isCompactionMarker }
+            pairs.add(SummaryPair(e, marker))
+        }
+        return pairs
     }
 
     private fun AgentAttachment.toAgentImage(): com.aicode.feature.agent.domain.model.AgentImage? {

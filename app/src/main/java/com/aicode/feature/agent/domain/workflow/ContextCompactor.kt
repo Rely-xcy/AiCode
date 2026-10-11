@@ -379,10 +379,12 @@ class ContextCompactor @Inject constructor(
     }
 
     /**
-     * 硬压缩：把早期对话（head）折叠成结构化接手摘要，替换回原位。
+     * 硬压缩：把窗口内最早的原文（head）折叠成一个**新摘要块**，追加到摘要链尾。
      *
-     * 持久化：head 标记 isCompacted（不删除），摘要以 marker + assistant 两条插到 tail 之前，
-     * 重启后回放顺序仍是「摘要 → tail」。
+     * 持久化：摘要以 marker + assistant 两条追加落库，summary 行带 foldsUpToTimestamp =
+     * head 最后一条的 timestamp（覆盖边界）；head 不标 isCompacted、旧摘要不淘汰——
+     * 库对「折叠」这个动作而言是纯追加的，已发出的请求前缀（S0..Sk）逐字节稳定。
+     * 回放侧（MessagePersistenceUseCase）按块边界裁窗口，被折叠的原文不再重复回放。
      *
      * @param preserveRecentTokens 保留最近原文的预算（由调用方按窗口档位算好）。
      * @param summaryWindowTokens 摘要模型自己的窗口，用于裁剪送进摘要请求的 head。
@@ -428,7 +430,10 @@ class ContextCompactor @Inject constructor(
             runCatching { onBeforeFold(head) }
                 .onFailure { FileLogger.w(TAG, "折叠前回调失败，继续压缩", it) }
         }
-        val previousSummary = extractPreviousSummary(messages)
+        val previousSummary: String? = null
+        // 新语义：旧摘要块是冻结的独立块，新块只覆盖本次折掉的原文，不再合并旧摘要
+        // （设计 §4.3 第 5 步）。buildSummaryInstruction 的 previous-summary 分支保留，
+        // 阶段 3 引入合并时复用；extractPreviousSummary 同理保留但不再被此处调用。
         val headForSummary = removeCompactionPairs(head).truncateForSummaryWindow(summaryWindowTokens)
         if (headForSummary.isEmpty()) {
             // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容。
@@ -543,7 +548,9 @@ class ContextCompactor @Inject constructor(
         // 摘要响应校验二：换上去的结果必须**真的更小**。摘要写长了（模型不听话）、或保留区
         // 本来就占满窗口时，折完反而更大——那就白花一次模型调用、还换来一份更差的历史。
         // 只算不算、不发请求；不省就不提交。
-        val compactedResult = listOf(markerMessage, compactedMessage) + tail
+        // 旧摘要块是冻结的独立块：折完的内存态视图 = 旧块 S0..Sk（原样保留）+ 新块 + tail。
+        val preservedBlocks = leadingCompactionPairs(head)
+        val compactedResult = preservedBlocks + listOf(markerMessage, compactedMessage) + tail
         val compactedTokens = TokenEstimator.estimateMessages(compactedResult)
         if (compactedTokens >= estimatedTokens) {
             FileLogger.w(
@@ -562,6 +569,11 @@ class ContextCompactor @Inject constructor(
         if (sessionId != null) {
             // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
             var markerPersisted = false
+            // 折叠后的摘要链状态（记账用，见下文日志）：块数与前缀稳定段估算。声明在 try 外
+            // 才能在 try 后的记账日志里读到；落库失败时保持初始值，日志里体现为缺省。
+            var chainBlockCount = 0
+            var latestBoundary = 0L
+            var stablePrefixTokens = 0
             try {
                 val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
                 // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
@@ -577,14 +589,16 @@ class ContextCompactor @Inject constructor(
                     onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
                     return null
                 }
-                // 先插 marker + 摘要，最后才标记 head。
-                // 反过来的话（先标记、后插入）插入失败会让 head 已被标成「已压缩」却没有摘要顶上，
-                // 那段历史就永久离开了上下文——这是真丢数据。插入失败直接放弃本次压缩，重复好过丢失。
-                // 摘要放在 tail 之前：回放/UI 顺序 = 摘要 → tail。
-                // 接手摘要作为背景，最后一条仍是用户请求 / tool 结果，模型才会继续干活；
-                // 若放在末尾，模型会把摘要当成自己的上一轮，续写一大段后停下。
+                // 先插 marker + 摘要，摘要没插成功则回滚删 marker（head 不标 isCompacted，
+                // 不存在「标了却没有摘要顶上」的丢失面；插入失败只意味着本轮没折成，原文仍在窗口里）。
+                // 摘要块落点仍在 tail 之前：回放/UI 顺序 = 摘要链 → 剩余窗口。
                 val markerTs = (anchorTs - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
+                // 覆盖边界 = head 最后一条消息的库行时间戳：该边界之前的原文由本块代表，
+                // 回放不再重复带上。匹配不到 head 末尾时退到 marker 前一刻，多回放一次好过丢。
+                val headEndTs = head.lastOrNull()
+                    ?.let { resolveRowTimestamp(dbEntities, it) }
+                    ?: (markerTs - 1).coerceAtLeast(0L)
                 agentMessageDao.insert(
                     AgentMessageEntity(
                         id = markerId,
@@ -603,37 +617,23 @@ class ContextCompactor @Inject constructor(
                         role = MessageRole.ASSISTANT.name,
                         content = compactedMessage.content,
                         timestamp = summaryTs,
-                        isContextSummary = true
+                        isContextSummary = true,
+                        foldsUpToTimestamp = headEndTs
                     )
                 )
-                FileLogger.i(TAG, "已持久化压缩结果到数据库，会话 $sessionId")
+                FileLogger.i(TAG, "已持久化摘要块到数据库，会话 $sessionId，覆盖边界=$headEndTs")
 
-                // 标记放在插入之后：标记失败只是让 head 下一轮再回放一次（重复），不会丢。
-                // cutoff 必须用 markerTs 而不是 anchorTs：markerTs / summaryTs 都小于 anchorTs，
-                // 用 anchorTs 会把刚插进去的这两行自己也标成 isCompacted，
-                // 而回放时会滤掉 isCompacted 的行——摘要就只在内存态活一轮，下一个用户轮次直接消失。
-                runCatching { agentMessageDao.markMessagesCompactedBeforeTimestamp(sessionId, markerTs, compactedId) }
-                    .onFailure { FileLogger.w(TAG, "标记已压缩失败，head 下一轮会重复回放一次", it) }
-
-                // 旧摘要显式回收：上面的时间戳标记在保留区起点没有前移时（两次折叠之间新增量小于预算富余）
-                // 标不到旧 marker / 旧摘要，上下文里会留下两份重复且过时的接手说明。旧摘要内容已被新摘要
-                // 吸收，直接标掉不丢信息。两个 keep id 都非空才执行——空 id 会让排除条件失效，
-                // 把刚插入的摘要一起标掉。
-                if (markerId.isNotBlank() && compactedId.isNotBlank()) {
-                    runCatching {
-                        agentMessageDao.markSupersededCompactionRows(
-                            sessionId = sessionId,
-                            keepMarkerId = markerId,
-                            keepSummaryId = compactedId
-                        )
-                    }
-                        .onSuccess { FileLogger.i(TAG, "已回收 $it 行旧摘要") }
-                        .onFailure { FileLogger.w(TAG, "回收旧摘要失败，上下文里可能残留重复的接手摘要", it) }
-                } else {
-                    FileLogger.w(TAG, "压缩结果 id 缺失，跳过旧摘要回收（宁可留重复，不能标掉刚插的摘要）")
-                }
+                // 记账用：折叠后的摘要链状态。链内块数 = 未淘汰的摘要行数（含本次新插的），
+                // 前缀稳定段 = 摘要块链部分的估算 token（system + 工具定义开销由模块侧另计）。
+                // 查库而不是从内存列表数：上一轮的块只落在库里，内存态 messages 不一定还带着。
+                chainBlockCount = dbEntities.count { it.isContextSummary && !it.isCompacted } + 1
+                latestBoundary = headEndTs
+                stablePrefixTokens = TokenEstimator.estimateText(
+                    dbEntities.filter { it.isContextSummary && !it.isCompacted }
+                        .joinToString("\n") { it.content }
+                ) + TokenEstimator.estimateMessage(compactedMessage)
             } catch (e: Exception) {
-                // 摘要没插进去 = 本次压缩作废（head 也不标记），那先落库的 marker 必须一并删掉：
+                // 摘要没插进去 = 本次压缩作废，那先落库的 marker 必须一并删掉：
                 // 回放时它是一条孤立的用户消息「What did we do so far?」——历史没被折叠，
                 // 模型却会以为用户刚问过这句；removeCompactionPairs 只成对清理，认不出这种孤儿。
                 if (markerPersisted) {
@@ -669,6 +669,16 @@ class ContextCompactor @Inject constructor(
                 "耗时=${durationMillis}ms 折叠条数=${trimmedHead.size} 保留条数=${tail.size} " +
                 "摘要长度=${summaryResponse.length}"
         )
+        if (chainBlockCount > 0) {
+            // 摘要链观测值（阶段 0 新增）：块数 k 与最新边界用来观察合并频率（阶段 3 引入合并时的参数依据）；
+            // 「前缀稳定段」估算 = 摘要块链部分（S0..Sk）的 token，用于验证缓存收益
+            // （system + 工具定义的开销由请求侧另计，不在本地估算内）。
+            FileLogger.i(
+                TAG,
+                "摘要链观测 会话=${sessionId ?: "-"} 块数=$chainBlockCount 最新边界=$latestBoundary " +
+                    "前缀稳定段估算=${stablePrefixTokens}tokens"
+            )
+        }
 
         return compactedResult
     }
@@ -894,27 +904,6 @@ class ContextCompactor @Inject constructor(
         }
     }
 
-    private fun extractPreviousSummary(messages: List<AgentMessage>): String? {
-        for (index in messages.indices.reversed()) {
-            val current = messages[index]
-            val next = messages.getOrNull(index + 1)
-            if (
-                current is AgentMessage.UserMessage &&
-                current.content == CONTEXT_COMPACTION_MARKER &&
-                next is AgentMessage.AssistantMessage
-            ) {
-                return next.content.cleanSummary()
-            }
-            if (
-                current is AgentMessage.AssistantMessage &&
-                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
-            ) {
-                return current.content.cleanSummary()
-            }
-        }
-        return null
-    }
-
     private fun removeCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
         val result = mutableListOf<AgentMessage>()
         var index = 0
@@ -940,6 +929,60 @@ class ContextCompactor @Inject constructor(
             index++
         }
         return result
+    }
+
+    private fun extractPreviousSummary(messages: List<AgentMessage>): String? {
+        for (index in messages.indices.reversed()) {
+            val current = messages[index]
+            val next = messages.getOrNull(index + 1)
+            if (
+                current is AgentMessage.UserMessage &&
+                current.content == CONTEXT_COMPACTION_MARKER &&
+                next is AgentMessage.AssistantMessage
+            ) {
+                return next.content.cleanSummary()
+            }
+            if (
+                current is AgentMessage.AssistantMessage &&
+                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
+            ) {
+                return current.content.cleanSummary()
+            }
+        }
+        return null
+    }
+
+    /**
+     * head 开头的连续摘要块（marker+summary 对与 legacy 前缀摘要）：新语义下它们是冻结的独立块，
+     * 折叠时原样保留在折叠结果的前缀里（新块追加在它们之后），不再被新摘要吸收。
+     */
+    private fun leadingCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
+        val blocks = mutableListOf<AgentMessage>()
+        var index = 0
+        while (index < messages.size) {
+            val current = messages[index]
+            val next = messages.getOrNull(index + 1)
+            if (
+                current is AgentMessage.UserMessage &&
+                current.content == CONTEXT_COMPACTION_MARKER &&
+                next is AgentMessage.AssistantMessage
+            ) {
+                blocks.add(current)
+                blocks.add(next)
+                index += 2
+                continue
+            }
+            if (
+                current is AgentMessage.AssistantMessage &&
+                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
+            ) {
+                blocks.add(current)
+                index++
+                continue
+            }
+            break
+        }
+        return blocks
     }
 
     private fun String.cleanSummary(): String =
