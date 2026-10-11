@@ -195,7 +195,7 @@ internal fun decodeInteractionSteps(json: String): List<JsonObject>? {
  * 工具入参 → Gson 树。直接把 kotlinx 的 JsonObject 交给 Gson 会按反射序列化它的内部字段
  * （得到 `{"body":...,"isString":true}` 这种垃圾），必须先转成文本再让 Gson 解析回来。
  *
- * 取值走 [effectiveArguments]：发给模型的是投影后的副本（原文回传会白白撑大请求）。
+ * 取值走 [effectiveArguments]：发给模型的是软精简后的副本（原文回传会白白撑大请求）。
  */
 private fun ToolCall.argumentsAsJson(): JsonElement =
     runCatching {

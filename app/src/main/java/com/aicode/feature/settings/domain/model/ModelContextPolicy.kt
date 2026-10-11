@@ -5,7 +5,7 @@ object ModelContextPolicy {
     const val MIN_PRESERVE_RECENT_TOKENS = 2_000
     const val MAX_PRESERVE_RECENT_TOKENS = 60_000
 
-    /** 兜底线（发送前硬截断超长消息）占窗口的比例：硬压缩做完仍超过该比例时才用。 */
+    /** 兜底线（发送前硬截断超长消息）占窗口的比例：软精简与硬压缩都做完仍超过该比例时才用。 */
     const val GUARD_BUDGET_PERCENT = 92
 
     /** 保留最近原文的预算占窗口比例：留够原文，压缩后模型才不会「不记得」刚发生的事。 */
@@ -16,13 +16,13 @@ object ModelContextPolicy {
         /** < 32K：不自动压缩，靠提示用户新建会话。 */
         DISABLED,
 
-        /** 32K–64K：不调摘要模型（超长工具输出的投影在落库时完成）。 */
+        /** 32K–64K：只做软精简（截断历史工具输出），不调摘要模型。 */
         SOFT_ONLY,
 
-        /** 64K–128K：摘要压缩。 */
+        /** 64K–128K：软精简 + 摘要压缩。 */
         STANDARD,
 
-        /** ≥ 128K：摘要压缩，留更宽的 headroom。 */
+        /** ≥ 128K：软精简 + 摘要压缩，留更宽的 headroom。 */
         GENEROUS
     }
 
@@ -73,7 +73,7 @@ object ModelContextPolicy {
     data class Thresholds(
         /** 判定用的模型窗口（与界面百分比的分母同源）。 */
         val contextLimit: Int,
-        /** 软精简线（保留字段，界面显示与旧数据兼容用；请求链路已不再消费）。 */
+        /** 软精简线：超过就裁历史里的超长工具输出与参数，不调模型。 */
         val soft: Int,
         /** 硬压缩线：超过就调摘要模型折叠早期对话；该档不启用硬压缩时为 0。 */
         val hard: Int,
@@ -88,7 +88,7 @@ object ModelContextPolicy {
      *
      * 生效值 = min(窗口 × 用户百分比, 该档位的绝对上限)：档位上限是为了给输出与提示词留 headroom，
      * 大窗口下用户设的 85% 可能被压到更低（如 128K 窗口：85% = 108.8K 被上限 108K 压住）。
-     * 软线必须严格低于硬线；窗口太小、档位不允许硬压缩时
+     * 软线必须严格低于硬线，否则软精简永远轮不到（硬压缩先到）；窗口太小、档位不允许硬压缩时
      * 软线按窗口 90% 封顶。
      */
     fun thresholds(contextLimit: Int, softPercent: Int, hardPercent: Int): Thresholds {
