@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -15,6 +16,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "ContainerSettingsRepo"
 
 private val Context.containerDataStore by preferencesDataStore(
     name = "container_prefs",
@@ -28,6 +31,80 @@ data class DownloadedImageRecord(
     val fileUri: String,
     val installed: Boolean = false
 )
+
+private val json = Json { ignoreUnknownKeys = true }
+private val profileSerializer = ListSerializer(ContainerProfile.serializer())
+private val downloadedImageSerializer = ListSerializer(DownloadedImageRecord.serializer())
+
+/**
+ * 解码用户自定义 profile 列表。
+ *
+ * 返回 null 表示「磁盘上有值但无法解码」——调用方**必须保留原值**，绝不能用空表覆写：
+ * 一次解码失败若当成空表写回，会把整份容器清单清掉（用户报的「导入的容器在列表里消失」）。
+ * 只有 `raw` 为 null（从未写过）才按空表处理。
+ */
+internal fun decodeProfiles(raw: String?): List<ContainerProfile>? {
+    if (raw == null) return emptyList()
+    return runCatching { json.decodeFromString(profileSerializer, raw) }
+        .getOrElse { e ->
+            FileLogger.w(TAG, "容器 profile 解码失败，保留原值不覆写：${e.message}")
+            null
+        }
+}
+
+/** 把 profile 列表编码为持久化 JSON。 */
+internal fun encodeProfiles(profiles: List<ContainerProfile>): String =
+    json.encodeToString(profileSerializer, profiles)
+
+/**
+ * 把 [profile] 合并进 [current]：同 id 覆盖并挪到末尾，其余保持原样。
+ *
+ * createdAt 规则：传入非 0 用传入值；为 0 且原记录存在（编辑场景，表单重建丢了时间）保留原时间，
+ * 否则用 [now]——保证编辑保存后不改变排序位置。
+ */
+internal fun mergeProfiles(
+    current: List<ContainerProfile>,
+    profile: ContainerProfile,
+    now: Long
+): List<ContainerProfile> {
+    val existing = current.firstOrNull { it.id == profile.id }
+    val final = when {
+        profile.createdAt != 0L -> profile
+        existing != null && existing.createdAt != 0L -> profile.copy(createdAt = existing.createdAt)
+        else -> profile.copy(createdAt = now)
+    }
+    return current.filterNot { it.id == final.id } + final
+}
+
+/** 从 [current] 中删除 id 为 [id] 的 profile，其余保持原样。 */
+internal fun removeProfile(current: List<ContainerProfile>, id: String): List<ContainerProfile> =
+    current.filterNot { it.id == id }
+
+/** 解码已下载镜像记录；返回 null 表示有值但无法解码，调用方须保留原值不覆写。 */
+internal fun decodeDownloadedImages(raw: String?): List<DownloadedImageRecord>? {
+    if (raw == null) return emptyList()
+    return runCatching { json.decodeFromString(downloadedImageSerializer, raw) }
+        .getOrElse { e ->
+            FileLogger.w(TAG, "已下载镜像记录解码失败，保留原值不覆写：${e.message}")
+            null
+        }
+}
+
+/** 把已下载镜像记录编码为持久化 JSON。 */
+internal fun encodeDownloadedImages(records: List<DownloadedImageRecord>): String =
+    json.encodeToString(downloadedImageSerializer, records)
+
+/** 按 entryId 覆盖合并：同 entryId 的旧记录替换为 [record] 并挪到末尾，其余保持原样。 */
+internal fun mergeDownloadedImage(
+    current: List<DownloadedImageRecord>,
+    record: DownloadedImageRecord
+): List<DownloadedImageRecord> = current.filterNot { it.entryId == record.entryId } + record
+
+/** 从 [current] 中删除 entryId 为 [entryId] 的记录，其余保持原样。 */
+internal fun removeDownloadedImageEntry(
+    current: List<DownloadedImageRecord>,
+    entryId: String
+): List<DownloadedImageRecord> = current.filterNot { it.entryId == entryId }
 
 /**
  * 持久化当前选中的容器 profile 与用户自定义 profile 列表。
@@ -50,9 +127,6 @@ class ContainerSettingsRepository @Inject constructor(
         val ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("container_announcement_shown_hash")
         /** 下载镜像页已下载/已安装的记录（JSON 列表）。 */
         val DOWNLOADED_IMAGES_KEY = stringPreferencesKey("downloaded_images_json")
-        val downloadedImageSerializer = ListSerializer(DownloadedImageRecord.serializer())
-        val profileSerializer = ListSerializer(ContainerProfile.serializer())
-        val json = Json { ignoreUnknownKeys = true }
     }
 
     /** 当前选中的 profile id；无值时默认内置 Alpine。 */
@@ -65,11 +139,12 @@ class ContainerSettingsRepository @Inject constructor(
         prefs[DEFAULT_CONTAINER_ID_KEY]?.takeIf { it.isNotBlank() } ?: ContainerProfile.BUILTIN_ID
     }
 
-    /** 用户自定义 profile 列表（不含内置）。解析失败回退空列表。 */
+    /**
+     * 用户自定义 profile 列表（不含内置）。解析失败回退空列表——只读流没有「上一份」可沿用，
+     * 但解码失败必须留痕（[decodeProfiles] 会记 WARN），便于下次复现时定位。
+     */
     val customProfilesFlow: Flow<List<ContainerProfile>> = context.containerDataStore.data.map { prefs ->
-        prefs[CUSTOM_PROFILES_KEY]?.let { raw ->
-            runCatching { json.decodeFromString(profileSerializer, raw) }.getOrNull()
-        } ?: emptyList()
+        decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: emptyList()
     }
 
     suspend fun setActiveProfile(id: String) {
@@ -84,18 +159,19 @@ class ContainerSettingsRepository @Inject constructor(
      * 首次启动（或旧版本升级）兜底：把内置 Alpine 补入列表（若缺），保证列表始终有内置项。
      * 置位初始化标记后不再自动补回——用户后续删光列表由空态手动恢复。
      * 存量设备已配自定义镜像时同样补入（旧版列表始终含内置项，升级不能让它消失）。
+     *
+     * 存量数据无法解码时直接返回：不写列表、也不置位标记，留给下次启动重试（否则一次解码失败
+     * 就把整份清单清空，正是「导入的容器消失」的成因）。
      */
     suspend fun ensureBuiltinDefault() {
         context.containerDataStore.edit { prefs ->
             if (prefs[INITIALIZED_KEY] == true) return@edit
+            val current = decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: return@edit
             prefs[INITIALIZED_KEY] = true
-            val current = prefs[CUSTOM_PROFILES_KEY]?.let { raw ->
-                runCatching { json.decodeFromString(profileSerializer, raw) }.getOrNull()
-            } ?: emptyList()
             if (current.none { it.id == ContainerProfile.BUILTIN_ID }) {
-                prefs[CUSTOM_PROFILES_KEY] = json.encodeToString(
-                    profileSerializer, listOf(ContainerProfile.BUILTIN_ALPINE) + current
-                )
+                val merged = listOf(ContainerProfile.BUILTIN_ALPINE) + current
+                prefs[CUSTOM_PROFILES_KEY] = encodeProfiles(merged)
+                FileLogger.i(TAG, "ensureBuiltinDefault -> ${merged.map { it.id }}")
             }
         }
     }
@@ -109,61 +185,50 @@ class ContainerSettingsRepository @Inject constructor(
         context.containerDataStore.edit { it[ANNOUNCEMENT_SHOWN_HASH_KEY] = hash }
     }
 
-    /** 已下载镜像记录列表（按 entryId 去重，最新覆盖旧的）。 */
+    /** 已下载镜像记录列表（按 entryId 去重，最新覆盖旧的）。解析失败回退空列表（会记 WARN）。 */
     val downloadedImagesFlow: Flow<List<DownloadedImageRecord>> = context.containerDataStore.data.map { prefs ->
-        prefs[DOWNLOADED_IMAGES_KEY]?.let { raw ->
-            runCatching { json.decodeFromString(downloadedImageSerializer, raw) }.getOrNull()
-        } ?: emptyList()
+        decodeDownloadedImages(prefs[DOWNLOADED_IMAGES_KEY]) ?: emptyList()
     }
 
     suspend fun upsertDownloadedImage(record: DownloadedImageRecord) {
         context.containerDataStore.edit { prefs ->
-            val current = prefs[DOWNLOADED_IMAGES_KEY]?.let { raw ->
-                runCatching { json.decodeFromString(downloadedImageSerializer, raw) }.getOrNull()
-            } ?: emptyList()
-            val merged = current.filterNot { it.entryId == record.entryId } + record
-            prefs[DOWNLOADED_IMAGES_KEY] = json.encodeToString(downloadedImageSerializer, merged)
+            val current = decodeDownloadedImages(prefs[DOWNLOADED_IMAGES_KEY]) ?: return@edit
+            val merged = mergeDownloadedImage(current, record)
+            prefs[DOWNLOADED_IMAGES_KEY] = encodeDownloadedImages(merged)
+            FileLogger.i(TAG, "upsertImage entryId=${record.entryId} -> ${merged.map { it.entryId }}")
         }
     }
 
     suspend fun removeDownloadedImage(entryId: String) {
         context.containerDataStore.edit { prefs ->
-            val current = prefs[DOWNLOADED_IMAGES_KEY]?.let { raw ->
-                runCatching { json.decodeFromString(downloadedImageSerializer, raw) }.getOrNull()
-            } ?: emptyList()
-            prefs[DOWNLOADED_IMAGES_KEY] =
-                json.encodeToString(downloadedImageSerializer, current.filterNot { it.entryId == entryId })
+            val current = decodeDownloadedImages(prefs[DOWNLOADED_IMAGES_KEY]) ?: return@edit
+            val remaining = removeDownloadedImageEntry(current, entryId)
+            prefs[DOWNLOADED_IMAGES_KEY] = encodeDownloadedImages(remaining)
+            FileLogger.i(TAG, "removeImage entryId=$entryId -> ${remaining.map { it.entryId }}")
         }
     }
 
     /**
      * 新增或覆盖同名 id 的自定义 profile。
-     * createdAt 规则：传入非 0 则用传入值；为 0 时若原记录存在（编辑场景，表单重建丢了时间）保留原时间，
-     * 否则视为新增写入当前时间——保证编辑保存后不改变排序位置。
+     * createdAt 规则见 [mergeProfiles]（编辑保存不改变排序位置）。
+     * 存量数据无法解码时直接返回，保留原值不覆写。
      */
     suspend fun upsertCustomProfile(profile: ContainerProfile) {
         context.containerDataStore.edit { prefs ->
-            val current = prefs[CUSTOM_PROFILES_KEY]?.let { raw ->
-                runCatching { json.decodeFromString(profileSerializer, raw) }.getOrNull()
-            } ?: emptyList()
-            val existing = current.firstOrNull { it.id == profile.id }
-            val final = when {
-                profile.createdAt != 0L -> profile
-                existing != null && existing.createdAt != 0L -> profile.copy(createdAt = existing.createdAt)
-                else -> profile.copy(createdAt = System.currentTimeMillis())
-            }
-            val merged = (current.filterNot { it.id == final.id } + final)
-            prefs[CUSTOM_PROFILES_KEY] = json.encodeToString(profileSerializer, merged)
+            val current = decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: return@edit
+            val merged = mergeProfiles(current, profile, System.currentTimeMillis())
+            prefs[CUSTOM_PROFILES_KEY] = encodeProfiles(merged)
+            FileLogger.i(TAG, "upsert id=${profile.id} -> ${merged.map { it.id }}")
         }
     }
 
+    /** 删除 id 为 [id] 的 profile；存量数据无法解码时直接返回，保留原值不覆写。 */
     suspend fun deleteCustomProfile(id: String) {
         context.containerDataStore.edit { prefs ->
-            val current = prefs[CUSTOM_PROFILES_KEY]?.let { raw ->
-                runCatching { json.decodeFromString(profileSerializer, raw) }.getOrNull()
-            } ?: emptyList()
-            prefs[CUSTOM_PROFILES_KEY] =
-                json.encodeToString(profileSerializer, current.filterNot { it.id == id })
+            val current = decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: return@edit
+            val remaining = removeProfile(current, id)
+            prefs[CUSTOM_PROFILES_KEY] = encodeProfiles(remaining)
+            FileLogger.i(TAG, "delete id=$id -> ${remaining.map { it.id }}")
         }
     }
 }
