@@ -737,11 +737,12 @@ class StatefulAgentWorkflow @Inject constructor(
                         var compactedMessages = state.messages
                         // 每轮都必须问一次压缩模块：它一手管「要不要折」，一手管「发送前兜底截断」。
                         // 早先这里用 flag 把整段 beforeLlmCall 跳过——硬折叠失败一次，本轮后续每次
-                        // LLM 调用就同时失去软精简、阈值发布与 92% 兜底（安全网被一次失败关掉）。
+                        // LLM 调用就同时失去阈值发布与 92% 兜底（安全网被一次失败关掉）。
                         // 现在失败只在模块内部消化：它记下位点、不重复尝试硬折叠，其余职责照跑。
                         val sessionLastInputTokens = currentContext.sessionId?.let { sessionUseCase.getSessionById(it)?.lastInputTokens } ?: 0
-                        // 上下文预算交给引擎统一调度：CompactionModule 判档位与软/硬线，
-                        // ContextCompactor 只做消息变换（软精简、硬压缩、发送前兜底）。
+                        // 上下文预算交给引擎统一调度：CompactionModule 判档位与硬线，
+                        // ContextCompactor 只做消息变换（硬压缩、发送前兜底）；超长工具输出的
+                        // 投影已在落库时定稿，请求组装只消费。
                         val call = agentEngine.beforeLlmCall(
                             EngineContext(
                                 sessionId = currentContext.sessionId,
@@ -1974,7 +1975,7 @@ internal fun autoApproveSkipsAsk(
 /**
  * 执行边界守卫：工具调用参数里某个大块正文字段「整串」就是上下文精简的占位说明时，返回拦截原因。
  *
- * 软精简只改模型可见的那份副本（`modelArguments`），模型可能把这句占位说明当成文件正文抄进新的
+ * 投影只改模型可见的那份副本（`modelArguments`），模型可能把这句占位说明当成文件正文抄进新的
  * `writeFile`，而执行读的是原文——照抄执行就会把占位文字写进磁盘。这里在落盘前拦下：
  * 参数里没有真正文，重试也无意义，必须先 read 回全文。
  *

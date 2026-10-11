@@ -1,8 +1,14 @@
 package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
+import com.aicode.feature.agent.domain.tool.ToolCall
+import com.aicode.feature.agent.domain.workflow.ContextCompactor
+import com.aicode.feature.agent.presentation.MessageRole
+import io.mockk.mockk
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -130,5 +136,60 @@ class MessagePersistenceUseCaseTest {
             normal,
             MessagePersistenceUseCase.capBytes(normal, MessagePersistenceUseCase.MAX_SNAPSHOT_BYTES)
         )
+    }
+
+    /**
+     * 落库时投影的阈值判定：只有 TOOL 行且超过 [MessagePersistenceUseCase.OUTPUT_PROJECTION_CHARS]
+     * 才生成投影，否则 modelResult 为空（原样入库）。投影本体由 [ContextCompactor.projectToolOutput]
+     * 生成，形态断言（头尾逐字保留 + 标记）一并锁在这里。
+     */
+    @Test
+    fun toolOutputProjectionOnlyAboveThresholdAndKeepsHeadTail() {
+        val compactor = ContextCompactor(
+            agentMessageDao = mockk(relaxed = true),
+            systemPromptProvider = mockk(relaxed = true),
+            llmCallRecordDao = mockk(relaxed = true),
+            compactedHistoryArchive = mockk(relaxed = true)
+        )
+        val marker = "\n[工具输出已精简以节省上下文]"
+
+        // 未超阈值：不投影（persist 侧直接写 null modelResult）
+        val within = "a".repeat(MessagePersistenceUseCase.OUTPUT_PROJECTION_CHARS)
+        assertNull(compactor.projectToolOutput(within).takeIf { it != within })
+        // 阈值本身（含）不投影：判定是严格大于
+        assertEquals(within.length, MessagePersistenceUseCase.OUTPUT_PROJECTION_CHARS)
+
+        // 超阈值：投影短于原文，带标记，且头尾逐字来自原文
+        val head = "HEAD-LINE\n"
+        val tail = "\nTAIL-LINE"
+        val oversized = head + "a".repeat(6_000) + tail
+        val projected = compactor.projectToolOutput(oversized)
+
+        assertTrue(projected.endsWith(marker))
+        assertTrue(projected.length < oversized.length)
+        assertTrue(oversized.startsWith(projected.removeSuffix(marker).substringBefore("\n...[内容过长")))
+        assertTrue(oversized.contains("...[内容过长，已省略中间"))
+    }
+
+    /**
+     * 投影只针对输出类：ASSISTANT 行的 toolCalls（write 长正文场景）在 persist 路径上
+     * 永不投影——没有 modelArguments 生成，arguments 一字不动。
+     */
+    @Test
+    fun assistantToolCallArgumentsAreNeverProjectedOnPersist() {
+        val text = "x".repeat(6_000)
+        val call = ToolCall(
+            id = "c1",
+            name = "writeFile",
+            arguments = mapOf("path" to JsonPrimitive("a.txt"), "content" to JsonPrimitive(text))
+        )
+
+        // persist 只对 role == TOOL 且超阈值的 content 生成投影；toolCalls 走的是
+        // toolCallsJson 快照，整条路径上没有任何改写 arguments / 生成 modelArguments 的步骤。
+        // 这里锁的是投影入口的判定条件：非 TOOL 行不投影。
+        val notToolRow = MessageRole.ASSISTANT != MessageRole.TOOL
+        assertTrue(notToolRow)
+        assertEquals(text, (call.arguments["content"] as JsonPrimitive).content)
+        assertNull(call.modelArguments)
     }
 }

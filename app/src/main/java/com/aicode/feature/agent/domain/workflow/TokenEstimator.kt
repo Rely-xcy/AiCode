@@ -18,7 +18,7 @@ import kotlin.math.max
  * - **真实值**：provider 回传的 usage（[com.aicode.feature.agent.domain.provider.AIResponse.inputTokens] 等，
  *   落库见 `LlmCallRecordEntity` 与 `chat_sessions`）。只有在请求已经发出去之后才存在。
  * - **估算值**：本类。用于「请求还没发出去」时的预判——压缩阈值判定、上下文占用百分比、
- *   软精简与兜底截断的取舍。估算不追求精确，只求同量级、且不系统性偏低或偏高。
+ *   输出投影与兜底截断的取舍。估算不追求精确，只求同量级、且不系统性偏低或偏高。
  *
  * 估算口径（按字符类别加权，并按**连续串长度**分档；不做真 BPE——cl100k 词表约 2MB，为省包体不内置）：
  * - CJK（表意文字、假名、谚文、全角与 CJK 标点）：**1 字 ≈ 1 token**；
@@ -95,7 +95,7 @@ object TokenEstimator {
     /**
      * 消息估算缓存：内容键 → token。
      *
-     * 为什么要缓存：同一批历史消息每轮要被估好几遍（判定、软精简、发送前兜底各跑一次），
+     * 为什么要缓存：同一批历史消息每轮要被估好几遍（判定、发送前兜底各跑一次），
      * 而每次都要逐字符走状态机、工具结果还要先解析 JSON 投影。内容没变就不必重算。
      *
      * 键 = 类型 + 各字段长度签名 + 消息自身的 `hashCode()`，与 [imageTokenCache] 同一套取舍：
@@ -183,7 +183,7 @@ object TokenEstimator {
             rebuilt.add(textCost(message.signature))
             message.toolCalls.forEach { call ->
                 rebuilt.add(textCost(call.name))
-                // 用实际喂模型的参数（modelArguments 优先），否则软精简后估算不会下降。
+                // 用实际喂模型的参数（modelArguments 优先），否则投影后估算不会下降。
                 rebuilt.add(textCost(call.effectiveArguments.toString()))
             }
             val snapshot = textCost(message.thinkingBlocksJson)

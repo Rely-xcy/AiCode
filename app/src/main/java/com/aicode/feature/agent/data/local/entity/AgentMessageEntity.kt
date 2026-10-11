@@ -67,7 +67,7 @@ data class AgentMessageEntity(
     // 追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
     @ColumnInfo(defaultValue = "0")
     val isInterjection: Boolean = false,
-    // 仅 TOOL 行：软精简写下的「喂模型那份」投影文本（result 保持原文，永不改写）。
+    // 仅 TOOL 行：落库时写下的「喂模型那份」投影文本（result 保持原文，永不改写）。
     // 回放时优先取它，界面与落库读 result。追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
     val modelResult: String? = null
 ) {

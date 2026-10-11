@@ -6,6 +6,7 @@ import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
+import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.MessageRole
@@ -103,6 +104,11 @@ class MessagePersistenceUseCase @Inject constructor(
         modelReminder: String? = null,
         isInterjection: Boolean = false
     ) {
+        val modelResult = if (role == MessageRole.TOOL && content.length > OUTPUT_PROJECTION_CHARS) {
+            ContextCompactor.projectToolOutput(content)
+        } else {
+            null
+        }
         agentMessageDao.insert(
             AgentMessageEntity(
                 id = id,
@@ -125,7 +131,8 @@ class MessagePersistenceUseCase @Inject constructor(
                 isCompacted = isCompacted,
                 isContextExcluded = isContextExcluded,
                 modelReminder = modelReminder,
-                isInterjection = isInterjection
+                isInterjection = isInterjection,
+                modelResult = modelResult
             )
         )
     }
@@ -144,6 +151,12 @@ class MessagePersistenceUseCase @Inject constructor(
     }
 
     companion object {
+        /**
+         * 输出投影阈值：工具结果正文超过它时在落库当场生成给模型的投影（首尾保留、中段省略）。
+         * 阈值判断用字符数（原文与投影同一个口径），投影本体由 [ContextCompactor.projectToolOutput] 生成。
+         */
+        const val OUTPUT_PROJECTION_CHARS = 3_000
+
         /**
          * 单条消息各文本字段的持久化上限（UTF-8 字节数）。远小于 SQLite CursorWindow 单窗口约 2MB
          * 的硬限制，防止超大内容撑爆数据行导致读取消息时崩溃。
@@ -386,7 +399,8 @@ class MessagePersistenceUseCase @Inject constructor(
                                 id = tcId,
                                 toolName = e.toolName ?: "unknown",
                                 result = e.content,
-                                // 软精简落库的投影：回放时原样带出，前沿因此跨轮次保留（result 仍是原文）。
+                                // 落库时写下的「喂模型那份」投影：回放时原样带出（result 仍是原文），
+                                // 跨轮次消费定稿结果，不存在事后改历史。
                                 modelResult = e.modelResult
                             )
                         )

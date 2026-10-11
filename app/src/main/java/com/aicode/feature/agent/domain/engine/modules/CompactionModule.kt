@@ -32,17 +32,15 @@ import javax.inject.Singleton
  * 压缩模块：把「上下文预算」接进引擎。
  *
  * 只做策略——什么时候压、压到哪一档、用哪个模型摘要；具体怎么改消息交给
- * [ContextCompactor]（软精简 / 硬压缩 / 发送前兜底三个纯变换）。
+ * [ContextCompactor]（输出投影 / 硬压缩 / 发送前兜底）。
  *
  * 三级预算（都由用户设置的百分比 × 模型窗口算出，再受窗口档位约束；
  * 实际生效值统一由 [ModelContextPolicy.thresholds] 算，界面显示也取同一份，见 [ContextUsageHolder]）：
- * 1. 软线（默认 40%）：只精简历史里的超长工具输出，不调模型、不发事件、界面无感；
- * 2. 硬线（默认 85%）：调摘要模型把早期对话折叠成结构化接手摘要；
- * 3. 兜底线（92%）：前两级都做完仍逼近窗口时，对超长消息本身做硬截断。
+ * 1. 硬线（默认 85%）：调摘要模型把早期对话折叠成结构化接手摘要；
+ * 2. 兜底线（92%）：逼近窗口时，对超长消息本身做硬截断。
  *
- * 为什么要有软精简这一级：上下文利用率超过约 40% 后模型质量就开始下降，而工具输出
- * （文件内容、命令输出）是最大的噪音源。等到 85% 才动它，中间那 45% 的窗口全在噪声里。
- * 软精简零成本（不调模型、不落库），所以能早就早、能省则省。
+ * 超长工具输出的瘦身不在请求链路上：输出投影在落库当场一次性完成（见 MessagePersistenceUseCase），
+ * 与缓存命中率彻底解耦——请求组装只消费定稿结果，不存在任何「事后改历史」的步骤。
  */
 @Singleton
 class CompactionModule @Inject constructor(
@@ -85,7 +83,7 @@ class CompactionModule @Inject constructor(
      * 上次硬折叠失败的位点：会话 id → 当时的判定 token。
      *
      * 失败（摘要模型报错、锚点定位不到、裁完 head 为空）不能每轮重试：一次失败就能白花一次模型调用。
-     * 但也不能因此把整个模块停掉——这里只抑制「再折一次」，判定、阈值发布、软精简与发送前兜底照跑。
+     * 但也不能因此把整个模块停掉——这里只抑制「再折一次」，判定、阈值发布与发送前兜底照跑。
      */
     private val foldFailedTokens = ConcurrentHashMap<String, Int>()
 
@@ -99,31 +97,11 @@ class CompactionModule @Inject constructor(
     private val lastRawEstimates = ConcurrentHashMap<String, Int>()
 
     /**
-     * 软精简闸门与滞回：会话 id → 上一次真正裁动历史时的（轮次身份, 判定 token）。
-     *
-     * 存在的理由：软线过去是**裸的** `currentTokens >= softThreshold`，长会话里每一轮都会够线，
-     * 每够一次就再裁一刀。前缀缓存以「第一处改动」为界——每动一次，改动点往后的缓存全部失效，
-     * 下一次请求要按 1.25× 的价格把这些前缀重新写回去。这是真金白银。
-     *
-     * 记两个数抑制它：
-     * 1. 轮次身份（[turnKeyOf]）：同一轮只裁一次，工具循环里的后续调用直接跳过；
-     * 2. 判定 token：两次裁剪之间至少要再长出 [SOFT_HYSTERESIS_PERCENT]% 才值得再动一次，
-     *    削完落在软线附近，于是短时间内的再次判定不会够线。
-     *
-     * 尺寸与其它同类簿记一致：按会话分槽，会话删掉时一并回收（见 [onSessionDeleted]）。
-     * 只抑制「软线这一支的触发」：硬线、92% 兜底与发送前硬截断一字未动，`call.force` 也不受抑制。
-     */
-    private val softTrimGates = ConcurrentHashMap<String, SoftTrimGate>()
-
-    /** 软精简闸门记住的两样东西：裁在哪一轮、裁在多少 token 上。 */
-    private data class SoftTrimGate(val turnKey: String, val tokens: Int)
-
-    /**
      * 调模型前的上下文处理入口：只负责把整段判定与压缩体搬到主线程之外。
      *
      * 为什么必须搬：本模块与 [ContextCompactor] 全程没有线程切换，调用链是
      * ViewModel 的 Main 协程 → AgentEngine → 本模块 → ContextCompactor，于是全量 token 估算
-     * （逐字符过整段历史）、软精简、摘要模型往返、归档写盘与落库全压在主线程上，
+     * （逐字符过整段历史）、摘要模型往返、归档写盘与落库全压在主线程上，
      * 长会话一次折叠实测把主线程占住近一分钟。
      *
      * 这里只换线程：阈值、判定式、日志字段、摘要内容一字未改，返回的消息与之前逐字节相同。
@@ -143,7 +121,7 @@ class CompactionModule @Inject constructor(
     }
 
     /**
-     * [beforeLlmCall] 的实体：判定、估算、软精简、硬折叠与发送前兜底全部在 [workDispatcher] 上执行。
+     * [beforeLlmCall] 的实体：判定、估算、硬折叠与发送前兜底全部在 [workDispatcher] 上执行。
      */
     private suspend fun beforeLlmCallOnBackground(ctx: EngineContext, call: LlmCall): LlmCall? {
         val messages = call.messages
@@ -161,7 +139,6 @@ class CompactionModule @Inject constructor(
         )
         val hardAllowed = thresholds.hardEnabled
         val hardThreshold = thresholds.hard
-        val softThreshold = thresholds.soft
 
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
@@ -187,14 +164,6 @@ class CompactionModule @Inject constructor(
                 thresholds = thresholds
             )
         )
-        // 软线滞回：刚到软线不动手，要再高出 [SOFT_HYSTERESIS_PERCENT]% 才值得动一次。
-        // 判定值到软线的差在长会话里是常态，不设这一层就会每轮都够线。
-        val softHysteresis = softThreshold * SOFT_HYSTERESIS_PERCENT / 100
-        // 闸门读上次动手的位点：两次裁剪之间至少要再长出同样的量；同轮只裁一次（见 [softTrimGates]）。
-        // 记的是判定值 `currentTokens`，与硬线取同一个数，不受 system/工具开销口径影响。
-        val softTrimGate = ctx.sessionId?.let { softTrimGates[it] }
-        val reachedSoft = currentTokens >= softThreshold + softHysteresis &&
-            (softTrimGate == null || currentTokens >= softTrimGate.tokens + softHysteresis)
         // 折叠被跳过有两种来由，都只针对「再折一次」：上一轮折完仍超线（可折的 head 已经折掉了），
         // 或上一轮硬折叠直接失败。两者都等上下文相对位点又长出 [REFOLD_GROWTH_PERCENT]% 才再试；
         // call.force 不受抑制（用户手动点了就该干活）。判据只决定折不折，模块其余职责照跑——
@@ -212,14 +181,14 @@ class CompactionModule @Inject constructor(
                 TAG,
                 "会话 ${ctx.sessionId ?: "-"} ${if (retryDeferred) "上次硬折叠失败" else "折叠后仍超线"}" +
                     "（位点 ${if (retryDeferred) failedPoint else foldedPoint} tokens，当前 $currentTokens " +
-                    "未再长出 $REFOLD_GROWTH_PERCENT%），本轮跳过重复折叠，只做软精简与发送前兜底"
+                    "未再长出 $REFOLD_GROWTH_PERCENT%），本轮跳过重复折叠，只做发送前兜底"
             )
         }
         // 判定输入与发布结果必须能对上账：环显示偏小时，靠这条日志分清是「估算顶上来的」
         // 还是「界面取错了会话」。只在线以上打，否则每次工具调用都写一条，日志会被判定刷屏。
         // 同时打估算的构成（cjk/alnum/other/图片/消息数）：只有「原始」一个总数时，估算偏高或偏低
         // 看不出是哪类内容贡献的，归因只能猜。构成走 TokenEstimator.breakdown，只读数、不参与判定。
-        if (reachedSoft || reachedHard) {
+        if (reachedHard) {
             val composition = TokenEstimator.breakdown(messages)
             val messageTokens = composition.cjk + composition.alnum + composition.other + composition.image
             FileLogger.i(
@@ -227,7 +196,7 @@ class CompactionModule @Inject constructor(
                 "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
                     "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含 system+工具开销 ${call.overheadTokens}" +
                     "${if (baselineEstimate != null) "，校准基线 $baselineEstimate" else "，未校准"}）" +
-                    "判定=$currentTokens 窗口=$contextLimit 软线=$softThreshold " +
+                    "判定=$currentTokens 窗口=$contextLimit " +
                     "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}" +
                     "；消息构成 cjk=${composition.cjk} alnum=${composition.alnum} " +
                     "other=${composition.other} 图片=${composition.image} 消息数=${composition.messages}" +
@@ -248,9 +217,8 @@ class CompactionModule @Inject constructor(
         if (reachedHard) {
             val summaryProvider = call.summaryProvider
             if (summaryProvider == null) {
-                // 没配压缩专用模型：退化成软精简 + 兜底，不硬发摘要请求。
-                FileLogger.w(TAG, "达到硬压缩线但无可用的摘要模型，本轮只做软精简")
-                result = compactor.get().softTrim(result, targetTokens = softThreshold)
+                // 没配压缩专用模型：不硬发摘要请求，交给发送前兜底。
+                FileLogger.w(TAG, "达到硬压缩线但无可用的摘要模型，本轮只做发送前兜底")
             } else {
                 FileLogger.i(
                     TAG,
@@ -330,33 +298,11 @@ class CompactionModule @Inject constructor(
                         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
                     }
                 } else {
-                    // 硬压缩没产出结果（摘要模型报错、锚点定位不到、裁剪后 head 为空）时不能就此罢手：
-                    // 走到这里说明上下文已在硬线以上，而软精简在 else if 分支里永远轮不到，
-                    // 不补这一步本轮就只剩兜底硬截（直接砍消息），体验与信息损失都差得多。
-                    FileLogger.w(TAG, "硬压缩未产出结果，退化为软精简")
-                    // 记下失败位点：本轮与随后几轮不再原地重试硬折叠（否则每次 LLM 调用都白试一次），
-                    // 但软精简与下面的发送前兜底照跑——失败只影响「折不折」，不影响安全网。
+                    // 硬压缩没产出结果（摘要模型报错、锚点定位不到、裁剪后 head 为空）：
+                    // 记下失败位点，本轮与随后几轮不再原地重试（否则每次 LLM 调用都白试一次），
+                    // 发送前兜底照跑——失败只影响「折不折」，不影响安全网。
+                    FileLogger.w(TAG, "硬压缩未产出结果，只剩发送前兜底")
                     ctx.sessionId?.let { foldFailedTokens[it] = currentTokens }
-                    val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
-                    if (trimmed !== result) result = trimmed
-                }
-            }
-        } else if (reachedSoft) {
-            // 同轮闸门：同一轮（同一次用户请求）已经裁过就不再裁。裁一刀就会改动消息字节，
-            // 而前缀缓存以第一处改动为界——每多裁一次，就从那处往后重新计一遍缓存。
-            val turnKey = turnKeyOf(messages)
-            val trimmedThisTurn = turnKey != null && softTrimGate?.turnKey == turnKey
-            if (!trimmedThisTurn) {
-                val trimmed = compactor.get().softTrim(result, targetTokens = softThreshold)
-                if (trimmed !== result) {
-                    FileLogger.i(
-                        TAG,
-                        "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens 达软线触发 " +
-                            "$softThreshold+滞回 $softHysteresis，精简历史工具输出（未调用摘要模型）"
-                    )
-                    result = trimmed
-                    // 记下本轮身份与动手时的判定值：本轮不再裁，且直到再长出滞回量才会够线。
-                    ctx.sessionId?.let { softTrimGates[it] = SoftTrimGate(turnKey.orEmpty(), currentTokens) }
                 }
             }
         }
@@ -396,20 +342,7 @@ class CompactionModule @Inject constructor(
         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
         ctx.sessionId?.let { foldFailedTokens.remove(it) }
         ctx.sessionId?.let { lastRawEstimates.remove(it) }
-        ctx.sessionId?.let { softTrimGates.remove(it) }
     }
-
-    /**
-     * 本轮（同一次用户请求）的身份：最后一条用户消息。
-     *
-     * 工具循环里的多次调用都带着同一条用户消息，于是天然聚成「同一轮」；下一轮用户发话会换掉它，
-     * 闸门随之放开。id 为空（少数内存态消息没有行 id）时退到「长度 + 内容哈希」：不追求密码学强度，
-     * 只求同一轮内稳定、跨轮可区分。
-     */
-    private fun turnKeyOf(messages: List<AgentMessage>): String? =
-        messages.filterIsInstance<AgentMessage.UserMessage>().lastOrNull()?.let { lastUser ->
-            lastUser.id.ifBlank { "len${lastUser.content.length}:${lastUser.content.hashCode()}" }
-        }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
         val className = provider::class.simpleName.orEmpty()
@@ -429,14 +362,6 @@ class CompactionModule @Inject constructor(
          * 按比例而不是固定值：小窗口与大窗口的「一折」量级差很远，比例跟得上。
          */
         const val REFOLD_GROWTH_PERCENT = 5
-
-        /**
-         * 软线滞回：判定值要高出软线这么多百分比才动手（软线的 10%）。
-         *
-         * 削完落回软线附近，于是要再涨出同样的量才会再削一次。按比例而不是固定值：
-         * 小窗口与大窗口的「一轮」量级差很远，比例跟得上。
-         */
-        const val SOFT_HYSTERESIS_PERCENT = 10
 
         /**
          * 「折叠后仍超线」在界面上的卡片名。

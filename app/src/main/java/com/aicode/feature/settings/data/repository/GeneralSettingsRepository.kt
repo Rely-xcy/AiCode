@@ -69,7 +69,7 @@ class GeneralSettingsRepository @Inject constructor(
          */
         const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 85
 
-        /** 软精简阈值默认 40%。
+        /** 软精简阈值默认 40%（历史设置项，请求链路已不消费）。
          *
          * 达到即只精简历史里的超长工具输出（不调 LLM、不落库、界面无感）。选 40% 是因为
          * 质量下降的拐点就在约 40%，而工具输出（文件内容、命令输出）是最大的噪音源——
@@ -190,7 +190,7 @@ class GeneralSettingsRepository @Inject constructor(
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
-    /** 软精简阈值（上下文窗口的百分比）：略微超过即先精简历史工具输出，不调 LLM；默认 40，限定 1..100。 */
+    /** 软精简阈值（上下文窗口的百分比）：历史设置项，请求链路已不消费；默认 40，限定 1..100。 */
     val softCompactionThresholdPercentFlow: Flow<Int> = context.generalDataStore.data.map {
         (it[SOFT_COMPACTION_THRESHOLD_PERCENT_KEY] ?: DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT).coerceIn(1, 100)
     }
@@ -199,7 +199,7 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[SOFT_COMPACTION_THRESHOLD_PERCENT_KEY] = percent.coerceIn(1, 100) }
     }
 
-    /** 压缩前读取一次软精简阈值百分比。 */
+    /** 压缩前读取一次软精简阈值百分比（兼容保留）。 */
     suspend fun softCompactionThresholdPercent(): Int = softCompactionThresholdPercentFlow.first()
 
     /** 备份快照：回车发送开关与两个压缩阈值。 */
