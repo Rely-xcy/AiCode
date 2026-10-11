@@ -784,7 +784,9 @@ class LinuxContainerEngine @Inject constructor(
             // **刻意不设 PROOT_NO_SECCOMP**——这正是 Termux 自己用 proot 的方式；强制全量 ptrace
             // (PROOT_NO_SECCOMP=1) 反而在本设备触发过 ptrace(PEEKDATA) I/O error。
             // 前缀 /root/.aicode/bin：容器内 aicode 环境工具（见 ContainerInstaller.extractEnvTool）。
-            "PATH" to "/root/.aicode/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            // /usr/local/bin 供 skills.sh CLI 等自装工具使用：容器内 shell 以非登录方式启动（bash -c），
+            // 不加载 /etc/profile，不在此处列出则这些命令名不可达。
+            "PATH" to "/root/.aicode/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME" to "/root",
             // 宿主进程环境的 TMPDIR 指向 App 缓存目录（/data/user/0/<pkg>/cache），容器内 /data 未挂载、
             // 该路径不存在——mktemp/dpkg 等会因找不到临时目录失败，故显式覆盖为容器内 /tmp。
