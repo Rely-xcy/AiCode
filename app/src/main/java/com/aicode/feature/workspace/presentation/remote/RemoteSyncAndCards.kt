@@ -44,6 +44,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -220,7 +222,10 @@ private fun ProtocolBadge(protocol: RemoteProtocol) {
     }
 }
 
-/** 连接通道行：服务器图标 + 名称（协议徽章）+ 地址副标题 + 右侧箭头，整行点击编辑，左滑删除。 */
+/**
+ * 连接通道行：服务器图标 + 名称（协议徽章）+ 地址副标题 + 右侧箭头，整行点击编辑，左滑删除。
+ * [dragModifier] 由列表侧提供（长按拖动排序的手柄），只挂在左侧信息区，避免与左滑删除抢手势。
+ */
 @Composable
 fun RemoteConnectionCard(
     conn: RemoteConnection,
@@ -228,6 +233,7 @@ fun RemoteConnectionCard(
     onDelete: (RemoteConnection) -> Unit,
     dragModifier: Modifier = Modifier
 ) {
+    val sortDescription = stringResource(R.string.remote_connection_sort_long_press)
     SwipeToDeleteRow(
         onDelete = { onDelete(conn) },
         onClick = { onEdit(conn) }
@@ -239,27 +245,35 @@ fun RemoteConnectionCard(
                 .padding(horizontal = Spacing.lg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            RowIconBox(FeatherIcons.Server)
-            Spacer(modifier = Modifier.width(Spacing.md))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(dragModifier)
+                    .semantics { contentDescription = sortDescription },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RowIconBox(FeatherIcons.Server)
+                Spacer(modifier = Modifier.width(Spacing.md))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = conn.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        ProtocolBadge(conn.protocol)
+                    }
                     Text(
-                        text = conn.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Normal,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false)
+                        text = "${conn.username}@${conn.host}:${conn.port}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    ProtocolBadge(conn.protocol)
                 }
-                Text(
-                    text = "${conn.username}@${conn.host}:${conn.port}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
             }
             EditRowButton(onEdit = { onEdit(conn) })
         }

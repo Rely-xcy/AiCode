@@ -3,6 +3,8 @@ package com.aicode.feature.agent.domain.mcp
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.mcp.auth.McpOAuthException
+import com.aicode.feature.agent.domain.mcp.auth.McpOAuthManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -32,7 +34,7 @@ data class McpServerStatus(
     val toolCount: Int = 0,
     val error: String? = null
 ) {
-    enum class State { CONNECTING, CONNECTED, FAILED, DISABLED }
+    enum class State { CONNECTING, CONNECTED, NEEDS_AUTH, FAILED, DISABLED }
 }
 
 // reloadMutex 串行化重连，避免设置页连点导致并发注册/反注册竞态。
@@ -43,7 +45,8 @@ class McpManager @Inject constructor(
     private val okHttpClient: OkHttpClient,
     private val containerEngine: LinuxContainerEngine,
     private val workspaceRepository: WorkspaceRepository,
-    private val containerSettingsRepository: ContainerSettingsRepository
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val oauthManager: McpOAuthManager
 ) {
     private companion object {
         const val TAG = "McpManager"
@@ -127,6 +130,9 @@ class McpManager @Inject constructor(
         val t0 = System.currentTimeMillis()
         return try {
             FileLogger.i(TAG, "[${cfg.name}] 开始连接（${if (cfg.isStdio) "stdio" else "HTTP"}）")
+            if (!cfg.isStdio && cfg.auth != null) {
+                oauthManager.prepare(cfg)
+            }
             val transport = if (cfg.isStdio) {
                 // stdio server 跑在「运行时容器」上：本地模式用当前容器，远程 SSH 模式用默认容器。
                 // 容器未就绪不自动初始化，直接失败并引导去终端页完成初始化。
@@ -151,7 +157,8 @@ class McpManager @Inject constructor(
                 StreamableHttpTransport(
                     endpoint = cfg.url.orEmpty(),
                     client = okHttpClient,
-                    extraHeaders = cfg.headers
+                    extraHeaders = cfg.headers,
+                    authorizationProvider = { oauthManager.cachedToken(cfg.name) }
                 )
             }
             val client = McpClient(serverName = cfg.name, transport = transport)
@@ -168,6 +175,9 @@ class McpManager @Inject constructor(
             }
             FileLogger.i(TAG, "[${cfg.name}] 连接成功，注册 ${enabledTools.size}/${tools.size} 个工具（${System.currentTimeMillis() - t0}ms）")
             McpServerStatus(cfg.name, McpServerStatus.State.CONNECTED, toolCount = enabledTools.size)
+        } catch (e: McpAuthRequiredException) {
+            FileLogger.i(TAG, "[${cfg.name}] 需要 OAuth 授权（${System.currentTimeMillis() - t0}ms）")
+            McpServerStatus(cfg.name, McpServerStatus.State.NEEDS_AUTH)
         } catch (e: Exception) {
             FileLogger.e(TAG, "[${cfg.name}] 连接失败（${System.currentTimeMillis() - t0}ms）", e)
             McpServerStatus(cfg.name, McpServerStatus.State.FAILED, error = e.message)
@@ -270,6 +280,28 @@ class McpManager @Inject constructor(
     suspend fun removeServer(name: String) = reloadMutex.withLock {
         teardownServer(name)
         _statuses.value = _statuses.value.filterNot { it.name == name }
+    }
+
+    /** 触发某个 server 的 OAuth 授权；成功后重连使其工具可用。 */
+    suspend fun authorize(name: String): Result<Unit> {
+        val cfg = configRepository.getEffectiveServers().firstOrNull { it.name == name }
+            ?: return Result.failure(McpOAuthException("未找到 MCP server: $name"))
+        return runCatching {
+            oauthManager.authorize(cfg)
+            reloadServer(name)
+        }
+    }
+
+    /** 退出登录：清除该 server 的令牌并重连（将再次变为需要授权）。 */
+    suspend fun logout(name: String) {
+        val cfg = configRepository.getEffectiveServers().firstOrNull { it.name == name } ?: return
+        oauthManager.logout(cfg)
+        reloadServer(name)
+    }
+
+    /** 取消某个 server 正在进行的 OAuth 授权。 */
+    fun cancelAuthorize(name: String) {
+        oauthManager.cancel(name)
     }
 
     private fun teardownServer(name: String) {

@@ -20,14 +20,17 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,9 +63,9 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.credentials.domain.model.GitCredential
 import com.aicode.feature.credentials.presentation.CredentialViewModel
+import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.git.presentation.component.SectionHeader
 import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsRow
 import com.aicode.feature.settings.presentation.component.settingsLightMode
@@ -70,6 +73,7 @@ import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Github
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Plus
@@ -112,6 +116,10 @@ fun CredentialScreen(
     // editingCredential != null -> 编辑现有；editingCredential == null && isAddingCredential -> 新增；否则列表态。
     var editingCredential by remember { mutableStateOf<GitCredential?>(null) }
     var isAddingCredential by remember { mutableStateOf(false) }
+    // 右上角 + 打开「添加凭据」方式选择弹层；再进入手动添加或快速登录子流程。
+    var showAddSheet by remember { mutableStateOf(false) }
+    var showQuickLoginSheet by remember { mutableStateOf(false) }
+    val quickLoginState by viewModel.quickLogin.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = settingsPageBackground(),
@@ -128,7 +136,7 @@ fun CredentialScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { isAddingCredential = true }) {
+                    IconButton(onClick = { showAddSheet = true }) {
                         Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.credential_add))
                     }
                 }
@@ -179,14 +187,13 @@ fun CredentialScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(Spacing.lg),
+                                .padding(horizontal = Spacing.lg)
+                                .padding(bottom = 70.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = stringResource(R.string.credential_empty_hint),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
+                            EmptyCredentialsCard(
+                                onQuickLogin = { viewModel.startGitHubLogin() },
+                                onManualAdd = { isAddingCredential = true }
                             )
                         }
                     } else {
@@ -243,6 +250,40 @@ fun CredentialScreen(
             initial = null,
             onDismiss = { isAddingCredential = false },
             onSave = { viewModel.saveCredential(it); isAddingCredential = false }
+        )
+    }
+
+    if (showAddSheet) {
+        CredentialAddSheet(
+            onManual = {
+                showAddSheet = false
+                isAddingCredential = true
+            },
+            onQuickLogin = {
+                showAddSheet = false
+                viewModel.startGitHubLogin()
+            },
+            onDismiss = { showAddSheet = false }
+        )
+    }
+
+    if (showQuickLoginSheet) {
+        QuickLoginSheet(
+            onSelectGitHub = {
+                showQuickLoginSheet = false
+                viewModel.startGitHubLogin()
+            },
+            onDismiss = { showQuickLoginSheet = false }
+        )
+    }
+
+    // 设备码流进行中（请求/等待/成功/失败）时展示登录弹层。
+    if (quickLoginState !is QuickLoginUiState.Idle) {
+        GitHubDeviceFlowSheet(
+            state = quickLoginState,
+            onCancel = { viewModel.cancelQuickLogin() },
+            onRetry = { viewModel.startGitHubLogin() },
+            onSuccessDismiss = { viewModel.consumeQuickLoginResult() }
         )
     }
 
@@ -379,5 +420,104 @@ private fun hostBadgeLabel(host: String): String {
         clean.contains("codeberg", ignoreCase = true) -> "Codeberg"
         clean.contains("azure", ignoreCase = true) || clean.contains("visualstudio", ignoreCase = true) -> "Azure DevOps"
         else -> clean.substringBefore('.').ifBlank { clean }.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** 凭据列表为空时的现代空态引导卡片 */
+@Composable
+private fun EmptyCredentialsCard(
+    onQuickLogin: () -> Unit,
+    onManualAdd: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.xl),
+        color = MaterialTheme.semanticColors.cardSurface,
+        shadowElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.xl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.md)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(Radius.mdLarge)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Key,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
+                Text(
+                    text = stringResource(R.string.credential_empty_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = stringResource(R.string.credential_empty_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = Spacing.sm)
+                )
+            }
+
+            Spacer(Modifier.height(Spacing.xs))
+
+            Button(
+                onClick = onQuickLogin,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                shape = RoundedCornerShape(Radius.mdLarge)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Github,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.credential_add_github_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            OutlinedButton(
+                onClick = onManualAdd,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                shape = RoundedCornerShape(Radius.mdLarge)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Edit3,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.credential_add_manual_title),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
     }
 }

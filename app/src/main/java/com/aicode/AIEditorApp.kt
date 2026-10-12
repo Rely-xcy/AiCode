@@ -181,6 +181,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var remoteSshConnection: com.aicode.feature.agent.domain.container.RemoteSshConnection
 
+    /** 全局网络可用性监听：网络恢复/切换链路时驱动即时重连。 */
+    @Inject
+    lateinit var networkConnectivityObserver: com.aicode.core.net.NetworkConnectivityObserver
+
     /** 当前激活 profile 的连接配置解析器：连接/profile/模式变化时驱动重连。 */
     @Inject
     lateinit var activeRemoteConnectionResolver: com.aicode.feature.agent.domain.container.ActiveRemoteConnectionResolver
@@ -316,6 +320,28 @@ class AIEditorApp : Application(), Configuration.Provider {
                     KeepaliveWorker.cancel(this@AIEditorApp)
                 }
                 last = enabled
+            }
+        }
+        // 网络恢复或切换链路时立即重连 SSH，不等 supervisor 轮询（并带动远端工作区刷新）。
+        appScope.launch {
+            networkConnectivityObserver.recovered.collect {
+                runCatching { remoteSshConnection.tryReconnectIfDisconnected() }
+                    .onFailure { FileLogger.w(TAG, "网络恢复后重连 SSH 失败", it) }
+            }
+        }
+        // 远程 SSH 连接期间维持前台服务：否则远程模式下的空闲会话切后台会被冻结、连接被切断。
+        // 用会话计数（而非用户常驻开关）表达，连接断开即释放，不影响用户对保活开关的选择。
+        appScope.launch {
+            var held = false
+            remoteSshConnection.connectionState.collect { state ->
+                val connected = state == com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED
+                if (connected && !held) {
+                    TerminalKeepaliveService.startSession(this@AIEditorApp)
+                    held = true
+                } else if (!connected && held) {
+                    TerminalKeepaliveService.stopSession(this@AIEditorApp)
+                    held = false
+                }
             }
         }
         // 连接已配置的 MCP server，把其工具注册进 ToolRegistry（内部自有 scope，失败不影响启动）。

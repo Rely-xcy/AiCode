@@ -12,7 +12,8 @@ data class McpServerConfig(
     val args: List<String> = emptyList(),
     val env: Map<String, String> = emptyMap(),
     val enabled: Boolean = true,
-    val disabledTools: Set<String> = emptySet()
+    val disabledTools: Set<String> = emptySet(),
+    val auth: McpAuthConfig? = null
 ) {
     val isStdio: Boolean get() = !command.isNullOrBlank()
 
@@ -24,5 +25,24 @@ data class McpServerConfig(
         private val NAME_REGEX = Regex("[a-zA-Z0-9_-]+")
 
         fun isValidName(name: String): Boolean = NAME_REGEX.matches(name)
+    }
+}
+
+/**
+ * 远程 MCP server 的认证配置（仅 HTTP 形态有效）。目前只支持 OAuth；
+ * 令牌与 client_secret 不入此结构，另存于 [com.aicode.feature.agent.domain.mcp.auth.McpTokenStore]。
+ */
+@Serializable
+data class McpAuthConfig(
+    val type: String = TYPE_OAUTH,
+    /** 预注册的 OAuth client_id；留空则尝试动态客户端注册。 */
+    val clientId: String? = null,
+    /** 覆盖发现到的授权服务器 issuer（例如资源元数据未声明时手动指定）。 */
+    val authServer: String? = null,
+    /** 显式请求的 scope；留空则按 401 挑战与元数据推导。 */
+    val scopes: List<String>? = null
+) {
+    companion object {
+        const val TYPE_OAUTH = "oauth"
     }
 }

@@ -4,8 +4,11 @@ import android.content.ContextWrapper
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
+import com.aicode.feature.agent.domain.tool.FileVersionRegistry
+import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
+import com.aicode.feature.workspace.domain.sha256Fingerprint
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -31,7 +34,14 @@ class CheckpointManagerSessionIsolationTest {
 
     private val dao = FakeCheckpointDao()
     private val fileAccess = LocalFileAccess()
-    private val manager = CheckpointManager(FakeContext(filesDir), dao, fileAccess)
+    private val versions = FileVersionRegistry()
+    private val manager = CheckpointManager(
+        FakeContext(filesDir),
+        dao,
+        fileAccess,
+        WorkspaceFileLock(),
+        versions
+    )
 
     @After
     fun tearDown() {
@@ -51,7 +61,7 @@ class CheckpointManagerSessionIsolationTest {
 
         val restored = manager.restoreCodeToCheckpoint("sessionB", cpB.id)
 
-        assertEquals(0, restored)
+        assertEquals(0, restored.restored)
         assertEquals("A 的新内容", File(path).readText())
     }
 
@@ -86,9 +96,111 @@ class CheckpointManagerSessionIsolationTest {
 
         val restored = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
 
-        assertEquals(2, restored)
+        assertEquals(2, restored.restored)
         assertEquals("original", File(modified).readText())
         assertFalse(File(created).exists())
+    }
+
+    @Test
+    fun restoreSkipsFileChangedAfterSnapshot() = runTest {
+        // 核心场景：本会话「见过」某版本之后，文件又被别的会话改过；此时回滚不能覆盖对方。
+        // 守卫依据的是「本会话最后看到的版本」，所以这里要先让本会话登记一个版本
+        // （真实流程里由 readFile / 上一次写入完成登记）。
+        val path = File(workspace, "shared.txt").apply { writeText("v1") }.absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+        fileAccess.writeFile(path, "v2-mine", overwrite = true)
+        recordSeenVersion("sessionA", path)
+
+        // 快照与登记都完成之后，别人把文件改成 v3
+        File(path).writeText("v3-changed-by-other-session")
+
+        val result = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+
+        assertEquals("存在本会话未见过的改动时必须跳过", 0, result.restored)
+        assertEquals(1, result.skipped.size)
+        assertTrue(
+            "跳过清单要能定位到文件，实际=${result.skipped}",
+            result.skipped.single().endsWith("shared.txt")
+        )
+        assertEquals("别人的改动必须保留", "v3-changed-by-other-session", File(path).readText())
+    }
+
+    @Test
+    fun restoreRevertsOwnChangesEvenWhenTheyDiffer() = runTest {
+        // 反向保证：本会话自己改过、且这是本会话见过的版本 → 必须照常回滚（这正是回滚的用途）。
+        val path = File(workspace, "mine.txt").apply { writeText("v1") }.absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+
+        // 本会话的编辑流程：登记（readFile）→ 写入 → 再登记
+        recordSeenVersion("sessionA", path)
+        fileAccess.writeFile(path, "v2-mine", overwrite = true)
+        recordSeenVersion("sessionA", path)
+
+        val result = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+
+        assertEquals("本会话自己的改动必须能被撤销", 1, result.restored)
+        assertTrue(result.skipped.isEmpty())
+        assertEquals("v1", File(path).readText())
+    }
+
+    /** 模拟「本会话看到了该文件的当前版本」（等价于 readFile 的登记行为）。 */
+    private fun recordSeenVersion(sessionId: String, path: String) {
+        val fp = fileAccess.fingerprint(path) ?: return
+        versions.record(sessionId, fileAccess.toDisplayPath(path), fp)
+    }
+
+    @Test
+    fun restoreRecreatesFileDeletedAfterSnapshot() = runTest {
+        // MODIFY 快照 + 文件在快照后被删除 → 恢复到快照内容。
+        // 这是"本会话自己改/删、用户要撤销"的常规场景，必须能回滚回去。
+        val path = File(workspace, "vanished.txt").apply { writeText("v1") }.absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+
+        assertTrue(File(path).delete())
+
+        val result = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+
+        assertEquals(1, result.restored)
+        assertTrue(result.skipped.isEmpty())
+        assertEquals("应恢复快照内容", "v1", File(path).readText())
+    }
+
+    @Test
+    fun restoreIsIdempotent() = runTest {
+        // 连续回滚两次结果一致：第一次已把文件写回快照内容，第二次不应再改出别的东西。
+        val path = File(workspace, "same.txt").apply { writeText("v1") }.absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+        fileAccess.writeFile(path, "v2-mine", overwrite = true)
+
+        val first = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+        assertEquals(1, first.restored)
+        assertEquals("v1", File(path).readText())
+
+        val second = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+        assertEquals(1, second.restored)
+        assertEquals("v1", File(path).readText())
+    }
+
+    @Test
+    fun restoreDeletesCreatedFileEvenIfLaterModified() = runTest {
+        // 已知局限的显式记录：CREATE 快照拍摄时文件还不存在，因此没记下内容指纹，
+        // 无法判断快照之后是否有人往里写过东西——当前实现一律删除。
+        // 这个用例把现状钉住：将来若补上「首次写入后记指纹」，本用例应当改成断言 skipped。
+        val path = File(workspace, "created.txt").absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+        fileAccess.writeFile(path, "A 新建的内容", overwrite = true)
+        fileAccess.writeFile(path, "别人又改了", overwrite = true)
+
+        val result = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+
+        assertEquals("按现状：新建的文件照旧删除", 1, result.restored)
+        assertTrue(result.skipped.isEmpty())
+        assertFalse(File(path).exists())
     }
 
     @Test
@@ -182,6 +294,13 @@ class CheckpointManagerSessionIsolationTest {
         override fun isFile(path: String): Boolean = throw UnsupportedOperationException()
         override fun fileSize(path: String): Long = throw UnsupportedOperationException()
         override fun lastModified(path: String): Long = throw UnsupportedOperationException()
+
+        /** 真实实现而非抛异常：checkpoint 回滚前要按指纹判断文件是否已被其他会话改动。 */
+        override fun fingerprint(path: String): String? {
+            val file = File(path)
+            if (!file.isFile) return null
+            return sha256Fingerprint(file.readBytes())
+        }
         override fun permissions(path: String): String = throw UnsupportedOperationException()
         override fun listFiles(path: String): List<FileEntry> = throw UnsupportedOperationException()
         override fun readBytes(path: String): ByteArray = throw UnsupportedOperationException()

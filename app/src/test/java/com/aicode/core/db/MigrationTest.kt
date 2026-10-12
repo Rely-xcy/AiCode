@@ -104,4 +104,22 @@ class MigrationTest {
      * 未来新增迁移（51+）时把 @AutoMigration/新迁移加进来后在此补升级用例：
      * createDatabase(50) → 跑迁移数组 → 断言新列/新表存在。
      */
+    @Test
+    fun migrate_58_to_59_adds_backup_targets() {
+        helper.createDatabase(dbName, 58).close()
+
+        val db = Room.databaseBuilder(context, AgentDatabase::class.java, dbName)
+            .addMigrations(*MigrationLoader.loadMigrations(context))
+            .build()
+        val tables = mutableSetOf<String>()
+        db.openHelper.writableDatabase
+            .query("SELECT name FROM sqlite_master WHERE type='table'")
+            .use { cursor -> while (cursor.moveToNext()) tables += cursor.getString(0) }
+        db.close()
+
+        assertTrue(
+            "迁移 59 应新增 backup_targets 表，实际表：$tables",
+            tables.contains("backup_targets")
+        )
+    }
 }

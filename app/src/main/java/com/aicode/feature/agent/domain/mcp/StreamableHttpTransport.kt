@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.mcp
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.mcp.auth.WwwAuthenticateParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -27,6 +28,7 @@ class StreamableHttpTransport(
     private val endpoint: String,
     private val client: OkHttpClient,
     private val extraHeaders: Map<String, String> = emptyMap(),
+    private val authorizationProvider: (() -> String?)? = null,
     private val json: Json = DEFAULT_JSON
 ) : McpTransport {
 
@@ -58,6 +60,9 @@ class StreamableHttpTransport(
                 // 会话 id 在首个响应（initialize）里下发，记下供后续请求复用。
                 resp.header("Mcp-Session-Id")?.let { if (it.isNotBlank()) sessionId = it }
 
+                if (resp.code == 401) {
+                    throw McpAuthRequiredException(WwwAuthenticateParser.parse(resp.header("WWW-Authenticate")))
+                }
                 if (!resp.isSuccessful) {
                     throw McpException(message = "HTTP ${resp.code} 调用 $method 失败: ${resp.message}")
                 }
@@ -97,6 +102,11 @@ class StreamableHttpTransport(
             // 同时接受两种响应，让 server 自行决定单条 JSON 还是 SSE。
             add("Accept", "application/json, text/event-stream")
             sessionId?.let { add("Mcp-Session-Id", it) }
+            // 用户显式配了 Authorization 时优先，不覆盖。
+            val hasExplicitAuth = extraHeaders.keys.any { it.equals("Authorization", ignoreCase = true) }
+            if (!hasExplicitAuth) {
+                authorizationProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { add("Authorization", "Bearer $it") }
+            }
             extraHeaders.forEach { (k, v) -> add(k, v) }
         }.build()
 

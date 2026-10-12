@@ -1,12 +1,17 @@
 package com.aicode.feature.agent.domain.tool.file
 
+import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.AgentTool
+import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
+import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
+import com.aicode.feature.agent.domain.tool.staleFileMessage
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LineDiff
 import com.aicode.core.watch.WorkspaceWriteSignal
@@ -25,8 +30,16 @@ import javax.inject.Inject
 
 private const val TAG = "FileTools"
 
+/**
+ * 读取文件内容（工作区文件或容器绝对路径的系统文件）。
+ *
+ * 除返回内容外，本工具还承担一个**副作用**：把本次读到的文件内容指纹登记到
+ * [FileVersionRegistry]，供后续 `editFile` / `writeFile` 做写前版本校验。因此
+ * 「先 readFile 再改」不只是好习惯，也是拿到并发保护的前提。
+ */
 class ReadFileTool @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val versions: FileVersionRegistry
 ) : AgentTool() {
     override val name = "readFile"
     override val description = "读取文件内容（工作区文件或容器绝对路径的系统文件）。单次读取有行数与字节上限，超出可用 start_line 分段续读。"
@@ -116,6 +129,31 @@ class ReadFileTool @Inject constructor(
         }
     }
 
+    override suspend fun executeWithContext(
+        args: Map<String, JsonElement>,
+        context: AgentContext
+    ): ToolResult {
+        val result = execute(args)
+        // 只有成功读取才登记版本；读失败（文件不存在/过大）时没有可信基线，登记反而会
+        // 让后续写入被误判为过期。
+        if (result is ToolResult.Success) {
+            args["path"]?.jsonPrimitive?.contentOrNull?.let { path -> recordVersion(path, context.sessionId) }
+        }
+        return result
+    }
+
+    /**
+     * 登记读到的版本。失败一律忽略——这里只是为后续写入建立基线，登记不上最多退化成
+     * 「没读过就写」的放行语义，不应让一次成功的读取因为登记失败而报错。
+     */
+    private fun recordVersion(path: String, sessionId: String?) {
+        runCatching {
+            fileAccess.fingerprint(path)?.let { versions.record(sessionId, fileAccess.toDisplayPath(path), it) }
+        }.onFailure {
+            FileLogger.w(TAG, "read_file 登记版本失败: $path", it)
+        }
+    }
+
     private companion object {
         /** 单次最多返回的行数，超出截断并提示用 start_line 续读。 */
         const val MAX_LINES = 2000
@@ -129,10 +167,18 @@ class ReadFileTool @Inject constructor(
  *
  * 通过 overwrite 参数吸收了旧 create_file 的「不覆盖已有文件」语义：
  * overwrite=false 且目标已存在时报错，可用于安全地新建文件。
+ *
+ * ### 并发保护
+ *
+ * 覆盖已有文件时做写前版本校验（[FileVersionRegistry]）：若模型上次读到的内容与磁盘当前
+ * 内容不一致，说明文件已被其他会话或用户改过，**拒绝覆盖**并提示重新读取。
+ * 新建文件不做校验（没有可比较的旧版本）。校验与写入都在 [WorkspaceFileLock] 内进行。
  */
 class WriteFileTool @Inject constructor(
     private val fileAccess: FileAccessProvider,
-    private val workspaceWriteSignal: WorkspaceWriteSignal
+    private val workspaceWriteSignal: WorkspaceWriteSignal,
+    private val fileLock: WorkspaceFileLock,
+    private val versions: FileVersionRegistry
 ) : AgentTool() {
     override val name = "writeFile"
     override val description = "写入完整文件内容，文件不存在时自动创建（含父目录）。局部修改请用 editFile。"
@@ -162,12 +208,71 @@ class WriteFileTool @Inject constructor(
         )
     }
 
-    override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
-        return try {
-            val path = args["path"]?.jsonPrimitive?.contentOrNull ?: run {
-                FileLogger.w(TAG, "write_file 缺少 path 参数")
-                return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+    /** 有会话上下文的执行路径（`StatefulAgentWorkflow` 走这条），带并发保护。 */
+    override suspend fun executeWithContext(
+        args: Map<String, JsonElement>,
+        context: AgentContext
+    ): ToolResult {
+        val path = args["path"]?.jsonPrimitive?.contentOrNull
+            ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+
+        val key = fileAccess.toDisplayPath(path)
+        val existedBefore = fileAccess.exists(path)
+        checkVersion(path, key, context.sessionId, existedBefore)?.let { return it }
+
+        return fileLock.withLock(key) {
+            checkVersion(path, key, context.sessionId, existedBefore)?.let { return@withLock it }
+            val result = performWrite(path, args)
+            // 写成功后登记新版本；登记失败不能把已成功的写入报成失败（见 EditFileTool 同处注释）。
+            if (result is ToolResult.Success) {
+                runCatching { fileAccess.fingerprint(path) }
+                    .onFailure { FileLogger.w(TAG, "write_file 写后登记版本失败: $key", it) }
+                    .getOrNull()
+                    ?.let { versions.record(context.sessionId, key, it) }
             }
+            result
+        }
+    }
+
+    /**
+     * 无上下文的执行路径。正常流程不会走到这里，保留以兼容直接调用工具的测试与内部调用方；
+     * 此路径**没有**并发保护（没有 sessionId 就无从判断"你读到的版本"）。
+     */
+    override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
+        val path = args["path"]?.jsonPrimitive?.contentOrNull
+            ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+        return performWrite(path, args)
+    }
+
+    /**
+     * 版本比对。返回 null 表示可以继续，返回 Error 表示内容已过期、拒绝写入。
+     *
+     * [existed] 为 false（新建文件）时直接放行：没有旧版本可比较，登记表里的任何记录
+     * 也不代表"这个文件曾经存在过"。
+     *
+     * **fail-open**：拿不到当前指纹时（远端文件超上限、IO 瞬时失败）放行并记日志。
+     * 版本校验是辅助保护，它自己的失败不应阻塞正常写入。
+     */
+    private fun checkVersion(
+        path: String,
+        key: String,
+        sessionId: String?,
+        existed: Boolean
+    ): ToolResult? {
+        if (!existed) return null
+        val recorded = versions.get(sessionId, key) ?: return null
+        val current = runCatching { fileAccess.fingerprint(path) }.getOrElse { e ->
+            FileLogger.w(TAG, "write_file 无法计算当前指纹，跳过版本校验: $key", e)
+            return null
+        } ?: return null
+        if (recorded == current) return null
+        FileLogger.w(TAG, "write_file 拒绝过期写: $key（记录版本与当前不一致）")
+        return ToolResult.Error(staleFileMessage(key), STALE_FILE_CODE)
+    }
+
+    /** 真正的写入逻辑：不涉及锁与版本，纯粹按 [args] 完成一次整文件写。 */
+    private suspend fun performWrite(path: String, args: Map<String, JsonElement>): ToolResult {
+        return try {
             val content = args["content"]?.jsonPrimitive?.contentOrNull ?: ""
             val overwrite = args["overwrite"]?.jsonPrimitive?.booleanOrNull ?: true
 

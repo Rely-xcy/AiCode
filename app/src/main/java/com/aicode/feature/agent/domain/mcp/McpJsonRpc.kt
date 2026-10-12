@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.mcp
 
+import com.aicode.feature.agent.domain.mcp.auth.BearerChallenge
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -50,6 +51,11 @@ class McpException(
     message: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/** MCP server 返回 401 需要授权时抛出，携带解析后的 `WWW-Authenticate` 挑战供上层引导 OAuth。 */
+class McpAuthRequiredException(
+    val challenge: BearerChallenge?
+) : Exception("MCP server 需要 OAuth 授权")
 
 // ---- MCP 领域模型（initialize / tools/list 的返回片段）----
 

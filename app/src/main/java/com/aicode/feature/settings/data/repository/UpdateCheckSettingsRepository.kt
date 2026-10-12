@@ -40,6 +40,16 @@ class UpdateCheckSettingsRepository @Inject constructor(
             prefs.edit().putString(KEY_CHANNEL, value.name).apply()
         }
 
+    /**
+     * 更新包下载镜像源：留空表示直连 GitHub。默认走 gh-proxy 的 CDN 节点
+     * （实测整包 sha256 与 GitHub API 的 digest 一致，首字节延迟也最低）。
+     */
+    var downloadMirror: String
+        get() = prefs.getString(KEY_DOWNLOAD_MIRROR, DEFAULT_DOWNLOAD_MIRROR) ?: DEFAULT_DOWNLOAD_MIRROR
+        set(value) {
+            prefs.edit().putString(KEY_DOWNLOAD_MIRROR, value.trim()).apply()
+        }
+
     /** 今天是否已检测过（按记录日期判断）。 */
     fun hasCheckedToday(): Boolean = prefs.getString(KEY_LAST_CHECKED, null) == today()
 
@@ -91,5 +101,30 @@ class UpdateCheckSettingsRepository @Inject constructor(
         const val KEY_ENABLED = "auto_check_enabled"
         const val KEY_CHANNEL = "update_channel"
         const val KEY_LAST_CHECKED = "last_checked_date"
+        const val KEY_DOWNLOAD_MIRROR = "download_mirror"
     }
+}
+
+/** 默认下载镜像源：gh-proxy 的 CDN 节点。 */
+const val DEFAULT_DOWNLOAD_MIRROR = "https://cdn.gh-proxy.com/"
+
+/** 备选镜像源（设置页快捷项）：gh-proxy 的 IPv6 优选节点。 */
+const val ALT_DOWNLOAD_MIRROR = "https://v6.gh-proxy.org/"
+
+/** 镜像源是否合法：留空（直连）或以 http/https 开头。 */
+fun isValidDownloadMirror(value: String): Boolean {
+    val v = value.trim()
+    return v.isEmpty() || v.startsWith("http://") || v.startsWith("https://")
+}
+
+/**
+ * 把 GitHub 原始下载地址套上镜像前缀。
+ *
+ * 留空或非法（非 http/https）时原样返回直连地址；含 `{url}` 占位符时按占位符替换，
+ * 否则按 gh-proxy 系约定做前缀拼接：`https://cdn.gh-proxy.com/https://github.com/...`。
+ */
+fun buildDownloadUrl(original: String, mirror: String): String {
+    val m = mirror.trim()
+    if (!isValidDownloadMirror(m) || m.isEmpty()) return original
+    return if (m.contains("{url}")) m.replace("{url}", original) else m.trimEnd('/') + "/" + original
 }

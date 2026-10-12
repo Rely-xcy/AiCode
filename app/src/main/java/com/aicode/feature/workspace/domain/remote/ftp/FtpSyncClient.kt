@@ -61,7 +61,7 @@ class FtpSyncClient : RemoteSyncClient {
         ftpClient.setAutodetectUTF8(true)
         ftpClient.setConnectTimeout(CONNECT_TIMEOUT_MS)
         ftpClient.setDefaultTimeout(CONTROL_READ_TIMEOUT_MS)
-        ftpClient.setDataTimeout(DATA_TIMEOUT_MS)
+        ftpClient.setDataTimeout(Duration.ofMillis(DATA_TIMEOUT_MS.toLong()))
         // 传输期间数据连接忙、控制连接空闲，靠 NOOP 保活，避免被服务器/路由器按 idle 断开。
         ftpClient.setControlKeepAliveTimeout(Duration.ofSeconds(CONTROL_KEEPALIVE_SECONDS))
         ftpClient.setControlKeepAliveReplyTimeout(Duration.ofSeconds(CONTROL_KEEPALIVE_REPLY_SECONDS))

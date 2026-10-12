@@ -23,7 +23,9 @@ class TerminalThemePresetTest {
     @Test
     fun all_presets_defined_and_ids_unique() {
         val expected = listOf(
+            TerminalThemePreset.FOLLOW_APP,
             TerminalThemePreset.TERMIUS_DARK,
+            TerminalThemePreset.GITHUB_LIGHT,
             TerminalThemePreset.DRACULA,
             TerminalThemePreset.ONE_DARK,
             TerminalThemePreset.MONOKAI,
@@ -71,7 +73,9 @@ class TerminalThemePresetTest {
 
     @Test
     fun find_by_id_returns_matching_preset() {
+        assertEquals(TerminalThemePreset.FOLLOW_APP, TerminalThemePreset.findById("follow_app"))
         assertEquals(TerminalThemePreset.TERMIUS_DARK, TerminalThemePreset.findById("termius_dark"))
+        assertEquals(TerminalThemePreset.GITHUB_LIGHT, TerminalThemePreset.findById("github_light"))
         assertEquals(TerminalThemePreset.DRACULA, TerminalThemePreset.findById("dracula"))
         assertEquals(TerminalThemePreset.ONE_DARK, TerminalThemePreset.findById("one_dark"))
         assertEquals(TerminalThemePreset.MONOKAI, TerminalThemePreset.findById("monokai"))
@@ -79,8 +83,47 @@ class TerminalThemePresetTest {
     }
 
     @Test
-    fun find_by_id_unknown_falls_back_to_termius_dark() {
-        assertEquals(TerminalThemePreset.TERMIUS_DARK, TerminalThemePreset.findById("no_such_theme"))
-        assertEquals(TerminalThemePreset.TERMIUS_DARK, TerminalThemePreset.findById("github_light"))
+    fun find_by_id_unknown_falls_back_to_follow_app() {
+        assertEquals(TerminalThemePreset.FOLLOW_APP, TerminalThemePreset.findById("no_such_theme"))
+    }
+
+    @Test
+    fun resolve_follow_app_uses_app_colors_and_mode_ansi() {
+        val lightResolved = TerminalThemePreset.resolve(
+            preset = TerminalThemePreset.FOLLOW_APP,
+            isDark = false,
+            backgroundArgb = 0xFFF5F3EC.toInt(),
+            foregroundArgb = 0xFF141413.toInt(),
+            cursorArgb = 0xFFC15F3C.toInt()
+        )
+        assertEquals(0xFFF5F3EC.toInt(), lightResolved.background)
+        assertEquals(0xFF141413.toInt(), lightResolved.foreground)
+        assertEquals(0xFFC15F3C.toInt(), lightResolved.cursor)
+        assertTrue(lightResolved.ansiColors.contentEquals(TerminalThemePreset.GITHUB_LIGHT.ansiColors))
+
+        val darkResolved = TerminalThemePreset.resolve(
+            preset = TerminalThemePreset.FOLLOW_APP,
+            isDark = true,
+            backgroundArgb = 0xFF1A1917.toInt(),
+            foregroundArgb = 0xFFFAF9F5.toInt(),
+            cursorArgb = 0xFFE08A6B.toInt()
+        )
+        assertEquals(0xFF1A1917.toInt(), darkResolved.background)
+        assertEquals(0xFFFAF9F5.toInt(), darkResolved.foreground)
+        assertEquals(0xFFE08A6B.toInt(), darkResolved.cursor)
+        assertTrue(darkResolved.ansiColors.contentEquals(TerminalThemePreset.TERMIUS_DARK.ansiColors))
+        assertNotEquals(lightResolved, darkResolved)
+    }
+
+    @Test
+    fun resolve_fixed_preset_returns_preset_unchanged() {
+        val resolved = TerminalThemePreset.resolve(
+            preset = TerminalThemePreset.DRACULA,
+            isDark = false,
+            backgroundArgb = 0xFFFFFFFF.toInt(),
+            foregroundArgb = 0xFF000000.toInt(),
+            cursorArgb = 0xFFFF0000.toInt()
+        )
+        assertEquals(TerminalThemePreset.DRACULA, resolved)
     }
 }

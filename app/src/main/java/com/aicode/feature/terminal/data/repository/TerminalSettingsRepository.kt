@@ -22,7 +22,7 @@ private val Context.terminalDataStore by preferencesDataStore(
 
 /** 终端配置模型。 */
 data class TerminalSettings(
-    val themeId: String = TerminalThemePreset.TERMIUS_DARK.id,
+    val themeId: String = TerminalThemePreset.FOLLOW_APP.id,
     val fontSizeSp: Int = 12,
     val cursorStyle: Int = 0, // 0=Block, 1=Underline, 2=Bar
     /** 字体标识：空=系统等宽，TerminalFontManager.BUILTIN_PATH=内置 JetBrains Mono NL，其余为导入字体的绝对路径。 */
@@ -46,7 +46,7 @@ class TerminalSettingsRepository @Inject constructor(
 
     val settingsFlow: Flow<TerminalSettings> = context.terminalDataStore.data.map { prefs ->
         TerminalSettings(
-            themeId = prefs[THEME_ID_KEY] ?: TerminalThemePreset.TERMIUS_DARK.id,
+            themeId = prefs[THEME_ID_KEY] ?: TerminalThemePreset.FOLLOW_APP.id,
             fontSizeSp = prefs[FONT_SIZE_SP_KEY]?.coerceIn(5, 22) ?: 12,
             cursorStyle = prefs[CURSOR_STYLE_KEY] ?: 0,
             // 未设过字体的用户给内置字体；显式选过“系统等宽”（空串）的保持原样；导入字体被删时回落内置

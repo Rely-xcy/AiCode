@@ -7,6 +7,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.editor.data.EditorSettings
 import com.aicode.feature.editor.data.EditorSettingsRepository
 import com.aicode.feature.editor.domain.TextMateSetup
+import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -34,20 +35,25 @@ sealed interface EditorUiState {
 /** 保存结果，一次性事件，经 [CodeEditorViewModel.saveEvents] 下发。 */
 sealed interface SaveResult {
     data object Success : SaveResult
-    data class Error(val detail: String?) : SaveResult
 
     /**
-     * 文件在打开之后被别的程序/会话改过（mtime 变新），本次没有写盘。
-     * 由 UI 二次确认后带 force = true 重来——只提示，不硬拦。
+     * 磁盘上的内容在编辑器打开之后被改过（多半是 AI 会话写的），本次保存**未写入**。
+     *
+     * 携带磁盘当前内容供 UI 展示差异：不直接覆盖，也不直接丢弃用户的编辑，由用户选。
+     *
+     * @param diskContent 磁盘当前内容（可能是 AI 刚写进去的）
      */
-    data object Conflict : SaveResult
+    data class Conflict(val diskContent: String) : SaveResult
+
+    data class Error(val detail: String?) : SaveResult
 }
 
 @HiltViewModel
 class CodeEditorViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val fileAccess: FileAccessProvider,
-    private val editorSettings: EditorSettingsRepository
+    private val editorSettings: EditorSettingsRepository,
+    private val versions: FileVersionRegistry
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<EditorUiState>(EditorUiState.Loading)
@@ -65,25 +71,21 @@ class CodeEditorViewModel @Inject constructor(
 
     private var loadedPath: String? = null
 
-    /** 打开时记录的文件修改时间（毫秒；0 表示取不到）。供保存前判断文件是否被外部改过。 */
-    private var loadedModifiedAt: Long = 0L
+    /** 加载时磁盘内容的指纹，用于保存前判断「文件是否被 AI/其他会话改过」。 */
+    private var loadedFingerprint: String? = null
 
     /** 重复调用同一路径不会重复读盘，供 Compose 重组时安全调用。 */
     fun load(path: String) {
         if (loadedPath == path) return
         loadedPath = path
-        // 换文件先清掉基准：否则会拿上一个文件的时间戳去判新文件的冲突
-        loadedModifiedAt = 0L
+        // 换文件时先清空基线：否则旧文件的指纹会被拿来跟新文件比，误报冲突。
+        loadedFingerprint = null
         _uiState.value = EditorUiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = runCatching {
-                // isFile 为假 = 不存在或不是普通文件（目录/设备），一次 statExistence 就能判定；
-                // 原先还要先 exists 一次，远程模式下每次 stat 都是一次 SFTP 往返。
-                if (!fileAccess.isFile(path)) {
+                if (!fileAccess.exists(path) || !fileAccess.isFile(path)) {
                     return@runCatching EditorUiState.Error(null)
                 }
-                // 保存冲突检测的基准：取不到时间戳（0）时后面不做冲突判定，宁可漏报也不误报
-                loadedModifiedAt = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
                 val size = fileAccess.fileSize(path)
                 if (size > MAX_EDITABLE_BYTES) {
                     return@runCatching EditorUiState.TooLarge(size)
@@ -104,7 +106,14 @@ class CodeEditorViewModel @Inject constructor(
                 EditorUiState.Success(
                     content = bytes.toString(Charsets.UTF_8),
                     scopeName = scope
-                )
+                ).also {
+                    // 记下磁盘指纹：保存前据此判断「编辑器打开后文件是否被 AI/其他会话改过」。
+                    loadedFingerprint = runCatching { fileAccess.fingerprint(path) }.getOrNull()
+                    // 同时登记给并发保护：用户保存后，所有 AI 会话手上的版本都算过期。
+                    loadedFingerprint?.let { fp ->
+                        versions.recordExternal(fileAccess.toDisplayPath(path), fp)
+                    }
+                }
             }.getOrElse { e ->
                 FileLogger.w(TAG, "打开文件失败: $path", e)
                 EditorUiState.Error(e.message)
@@ -115,46 +124,75 @@ class CodeEditorViewModel @Inject constructor(
     /**
      * 把编辑器当前内容写回文件。写入在 IO 线程进行，结果通过 [saveEvents] 通知，期间 [saving] 置位。
      *
-     * [force] = false 时先比对 mtime：文件在打开之后被别的程序/会话改过就先发 [SaveResult.Conflict]
-     * 并且**不写盘**，由 UI 提示用户二次确认（确认后带 force = true 重来）。只提示不硬拦：
-     * SFTP v3 的 mtime 只有秒级精度、远端 FS 时间戳也未必可靠，硬拦会误报卡人。
+     * 保存前先比对磁盘指纹：若文件在编辑器打开之后被 AI 会话或别的进程改过，**不写入**，
+     * 改为下发 [SaveResult.Conflict]，由用户决定覆盖还是放弃自己的编辑。否则用户的保存会
+     * 静默抹掉 AI 刚写的改动（反向亦然）。
      */
-    fun save(content: String, force: Boolean = false) {
+    fun save(content: String) {
         val path = loadedPath ?: return
         viewModelScope.launch(Dispatchers.IO) {
             _saving.value = true
             try {
-                if (!force && hasExternalChange()) {
-                    FileLogger.w(TAG, "保存前检测到文件已被外部修改: $path")
-                    _saveEvents.send(SaveResult.Conflict)
+                val current = runCatching { fileAccess.fingerprint(path) }.getOrNull()
+                if (loadedFingerprint != null && current != null && current != loadedFingerprint) {
+                    FileLogger.w(TAG, "保存冲突（磁盘内容已变）: $path")
+                    val disk = runCatching { fileAccess.readFile(path) }.getOrNull()
+                    _saveEvents.send(SaveResult.Conflict(disk.orEmpty()))
                     return@launch
                 }
-                val result = runCatching { fileAccess.writeFile(path, content) }
-                    .fold(
-                        onSuccess = {
-                            // 自己写完就刷新基准，否则下一次保存必然把自己的写入当成外部改动
-                            loadedModifiedAt = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
-                            SaveResult.Success
-                        },
-                        onFailure = { e ->
-                            FileLogger.w(TAG, "保存文件失败: $path", e)
-                            SaveResult.Error(e.message)
-                        }
-                    )
-                _saveEvents.send(result)
+                _saveEvents.send(writeThrough(path, content))
             } finally {
                 _saving.value = false
             }
         }
     }
 
-    /** 文件是否在打开之后被外部改动过（mtime 变新）。基准或当前值取不到（0）时不判定冲突。 */
-    private fun hasExternalChange(): Boolean {
-        val path = loadedPath ?: return false
-        if (loadedModifiedAt <= 0L) return false
-        val current = runCatching { fileAccess.lastModified(path) }.getOrDefault(0L)
-        return current > loadedModifiedAt
+    /**
+     * 无视冲突直接覆盖磁盘（用户在冲突提示里选了「覆盖」）。
+     *
+     * 这是用户显式确认的覆盖，因此不再比对指纹——但仍走 [fileAccess] 的原子写。
+     */
+    fun saveForce(content: String) {
+        val path = loadedPath ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _saving.value = true
+            try {
+                _saveEvents.send(writeThrough(path, content))
+            } finally {
+                _saving.value = false
+            }
+        }
     }
+
+    /**
+     * 放弃编辑器里的修改、重新从磁盘加载（用户在冲突提示里选了「放弃我的修改」）。
+     *
+     * 复用 [load] 会因 `loadedPath` 未变而直接返回，所以这里先清掉再走加载，
+     * 保证拿到的是磁盘最新内容。
+     */
+    fun reloadFromDisk() {
+        val path = loadedPath ?: return
+        loadedPath = null
+        load(path)
+    }
+
+    /** 真正写盘并维护版本基线；成功/失败统一转成 [SaveResult]。 */
+    private fun writeThrough(path: String, content: String): SaveResult =
+        runCatching { fileAccess.writeFile(path, content) }
+            .fold(
+                onSuccess = {
+                    // 更新基线，否则紧接着的第二次保存会被自己上一次的写入判成冲突。
+                    loadedFingerprint = runCatching { fileAccess.fingerprint(path) }.getOrNull()
+                    loadedFingerprint?.let { fp ->
+                        versions.recordExternal(fileAccess.toDisplayPath(path), fp)
+                    }
+                    SaveResult.Success
+                },
+                onFailure = { e ->
+                    FileLogger.w(TAG, "保存文件失败: $path", e)
+                    SaveResult.Error(e.message)
+                }
+            )
 
     private companion object {
         const val TAG = "CodeEditorViewModel"

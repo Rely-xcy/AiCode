@@ -242,6 +242,18 @@
     <string name="settings_keepalive_subtitle">Foreground notification prevents background kill</string>
     <string name="settings_screen_on_title">Keep screen on</string>
     <string name="settings_screen_on_subtitle">Screen stays awake while the app is in the foreground</string>
+    <string name="settings_network_guide_title">Background network troubleshooting</string>
+    <string name="settings_network_guide_subtitle">Connection dropping in background? Check these</string>
+    <string name="settings_network_guide_intro">If you see \"Network connection lost\" after switching to the background, set up in this order:</string>
+    <string name="settings_network_guide_step_keepalive">1. Turn on \"Background keepalive\" above and keep its notification</string>
+    <string name="settings_network_guide_step_lock">2. Lock this app in the Recents screen instead of swiping it away</string>
+    <string name="settings_network_guide_step_battery">3. In system settings, set this app\'s battery policy to \"Unrestricted / Don\'t optimize\" and allow auto-launch</string>
+    <string name="settings_network_guide_brand_huawei">Huawei / Honor: App launch → Manage manually → Auto-launch, Associated launch, Run in background</string>
+    <string name="settings_network_guide_brand_xiaomi">Xiaomi / Redmi: Battery and performance → App battery saver → No restrictions</string>
+    <string name="settings_network_guide_brand_oppo">OPPO / OnePlus / realme: App management → Battery usage → Allow background activity; Battery → More settings → Optimize battery use → Don\'t optimize</string>
+    <string name="settings_network_guide_brand_vivo">vivo / iQOO: Battery → Background power consumption management → Allow high background power; Apps and permissions → Auto-start</string>
+    <string name="settings_network_guide_brand_samsung">Samsung: Battery and device care → Battery → Background usage limits → Never sleeping apps; Apps → Battery → Unrestricted</string>
+    <string name="settings_network_guide_more">See the online docs for more devices and details</string>
     <string name="settings_agent_sound_title">Agent completion notification</string>
     <string name="settings_agent_sound_subtitle">Pop a notification when agent finishes in background</string>
     <string name="agent_complete_notification_title">Task complete</string>
@@ -298,8 +310,8 @@
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_cancel">Cancel</string>
-    <string name="common_confirm">Confirm</string>
     <string name="common_retry">Retry</string>
+    <string name="common_confirm">Confirm</string>
     <string name="common_go_to_settings">Go to Settings</string>
     <string name="common_name">Name</string>
     <string name="common_image_preview">Image Preview</string>
@@ -434,6 +446,29 @@
     <string name="fork_update_release_title">%1$s (%2$s)</string>
     <string name="fork_update_install_now">Update now</string>
     <string name="fork_update_changelog_truncated">… (long changelog — showing only the first %1$d lines)</string>
+    <string name="about_update_mirror">Download mirror</string>
+    <string name="about_update_mirror_desc">Speeds up update downloads; leave empty to use GitHub directly</string>
+    <string name="about_update_mirror_preset_cdn">gh-proxy CDN (default)</string>
+    <string name="about_update_mirror_preset_v6">gh-proxy preferred node</string>
+    <string name="about_update_mirror_preset_direct">GitHub direct</string>
+    <string name="about_update_mirror_invalid">Address must start with http:// or https://</string>
+    <string name="about_update_mirror_default">Restore default</string>
+    <string name="about_update_download_install">Download &amp; install</string>
+    <string name="about_update_install">Install</string>
+    <string name="about_update_browser">Download in browser</string>
+    <string name="about_update_background">Continue in background</string>
+    <string name="about_update_downloading">Downloading %1$d%%</string>
+    <string name="about_update_download_size">%1$s / %2$s</string>
+    <string name="about_update_apk_ready">Update package is ready — tap Install to finish</string>
+    <string name="about_update_need_permission">Allow “install unknown apps” first, then come back and tap Install</string>
+    <string name="about_update_download_failed">Download failed</string>
+    <string name="about_update_download_failed_hint">Change the mirror in Settings → About → Download mirror and retry</string>
+    <string name="about_update_retry">Retry</string>
+    <string name="about_update_verify_not_apk">The downloaded file is not a valid package</string>
+    <string name="about_update_verify_package">The package does not match this app</string>
+    <string name="about_update_verify_signature">Package signature differs from this app — download in browser instead</string>
+    <string name="about_update_verify_not_newer">Package version is not newer than the installed one</string>
+    <string name="about_update_install_failed">No app available to install packages</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>
@@ -496,6 +531,50 @@
     <string name="backup_export_failed">Export failed</string>
     <string name="backup_wrong_password">Wrong backup password, or the encrypted backup file is corrupted</string>
     <string name="backup_import_failed">Import failed</string>
+
+    <!-- 网络备份 -->
+    <string name="backup_net_section">Cloud backup</string>
+    <string name="backup_tab_local">Local</string>
+    <string name="backup_net_targets">Backup targets</string>
+    <string name="backup_net_add_target">Add backup target</string>
+    <string name="backup_net_edit_target">Edit backup target</string>
+    <string name="backup_net_no_target">No cloud backup target yet</string>
+    <string name="backup_net_upload">Upload</string>
+    <string name="backup_net_upload_short">Upload</string>
+    <string name="backup_net_upload_subtitle">Export the current backup and upload to the selected target</string>
+    <string name="backup_net_restore">Restore from cloud</string>
+    <string name="backup_net_restore_subtitle">Download a backup from the selected target and restore</string>
+    <string name="backup_net_test_connection">Test connection</string>
+    <string name="backup_net_test_success">Connection succeeded</string>
+    <string name="backup_net_test_failed">Connection failed</string>
+    <string name="backup_net_upload_failed">Upload failed</string>
+    <string name="backup_net_list_failed">Failed to read cloud backups</string>
+    <string name="backup_net_delete_failed">Failed to delete cloud backup</string>
+    <string name="backup_net_upload_done">Uploaded to %1$s</string>
+    <string name="backup_net_type_webdav">WebDAV</string>
+    <string name="backup_net_type_s3">Object storage (S3)</string>
+    <string name="backup_net_name">Name</string>
+    <string name="backup_net_endpoint">Server URL</string>
+    <string name="backup_net_endpoint_hint">e.g. https://dav.example.com/dav</string>
+    <string name="backup_net_base_path">Remote directory</string>
+    <string name="backup_net_base_path_hint">WebDAV directory or S3 object prefix</string>
+    <string name="backup_net_username">Username</string>
+    <string name="backup_net_password">Password</string>
+    <string name="backup_net_access_key">Access Key</string>
+    <string name="backup_net_secret_key">Secret Key</string>
+    <string name="backup_net_session_token">Session Token (optional)</string>
+    <string name="backup_net_bucket">Bucket</string>
+    <string name="backup_net_region">Region</string>
+    <string name="backup_net_path_style">Path-style addressing</string>
+    <string name="backup_net_remote_list_title">Cloud backups</string>
+    <string name="backup_net_remote_empty">No backups in the cloud</string>
+    <string name="backup_net_remote_restore">Restore</string>
+    <string name="backup_net_remote_delete">Delete</string>
+    <string name="backup_net_remote_delete_confirm">Delete cloud backup %1$s? This cannot be undone.</string>
+    <string name="backup_net_loading">Loading cloud backups…</string>
+    <string name="backup_net_uploading">Uploading backup…</string>
+    <string name="backup_net_testing">Testing connection…</string>
+    <string name="backup_net_delete_target_confirm">Delete backup target %1$s?</string>
 
     <!-- Chat Drawer -->
     <string name="chat_no_sessions_hint">No sessions yet</string>
@@ -570,15 +649,16 @@
     <string name="editor_font_size_value">%1$d sp</string>
     <string name="editor_file_too_large">File too large (%1$d MB) to open</string>
     <string name="editor_load_failed">Failed to open file</string>
-    <string name="editor_save_conflict_title">File changed elsewhere</string>
-    <string name="editor_save_conflict_message">This file was modified by another program or session after it was opened. Saving will overwrite those changes. Save anyway?</string>
-    <string name="editor_save_conflict_overwrite">Save anyway</string>
     <string name="editor_binary_unsupported">Binary file, opening not supported</string>
 
     <!-- Chat Input Bar -->
     <string name="chat_input_placeholder">Type a message to chat with AI…</string>
     <string name="chat_queue_hint">AI is busy, press enter to queue the message</string>
     <string name="chat_input_expand">Expand input box</string>
+    <string name="chat_mention_loading">Loading files…</string>
+    <string name="chat_mention_unavailable">Container not ready, cannot search files</string>
+    <string name="chat_mention_error">Failed to load file list</string>
+    <string name="chat_mention_empty">No matching files</string>
     <string name="chat_input_fullscreen_title">Full-screen input</string>
     <string name="chat_queue_title">Queue (%1$d)</string>
     <string name="chat_queue_remove">Remove from queue</string>
@@ -615,6 +695,17 @@
     <string name="checkpoint_restore_conversation_desc">Keep current code, truncate conversation to this point</string>
     <string name="checkpoint_restore_code">Restore code only</string>
     <string name="checkpoint_restore_code_desc">Revert code to snapshot before this point, keep conversation</string>
+    <string name="checkpoint_skipped_single">Skipped 1 file: it changed after the snapshot, so it was left alone to keep those edits\n%1$s</string>
+    <string name="checkpoint_skipped_multiple">Skipped %1$d files: they changed after the snapshot, so they were left alone to keep those edits\n%2$s</string>
+
+    <!-- Editor save conflict -->
+    <string name="editor_save_conflict_title">File changed on disk</string>
+    <string name="editor_save_conflict_message">This file was modified by the AI or another program after you opened it. Saving now would overwrite those changes.</string>
+    <string name="editor_save_conflict_diff">- Current on disk\n+ Your edits\n\n%1$s</string>
+    <string name="editor_save_conflict_overwrite">Overwrite disk</string>
+    <string name="editor_save_conflict_discard">Discard my edits</string>
+    <string name="editor_save_conflict_cancel">Cancel</string>
+    <string name="editor_save_conflict_discarded">Edits discarded; reloaded from disk</string>
 
     <!-- Chat Message Bubbles -->
     <string name="chat_copied">Copied</string>
@@ -687,7 +778,6 @@
     <string name="container_empty">No containers or images</string>
     <string name="container_empty_desc">Add a custom image, or restore the built-in Alpine.</string>
     <string name="container_restore_builtin">Restore Built-in Alpine</string>
-    <string name="container_active">Currently in use</string>
     <string name="container_set_as_default">Set as default container</string>
     <string name="container_default_badge">Default</string>
     <string name="container_default_desc">In remote workspace mode, local MCP services run in this container</string>
@@ -701,6 +791,7 @@
     <string name="container_not_ready_hint">Container is not initialized yet. Please open the Terminal page to complete initialization first.</string>
     <string name="container_file_selected">File selected</string>
     <string name="container_select_image_file">Select tar.gz / tgz / tar.xz / txz image file</string>
+    <string name="container_sort_long_press">Long press to reorder</string>
     <string name="container_mount_local">Local path</string>
     <string name="container_mount_container">Container path</string>
     <string name="container_no_bindings">No mounts</string>
@@ -748,6 +839,50 @@
 
     <!-- Credential List -->
     <string name="credential_empty_hint">No credentials yet, tap + to add</string>
+    <string name="credential_empty_title">No Git Credentials</string>
+    <string name="credential_empty_desc">Configure credentials so AiCode can authenticate when pushing or pulling repositories</string>
+
+    <!-- Credential Add / Quick Login -->
+    <string name="credential_add_sheet_title">Add Credential</string>
+    <string name="credential_add_sheet_subtitle">Choose quick authorization or configure access credentials manually</string>
+    <string name="credential_add_manual">Add manually</string>
+    <string name="credential_add_manual_desc">Fill in remote host, username and access token</string>
+    <string name="credential_add_github_title">GitHub Quick Sign-in</string>
+    <string name="credential_add_github_desc">One-tap sign-in with GitHub account, no manual token required</string>
+    <string name="credential_add_manual_title">Configure Manually</string>
+    <string name="credential_add_manual_subtitle">For GitLab, Gitee, self-hosted servers or personal access tokens</string>
+    <string name="credential_add_recommend">Recommended</string>
+    <string name="credential_quick_login">Quick login</string>
+    <string name="credential_quick_login_desc">Sign in via GitHub device code</string>
+    <string name="credential_quick_login_title">Quick login</string>
+    <string name="credential_quick_login_github_desc">Sign in with your GitHub account</string>
+    <string name="credential_device_title">GitHub Sign-in</string>
+    <string name="credential_device_subtitle">Securely authorize access permissions via GitHub device flow</string>
+    <string name="credential_device_requesting">Requesting device code…</string>
+    <string name="credential_device_instruction">Open the address below in a browser and enter the device code to authorize</string>
+    <string name="credential_device_card_label">Verification Code</string>
+    <string name="credential_device_tap_to_copy">Tap to copy</string>
+    <string name="credential_device_code_copied">Device code copied</string>
+    <string name="credential_device_code_copied_opening">Device code copied, opening browser…</string>
+    <string name="credential_device_authorize_and_open">Copy &amp; Authorize</string>
+    <string name="credential_device_copy_code">Copy code only</string>
+    <string name="credential_device_open_browser">Open browser</string>
+    <string name="credential_device_step_1">1. Copy the 8-character verification code above</string>
+    <string name="credential_device_step_2">2. Paste and confirm authorization on the GitHub page</string>
+    <string name="credential_device_waiting">Waiting for browser authorization…</string>
+    <string name="credential_device_waiting_desc">Credentials will be bound and saved automatically once authorized</string>
+    <string name="credential_device_success_title">Authorization Successful</string>
+    <string name="credential_device_success">Signed in as %1$s and credential saved</string>
+    <string name="credential_device_install_required">Signed in as %1$s. You still need to install AiCode on your repositories before pushing/pulling code.</string>
+    <string name="credential_device_install_now">Install</string>
+    <string name="credential_device_install_later">Later</string>
+    <string name="credential_device_failed_title">Authorization Incomplete</string>
+    <string name="credential_device_failed">Sign-in failed: %1$s</string>
+    <string name="credential_device_expired">Device code expired, please retry</string>
+    <string name="credential_device_denied">Authorization was denied</string>
+    <string name="credential_device_flow_disabled">Device flow is not enabled for this app, please enable it in the GitHub App settings</string>
+    <string name="credential_device_bad_client">Invalid client ID, please check the app configuration</string>
+    <string name="credential_device_unknown_error">Unknown error</string>
 
     <!-- Credential Prompt -->
     <string name="credential_prompt_title">Login credentials needed for %1$s</string>
@@ -981,6 +1116,43 @@
     <string name="mcp_connected">Connected</string>
     <string name="mcp_connecting">Connecting…</string>
     <string name="mcp_connection_failed">Connection failed</string>
+    <string name="mcp_needs_auth">Sign-in required</string>
+    <string name="mcp_auth_enable">OAuth authentication</string>
+    <string name="mcp_auth_desc">For remote MCP servers that require browser sign-in</string>
+    <string name="mcp_auth_client_id">client_id (optional)</string>
+    <string name="mcp_auth_client_id_hint">Pre-registered client ID; leave blank to try dynamic registration</string>
+    <string name="mcp_auth_server">Authorization server (optional)</string>
+    <string name="mcp_auth_server_hint">Override the auto-discovered authorization server</string>
+    <string name="mcp_auth_advanced">Advanced OAuth options</string>
+    <string name="mcp_auth_login">Sign in / Re-authorize</string>
+    <string name="mcp_auth_reauthorize">Re-authorize</string>
+    <string name="mcp_auth_logout">Sign out</string>
+    <string name="mcp_auth_cancel">Cancel authorization</string>
+    <string name="mcp_auth_in_progress">Waiting for browser authorization…</string>
+    <string name="mcp_auth_in_progress_hint">Opened sign-in page in browser; will reconnect automatically once completed</string>
+    <string name="mcp_auth_save_first">Save the server configuration first to sign in here</string>
+    <string name="mcp_auth_failed">Authorization failed: %1$s</string>
+    <string name="mcp_auth_status_label">Authorization status</string>
+    <string name="mcp_auth_status_authorized">Signed in</string>
+    <string name="mcp_auth_status_unauthorized">Not signed in</string>
+    <string name="mcp_auth_status_authorizing">Authorizing</string>
+    <string name="mcp_auth_success">Authorized and connected</string>
+    <string name="mcp_search_placeholder">Search MCP servers…</string>
+    <string name="mcp_search_empty">No matching MCP servers found</string>
+    <string name="mcp_tools_search">Search tool name or description…</string>
+    <string name="mcp_tools_search_empty">No matching tools found</string>
+    <string name="mcp_tools_summary">%1$d / %2$d tools enabled</string>
+    <string name="mcp_tools_enable_all">Enable all</string>
+    <string name="mcp_tools_disable_all">Disable all</string>
+    <string name="mcp_add_sheet_title">Add MCP server</string>
+    <string name="mcp_add_manual">Fill in manually</string>
+    <string name="mcp_add_manual_desc">Enter URL, headers, or launch command one by one</string>
+    <string name="mcp_add_from_json">Import from JSON</string>
+    <string name="mcp_add_from_json_desc">Paste a standard mcpServers config to import in bulk</string>
+    <string name="mcp_json_import_title">Import from JSON</string>
+    <string name="mcp_json_import_hint">Paste an mcpServers config, e.g. {&quot;mcpServers&quot;:{&quot;demo&quot;:{&quot;url&quot;:&quot;https://...&quot;}}}</string>
+    <string name="mcp_json_import_action">Import</string>
+    <string name="mcp_json_import_empty">No MCP server was parsed</string>
     <string name="mcp_type_stdio">stdio</string>
     <string name="mcp_tools_count">%1$d tools</string>
     <string name="mcp_details">Details</string>
@@ -1294,6 +1466,7 @@
     <string name="remote_edit_connection">Edit Connection Channel</string>
     <string name="remote_add_connection">Add Connection Channel</string>
     <string name="remote_connection_name_hint">Connection name</string>
+    <string name="remote_connection_sort_long_press">Long press to reorder</string>
     <string name="remote_host_address">Host</string>
     <string name="remote_port">Port</string>
     <string name="remote_password">Password</string>
@@ -1448,6 +1621,9 @@
     <string name="terminal_font_builtin">JetBrains Mono</string>
     <string name="terminal_font_delete">Delete this font</string>
     <string name="terminal_font_import_failed">Import failed. Please pick a valid ttf / otf / ttc font file</string>
+    <string name="terminal_preview_text">Terminal Preview</string>
+    <string name="terminal_theme_follow_app">Follow App</string>
+    <string name="terminal_theme_github_light">GitHub Light</string>
     <string name="terminal_theme_termius_dark">Termius Dark</string>
     <string name="terminal_theme_dracula">Dracula</string>
     <string name="terminal_theme_one_dark">One Dark</string>
@@ -1680,4 +1856,30 @@
     <string name="browser_dialog_alert_title">Page Alert</string>
     <string name="browser_dialog_confirm_title">Page Confirmation</string>
     <string name="browser_dialog_prompt_title">Page Input</string>
+    <string name="browser_menu">More options</string>
+    <string name="browser_menu_title">Browser Options</string>
+    <string name="browser_menu_general_section">Display &amp; Tools</string>
+    <string name="browser_night_mode_title">Night mode</string>
+    <string name="browser_night_mode_desc">Dim page brightness and enable dark mode preference</string>
+    <string name="browser_devtools_title">Developer tools</string>
+    <string name="browser_devtools_desc">Enable mobile Eruda debug console</string>
+    <string name="browser_ua_section">User-Agent</string>
+    <string name="browser_ua_desc">Emulate different device environments</string>
+    <string name="browser_ua_default">System default</string>
+    <string name="browser_ua_default_desc">Native WebView User-Agent</string>
+    <string name="browser_ua_android_phone">Android Phone</string>
+    <string name="browser_ua_android_phone_desc">Chrome Mobile (Android)</string>
+    <string name="browser_ua_android_tablet">Android Tablet</string>
+    <string name="browser_ua_android_tablet_desc">Chrome Tablet (Android)</string>
+    <string name="browser_ua_desktop_pc">Desktop PC</string>
+    <string name="browser_ua_desktop_pc_desc">Chrome Desktop (Windows PC)</string>
+    <string name="browser_ua_iphone">iPhone</string>
+    <string name="browser_ua_iphone_desc">Mobile Safari (iOS)</string>
+    <string name="browser_ua_ipad">iPad</string>
+    <string name="browser_ua_ipad_desc">Tablet Safari (iPadOS)</string>
+    <string name="browser_ua_custom">Custom</string>
+    <string name="browser_ua_custom_desc">Specify custom User-Agent string</string>
+    <string name="browser_ua_custom_dialog_title">Custom User-Agent</string>
+    <string name="browser_ua_custom_input_hint">Enter full User-Agent string</string>
+    <string name="browser_ua_applied_toast">User-Agent updated, page reloaded</string>
 </resources>

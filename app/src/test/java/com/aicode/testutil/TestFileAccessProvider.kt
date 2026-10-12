@@ -2,6 +2,7 @@ package com.aicode.testutil
 
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
+import com.aicode.feature.workspace.domain.sha256Fingerprint
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -43,6 +44,13 @@ class TestFileAccessProvider : FileAccessProvider {
     override fun fileSize(path: String): Long = File(path).length()
 
     override fun lastModified(path: String): Long = File(path).lastModified()
+
+    /** 与生产实现同语义：非普通文件返回 null，否则按原始字节算 SHA-256。 */
+    override fun fingerprint(path: String): String? {
+        val file = File(path)
+        if (!file.isFile) return null
+        return sha256Fingerprint(file.readBytes())
+    }
 
     override fun permissions(path: String): String = "rwx"
 

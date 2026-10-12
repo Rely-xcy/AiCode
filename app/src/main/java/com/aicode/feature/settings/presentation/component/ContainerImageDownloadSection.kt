@@ -62,7 +62,8 @@ import compose.icons.feathericons.HardDrive
 import java.io.File
 import kotlinx.coroutines.launch
 
-private fun formatBytes(bytes: Long): String = when {
+/** 字节数转可读体积；容器镜像下载与更新包下载共用（同包内 internal，避免各写一份）。 */
+internal fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / 1024.0 / 1024 / 1024)
     bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)

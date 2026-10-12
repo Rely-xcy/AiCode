@@ -269,6 +269,16 @@ class McpConfigRepository @Inject constructor(
                                 server.headers.forEach { (key, value) -> put(key, value) }
                             }
                         }
+                        server.auth?.let { auth ->
+                            putJsonObject("auth") {
+                                put("type", auth.type)
+                                auth.clientId?.takeIf { it.isNotBlank() }?.let { put("clientId", it) }
+                                auth.authServer?.takeIf { it.isNotBlank() }?.let { put("authServer", it) }
+                                auth.scopes?.takeIf { it.isNotEmpty() }?.let { scopes ->
+                                    putJsonArray("scopes") { scopes.forEach { add(it) } }
+                                }
+                            }
+                        }
                     }
                     put("enabled", server.enabled)
                     if (server.disabledTools.isNotEmpty()) {
@@ -320,12 +330,21 @@ class McpConfigRepository @Inject constructor(
                     val headers = (obj["headers"] as? JsonObject)?.mapNotNull { (k, v) ->
                         (v as? JsonPrimitive)?.contentOrNull?.let { k to it }
                     }?.toMap() ?: emptyMap()
+                    val auth = (obj["auth"] as? JsonObject)?.let { authObj ->
+                        McpAuthConfig(
+                            type = (authObj["type"] as? JsonPrimitive)?.contentOrNull ?: McpAuthConfig.TYPE_OAUTH,
+                            clientId = (authObj["clientId"] as? JsonPrimitive)?.contentOrNull,
+                            authServer = (authObj["authServer"] as? JsonPrimitive)?.contentOrNull,
+                            scopes = (authObj["scopes"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        )
+                    }
                     McpServerConfig(
                         name = name,
                         url = url,
                         headers = headers,
                         enabled = enabled,
-                        disabledTools = disabledTools
+                        disabledTools = disabledTools,
+                        auth = auth
                     )
                 }
                 else -> {

@@ -4,6 +4,7 @@ import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -11,6 +12,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.nio.charset.Charset
 import kotlin.io.FileAlreadyExistsException
 import kotlin.io.NoSuchFileException
 
@@ -180,6 +182,132 @@ class LocalFileAccessTest {
         assertThrows(FileAlreadyExistsException::class.java) {
             access.writeBytes("bin.dat", byteArrayOf(2), overwrite = false)
         }
+    }
+
+    // ---------- fingerprint ----------
+
+    @Test
+    fun fingerprint_missingFile_returnsNull() {
+        assertEquals(null, newAccess().fingerprint("missing.txt"))
+    }
+
+    @Test
+    fun fingerprint_directory_returnsNull() {
+        // 目录没有「内容版本」可言，返回 null 让并发校验放行
+        assertEquals(null, newAccess().fingerprint("."))
+    }
+
+    @Test
+    fun fingerprint_isStableForSameContent_andChangesWithContent() {
+        val access = newAccess()
+        access.writeFile("f.txt", "same", overwrite = true)
+        val first = access.fingerprint("f.txt")
+        assertNotNull(first)
+        assertTrue("指纹应带算法前缀，便于将来换算法时不会误判为相等", first!!.startsWith("sha256:"))
+        assertEquals("内容未变时指纹必须稳定", first, access.fingerprint("f.txt"))
+
+        access.writeFile("f.txt", "different", overwrite = true)
+        assertNotEquals("内容变化后指纹必须不同", first, access.fingerprint("f.txt"))
+    }
+
+    @Test
+    fun fingerprint_isEncodingAgnostic_hashesRawBytes() {
+        // 指纹按原始字节计算，与调用方用哪种编码解码无关；不同字节必须得到不同指纹。
+        val access = newAccess()
+        access.writeBytes("bin.dat", byteArrayOf(1, 2, 3, -1, 0), overwrite = true)
+        val byBytes = access.fingerprint("bin.dat")
+        assertNotNull(byBytes)
+
+        access.writeBytes("bin2.dat", byteArrayOf(1, 2, 3, -1, 1), overwrite = true)
+        assertNotEquals("仅末字节不同也必须产生不同指纹", byBytes, access.fingerprint("bin2.dat"))
+    }
+
+    // ---------- 原子写 ----------
+
+    @Test
+    fun writeFile_leavesNoTempFileBehind() {
+        val access = newAccess()
+        access.writeFile("f.txt", "content", overwrite = true)
+        access.writeBytes("b.dat", byteArrayOf(1, 2, 3), overwrite = true)
+
+        val leftovers = tmp.root.listFiles().orEmpty().map { it.name }
+            .filter { it.startsWith(".aicode-tmp-") }
+        assertEquals("原子写不应留下临时文件，实际=$leftovers", emptyList<String>(), leftovers)
+    }
+
+    @Test
+    fun writeFile_overwrite_replacesContentExactly() {
+        // 原子替换路径（delete + rename）必须产出与直接写完全一致的结果
+        val access = newAccess()
+        access.writeFile("f.txt", "longer-old-content", overwrite = true)
+        access.writeFile("f.txt", "s", overwrite = true)
+        assertEquals("s", access.readFile("f.txt"))
+        assertEquals(1L, access.fileSize("f.txt"))
+    }
+
+    @Test
+    fun writeBytes_overwriteFalse_doesNotTouchExistingFile() {
+        val access = newAccess()
+        access.writeBytes("b.dat", byteArrayOf(9), overwrite = true)
+        assertThrows(FileAlreadyExistsException::class.java) {
+            access.writeBytes("b.dat", byteArrayOf(1, 2), overwrite = false)
+        }
+        assertTrue("被拒绝的写入不得改动原文件", byteArrayOf(9).contentEquals(access.readBytes("b.dat")))
+    }
+
+    @Test
+    fun moveReplacing_movesWhenTargetIsClear() {
+        val tmpFile = tmp.newFile("tmp.part")
+        val target = File(tmp.root, "target.txt")
+
+        moveReplacing(
+            exists = { false },
+            delete = { error("目标不存在时不应调用 delete") },
+            move = { from, to -> from.renameTo(to) },
+            tmp = tmpFile,
+            target = target
+        )
+
+        assertTrue("替换后目标应存在", target.isFile)
+        assertFalse("临时文件应被消费掉", tmpFile.exists())
+    }
+
+    @Test
+    fun moveReplacing_failsFastWhenTargetCannotBeCleared() {
+        val tmpFile = tmp.newFile("tmp.part")
+        val target = tmp.newFile("target.txt")
+        var moveAttempted = false
+
+        assertThrows(java.io.IOException::class.java) {
+            moveReplacing(
+                exists = { true },
+                delete = { false }, // 目标删不掉
+                move = { _, _ -> moveAttempted = true; true },
+                tmp = tmpFile,
+                target = target
+            )
+        }
+
+        assertFalse("删不掉目标时不得继续改名（否则会破坏目标）", moveAttempted)
+        assertFalse("失败路径必须清掉临时文件", tmpFile.exists())
+    }
+
+    @Test
+    fun moveReplacing_cleansTempWhenMoveFails() {
+        val tmpFile = tmp.newFile("tmp.part")
+        val target = File(tmp.root, "target.txt")
+
+        assertThrows(java.io.IOException::class.java) {
+            moveReplacing(
+                exists = { false },
+                delete = { true },
+                move = { _, _ -> false }, // 改名失败
+                tmp = tmpFile,
+                target = target
+            )
+        }
+
+        assertFalse("改名失败时必须清掉临时文件", tmpFile.exists())
     }
 
     // ---------- delete / rename / copy / move / mkdirs ----------

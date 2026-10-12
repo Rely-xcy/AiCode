@@ -444,7 +444,7 @@ private fun buildHighlightedText(
                 is ColorHighlight -> SpanStyle(color = Color(highlight.rgb).copy(alpha = 1f))
                 is BoldHighlight -> SpanStyle(fontWeight = FontWeight.Bold)
             }
-            if (spanStyle != null) addStyle(spanStyle, start, end)
+            addStyle(spanStyle, start, end)
         }
     }
 }

@@ -18,17 +18,18 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
@@ -38,7 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -75,22 +76,36 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.tool.browser.BrowserDialog
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
 import com.aicode.feature.agent.domain.tool.browser.BrowserTabState
+import com.aicode.feature.agent.domain.tool.browser.BrowserUserAgentPreset
+import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.feature.settings.presentation.component.SettingsGroup
+import com.aicode.feature.settings.presentation.component.SettingsRow
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Code
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Menu
+import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Moon
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Sliders
+import compose.icons.feathericons.Smartphone
 import compose.icons.feathericons.Sun
+import compose.icons.feathericons.Tablet
 import compose.icons.feathericons.X
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -132,7 +147,12 @@ fun BrowserScreen(
     val container = remember { FrameLayout(context) }
 
     var showTabsSheet by rememberSaveable { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val tabsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var showMenuSheet by rememberSaveable { mutableStateOf(false) }
+    val menuSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var showCustomUaDialog by rememberSaveable { mutableStateOf(false) }
 
     var isEditingAddress by rememberSaveable { mutableStateOf(false) }
 
@@ -165,13 +185,11 @@ fun BrowserScreen(
                 title = activeTab?.title.orEmpty(),
                 url = activeTab?.url.orEmpty(),
                 loading = activeTab?.loading == true,
-                devToolsOpen = state.devToolsOpen,
                 isEditing = isEditingAddress,
                 onEditingChange = { isEditingAddress = it },
                 embedded = embedded,
                 onNavigateBack = onNavigateBack,
                 onReload = { scope.launchBrowserOp { browserManager.reload() } },
-                onToggleDevTools = { scope.launchBrowserOp { browserManager.toggleDevTools() } },
                 onNavigate = { url ->
                     isEditingAddress = false
                     scope.launchBrowserOp { browserManager.navigate(url) }
@@ -183,13 +201,13 @@ fun BrowserScreen(
                 canGoBack = activeTab?.loading == false,
                 canGoForward = activeTab?.loading == false,
                 tabsCount = state.tabs.size,
-                nightMode = state.nightMode,
+                hasActiveSettings = state.nightMode || state.devToolsOpen || state.userAgentPreset != BrowserUserAgentPreset.DEFAULT,
                 embedded = embedded,
                 onGoBack = { scope.launchBrowserOp { browserManager.goBack() } },
                 onGoForward = { scope.launchBrowserOp { browserManager.goForward() } },
                 onNewTab = { scope.launchBrowserOp { browserManager.newTab() } },
-                onToggleNightMode = { browserManager.toggleNightMode() },
-                onOpenTabs = { showTabsSheet = true }
+                onOpenTabs = { showTabsSheet = true },
+                onOpenMenu = { showMenuSheet = true }
             )
         }
     ) { padding ->
@@ -283,14 +301,15 @@ fun BrowserScreen(
 
     // 多标签页管理抽屉
     if (showTabsSheet) {
-        ModalBottomSheet(
+        AdaptiveModalBottomSheet(
             onDismissRequest = { showTabsSheet = false },
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.surface
+            sheetState = tabsSheetState,
+            containerColor = MaterialTheme.semanticColors.pageBackground
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.md)
                     .padding(bottom = Spacing.xl)
             ) {
@@ -304,7 +323,8 @@ fun BrowserScreen(
                     Text(
                         text = stringResource(R.string.browser_tabs_count, state.tabs.size),
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     IconButton(
                         onClick = {
@@ -322,12 +342,10 @@ fun BrowserScreen(
                     }
                 }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    items(state.tabs, key = { it.id }) { tab ->
-                        BrowserTabItemCard(
+                SettingsGroup {
+                    state.tabs.forEachIndexed { index, tab ->
+                        if (index > 0) SettingsDivider()
+                        BrowserTabItemRow(
                             tab = tab,
                             selected = tab.id == state.activeTabId,
                             onClick = {
@@ -348,6 +366,53 @@ fun BrowserScreen(
         }
     }
 
+    // 更多设置与工具抽屉（夜间模式、调试工具、浏览器 UA）
+    if (showMenuSheet) {
+        BrowserMenuSheet(
+            sheetState = menuSheetState,
+            nightMode = state.nightMode,
+            devToolsOpen = state.devToolsOpen,
+            userAgentPreset = state.userAgentPreset,
+            customUserAgent = state.customUserAgent,
+            onDismiss = { showMenuSheet = false },
+            onToggleNightMode = { browserManager.toggleNightMode() },
+            onToggleDevTools = {
+                scope.launchBrowserOp {
+                    browserManager.toggleDevTools()
+                }
+            },
+            onSelectUaPreset = { preset ->
+                if (preset == BrowserUserAgentPreset.CUSTOM) {
+                    showMenuSheet = false
+                    showCustomUaDialog = true
+                } else {
+                    scope.launchBrowserOp {
+                        browserManager.setUserAgent(preset, reloadCurrent = true)
+                    }
+                    showMenuSheet = false
+                }
+            }
+        )
+    }
+
+    // 自定义 User-Agent 编辑对话框
+    if (showCustomUaDialog) {
+        BrowserCustomUaDialog(
+            initialValue = state.customUserAgent.ifBlank { state.currentUserAgent },
+            onDismiss = { showCustomUaDialog = false },
+            onConfirm = { customUa ->
+                showCustomUaDialog = false
+                scope.launchBrowserOp {
+                    browserManager.setUserAgent(
+                        preset = BrowserUserAgentPreset.CUSTOM,
+                        customUa = customUa,
+                        reloadCurrent = true
+                    )
+                }
+            }
+        )
+    }
+
     DisposableEffect(container) {
         onDispose {
             browserManager.detachContainerView(container)
@@ -364,13 +429,11 @@ private fun BrowserTopBar(
     title: String,
     url: String,
     loading: Boolean,
-    devToolsOpen: Boolean,
     isEditing: Boolean,
     onEditingChange: (Boolean) -> Unit,
     embedded: Boolean,
     onNavigateBack: () -> Unit,
     onReload: () -> Unit,
-    onToggleDevTools: () -> Unit,
     onNavigate: (String) -> Unit
 ) {
     var addressInput by rememberSaveable(stateSaver = TextFieldValue.Saver) {
@@ -413,7 +476,7 @@ private fun BrowserTopBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (!embedded) Modifier.statusBarsPadding() else Modifier)
+                .statusBarsPadding()
         ) {
             Row(
                 modifier = Modifier
@@ -539,42 +602,24 @@ private fun BrowserTopBar(
                     }
                 }
 
-                // 右侧：开发者工具 + 刷新按钮
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onToggleDevTools,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            FeatherIcons.Code,
-                            contentDescription = stringResource(R.string.browser_devtools),
-                            tint = if (devToolsOpen) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.size(19.dp)
+                // 右侧：刷新按钮
+                IconButton(
+                    onClick = onReload,
+                    enabled = !loading,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
                         )
-                    }
-
-                    IconButton(
-                        onClick = onReload,
-                        enabled = !loading,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        if (loading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
-                            Icon(
-                                FeatherIcons.RefreshCw,
-                                contentDescription = stringResource(R.string.browser_reload),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                    } else {
+                        Icon(
+                            FeatherIcons.RefreshCw,
+                            contentDescription = stringResource(R.string.browser_reload),
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }
@@ -603,13 +648,13 @@ private fun BrowserBottomBar(
     canGoBack: Boolean,
     canGoForward: Boolean,
     tabsCount: Int,
-    nightMode: Boolean,
+    hasActiveSettings: Boolean,
     embedded: Boolean,
     onGoBack: () -> Unit,
     onGoForward: () -> Unit,
     onNewTab: () -> Unit,
-    onToggleNightMode: () -> Unit,
-    onOpenTabs: () -> Unit
+    onOpenTabs: () -> Unit,
+    onOpenMenu: () -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -619,7 +664,7 @@ private fun BrowserBottomBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (!embedded) Modifier.navigationBarsPadding() else Modifier)
+                .navigationBarsPadding()
         ) {
             HorizontalDivider(
                 thickness = 0.5.dp,
@@ -667,19 +712,7 @@ private fun BrowserBottomBar(
                     )
                 }
 
-                // 4. 夜间模式切换
-                IconButton(onClick = onToggleNightMode) {
-                    Icon(
-                        if (nightMode) FeatherIcons.Sun else FeatherIcons.Moon,
-                        contentDescription = stringResource(
-                            if (nightMode) R.string.browser_night_mode_on else R.string.browser_night_mode_off
-                        ),
-                        tint = if (nightMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                // 5. 标签页管理按钮（数字方框徽标）
+                // 4. 标签页管理按钮（数字方框徽标）
                 Box(
                     modifier = Modifier
                         .size(28.dp)
@@ -701,18 +734,270 @@ private fun BrowserBottomBar(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                // 5. 更多更改菜单（三条杠图标）
+                IconButton(onClick = onOpenMenu) {
+                    Box {
+                        Icon(
+                            FeatherIcons.Menu,
+                            contentDescription = stringResource(R.string.browser_menu),
+                            tint = if (hasActiveSettings) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(23.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BrowserMenuSheet(
+    sheetState: androidx.compose.material3.SheetState,
+    nightMode: Boolean,
+    devToolsOpen: Boolean,
+    userAgentPreset: BrowserUserAgentPreset,
+    customUserAgent: String,
+    onDismiss: () -> Unit,
+    onToggleNightMode: () -> Unit,
+    onToggleDevTools: () -> Unit,
+    onSelectUaPreset: (BrowserUserAgentPreset) -> Unit
+) {
+    // 菜单层级：0 = 一级主菜单，1 = 二级 UA 场景选择菜单
+    var menuLevel by rememberSaveable { mutableStateOf(0) }
+
+    AdaptiveModalBottomSheet(
+        onDismissRequest = {
+            menuLevel = 0
+            onDismiss()
+        },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.semanticColors.pageBackground
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.md)
+                .padding(bottom = Spacing.xl)
+        ) {
+            // 顶部标题栏
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (menuLevel == 1) {
+                    IconButton(
+                        onClick = { menuLevel = 0 },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            FeatherIcons.ArrowLeft,
+                            contentDescription = stringResource(R.string.common_back),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(Spacing.xs))
+                }
+                Text(
+                    text = stringResource(
+                        if (menuLevel == 1) R.string.browser_ua_section else R.string.browser_menu_title
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            if (menuLevel == 0) {
+                // 一级菜单：单行按钮列表（夜间模式、开发者工具、浏览器标识）
+                val uaIcon: ImageVector = when (userAgentPreset) {
+                    BrowserUserAgentPreset.DEFAULT -> FeatherIcons.Globe
+                    BrowserUserAgentPreset.ANDROID_PHONE -> FeatherIcons.Smartphone
+                    BrowserUserAgentPreset.ANDROID_TABLET -> FeatherIcons.Tablet
+                    BrowserUserAgentPreset.DESKTOP_PC -> FeatherIcons.Monitor
+                    BrowserUserAgentPreset.IPHONE -> FeatherIcons.Smartphone
+                    BrowserUserAgentPreset.IPAD -> FeatherIcons.Tablet
+                    BrowserUserAgentPreset.CUSTOM -> FeatherIcons.Sliders
+                }
+
+                SettingsGroup {
+                    // 1. 夜间模式
+                    SettingsRow(
+                        icon = if (nightMode) FeatherIcons.Moon else FeatherIcons.Sun,
+                        title = stringResource(R.string.browser_night_mode_title),
+                        trailing = {
+                            AppSwitch(
+                                checked = nightMode,
+                                onCheckedChange = { onToggleNightMode() }
+                            )
+                        }
+                    )
+
+                    SettingsDivider()
+
+                    // 2. 开发者工具
+                    SettingsRow(
+                        icon = FeatherIcons.Code,
+                        title = stringResource(R.string.browser_devtools_title),
+                        trailing = {
+                            AppSwitch(
+                                checked = devToolsOpen,
+                                onCheckedChange = { onToggleDevTools() }
+                            )
+                        }
+                    )
+
+                    SettingsDivider()
+
+                    // 3. 浏览器标识 (UA) - 单行按钮，点击展开二级菜单
+                    SettingsRow(
+                        icon = uaIcon,
+                        title = stringResource(R.string.browser_ua_section),
+                        trailing = {
+                            Text(
+                                text = stringResource(userAgentPreset.titleRes),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        onClick = { menuLevel = 1 }
+                    )
+                }
+            } else {
+                // 二级菜单：选择 User-Agent 场景
+                SettingsGroup {
+                    val presets = BrowserUserAgentPreset.entries
+                    presets.forEachIndexed { index, preset ->
+                        if (index > 0) SettingsDivider()
+                        val selected = preset == userAgentPreset
+                        val icon: ImageVector = when (preset) {
+                            BrowserUserAgentPreset.DEFAULT -> FeatherIcons.Globe
+                            BrowserUserAgentPreset.ANDROID_PHONE -> FeatherIcons.Smartphone
+                            BrowserUserAgentPreset.ANDROID_TABLET -> FeatherIcons.Tablet
+                            BrowserUserAgentPreset.DESKTOP_PC -> FeatherIcons.Monitor
+                            BrowserUserAgentPreset.IPHONE -> FeatherIcons.Smartphone
+                            BrowserUserAgentPreset.IPAD -> FeatherIcons.Tablet
+                            BrowserUserAgentPreset.CUSTOM -> FeatherIcons.Sliders
+                        }
+                        val subtitle = if (preset == BrowserUserAgentPreset.CUSTOM && customUserAgent.isNotBlank()) {
+                            customUserAgent
+                        } else {
+                            stringResource(preset.descRes)
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    menuLevel = 0
+                                    onSelectUaPreset(preset)
+                                }
+                                .padding(horizontal = Spacing.lg, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(Spacing.md))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(preset.titleRes),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = subtitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (selected) {
+                                Spacer(Modifier.width(Spacing.sm))
+                                Icon(
+                                    imageVector = FeatherIcons.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun BrowserTabItemCard(
+private fun BrowserCustomUaDialog(
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var uaText by rememberSaveable { mutableStateOf(initialValue) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(text = stringResource(R.string.browser_ua_custom_dialog_title))
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                AppTextField(
+                    value = uaText,
+                    onValueChange = { uaText = it },
+                    placeholder = stringResource(R.string.browser_ua_custom_input_hint),
+                    singleLine = false,
+                    maxLines = 5,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 80.dp),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    colors = dialogTextFieldColors()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(uaText.trim()) },
+                enabled = uaText.isNotBlank()
+            ) {
+                Text(stringResource(R.string.common_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        }
+    )
+}
+
+/**
+ * 标签页管理列表行：集成 [SwipeToDeleteRow] 支持左滑删除与点击切换，
+ * 采用全局统一卡片行风格。
+ */
+@Composable
+private fun BrowserTabItemRow(
     tab: BrowserTabState,
     selected: Boolean,
     onClick: () -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    onClose: () -> Unit
 ) {
     val title = when {
         tab.title.isNotBlank() -> tab.title
@@ -720,77 +1005,66 @@ private fun BrowserTabItemCard(
         else -> stringResource(R.string.browser_tab_default_title)
     }
 
-    val borderColor = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-    }
-
-    val bgColor = if (selected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .border(if (selected) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically
+    SwipeToDeleteRow(
+        onDelete = onClose,
+        onClick = onClick
     ) {
-        Icon(
-            FeatherIcons.Globe,
-            contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-
-        Spacer(Modifier.width(Spacing.sm))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = FeatherIcons.Globe,
+                contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
             )
-            if (tab.url.isNotBlank()) {
+
+            Spacer(Modifier.width(Spacing.md))
+
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = tab.url,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (tab.url.isNotBlank()) {
+                    Text(
+                        text = tab.url,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-        }
 
-        if (tab.loading) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .size(16.dp)
-                    .padding(end = Spacing.xs),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
+            if (tab.loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .padding(end = Spacing.xs),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
-        IconButton(
-            onClick = onClose,
-            modifier = Modifier.size(28.dp)
-        ) {
-            Icon(
-                FeatherIcons.X,
-                contentDescription = stringResource(R.string.browser_close_tab),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    FeatherIcons.X,
+                    contentDescription = stringResource(R.string.browser_close_tab),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

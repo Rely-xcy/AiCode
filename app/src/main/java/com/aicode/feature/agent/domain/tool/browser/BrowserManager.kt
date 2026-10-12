@@ -59,6 +59,61 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import dagger.hilt.android.qualifiers.ApplicationContext
 
+enum class BrowserUserAgentPreset(
+    val id: String,
+    val titleRes: Int,
+    val descRes: Int,
+    val userAgentString: String?
+) {
+    DEFAULT(
+        id = "default",
+        titleRes = R.string.browser_ua_default,
+        descRes = R.string.browser_ua_default_desc,
+        userAgentString = null
+    ),
+    ANDROID_PHONE(
+        id = "android_phone",
+        titleRes = R.string.browser_ua_android_phone,
+        descRes = R.string.browser_ua_android_phone_desc,
+        userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
+    ),
+    ANDROID_TABLET(
+        id = "android_tablet",
+        titleRes = R.string.browser_ua_android_tablet,
+        descRes = R.string.browser_ua_android_tablet_desc,
+        userAgentString = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    DESKTOP_PC(
+        id = "desktop_pc",
+        titleRes = R.string.browser_ua_desktop_pc,
+        descRes = R.string.browser_ua_desktop_pc_desc,
+        userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    IPHONE(
+        id = "iphone",
+        titleRes = R.string.browser_ua_iphone,
+        descRes = R.string.browser_ua_iphone_desc,
+        userAgentString = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    ),
+    IPAD(
+        id = "ipad",
+        titleRes = R.string.browser_ua_ipad,
+        descRes = R.string.browser_ua_ipad_desc,
+        userAgentString = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    ),
+    CUSTOM(
+        id = "custom",
+        titleRes = R.string.browser_ua_custom,
+        descRes = R.string.browser_ua_custom_desc,
+        userAgentString = null
+    );
+
+    companion object {
+        fun fromId(id: String?): BrowserUserAgentPreset =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
 data class BrowserTabState(
     val id: String,
     val url: String = "",
@@ -73,6 +128,9 @@ data class BrowserState(
     val activeTabId: String = "",
     val attached: Boolean = false,
     val nightMode: Boolean = false,
+    val userAgentPreset: BrowserUserAgentPreset = BrowserUserAgentPreset.DEFAULT,
+    val customUserAgent: String = "",
+    val currentUserAgent: String = "",
     /** 面板可见时等待用户处理的网页对话框（alert/confirm/prompt）。 */
     val pendingDialog: BrowserDialog? = null
 ) {
@@ -99,7 +157,7 @@ data class BrowserConsoleEntry(
 
 @Singleton
 class BrowserManager @Inject constructor(
-    @ApplicationContext private val appContext: Context,
+    @param:ApplicationContext private val appContext: Context,
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver
 ) {
@@ -208,8 +266,28 @@ class BrowserManager @Inject constructor(
 
     private val nightMode: Boolean get() = nightModeOverride ?: appDarkTheme
 
+    private val prefs by lazy {
+        appContext.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
+    }
+    private var currentUaPreset: BrowserUserAgentPreset = BrowserUserAgentPreset.DEFAULT
+    private var currentCustomUa: String = ""
+    private var defaultSystemUserAgent: String = ""
+
     private val _state = MutableStateFlow(BrowserState())
     val state: StateFlow<BrowserState> = _state.asStateFlow()
+
+    init {
+        val savedPresetId = prefs.getString("ua_preset", BrowserUserAgentPreset.DEFAULT.id)
+        currentUaPreset = BrowserUserAgentPreset.fromId(savedPresetId)
+        currentCustomUa = prefs.getString("custom_ua", "").orEmpty()
+        _state.update {
+            it.copy(
+                userAgentPreset = currentUaPreset,
+                customUserAgent = currentCustomUa,
+                currentUserAgent = resolveCurrentUserAgent()
+            )
+        }
+    }
 
     /** 选择器辅助函数，prepend 到所有需要选择器的 JS 中。支持 ref= / text= / text*= / role= / xpath= / CSS。 */
     private val selectorHelper = """
@@ -417,6 +495,10 @@ class BrowserManager @Inject constructor(
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
         wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        if (defaultSystemUserAgent.isBlank()) {
+            defaultSystemUserAgent = wv.settings.userAgentString.orEmpty()
+        }
+        applyUserAgentTo(wv)
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.setBackgroundColor(if (nightMode) NIGHT_BG_COLOR else Color.WHITE)
         applyDarkThemeToSettings(wv)
@@ -492,8 +574,59 @@ class BrowserManager @Inject constructor(
                 activeTabId = activeTabId,
                 attached = containerView != null,
                 nightMode = nightMode,
+                userAgentPreset = currentUaPreset,
+                customUserAgent = currentCustomUa,
+                currentUserAgent = resolveCurrentUserAgent(),
                 pendingDialog = uiDialog
             )
+        }
+    }
+
+    // ================= User-Agent =================
+
+    fun resolveCurrentUserAgent(): String {
+        return when (currentUaPreset) {
+            BrowserUserAgentPreset.DEFAULT -> defaultSystemUserAgent
+            BrowserUserAgentPreset.CUSTOM -> currentCustomUa.ifBlank { defaultSystemUserAgent }
+            else -> currentUaPreset.userAgentString ?: defaultSystemUserAgent
+        }
+    }
+
+    private fun applyUserAgentTo(wv: WebView) {
+        val ua = resolveCurrentUserAgent()
+        if (ua.isNotBlank()) {
+            wv.settings.userAgentString = ua
+        }
+    }
+
+    suspend fun setUserAgent(
+        preset: BrowserUserAgentPreset,
+        customUa: String? = null,
+        reloadCurrent: Boolean = true
+    ) = withContext(Dispatchers.Main) {
+        currentUaPreset = preset
+        if (customUa != null) {
+            currentCustomUa = customUa.trim()
+        }
+        prefs.edit()
+            .putString("ua_preset", preset.id)
+            .putString("custom_ua", currentCustomUa)
+            .apply()
+
+        tabs.forEach { tab ->
+            applyUserAgentTo(tab.webView)
+        }
+        publishState()
+
+        if (reloadCurrent) {
+            val active = findTab(activeTabId)
+            if (active != null && active.url.isNotBlank()) {
+                try {
+                    active.webView.reload()
+                } catch (e: Throwable) {
+                    FileLogger.w(TAG, "Failed to reload after User-Agent change", e)
+                }
+            }
         }
     }
 
@@ -533,6 +666,9 @@ class BrowserManager @Inject constructor(
      * 内核级暗色设置。prefers-color-scheme 实际由 WebView 主题的 isLightTheme 决定（见 [webViewThemeRes]），
      * 这里设置算法调暗并借此触发 WebView 重读偏好——夜间模式切换后需要一次 settings 变更才会下发新偏好。
      */
+    // FORCE_DARK 已被 AndroidX 弃用（推荐 setAlgorithmicDarkeningAllowed），但后者要 API 33+，
+    // 本项目锁 targetSdk 28，旧 WebView 上这条兜底是唯一可用的开关，故保留并抑制告警。
+    @Suppress("DEPRECATION")
     private fun applyDarkThemeToSettings(wv: WebView) {
         try {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {

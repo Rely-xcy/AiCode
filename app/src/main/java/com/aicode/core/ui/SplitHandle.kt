@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 
@@ -27,10 +29,15 @@ import com.aicode.R
 private val HandleTouchWidth = 14.dp
 
 /**
- * 左右分栏之间的拖拽分割条。[onDragDelta] 收到的是水平位移像素，由调用方换算成分栏比例。
+ * 左右分栏之间的拖拽分割条浮层。[onDragDelta] 收到的是水平位移像素，由调用方换算成分栏比例。
+ *
+ * 排版中的实际分割线由 `Row` 内的 `VerticalDivider`（1.dp）承担，保证左右面板无缝贴合、无留白；
+ * 本组件作为 [HandleTouchWidth] 宽度的触控浮层，以 [anchorX]（左栏右边缘，即分割线起点）为中心骑跨在分割线上，
+ * 既不挤占 `Row` 的排版宽度，又保留完整的触摸与鼠标悬停热区。
  */
 @Composable
 fun VerticalSplitHandle(
+    anchorX: Int,
     onDragDelta: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -39,6 +46,11 @@ fun VerticalSplitHandle(
     val description = stringResource(R.string.workbench_split_handle)
     Box(
         modifier = modifier
+            .offset {
+                val touchWidthPx = HandleTouchWidth.roundToPx()
+                val dividerWidthPx = 1.dp.roundToPx()
+                IntOffset(x = anchorX - (touchWidthPx - dividerWidthPx) / 2, y = 0)
+            }
             .fillMaxHeight()
             .width(HandleTouchWidth)
             .semantics { contentDescription = description }
@@ -50,17 +62,13 @@ fun VerticalSplitHandle(
             .pointerHoverIcon(PointerIcon.Hand),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(if (dragging) 3.dp else 1.dp)
-                .background(
-                    if (dragging) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant
-                    }
-                )
-        )
+        if (dragging) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+        }
     }
 }

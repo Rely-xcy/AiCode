@@ -30,7 +30,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class MarkdownPreviewViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val fileAccess: FileAccessProvider
 ) : ViewModel() {
 

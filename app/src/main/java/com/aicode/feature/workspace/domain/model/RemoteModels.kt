@@ -23,7 +23,9 @@ data class RemoteConnection(
     /** 'password' 或 'key'，与 [RemoteConnectionEntity.authType] 对应。 */
     val authType: String = "password",
     /** 密码（authType=password）或私钥文件路径（authType=key）。 */
-    val authData: String = ""
+    val authData: String = "",
+    /** 用户拖拽排序的显式顺序，越小越靠前。 */
+    val sortOrder: Int = 0
 )
 
 data class RemoteMount(

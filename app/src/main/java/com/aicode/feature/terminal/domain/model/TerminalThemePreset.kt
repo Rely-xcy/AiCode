@@ -4,7 +4,7 @@ import androidx.annotation.StringRes
 import com.aicode.R
 
 /**
- * 终端预设配色主题（精选 5 套热门主题，含默认 Termius Dark 与亮白主题）。
+ * 终端预设配色主题（支持跟随应用外观、亮白主题及多套经典暗色主题）。
  *
  * @param id 唯一标识符，持久化于 DataStore
  * @param nameRes 国际化名称资源
@@ -25,13 +25,24 @@ data class TerminalThemePreset(
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
         other as TerminalThemePreset
-        return id == other.id
+        return id == other.id &&
+            background == other.background &&
+            foreground == other.foreground &&
+            cursor == other.cursor &&
+            ansiColors.contentEquals(other.ansiColors)
     }
 
-    override fun hashCode(): Int = id.hashCode()
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + background
+        result = 31 * result + foreground
+        result = 31 * result + cursor
+        result = 31 * result + ansiColors.contentHashCode()
+        return result
+    }
 
     companion object {
-        /** 默认主题：经典 Termius 深邃蓝黑底 + 亮绿光标。 */
+        /** 经典 Termius 深邃蓝黑底 + 亮绿光标。 */
         val TERMIUS_DARK = TerminalThemePreset(
             id = "termius_dark",
             nameRes = R.string.terminal_theme_termius_dark,
@@ -44,6 +55,31 @@ data class TerminalThemePreset(
                 0xFF4C566A.toInt(), 0xFFFF6E6E.toInt(), 0xFF5DFFA9.toInt(), 0xFFFFC766.toInt(),
                 0xFF6CA8FF.toInt(), 0xFFCA8BFF.toInt(), 0xFF5DF2F9.toInt(), 0xFFECEFF4.toInt()
             )
+        )
+
+        /** GitHub Light：官方标准极客明亮主题（基于 GitHub Primer Light 规范）。 */
+        val GITHUB_LIGHT = TerminalThemePreset(
+            id = "github_light",
+            nameRes = R.string.terminal_theme_github_light,
+            background = 0xFFFFFFFF.toInt(),
+            foreground = 0xFF24292F.toInt(),
+            cursor = 0xFF0969DA.toInt(),
+            ansiColors = intArrayOf(
+                0xFF24292F.toInt(), 0xFFCF222E.toInt(), 0xFF116329.toInt(), 0xFF4D3800.toInt(),
+                0xFF0969DA.toInt(), 0xFF8250DF.toInt(), 0xFF1B7C83.toInt(), 0xFF6E7781.toInt(),
+                0xFF57606A.toInt(), 0xFFA40E26.toInt(), 0xFF1A7F37.toInt(), 0xFF633C01.toInt(),
+                0xFF218BFF.toInt(), 0xFFA475F9.toInt(), 0xFF3192AA.toInt(), 0xFF1F2328.toInt()
+            )
+        )
+
+        /** 默认主题：跟随应用当前主题的深浅色与背景/前景色。 */
+        val FOLLOW_APP = TerminalThemePreset(
+            id = "follow_app",
+            nameRes = R.string.terminal_theme_follow_app,
+            background = TERMIUS_DARK.background,
+            foreground = TERMIUS_DARK.foreground,
+            cursor = TERMIUS_DARK.cursor,
+            ansiColors = TERMIUS_DARK.ansiColors
         )
 
         /** Dracula：官方标准极客暗黑主题（基于 draculatheme.com 规范）。 */
@@ -107,7 +143,9 @@ data class TerminalThemePreset(
         )
 
         val ALL_PRESETS = listOf(
+            FOLLOW_APP,
             TERMIUS_DARK,
+            GITHUB_LIGHT,
             DRACULA,
             ONE_DARK,
             MONOKAI,
@@ -116,6 +154,27 @@ data class TerminalThemePreset(
 
         fun findById(id: String): TerminalThemePreset =
             ALL_PRESETS.firstOrNull { it.id == id }
-                ?: TERMIUS_DARK
+                ?: FOLLOW_APP
+
+        /**
+         * 将预设解析为最终生效的配色：若为 [FOLLOW_APP]，则根据当前应用主题的深浅色与色彩槽位动态合成。
+         */
+        fun resolve(
+            preset: TerminalThemePreset,
+            isDark: Boolean,
+            backgroundArgb: Int,
+            foregroundArgb: Int,
+            cursorArgb: Int
+        ): TerminalThemePreset {
+            if (preset.id != FOLLOW_APP.id) return preset
+            return TerminalThemePreset(
+                id = FOLLOW_APP.id,
+                nameRes = FOLLOW_APP.nameRes,
+                background = backgroundArgb,
+                foreground = foregroundArgb,
+                cursor = cursorArgb,
+                ansiColors = if (isDark) TERMIUS_DARK.ansiColors else GITHUB_LIGHT.ansiColors
+            )
+        }
     }
 }

@@ -102,7 +102,7 @@ class ShizukuBindException(
  */
 @Singleton
 class ShizukuManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     private companion object {
         const val TAG = "ShizukuManager"

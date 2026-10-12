@@ -3,6 +3,7 @@ package com.aicode.feature.terminal.presentation.component
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.Font
@@ -309,7 +312,20 @@ private fun rememberPreviewFontFamily(path: String): FontFamily = remember(path)
 /** 终端实时预览小窗。 */
 @Composable
 private fun TerminalPreviewCard(settings: TerminalSettings) {
-    val theme = settings.theme
+    val colorScheme = MaterialTheme.colorScheme
+    val isDark = colorScheme.background.luminance() < 0.5f
+    val bgArgb = colorScheme.background.toArgb()
+    val fgArgb = colorScheme.onBackground.toArgb()
+    val cursorArgb = colorScheme.primary.toArgb()
+    val theme = remember(settings.theme, isDark, bgArgb, fgArgb, cursorArgb) {
+        TerminalThemePreset.resolve(
+            preset = settings.theme,
+            isDark = isDark,
+            backgroundArgb = bgArgb,
+            foregroundArgb = fgArgb,
+            cursorArgb = cursorArgb
+        )
+    }
     val bgColor = Color(theme.background)
     val fgColor = Color(theme.foreground)
     val cursorColor = Color(theme.cursor)
@@ -322,6 +338,7 @@ private fun TerminalPreviewCard(settings: TerminalSettings) {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.md),
         color = bgColor,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         shadowElevation = 2.dp
     ) {
         Column(

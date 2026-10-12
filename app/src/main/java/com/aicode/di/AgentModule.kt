@@ -1,6 +1,7 @@
 package com.aicode.di
 
 import android.content.Context
+import com.aicode.core.net.applyTcpKeepAlive
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -9,6 +10,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
+import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.data.local.database.AgentDatabase
@@ -164,6 +166,12 @@ object AgentModule {
 
     @Provides
     @Singleton
+    fun provideBackupTargetDao(database: AgentDatabase): BackupTargetDao {
+        return database.backupTargetDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideOkHttpClient(@ApplicationContext context: Context): OkHttpClient {
         // 统一 UA 为 aicode/<版本> (Android)；请求已带显式 UA（如用户自定义头）时不覆盖。
         // 版本号走 PackageManager（项目未开启 BuildConfig），dev 构建为 1.x.y-dev.N+hash 天然可溯源。
@@ -234,6 +242,8 @@ object AgentModule {
                     override fun connectionAcquired(call: Call, connection: Connection) {
                         connectionId = Integer.toHexString(System.identityHashCode(connection))
                         protocol = connection.protocol().toString()
+                        // 长连接在后台空闲时会被 NAT/路由器回收，缩短 keepalive 探测间隔以维持映射。
+                        connection.socket().applyTcpKeepAlive()
                     }
 
                     override fun callFailed(call: Call, ioe: IOException) {

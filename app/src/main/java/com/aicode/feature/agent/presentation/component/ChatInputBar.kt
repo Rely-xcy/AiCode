@@ -98,6 +98,8 @@ import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
+import com.aicode.feature.agent.domain.mention.FileMentionState
+import com.aicode.feature.agent.domain.mention.fileMentionQuery
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.QueuedRequest
 import com.aicode.feature.settings.domain.model.AIProviderConfig
@@ -162,6 +164,10 @@ internal fun ChatInputBar(
     onUploadImage: () -> Unit,
     onTakePhoto: () -> Unit,
     slashCommands: List<SlashCommand> = emptyList(),
+    fileMentionState: FileMentionState = FileMentionState.Idle,
+    onFileMentionOpen: () -> Unit = {},
+    onFileMentionDismiss: () -> Unit = {},
+    matchFileMentions: (String) -> List<String> = { emptyList() },
     queuedRequests: List<QueuedRequest> = emptyList(),
     onRemoveQueued: (String) -> Unit = {},
     onMoveQueued: (Int, Int) -> Unit = { _, _ -> },
@@ -208,6 +214,28 @@ internal fun ChatInputBar(
         if (value == "/") slashCommands
         else slashCommands.filter { "/${it.name}".startsWith(value) }
     } else emptyList()
+
+    // `@` 文件引用：`/` 菜单优先，忙碌时不弹；查询词从文本末尾提取。
+    val mentionQuery = if (!isBusy && !showSlashMenu) fileMentionQuery(value) else null
+    val mentionFiles = remember(mentionQuery, fileMentionState) {
+        if (mentionQuery != null && fileMentionState is FileMentionState.Ready) {
+            matchFileMentions(mentionQuery)
+        } else {
+            emptyList()
+        }
+    }
+    LaunchedEffect(mentionQuery) {
+        if (mentionQuery != null) onFileMentionOpen() else onFileMentionDismiss()
+    }
+    // 选中文件：把 `@查询词` 替换为 `@相对路径 `，光标移到末尾。
+    val applyMention: (String) -> Unit = { path ->
+        val at = value.lastIndexOf('@')
+        if (at >= 0) {
+            val newText = value.substring(0, at) + "@" + path + " "
+            inputFieldValue = TextFieldValue(newText, TextRange(newText.length))
+            onValueChange(newText)
+        }
+    }
 
     // 文本是否已经超出输入框高度（超出后框内滚动，展开按钮才有意义）。
     // 按换行符数硬编码阈值在长行自动折行时会判断错，这里按 TextField 的实际宽度实测文本高度。
@@ -326,6 +354,70 @@ internal fun ChatInputBar(
                                         stringResource(R.string.settings_skills),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (mentionQuery != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = Spacing.sm),
+                    shape = RoundedCornerShape(Radius.lg),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, MaterialTheme.colorScheme.outlineVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                    ) {
+                        val mentionHint = when (fileMentionState) {
+                            FileMentionState.Idle, FileMentionState.Loading ->
+                                stringResource(R.string.chat_mention_loading)
+                            FileMentionState.Unavailable ->
+                                stringResource(R.string.chat_mention_unavailable)
+                            is FileMentionState.Error ->
+                                stringResource(R.string.chat_mention_error)
+                            is FileMentionState.Ready -> null
+                        }
+                        when {
+                            mentionHint != null -> Text(
+                                mentionHint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                            )
+                            mentionFiles.isEmpty() -> Text(
+                                stringResource(R.string.chat_mention_empty),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                            )
+                            else -> mentionFiles.forEach { path ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(Radius.sm))
+                                        .clickable { applyMention(path) }
+                                        .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        path,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
                                     )
                                 }
                             }

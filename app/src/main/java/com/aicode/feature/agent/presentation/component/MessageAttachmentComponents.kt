@@ -2,8 +2,6 @@ package com.aicode.feature.agent.presentation.component
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.clickable
@@ -42,6 +40,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.THUMBNAIL_MAX_EDGE
 import com.aicode.core.ui.decodeSampledBitmap
+import com.aicode.core.util.ApkInstaller
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import compose.icons.FeatherIcons
@@ -253,23 +252,28 @@ internal suspend fun openSentAttachment(
             return
         }
     }
-    // APK 安装包：系统安装器要求「允许安装未知应用」授权，未授权时引导用户去设置页开启，
-    // 否则点击只会弹出「没有权限安装」的拒绝提示。
+    // APK 安装包：统一走 ApkInstaller（含「允许安装未知应用」的授权判定与设置页引导）。
+    // 外部本地目录工作区、自定义挂载源的文件不在 FileProvider 目录树内，先拷进 cacheDir 再授权。
     if (isApk(attachment)) {
-        if (!context.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(context, context.getString(R.string.chat_open_apk_permission), Toast.LENGTH_LONG).show()
-            try {
-                context.startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                )
-            } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
-            }
+        val installable = withContext(Dispatchers.IO) {
+            if (isShareable(context, local)) local else copyToShareCache(context, local)
+        }
+        if (installable == null) {
+            Toast.makeText(context, context.getString(R.string.chat_open_file_unshareable), Toast.LENGTH_SHORT).show()
             return
         }
+        when (ApkInstaller.install(context, installable)) {
+            ApkInstaller.Result.STARTED -> Unit
+            ApkInstaller.Result.NEED_PERMISSION -> {
+                Toast.makeText(context, context.getString(R.string.chat_open_apk_permission), Toast.LENGTH_LONG).show()
+                if (!ApkInstaller.openInstallPermissionSettings(context)) {
+                    Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
+                }
+            }
+            ApkInstaller.Result.NO_HANDLER ->
+                Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
+        }
+        return
     }
     val shareable = withContext(Dispatchers.IO) {
         if (isShareable(context, localFile)) localFile else copyToShareCache(context, localFile)

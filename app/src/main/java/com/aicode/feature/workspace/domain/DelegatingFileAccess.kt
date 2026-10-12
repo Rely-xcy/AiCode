@@ -65,6 +65,8 @@ class DelegatingFileAccess @Inject constructor(
 
     override fun lastModified(path: String): Long = call { delegate().lastModified(path) }
 
+    override fun fingerprint(path: String): String? = delegate().fingerprint(path)
+
     override fun permissions(path: String): String = call { delegate().permissions(path) }
 
     override fun listFiles(path: String): List<FileEntry> = call { delegate().listFiles(path) }

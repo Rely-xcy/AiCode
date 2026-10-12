@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +26,7 @@ import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,11 +46,17 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.settings.data.remote.FORK_UPDATE_SUPPORTS_CHANNEL
+import com.aicode.feature.settings.data.repository.ALT_DOWNLOAD_MIRROR
+import com.aicode.feature.settings.data.repository.DEFAULT_DOWNLOAD_MIRROR
 import com.aicode.feature.settings.data.repository.UpdateChannel
+import com.aicode.feature.settings.data.repository.isValidDownloadMirror
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.Check
+import compose.icons.feathericons.Download
 import compose.icons.feathericons.Github
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.RefreshCw
@@ -55,20 +64,23 @@ import compose.icons.feathericons.Tag
 
 /**
  * 关于页：顶部应用信息、版本号（点击手动检查更新）、自动检查更新开关、更新通道、
- * GitHub 仓库、开源许可证。检查更新逻辑与弹窗由全局 [SettingsViewModel] 承载，
- * 本页只负责触发与展示设置项。
+ * 下载镜像源、GitHub 仓库、开源许可证。检查更新逻辑与弹窗由全局 [SettingsViewModel]
+ * 承载，本页只负责触发与展示设置项。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AboutSection(
     updateCheckEnabled: Boolean,
     updateCheckChannel: UpdateChannel,
+    updateCheckMirror: String,
     onToggleUpdateCheck: (Boolean) -> Unit,
     onSelectChannel: (UpdateChannel) -> Unit,
+    onSelectMirror: (String) -> Unit,
     onCheckUpdate: () -> Unit
 ) {
     val context = LocalContext.current
     var showChannelSheet by remember { mutableStateOf(false) }
+    var showMirrorDialog by remember { mutableStateOf(false) }
 
     // 通过 PackageManager 读取 versionName/versionCode（项目未开启 BuildConfig）
     val appInfo = remember {
@@ -127,7 +139,7 @@ internal fun AboutSection(
                 }
             )
             SettingsDivider()
-            // fork 专属：本 fork 的更新源没有「更新通道」概念，该行隐藏（剥离时连同上面的 import 一起删）
+            // fork 专属：本 fork 的更新源没有「更新通道」概念，该行隐藏（剥离时连同 import 一起删）
             if (FORK_UPDATE_SUPPORTS_CHANNEL) {
                 // 更新通道
                 SettingsRow(
@@ -150,6 +162,25 @@ internal fun AboutSection(
                 )
                 SettingsDivider()
             }
+            // 下载镜像源：更新包下载走它加速，留空表示直连 GitHub
+            SettingsRow(
+                icon = FeatherIcons.Download,
+                title = stringResource(R.string.about_update_mirror),
+                onClick = { showMirrorDialog = true },
+                trailing = {
+                    Text(
+                        text = updateCheckMirror.ifBlank {
+                            stringResource(R.string.about_update_mirror_preset_direct)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 170.dp)
+                    )
+                }
+            )
+            SettingsDivider()
             // GitHub 仓库
             SettingsRow(
                 icon = FeatherIcons.Github,
@@ -174,6 +205,17 @@ internal fun AboutSection(
                 showChannelSheet = false
             },
             onDismiss = { showChannelSheet = false }
+        )
+    }
+
+    if (showMirrorDialog) {
+        MirrorSourceDialog(
+            current = updateCheckMirror,
+            onConfirm = {
+                onSelectMirror(it)
+                showMirrorDialog = false
+            },
+            onDismiss = { showMirrorDialog = false }
         )
     }
 }
@@ -302,6 +344,104 @@ private fun UpdateChannelSheet(
             }
         }
     }
+}
+
+/** 镜像源快捷项：预置常用节点 + 直连，省得用户手打前缀。 */
+private data class MirrorPreset(val labelRes: Int, val value: String)
+
+private val MIRROR_PRESETS = listOf(
+    MirrorPreset(R.string.about_update_mirror_preset_cdn, DEFAULT_DOWNLOAD_MIRROR),
+    MirrorPreset(R.string.about_update_mirror_preset_v6, ALT_DOWNLOAD_MIRROR),
+    MirrorPreset(R.string.about_update_mirror_preset_direct, "")
+)
+
+/**
+ * 下载镜像源编辑弹窗：预置快捷项 + 自定义前缀 + 恢复默认。
+ *
+ * 约定是「前缀拼接」（`https://镜像/https://github.com/...`），含 `{url}` 占位符时按占位符
+ * 替换，所以第三方 gh-proxy 实例与自建节点都能直接填；留空 = 直连 GitHub。
+ * 「恢复默认」只把输入框填回默认值，仍需点「保存」才落盘。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MirrorSourceDialog(
+    current: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var text by remember(current) { mutableStateOf(current) }
+    val valid = isValidDownloadMirror(text)
+    val trimmed = text.trim()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.about_update_mirror)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Text(
+                    text = stringResource(R.string.about_update_mirror_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                MIRROR_PRESETS.forEach { preset ->
+                    val selected = trimmed == preset.value
+                    Surface(onClick = { text = preset.value }, color = Color.Transparent) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(preset.labelRes),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (selected) {
+                                Icon(
+                                    imageVector = FeatherIcons.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+                AppTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = DEFAULT_DOWNLOAD_MIRROR,
+                    isError = !valid,
+                    supportingText = if (valid) {
+                        null
+                    } else {
+                        { Text(stringResource(R.string.about_update_mirror_invalid)) }
+                    },
+                    colors = dialogTextFieldColors()
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                TextButton(onClick = { text = DEFAULT_DOWNLOAD_MIRROR }) {
+                    Text(stringResource(R.string.about_update_mirror_default))
+                }
+                TextButton(onClick = { onConfirm(trimmed) }, enabled = valid) {
+                    Text(stringResource(R.string.common_save))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        }
+    )
 }
 
 /** GitHub tag 形如 v1.7.0 / 1.7.0 / v1.7.0-rc1，提取出纯版本号。 */

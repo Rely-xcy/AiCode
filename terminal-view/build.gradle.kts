@@ -21,8 +21,9 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        // 与 :app 的 JDK 21 构建保持一致：JDK 21 已弃用 source/target 8，会在编译期刷警告。
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 

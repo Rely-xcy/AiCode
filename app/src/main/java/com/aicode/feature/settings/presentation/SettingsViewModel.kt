@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.net.AppProxy
+import com.aicode.core.util.ApkInstaller
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LogLevel
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
@@ -28,6 +29,7 @@ import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
+import com.aicode.feature.agent.domain.mcp.auth.McpOAuthCancelledException
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -49,7 +51,12 @@ import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.remote.ModelTestResult
+import com.aicode.feature.settings.data.remote.ApkDownloadResult
+import com.aicode.feature.settings.data.remote.ApkDownloader
+import com.aicode.feature.settings.data.remote.ApkVerifier
+import com.aicode.feature.settings.data.remote.ApkVerifyResult
 import com.aicode.feature.settings.data.remote.ForkUpdateCheckService
+import com.aicode.feature.settings.data.remote.UpdateAsset
 import com.aicode.feature.settings.data.remote.UpdateCheckResult
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
@@ -113,6 +120,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 private const val TAG = "SettingsViewModel"
@@ -147,6 +155,19 @@ sealed interface ContainerImageDownloadUiState {
 /** 重置容器的进行状态：重置中才有值，[deleted] 为已删除的文件与目录数。 */
 data class ContainerResetUiState(val name: String, val deleted: Int)
 
+data class McpAuthUiState(
+    val serverName: String? = null,
+    val inProgress: Boolean = false,
+    val error: String? = null,
+    val success: Boolean = false
+)
+
+data class McpImportUiState(
+    val inProgress: Boolean = false,
+    val error: String? = null,
+    val importedCount: Int? = null
+)
+
 data class LogViewerUiState(
     val files: List<String> = emptyList(),
     val selectedFileName: String? = null,
@@ -163,12 +184,35 @@ sealed interface UpdateCheckUiState {
     data object Idle : UpdateCheckUiState
     data object Checking : UpdateCheckUiState
     data object UpToDate : UpdateCheckUiState
+    /** 检测到新版本。[asset] 为该版本可下载的更新包；[downloadUrl] 为 fork 自建更新源的 APK 直链（GitHub 数据源恒为 null）。 */
     data class NewVersion(
         val latestTag: String,
         val changelog: String,
-        /** fork 专属：自建更新源给的 APK 直链（GitHub 数据源恒为 null，弹窗回退到 Release 页面）。 */
+        val asset: UpdateAsset? = null,
         val downloadUrl: String? = null
     ) : UpdateCheckUiState
+
+    /** 正在下载更新包（关闭弹窗不中断，重开可见进度）。 */
+    data class Downloading(
+        val latestTag: String,
+        val percent: Int,
+        val downloaded: Long,
+        val total: Long
+    ) : UpdateCheckUiState
+
+    /** 更新包已落盘并通过自检，等待拉起安装器。[needPermission] 为真表示还没授权安装未知应用。 */
+    data class ReadyToInstall(
+        val previous: NewVersion,
+        val apk: File,
+        val needPermission: Boolean
+    ) : UpdateCheckUiState
+
+    /** 下载或自检失败。[previous] 保留版本信息，供「重试」与「浏览器下载」继续使用。 */
+    data class DownloadFailed(
+        val previous: NewVersion,
+        val message: String
+    ) : UpdateCheckUiState
+
     data class Error(val message: String) : UpdateCheckUiState
 }
 
@@ -372,6 +416,9 @@ class SettingsViewModel @Inject constructor(
     private val updateCheckSettingsRepository: UpdateCheckSettingsRepository,
     // fork 专属：检查更新的数据源换成本 fork 站点的 id 版接口，剥离步骤见 ForkUpdateCheckService 文件头
     private val forkUpdateCheckService: ForkUpdateCheckService,
+    private val updateCheckService: UpdateCheckService,
+    private val apkDownloader: ApkDownloader,
+    private val apkVerifier: ApkVerifier,
     private val providerDashboardRunner: ProviderDashboardRunner,
     private val terminalSettingsRepository: TerminalSettingsRepository,
     private val proxySettingsRepository: ProxySettingsRepository,
@@ -379,6 +426,9 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private companion object {
         const val MAX_LOG_LINES = 1200
+
+        /** 正式包的 applicationId：只有它能应用内覆盖安装 GitHub Releases 里的包。 */
+        const val RELEASE_APPLICATION_ID = "com.aicode"
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
         /** 背景透明度停止拖动后的落盘延迟。 */
@@ -500,11 +550,24 @@ class SettingsViewModel @Inject constructor(
     private val _updateCheckState = MutableStateFlow<UpdateCheckUiState>(UpdateCheckUiState.Idle)
     val updateCheckState: StateFlow<UpdateCheckUiState> = _updateCheckState.asStateFlow()
 
+    /**
+     * 更新弹窗是否可见。与 [updateCheckState] 分开：下载中关掉弹窗只收起界面、不打断下载，
+     * 之后再点「版本」行即可按原状态重新亮出来（不必重下已完成的包）。
+     */
+    private val _updateCheckVisible = MutableStateFlow(false)
+    val updateCheckVisible: StateFlow<Boolean> = _updateCheckVisible.asStateFlow()
+
     private val _updateCheckEnabled = MutableStateFlow(updateCheckSettingsRepository.autoCheckEnabled)
     val updateCheckEnabled: StateFlow<Boolean> = _updateCheckEnabled.asStateFlow()
 
     private val _updateCheckChannel = MutableStateFlow(updateCheckSettingsRepository.channel)
     val updateCheckChannel: StateFlow<UpdateChannel> = _updateCheckChannel.asStateFlow()
+
+    private val _updateCheckMirror = MutableStateFlow(updateCheckSettingsRepository.downloadMirror)
+    val updateCheckMirror: StateFlow<String> = _updateCheckMirror.asStateFlow()
+
+    /** 更新包下载协程；重试前先顶掉上一个，避免两路并发写同一状态。 */
+    private var apkDownloadJob: Job? = null
 
     private val _keepaliveEnabled = MutableStateFlow(false)
     val keepaliveEnabled: StateFlow<Boolean> = _keepaliveEnabled.asStateFlow()
@@ -636,6 +699,12 @@ class SettingsViewModel @Inject constructor(
 
     private val _mcpReloading = MutableStateFlow(false)
     val mcpReloading: StateFlow<Boolean> = _mcpReloading.asStateFlow()
+
+    private val _mcpAuthState = MutableStateFlow(McpAuthUiState())
+    val mcpAuthState: StateFlow<McpAuthUiState> = _mcpAuthState.asStateFlow()
+
+    private val _mcpImportState = MutableStateFlow(McpImportUiState())
+    val mcpImportState: StateFlow<McpImportUiState> = _mcpImportState.asStateFlow()
 
     private val _fetchState = MutableStateFlow<FetchState>(FetchState.Idle)
     val fetchState: StateFlow<FetchState> = _fetchState.asStateFlow()
@@ -1089,11 +1158,11 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
-                // 首次启动写入内置 Alpine 默认项（置位标记后不再自动补回）
+                // 先做存量数据归一，再开始收集，避免升级后的第一帧闪出旧顺序：
+                // 1) 首次启动写入内置 Alpine 默认项（置位标记后不再自动补回）；
+                // 2) 把存量列表顺序归一为「新建在前」的显示序（此后顺序由用户拖拽决定，不再实时排序）。
                 containerSettingsRepository.ensureBuiltinDefault()
-            }
-
-            launch {
+                containerSettingsRepository.ensureProfileDisplayOrder()
                 containerSettingsRepository.customProfilesFlow.collectLatest {
                     // 列表顺序 = 用户拖拽顺序表（ListOrderStore，不在表里的按创建时间降序补在后面），
                     // 没拖过则保持原行为：按添加时间降序（新的在前）；旧数据 createdAt 同为 0 时保持存储顺序
@@ -1274,7 +1343,6 @@ class SettingsViewModel @Inject constructor(
 
     fun upsertMcpServer(originalName: String?, initialScope: McpScope?, config: McpServerConfig, scope: McpScope) {
         viewModelScope.launch {
-            // 项目级写入在工作区未就绪时会被仓库跳过，这里记录下来统一提示（否则「MCP 加了不出现」）
             var written = true
             // 作用域迁移：仅当保存作用域与原来不同时，从原作用域移除旧条目，
             // 避免残留条目在合并时（项目优先）继续覆盖新作用域的配置。
@@ -1282,7 +1350,7 @@ class SettingsViewModel @Inject constructor(
                 val oldBase = if (initialScope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
                 val oldUpdated = oldBase.filterNot { it.name == originalName }
                 if (initialScope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(oldUpdated)
-                else written = mcpConfigRepository.setProjectServers(oldUpdated)
+                else written = mcpConfigRepository.setProjectServers(oldUpdated) && written
             }
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
             val ordered = LinkedHashMap<String, McpServerConfig>()
@@ -1304,6 +1372,54 @@ class SettingsViewModel @Inject constructor(
                 mcpManager.reloadServer(config.name)
             } finally {
                 _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 保存最新表单配置并立即发起 OAuth 授权，确保弹窗中修改的 client_id 等字段即时生效。 */
+    fun saveAndAuthorizeMcpServer(
+        originalName: String?,
+        initialScope: McpScope?,
+        config: McpServerConfig,
+        scope: McpScope
+    ) {
+        if (_mcpAuthState.value.inProgress) return
+        viewModelScope.launch {
+            var written = true
+            // 作用域迁移：仅当保存作用域与原来不同时，从原作用域移除旧条目，
+            // 避免残留条目在合并时（项目优先）继续覆盖新作用域的配置。
+            if (originalName != null && initialScope != null && initialScope != scope) {
+                val oldBase = if (initialScope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+                val oldUpdated = oldBase.filterNot { it.name == originalName }
+                if (initialScope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(oldUpdated)
+                else written = mcpConfigRepository.setProjectServers(oldUpdated) && written
+            }
+            val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+            val ordered = LinkedHashMap<String, McpServerConfig>()
+            base.forEach { ordered[it.name] = it }
+            if (originalName != null && originalName != config.name) {
+                ordered.remove(originalName)
+            }
+            ordered[config.name] = config
+            val updated = ordered.values.toList()
+            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated)
+            else written = mcpConfigRepository.setProjectServers(updated) && written
+            if (!written) reportConfigWriteSkipped()
+            _mcpReloading.value = true
+            try {
+                if (originalName != null && originalName != config.name) {
+                    mcpManager.removeServer(originalName)
+                }
+                mcpManager.reloadServer(config.name)
+            } finally {
+                _mcpReloading.value = false
+            }
+            _mcpAuthState.value = McpAuthUiState(serverName = config.name, inProgress = true)
+            val result = mcpManager.authorize(config.name)
+            _mcpAuthState.value = when {
+                result.isSuccess -> McpAuthUiState(serverName = config.name, success = true)
+                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
+                else -> McpAuthUiState(serverName = config.name, error = result.exceptionOrNull()?.message)
             }
         }
     }
@@ -1346,6 +1462,76 @@ class SettingsViewModel @Inject constructor(
                 _mcpReloading.value = false
             }
         }
+    }
+
+    /** 触发某个 server 的 OAuth 授权，结果（含失败原因）写入 [mcpAuthState] 供编辑弹窗展示。 */
+    fun authorizeMcpServer(name: String) {
+        if (_mcpAuthState.value.inProgress) return
+        viewModelScope.launch {
+            _mcpAuthState.value = McpAuthUiState(serverName = name, inProgress = true)
+            val result = mcpManager.authorize(name)
+            _mcpAuthState.value = when {
+                result.isSuccess -> McpAuthUiState(serverName = name, success = true)
+                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
+                else -> McpAuthUiState(serverName = name, error = result.exceptionOrNull()?.message)
+            }
+        }
+    }
+
+    fun cancelMcpAuthorize(name: String) {
+        mcpManager.cancelAuthorize(name)
+    }
+
+    /** 从标准 mcpServers JSON 批量导入到指定作用域；同名覆盖。 */
+    fun importMcpServersFromJson(raw: String, scope: McpScope) {
+        viewModelScope.launch {
+            _mcpImportState.value = McpImportUiState(inProgress = true)
+            val parsed = runCatching { mcpConfigRepository.parse(raw) }.getOrElse {
+                _mcpImportState.value = McpImportUiState(error = it.message)
+                return@launch
+            }
+            val valid = parsed.filter { McpServerConfig.isValidName(it.name) }
+            if (valid.isEmpty()) {
+                _mcpImportState.value = McpImportUiState(error = context.getString(R.string.mcp_json_import_empty))
+                return@launch
+            }
+            runCatching {
+                val existing = if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.getGlobalServers()
+                } else {
+                    mcpConfigRepository.getProjectServers()
+                }
+                val merged = LinkedHashMap<String, McpServerConfig>()
+                existing.forEach { merged[it.name] = it }
+                valid.forEach { merged[it.name] = it }
+                val list = merged.values.toList()
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(list)
+                } else {
+                    mcpConfigRepository.setProjectServers(list)
+                }
+            }.onSuccess {
+                _mcpImportState.value = McpImportUiState(importedCount = valid.size)
+                mcpManager.reload()
+            }.onFailure {
+                _mcpImportState.value = McpImportUiState(error = it.message)
+            }
+        }
+    }
+
+    fun clearMcpImportState() {
+        _mcpImportState.value = McpImportUiState()
+    }
+
+    fun logoutMcpServer(name: String) {
+        viewModelScope.launch {
+            mcpManager.logout(name)
+            _mcpAuthState.value = McpAuthUiState()
+        }
+    }
+
+    fun clearMcpAuthState() {
+        _mcpAuthState.value = McpAuthUiState()
     }
 
     fun reloadMcp() {
@@ -1604,14 +1790,25 @@ class SettingsViewModel @Inject constructor(
      * 留到下次启动再试（fork 专属，见下方注释）。
      */
     fun checkUpdate(manual: Boolean) {
+        val current = _updateCheckState.value
+        // 下载中 / 安装包已就绪：不打断当前流程；手动点「版本」行只把弹窗重新亮出来，不重下
+        if (current is UpdateCheckUiState.Downloading || current is UpdateCheckUiState.ReadyToInstall) {
+            if (manual) _updateCheckVisible.value = true
+            return
+        }
+        // 已在检测中：手动点击同样只需把弹窗亮回来（用户可能刚把它关掉）
+        if (current == UpdateCheckUiState.Checking) {
+            if (manual) _updateCheckVisible.value = true
+            return
+        }
         if (!manual) {
             if (!updateCheckSettingsRepository.autoCheckEnabled) return
             if (updateCheckSettingsRepository.hasCheckedToday()) return
         }
-        if (_updateCheckState.value == UpdateCheckUiState.Checking) return
         viewModelScope.launch {
             // 手动检查显示「检测中」反馈；自动检查全程无感，仅检测到新版本才弹窗
             if (manual) {
+                _updateCheckVisible.value = true
                 _updateCheckState.value = UpdateCheckUiState.Checking
             }
             // fork 专属：数据源换成自建接口，并把本机 versionName 传进去——服务里从 `+g<短哈希>`
@@ -1621,11 +1818,15 @@ class SettingsViewModel @Inject constructor(
                 is UpdateCheckResult.UpToDate -> {
                     if (manual) UpdateCheckUiState.UpToDate else UpdateCheckUiState.Idle
                 }
-                is UpdateCheckResult.NewVersion -> UpdateCheckUiState.NewVersion(
-                    latestTag = result.info.latestTag,
-                    changelog = result.info.changelog,
-                    downloadUrl = result.info.downloadUrl
-                )
+                is UpdateCheckResult.NewVersion -> {
+                    _updateCheckVisible.value = true
+                    UpdateCheckUiState.NewVersion(
+                        latestTag = result.info.latestTag,
+                        changelog = result.info.changelog,
+                        asset = result.info.latestAsset,
+                        downloadUrl = result.info.downloadUrl
+                    )
+                }
                 is UpdateCheckResult.Error -> {
                     if (manual) UpdateCheckUiState.Error(result.message) else UpdateCheckUiState.Idle
                 }
@@ -1644,9 +1845,134 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 关闭更新弹窗。 */
+    /**
+     * 应用内安装是否可用：只对正式包开放。beta/debug 变体的 applicationId 带后缀
+     * （`com.aicode.beta` / `com.aicode.debug`），装 GitHub 上的正式包等于「装上第二个 App」，
+     * 包名自检也会把它拦下——索性不给下载入口，省掉一次十几 MB 的白下载。
+     */
+    val inAppInstallSupported: Boolean
+        get() = context.packageName == RELEASE_APPLICATION_ID
+
+    /**
+     * 下载并安装（更新弹窗主按钮）。
+     *
+     * 按当前状态分派：已就绪 → 直接拉起安装器（用户可能刚授完权回来）；检测到新版本 → 下载；
+     * 下载失败 → 用保留的版本信息重试。下载走「镜像 → 直连」两跳，下完先做包名/签名/versionCode
+     * 自检，全过才交给系统安装器。
+     */
+    fun downloadAndInstall() {
+        if (!inAppInstallSupported) return
+        when (val current = _updateCheckState.value) {
+            is UpdateCheckUiState.ReadyToInstall -> startInstall(current)
+            is UpdateCheckUiState.NewVersion -> startDownload(current)
+            is UpdateCheckUiState.DownloadFailed -> startDownload(current.previous)
+            else -> Unit
+        }
+    }
+
+    private fun startDownload(target: UpdateCheckUiState.NewVersion) {
+        val asset = target.asset
+        if (asset == null) {
+            // Release 没挂 APK 资产（或资产命名不认识）：只能引导去浏览器下载
+            _updateCheckState.value = UpdateCheckUiState.DownloadFailed(
+                previous = target,
+                message = context.getString(R.string.about_update_verify_not_apk)
+            )
+            return
+        }
+        if (apkDownloadJob?.isActive == true) return
+        _updateCheckVisible.value = true
+        apkDownloadJob = viewModelScope.launch {
+            _updateCheckState.value = UpdateCheckUiState.Downloading(
+                latestTag = target.latestTag,
+                percent = 0,
+                downloaded = 0,
+                total = asset.size
+            )
+            val result = apkDownloader.download(
+                url = asset.url,
+                mirror = updateCheckSettingsRepository.downloadMirror,
+                fileName = "aicode-${target.latestTag}.apk",
+                expectedSize = asset.size,
+                expectedSha256 = asset.sha256
+            ) { downloaded, total ->
+                _updateCheckState.value = UpdateCheckUiState.Downloading(
+                    latestTag = target.latestTag,
+                    percent = if (total > 0) ((downloaded * 100) / total).toInt().coerceIn(0, 100) else 0,
+                    downloaded = downloaded,
+                    total = total
+                )
+            }
+            when (result) {
+                is ApkDownloadResult.Success -> {
+                    val verify = apkVerifier.verify(result.file)
+                    if (verify is ApkVerifyResult.Ok) {
+                        val ready = UpdateCheckUiState.ReadyToInstall(
+                            previous = target,
+                            apk = result.file,
+                            needPermission = !ApkInstaller.canInstall(context)
+                        )
+                        _updateCheckState.value = ready
+                        // 已授权就直接拉起安装器；未授权则停在「就绪」态，授权后回来再点一次即可
+                        if (!ready.needPermission) startInstall(ready)
+                    } else {
+                        _updateCheckState.value = UpdateCheckUiState.DownloadFailed(
+                            previous = target,
+                            message = verifyFailureMessage(verify)
+                        )
+                    }
+                }
+                is ApkDownloadResult.Failure -> {
+                    _updateCheckState.value = UpdateCheckUiState.DownloadFailed(
+                        previous = target,
+                        message = result.message
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 拉起系统安装器。未授权「安装未知应用」时先引导去设置页，授权后回到 App 再点一次即装
+     * （安装包已落盘，不重下）。
+     */
+    private fun startInstall(ready: UpdateCheckUiState.ReadyToInstall) {
+        when (ApkInstaller.install(context, ready.apk)) {
+            ApkInstaller.Result.STARTED -> {
+                FileLogger.i("SettingsViewModel", "已拉起系统安装器：${ready.apk.name}")
+                _updateCheckVisible.value = false
+                _updateCheckState.value = UpdateCheckUiState.Idle
+            }
+            ApkInstaller.Result.NEED_PERMISSION -> {
+                _updateCheckState.value = ready.copy(needPermission = true)
+                _updateCheckVisible.value = true
+                if (!ApkInstaller.openInstallPermissionSettings(context)) {
+                    _updateCheckState.value = UpdateCheckUiState.DownloadFailed(
+                        previous = ready.previous,
+                        message = context.getString(R.string.about_update_install_failed)
+                    )
+                }
+            }
+            ApkInstaller.Result.NO_HANDLER -> {
+                _updateCheckState.value = UpdateCheckUiState.DownloadFailed(
+                    previous = ready.previous,
+                    message = context.getString(R.string.about_update_install_failed)
+                )
+            }
+        }
+    }
+
+    private fun verifyFailureMessage(result: ApkVerifyResult): String = when (result) {
+        is ApkVerifyResult.Ok -> ""
+        is ApkVerifyResult.NotAnApk -> context.getString(R.string.about_update_verify_not_apk)
+        is ApkVerifyResult.PackageMismatch -> context.getString(R.string.about_update_verify_package)
+        is ApkVerifyResult.SignatureMismatch -> context.getString(R.string.about_update_verify_signature)
+        is ApkVerifyResult.NotNewer -> context.getString(R.string.about_update_verify_not_newer)
+    }
+
+    /** 关闭更新弹窗：只收起界面，下载中的任务继续跑（状态保留，重开可见）。 */
     fun dismissUpdateCheck() {
-        _updateCheckState.value = UpdateCheckUiState.Idle
+        _updateCheckVisible.value = false
     }
 
     /** 自动检查更新开关（默认开启）。 */
@@ -1659,6 +1985,12 @@ class SettingsViewModel @Inject constructor(
     fun setUpdateCheckChannel(channel: UpdateChannel) {
         updateCheckSettingsRepository.channel = channel
         _updateCheckChannel.value = channel
+    }
+
+    /** 更新包下载镜像源；留空表示直连 GitHub。 */
+    fun setUpdateCheckMirror(mirror: String) {
+        updateCheckSettingsRepository.downloadMirror = mirror
+        _updateCheckMirror.value = updateCheckSettingsRepository.downloadMirror
     }
 
     private fun currentVersionName(): String = runCatching {
@@ -1978,6 +2310,23 @@ class SettingsViewModel @Inject constructor(
     fun saveCustomContainerProfile(profile: ContainerProfile) {
         viewModelScope.launch {
             containerSettingsRepository.upsertCustomProfile(profile)
+        }
+    }
+
+    /**
+     * 容器列表长按拖拽排序：同步更新内存顺序（列表已重排 UI 才重绘，避免松手瞬间回跳），
+     * 再异步持久化新顺序（存储顺序即显示顺序）。
+     */
+    fun reorderContainerProfiles(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        val current = _customProfiles.value
+        if (fromIndex !in current.indices || toIndex !in current.indices) return
+        val reordered = current.toMutableList().apply {
+            add(toIndex, removeAt(fromIndex))
+        }
+        _customProfiles.value = reordered
+        viewModelScope.launch {
+            containerSettingsRepository.reorderCustomProfiles(reordered.map { it.id })
         }
     }
 
