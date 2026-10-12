@@ -224,6 +224,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var modelMetadataService: ModelMetadataService
 
+    /** 可下载镜像目录：启动即异步从仓库 data 分支拉取最新版本清单（12h 缓存，失败静默，兜底内置 assets）。 */
+    @Inject
+    lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
+
     /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
@@ -289,6 +293,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即异步刷新仓库 providers.json 预设（12h 缓存；失败静默，兜底本地磁盘与内置 assets）。
         appScope.launch {
             com.aicode.feature.settings.data.local.ProviderPresetLibrary.refreshFromNetworkIfStale(this@AIEditorApp)
+        }
+        // 启动即异步刷新可下载镜像目录（12h 缓存；失败静默，兜底本地磁盘与内置 assets）。
+        // 目的是让「上游发了安全补丁」不必等 App 发版就能在下载列表里看到。
+        appScope.launch {
+            containerImageCatalog.refreshFromNetworkIfStale()
         }
         // 启动即加载持久化等级，并随设置页改动实时生效（唯一同步点）。
         appScope.launch {

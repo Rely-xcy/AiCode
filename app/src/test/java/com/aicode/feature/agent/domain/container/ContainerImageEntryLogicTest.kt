@@ -140,6 +140,53 @@ class ContainerImageEntryLogicTest {
         assertEquals("", parsed.versionSuffix)
         assertEquals("", parsed.versionPath)
         assertEquals("", parsed.eol)
+        assertEquals(emptyMap<String, String>(), parsed.sha256ByAbi)
         assertEquals("Alpine Linux 3.21.7", parsed.displayLabel())
+    }
+
+    @Test
+    fun json_解析各架构校验和() {
+        val parsed = json.decodeFromString(
+            ContainerImageEntry.serializer(),
+            """
+            {
+              "id": "alpine-3.21",
+              "name": "Alpine Linux",
+              "version": "3.21.8",
+              "path": "alpine/v3.21/releases/{abi}/alpine-minirootfs-3.21.8-{abi}.tar.gz",
+              "sha256ByAbi": {
+                "arm64": "f25a96d2846a4bc439093107c1b48a8b0c93dcb411e2cb9cfded6f790b2bc001",
+                "x86_64": "6ea461b0225faad280b7e13df878b30fdd6d969dde25ef05f85a1bcec9033348"
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            "f25a96d2846a4bc439093107c1b48a8b0c93dcb411e2cb9cfded6f790b2bc001",
+            parsed.sha256ByAbi["arm64"]
+        )
+        assertEquals(
+            "6ea461b0225faad280b7e13df878b30fdd6d969dde25ef05f85a1bcec9033348",
+            parsed.sha256ByAbi["x86_64"]
+        )
+    }
+
+    @Test
+    fun hasNewerVersion_下载时的版本与当前版本不同_提示有新版() {
+        assertEquals(true, hasNewerVersion("3.21.7", "3.21.8"))
+        assertEquals(true, hasNewerVersion("12.15", "12.16"))
+    }
+
+    @Test
+    fun hasNewerVersion_版本一致_不提示() {
+        assertEquals(false, hasNewerVersion("3.21.8", "3.21.8"))
+    }
+
+    @Test
+    fun hasNewerVersion_旧记录没有版本号_不提示() {
+        // 升级前下载的记录没有 version 字段：宁可漏提示，也不能把用户刚下好的镜像误报成「有新版」
+        assertEquals(false, hasNewerVersion(null, "3.21.8"))
+        assertEquals(false, hasNewerVersion("", "3.21.8"))
     }
 }

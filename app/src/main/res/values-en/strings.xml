@@ -864,6 +864,8 @@
     <string name="container_download_failed">Download failed: %1$s</string>
     <string name="container_download_list_empty">No images available</string>
     <string name="container_download_done">Downloaded</string>
+    <string name="container_download_newer_available">Update available</string>
+    <string name="container_download_checksum_failed">Checksum mismatch — the file may be truncated or tampered with. Please retry.</string>
     <string name="container_download_eol_soon">Support ending soon</string>
     <string name="container_download_eol_ended">No longer supported</string>
     <string name="container_download_size">Size: %1$s</string>

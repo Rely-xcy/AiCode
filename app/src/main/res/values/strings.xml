@@ -864,6 +864,8 @@
     <string name="container_download_failed">下载失败：%1$s</string>
     <string name="container_download_list_empty">暂无可用镜像</string>
     <string name="container_download_done">已下载</string>
+    <string name="container_download_newer_available">有新版可下载</string>
+    <string name="container_download_checksum_failed">文件校验失败，可能被截断或篡改，请重试</string>
     <string name="container_download_eol_soon">即将停止支持</string>
     <string name="container_download_eol_ended">已停止支持</string>
     <string name="container_download_size">大小：%1$s</string>

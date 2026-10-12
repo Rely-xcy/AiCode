@@ -57,6 +57,7 @@ import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerImageEol
 import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.agent.domain.container.eolStatus
+import com.aicode.feature.agent.domain.container.hasNewerVersion
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
 import com.aicode.feature.settings.presentation.ContainerImageDownloadUiState
 import compose.icons.FeatherIcons
@@ -133,10 +134,13 @@ internal fun ContainerImageDownloadSection(
                     if (index > 0) SettingsDivider()
                     val record = downloadedImages[entry.id]
                     val fileExists = record?.let { File(Uri.parse(it.fileUri).path ?: "").exists() } == true
+                    // 展示版本以运行时探测值为准（Debian 的补丁号靠它），「有新版」比对也用同一个值
+                    val resolvedVersion = imageVersions[entry.id] ?: entry.version
                     DownloadImageRow(
                         entry = entry,
                         displayName = entry.displayLabel(imageVersions[entry.id]),
                         eol = entry.eolStatus(),
+                        hasNewerVersion = hasNewerVersion(record?.version, resolvedVersion),
                         state = state,
                         isDownloaded = record != null && fileExists,
                         onOpenDetail = { detailEntry = entry },
@@ -152,6 +156,10 @@ internal fun ContainerImageDownloadSection(
             entry = entry,
             displayName = entry.displayLabel(imageVersions[entry.id]),
             eol = entry.eolStatus(),
+            hasNewerVersion = hasNewerVersion(
+                downloadedImages[entry.id]?.version,
+                imageVersions[entry.id] ?: entry.version
+            ),
             state = state,
             record = downloadedImages[entry.id],
             sourceUnavailable = entry.id in sourceUnavailableIds,
@@ -218,6 +226,7 @@ private fun DownloadImageRow(
     entry: ContainerImageEntry,
     displayName: String,
     eol: ContainerImageEol,
+    hasNewerVersion: Boolean,
     state: ContainerImageDownloadUiState,
     isDownloaded: Boolean,
     onOpenDetail: () -> Unit,
@@ -280,10 +289,17 @@ private fun DownloadImageRow(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     if (isDownloaded) {
-                        StatusBadge(
-                            text = stringResource(R.string.container_download_done),
-                            color = MaterialTheme.semanticColors.success
-                        )
+                        if (hasNewerVersion) {
+                            StatusBadge(
+                                text = stringResource(R.string.container_download_newer_available),
+                                color = MaterialTheme.semanticColors.warning
+                            )
+                        } else {
+                            StatusBadge(
+                                text = stringResource(R.string.container_download_done),
+                                color = MaterialTheme.semanticColors.success
+                            )
+                        }
                     }
                     EolBadge(eol)
                 }
@@ -336,6 +352,7 @@ private fun ImageDetailSheet(
     entry: ContainerImageEntry,
     displayName: String,
     eol: ContainerImageEol,
+    hasNewerVersion: Boolean,
     state: ContainerImageDownloadUiState,
     record: DownloadedImageRecord?,
     sourceUnavailable: Boolean,
@@ -399,9 +416,13 @@ private fun ImageDetailSheet(
                     )
                     if (isDownloaded) {
                         Text(
-                            text = stringResource(R.string.container_download_done),
+                            text = stringResource(
+                                if (hasNewerVersion) R.string.container_download_newer_available
+                                else R.string.container_download_done
+                            ),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.success
+                            color = if (hasNewerVersion) MaterialTheme.semanticColors.warning
+                            else MaterialTheme.semanticColors.success
                         )
                     }
                     when (eol) {

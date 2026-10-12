@@ -30,6 +30,12 @@ private val Context.containerDataStore by preferencesDataStore(
 data class DownloadedImageRecord(
     val entryId: String,
     val fileUri: String,
+    /**
+     * 下载当时的版本号（如 `3.21.8` / `12.15`）。
+     * 目录版本会随上游刷新，而磁盘上的文件不会跟着变，靠它才能判断「已下载的是不是旧补丁」。
+     * 空串表示升级前留下的旧记录，此时不参与「有新版」判定（宁可漏提示也不误报）。
+     */
+    val version: String = "",
     val installed: Boolean = false
 )
 

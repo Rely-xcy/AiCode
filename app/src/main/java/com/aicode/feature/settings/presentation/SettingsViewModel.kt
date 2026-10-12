@@ -996,10 +996,20 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
-        _imageCatalog.value = containerImageCatalog.load()
-        _imageSourceOptions.value = containerImageCatalog.sourceIds
-        _selectedImageSource.value = containerImageCatalog.sourceIds.firstOrNull { it == "official" }
-            ?: containerImageCatalog.sourceIds.firstOrNull() ?: "official"
+        // 先同步拿本地目录（内存 → 磁盘缓存 → 内置 assets），保证首帧就有列表、断网也不为空
+        containerImageCatalog.load()
+        // 目录快照变化时同步刷新列表与源选项：启动预热从仓库拉到最新版本号后会在这里反映出来
+        viewModelScope.launch {
+            containerImageCatalog.catalog.collect { data ->
+                _imageCatalog.value = data.images
+                _imageSourceOptions.value = data.sources.keys.toList()
+                // 仅在当前选中源已不存在时才回退（否则会把用户刚切的源重置掉）
+                if (_selectedImageSource.value !in data.sources) {
+                    _selectedImageSource.value = data.sources.keys.firstOrNull { it == "official" }
+                        ?: data.sources.keys.firstOrNull() ?: "official"
+                }
+            }
+        }
         // 已下载/已安装记录跨重启保留
         viewModelScope.launch {
             containerSettingsRepository.downloadedImagesFlow.collect { records ->
@@ -2487,17 +2497,20 @@ class SettingsViewModel @Inject constructor(
         // 避免用户下载到 12.15 却在文件名/容器名里看到 12。
         val version = _imageVersions.value[entry.id] ?: entry.version
         val fileName = "download_${entry.id}_${version}_${System.currentTimeMillis()}.$suffix"
+        // 目录里带了官方校验和就校验（Alpine/Ubuntu 有，Debian 没有 → 传 null 跳过）
+        val expectedSha256 = containerImageCatalog.sha256For(entry, ContainerImageCatalog.CURRENT_ABI)
         downloadJob = viewModelScope.launch {
             _containerImageDownload.value =
                 ContainerImageDownloadUiState.Downloading(entry.id, entry.name, version, sourceId, 0, 0)
             try {
-                val uri = containerImageDownloader.download(url, fileName) { read, total ->
+                val uri = containerImageDownloader.download(url, fileName, expectedSha256) { read, total ->
                     _containerImageDownload.value = ContainerImageDownloadUiState.Downloading(
                         entry.id, entry.name, version, sourceId, read, total
                     )
                 }
-                // 下载完成即持久化记录，安装与否都保留，跨重启可见。
-                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri))
+                // 下载完成即持久化记录，安装与否都保留，跨重启可见。版本一并记下，
+                // 之后上游发新补丁时列表才能提示「有新版」而不是一直显示「已下载」。
+                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri, version = version))
                 _containerImageDownload.value =
                     ContainerImageDownloadUiState.Done(entry.id, entry.name, version, uri)
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -2521,18 +2534,30 @@ class SettingsViewModel @Inject constructor(
      */
     fun importDownloadedImage(entryId: String, fileUri: String) {
         val entry = _imageCatalog.value.firstOrNull { it.id == entryId } ?: return
+        val record = _downloadedImages.value[entryId]
         viewModelScope.launch {
             val profile = ContainerProfile(
                 id = "custom-${System.currentTimeMillis()}",
-                name = entry.displayLabel(_imageVersions.value[entry.id]),
+                // 用**下载时**记录的版本命名：目录版本可能已被上游刷新，而磁盘上的文件不会跟着变，
+                // 用当前目录版本命名会出现「名字写着 3.21.8、实际解压的是 3.21.7」。
+                name = entry.displayLabel(
+                    record?.version?.takeIf { it.isNotBlank() } ?: _imageVersions.value[entry.id]
+                ),
                 rootfsSource = RootfsSource.LocalFile(fileUri),
                 shellPath = null,
                 extraArgs = ContainerProfile.DEFAULT_PROOT_ARGS,
                 isBuiltin = false
             )
             containerSettingsRepository.upsertCustomProfile(profile)
-            // 保留已下载记录，仅标记已导入；UI 状态不消失。
-            containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entryId, fileUri, installed = true))
+            // 保留已下载记录（含下载时的版本号，供「有新版」判定），仅标记已导入；UI 状态不消失。
+            containerSettingsRepository.upsertDownloadedImage(
+                DownloadedImageRecord(
+                    entryId = entryId,
+                    fileUri = fileUri,
+                    version = record?.version.orEmpty(),
+                    installed = true
+                )
+            )
             _containerImageDownload.value = ContainerImageDownloadUiState.Idle
         }
     }

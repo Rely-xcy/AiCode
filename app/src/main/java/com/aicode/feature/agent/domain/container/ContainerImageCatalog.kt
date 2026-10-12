@@ -2,7 +2,13 @@ package com.aicode.feature.agent.domain.container
 
 import android.content.Context
 import android.os.Build
+import com.aicode.core.net.RepoDataFetcher
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
@@ -33,7 +39,12 @@ data class ContainerImageEntry(
     val distro: String = "",
     val path: String,
     /** 标准架构键（arm64/x86_64）→ 该发行版实际目录名（如 aarch64/amd64）。 */
-    val abiNames: Map<String, String> = emptyMap()
+    val abiNames: Map<String, String> = emptyMap(),
+    /**
+     * 标准架构键（arm64/x86_64）→ 官方公布的 SHA-256。下载完成后据此校验，避免镜像被截断或投毒。
+     * 留空表示上游不提供校验和（如 Debian 的 Jenkins artifact），此时跳过校验。
+     */
+    val sha256ByAbi: Map<String, String> = emptyMap()
 )
 
 /** 发行版分支的支持状态，用于列表标注。 */
@@ -66,6 +77,15 @@ fun ContainerImageEntry.displayLabel(resolvedVersion: String? = null): String =
         .filter { it.isNotBlank() }
         .joinToString(" ")
 
+/**
+ * 已下载的文件是否落后于目录当前版本。
+ * [downloadedVersion] 为空（升级前留下的旧记录）时返回 false——宁可漏提示，也不能把用户刚下好的东西误报成「有新版」。
+ */
+fun hasNewerVersion(downloadedVersion: String?, currentVersion: String): Boolean =
+    !downloadedVersion.isNullOrBlank() &&
+        currentVersion.isNotBlank() &&
+        downloadedVersion != currentVersion
+
 /** 一个下载源：中英文显示名 + 各发行版的前缀（缺失/为空表示该源不提供此发行版）。 */
 @Serializable
 data class ContainerImageSource(
@@ -81,33 +101,88 @@ data class ContainerImageCatalogData(
 )
 
 /**
- * 从内置 assets/container-images.json 加载可下载镜像目录。
+ * 可下载镜像目录，三级来源：**内存 → 仓库磁盘缓存 → 内置 assets**（与 ProviderPresetLibrary 同构）。
+ *
+ * 内置 assets 是发版快照，版本号只会越来越旧；真实版本清单由 CI 每日同步到仓库 data 分支的
+ * [REMOTE_PATH]，[refreshFromNetworkIfStale] 在启动阶段后台拉取并落盘。UI 读取走 [load]，
+ * 纯本地 IO、绝不发网络请求，因此断网首启也能拿到内置基线，不会出现空列表。
+ *
  * 源与镜像分离存储：URL = sources[源][发行版] 前缀 + 条目 path（{abi} 按设备架构替换）。
  */
 @Singleton
 class ContainerImageCatalog @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
-    private var data = ContainerImageCatalogData()
+    private val _catalog = MutableStateFlow(ContainerImageCatalogData())
 
+    /** 目录快照；启动预热拉到新数据后会重新发射，UI 据此自动刷新。 */
+    val catalog: StateFlow<ContainerImageCatalogData> = _catalog.asStateFlow()
+
+    @Volatile
+    private var loaded = false
+
+    @Volatile
+    private var refreshAttempted = false
+
+    /**
+     * 同步读取目录（内存 → 磁盘缓存 → 内置 assets），毫秒级返回、不发网络请求。
+     * 磁盘缓存解析失败或为空时同样回退 assets——宁可给出稍旧的基线，也不能给空列表。
+     *
+     * 取磁盘缓存优先于 assets：缓存来自仓库 data 分支（CI 每日刷新），通常比随 APK 固化的 assets 新。
+     * 唯一例外是「刚升级完 App、而缓存还是旧版拉的」这一小段窗口，此时会短暂显示比 assets 略旧的版本；
+     * [RepoDataFetcher] 的 12h TTL 一过即被网络结果覆盖，属可自愈的取舍，不值得为此引入版本时间戳比对。
+     */
     fun load(): List<ContainerImageEntry> {
-        val raw = runCatching {
-            context.assets.open(ASSET_FILE).bufferedReader().use { it.readText() }
-        }.getOrNull() ?: return emptyList()
-        val parsed = runCatching {
-            json.decodeFromString<ContainerImageCatalogData>(raw)
-        }.getOrNull()
-        data = parsed ?: ContainerImageCatalogData()
-        return data.images
+        if (!loaded) {
+            val fromDisk = runCatching { RepoDataFetcher(context, branch = REMOTE_BRANCH).readLocalCache(REMOTE_PATH) }
+                .getOrNull()
+            _catalog.value = parse(fromDisk) ?: parse(readAsset()) ?: ContainerImageCatalogData()
+            loaded = true
+        }
+        return _catalog.value.images
     }
+
+    /**
+     * 仅供 App 启动阶段（AIEditorApp）在后台协程调用：拉取仓库最新目录并落盘，失败完全静默。
+     * 成功后 [catalog] 会发射新值，已订阅的界面自动拿到新版本号。
+     */
+    suspend fun refreshFromNetworkIfStale() = withContext(Dispatchers.IO) {
+        if (refreshAttempted) return@withContext
+        refreshAttempted = true
+
+        val result = runCatching {
+            RepoDataFetcher(context, branch = REMOTE_BRANCH).fetch(REMOTE_PATH)
+        }.getOrNull()
+        val content = when (result) {
+            is RepoDataFetcher.FetchResult.Success -> result.content
+            is RepoDataFetcher.FetchResult.FallbackDiskCache -> result.content
+            else -> null
+        }
+        val parsed = parse(content)
+        if (parsed != null) {
+            _catalog.value = parsed
+            loaded = true
+        }
+    }
+
+    /** 解析目录 JSON；内容为空或条目为空一律返回 null（调用方据此继续往下一级回退）。 */
+    private fun parse(raw: String?): ContainerImageCatalogData? {
+        if (raw.isNullOrBlank()) return null
+        val parsed = runCatching { json.decodeFromString<ContainerImageCatalogData>(raw) }.getOrNull()
+        return parsed?.takeIf { it.images.isNotEmpty() }
+    }
+
+    private fun readAsset(): String? = runCatching {
+        context.assets.open(ASSET_FILE).bufferedReader().use { it.readText() }
+    }.getOrNull()
 
     /** 全局源 id 列表（保持 JSON 顺序），供右上角源切换展示。 */
     val sourceIds: List<String>
-        get() = data.sources.keys.toList()
+        get() = _catalog.value.sources.keys.toList()
 
     /** 源显示名（按语言键 zh/en 取，缺省回退任意可用名）；源不存在返回 null。 */
     fun sourceName(sourceId: String, lang: String): String? {
-        val names = data.sources[sourceId]?.name ?: return null
+        val names = _catalog.value.sources[sourceId]?.name ?: return null
         return names[lang] ?: names.values.firstOrNull()
     }
 
@@ -122,6 +197,13 @@ class ContainerImageCatalog @Inject constructor(
     fun versionUrlFor(entry: ContainerImageEntry, sourceId: String, abi: String): String? =
         buildUrl(sourceId, entry.distro, entry.versionPath, entry.abiNames, abi)
 
+    /**
+     * 当前设备架构下该条目官方给出的 SHA-256；目录未提供（如 Debian 的 Jenkins artifact）返回 null，
+     * 调用方据此跳过校验而不是当成失败。
+     */
+    fun sha256For(entry: ContainerImageEntry, abi: String): String? =
+        entry.sha256ByAbi[abi]?.takeIf { it.isNotBlank() }
+
     /** 由「源前缀 + 发行版相对路径 + 架构名」拼 URL，任一环节缺失返回 null。 */
     private fun buildUrl(
         sourceId: String,
@@ -131,7 +213,7 @@ class ContainerImageCatalog @Inject constructor(
         abi: String
     ): String? {
         if (path.isBlank()) return null
-        val prefix = data.sources[sourceId]?.distros?.get(distro)
+        val prefix = _catalog.value.sources[sourceId]?.distros?.get(distro)
             ?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
         val abiName = abiNames[abi] ?: return null
         return "$prefix/$path".replace("{abi}", abiName)
@@ -139,6 +221,11 @@ class ContainerImageCatalog @Inject constructor(
 
     companion object {
         private const val ASSET_FILE = "container-images.json"
+
+        /** CI 每日同步的远程目录：仓库 data 分支上的同一份 JSON（与 models.json 同分支）。 */
+        const val REMOTE_BRANCH = "data"
+        const val REMOTE_PATH = "data/container-images.json"
+
         private val json = Json { ignoreUnknownKeys = true }
 
         /** 与 [com.aicode.feature.agent.domain.container.ContainerInstaller] 一致的架构判定：x86 设备走 x86_64，其余走 arm64。 */
