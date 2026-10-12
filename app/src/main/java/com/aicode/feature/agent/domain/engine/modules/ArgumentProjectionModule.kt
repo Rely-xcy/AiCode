@@ -1,12 +1,15 @@
 package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.LlmCall
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.workflow.BULK_ARG_KEYS
 import com.aicode.feature.agent.domain.workflow.TokenEstimator
 import com.aicode.feature.agent.domain.workflow.bulkArgumentExcerptOf
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,18 +48,18 @@ class ArgumentProjectionModule @Inject constructor() : EngineModule {
             if (message !is AgentMessage.AssistantMessage || message.toolCalls.isEmpty()) return@map message
             val rebuiltCalls = message.toolCalls.map { tc ->
                 val projectedArgs = tc.arguments.mapValues { (key, value) ->
-                    val text = (value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    val text = (value as? JsonPrimitive)?.contentOrNull
                         ?: return@mapValues value
                     if (key.lowercase() !in BULK_ARG_KEYS) return@mapValues value
                     if (text.length <= BULK_ARG_THRESHOLD_CHARS) return@mapValues value
                     val path = tc.arguments.entries
                         .firstOrNull { it.key.lowercase() in PATH_ARG_KEYS }
-                        ?.let { (it.value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                        ?.let { (it.value as? JsonPrimitive)?.contentOrNull }
                         ?.takeIf { it.isNotBlank() }
                     val excerpt = bulkArgumentExcerptOf(text, path, BULK_ARG_THRESHOLD_CHARS)
                         ?: return@mapValues value
                     changed = true
-                    kotlinx.serialization.json.JsonPrimitive(excerpt)
+                    JsonPrimitive(excerpt)
                 }
                 if (projectedArgs == tc.arguments) tc else tc.copy(arguments = projectedArgs)
             }
