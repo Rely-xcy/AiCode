@@ -864,6 +864,8 @@
     <string name="container_download_failed">Download failed: %1$s</string>
     <string name="container_download_list_empty">No images available</string>
     <string name="container_download_done">Downloaded</string>
+    <string name="container_download_eol_soon">Support ending soon</string>
+    <string name="container_download_eol_ended">No longer supported</string>
     <string name="container_download_size">Size: %1$s</string>
     <string name="container_download_delete_title">Delete downloaded image</string>
     <string name="container_download_delete_confirm">Delete the downloaded file for "%1$s"? Imported containers will not be able to extract again.</string>

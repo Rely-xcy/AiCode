@@ -22,6 +22,7 @@ import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.agent.domain.container.SshHostKeyPendingException
+import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -51,6 +52,7 @@ import com.aicode.feature.agent.domain.subagent.InjectPart
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
+import com.aicode.feature.settings.data.remote.ContainerImageVersionProbe
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.data.remote.ApkDownloadResult
@@ -418,6 +420,7 @@ class SettingsViewModel @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val containerImageCatalog: ContainerImageCatalog,
     private val containerImageDownloader: ContainerImageDownloader,
+    private val containerImageVersionProbe: ContainerImageVersionProbe,
     private val containerInstaller: ContainerInstaller,
     private val containerOsDetector: ContainerOsDetector,
     private val executionModeRepository: ExecutionModeRepository,
@@ -928,6 +931,13 @@ class SettingsViewModel @Inject constructor(
     private val _sourceUnavailableIds = MutableStateFlow<Set<String>>(emptySet())
     val sourceUnavailableIds: StateFlow<Set<String>> = _sourceUnavailableIds.asStateFlow()
 
+    /**
+     * 运行时探测到的精确版本（entryId → 版本号，如 Debian 的 `12.15`）。
+     * 只有配了 versionPath 且探测成功的条目会出现在表中；其余条目 UI 回退到内置版本号。
+     */
+    private val _imageVersions = MutableStateFlow<Map<String, String>>(emptyMap())
+    val imageVersions: StateFlow<Map<String, String>> = _imageVersions.asStateFlow()
+
     private val _containerImageDownload = MutableStateFlow<ContainerImageDownloadUiState>(ContainerImageDownloadUiState.Idle)
     val containerImageDownload: StateFlow<ContainerImageDownloadUiState> = _containerImageDownload.asStateFlow()
 
@@ -1002,6 +1012,20 @@ class SettingsViewModel @Inject constructor(
                 entries.filter { containerImageCatalog.urlFor(it, sourceId, ContainerImageCatalog.CURRENT_ABI) == null }
                     .map { it.id }.toSet()
             }.collect { _sourceUnavailableIds.value = it }
+        }
+        // 精确版本探测：Debian 之类的条目内置值只有主版本，而 rootfs 内容随上游滚动，
+        // 故按「当前源 + 当前架构」读版本文件补上补丁号。失败静默保留内置版本；
+        // 切源后重探（版本文件 URL 随源变化），collectLatest 顺带取消上一轮未完成的探测。
+        viewModelScope.launch {
+            combine(_imageCatalog, _selectedImageSource) { entries, sourceId -> entries to sourceId }
+                .collectLatest { (entries, sourceId) ->
+                    _imageVersions.value = entries.mapNotNull { entry ->
+                        val url = containerImageCatalog.versionUrlFor(
+                            entry, sourceId, ContainerImageCatalog.CURRENT_ABI
+                        ) ?: return@mapNotNull null
+                        containerImageVersionProbe.probe(url)?.let { entry.id to it }
+                    }.toMap()
+                }
         }
         // 公告按「内容哈希比对」判断是否弹出：首次（无哈希）或内容更新（哈希不一致）即弹。
         viewModelScope.launch {
@@ -2459,20 +2483,23 @@ class SettingsViewModel @Inject constructor(
             url.endsWith(".tgz") -> "tgz"
             else -> "tar.gz"
         }
-        val fileName = "download_${entry.id}_${entry.version}_${System.currentTimeMillis()}.$suffix"
+        // 记录里存「探测到的精确版本」（如 Debian 的 12.15），文件名与后续展示都以此为准，
+        // 避免用户下载到 12.15 却在文件名/容器名里看到 12。
+        val version = _imageVersions.value[entry.id] ?: entry.version
+        val fileName = "download_${entry.id}_${version}_${System.currentTimeMillis()}.$suffix"
         downloadJob = viewModelScope.launch {
             _containerImageDownload.value =
-                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, entry.version, sourceId, 0, 0)
+                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, version, sourceId, 0, 0)
             try {
                 val uri = containerImageDownloader.download(url, fileName) { read, total ->
                     _containerImageDownload.value = ContainerImageDownloadUiState.Downloading(
-                        entry.id, entry.name, entry.version, sourceId, read, total
+                        entry.id, entry.name, version, sourceId, read, total
                     )
                 }
                 // 下载完成即持久化记录，安装与否都保留，跨重启可见。
                 containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri))
                 _containerImageDownload.value =
-                    ContainerImageDownloadUiState.Done(entry.id, entry.name, entry.version, uri)
+                    ContainerImageDownloadUiState.Done(entry.id, entry.name, version, uri)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _containerImageDownload.value = ContainerImageDownloadUiState.Idle
                 throw e
@@ -2497,7 +2524,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val profile = ContainerProfile(
                 id = "custom-${System.currentTimeMillis()}",
-                name = "${entry.name} ${entry.version}",
+                name = entry.displayLabel(_imageVersions.value[entry.id]),
                 rootfsSource = RootfsSource.LocalFile(fileUri),
                 shellPath = null,
                 extraArgs = ContainerProfile.DEFAULT_PROOT_ARGS,

@@ -34,41 +34,42 @@
     {
       "id": "alpine-3.21",
       "name": "Alpine Linux",
-      "version": "3.21.7",
-      "description": "极简 Linux 发行版，rootfs 仅数 MB；与内置 Alpine 同分支",
-      "sizeBytes": 4000000,
+      "version": "3.21.8",
+      "eol": "2026-11-01",
+      "description": "极简 Linux 发行版，rootfs 仅数 MB；与内置 Alpine 同为 3.21 分支，补丁版本更高",
+      "sizeBytes": 3831912,
       "distro": "alpine",
-      "path": "alpine/v3.21/releases/{abi}/alpine-minirootfs-3.21.7-{abi}.tar.gz",
+      "path": "alpine/v3.21/releases/{abi}/alpine-minirootfs-3.21.8-{abi}.tar.gz",
       "abiNames": { "arm64": "aarch64", "x86_64": "x86_64" }
     },
     {
       "id": "alpine-3.22",
       "name": "Alpine Linux",
-      "version": "3.22.5",
+      "version": "3.22.6",
       "description": "极简 Linux 发行版，rootfs 仅数 MB，解压快、占用小",
-      "sizeBytes": 4000000,
+      "sizeBytes": 3969729,
       "distro": "alpine",
-      "path": "alpine/v3.22/releases/{abi}/alpine-minirootfs-3.22.5-{abi}.tar.gz",
+      "path": "alpine/v3.22/releases/{abi}/alpine-minirootfs-3.22.6-{abi}.tar.gz",
       "abiNames": { "arm64": "aarch64", "x86_64": "x86_64" }
     },
     {
       "id": "alpine-3.23",
       "name": "Alpine Linux",
-      "version": "3.23.5",
+      "version": "3.23.6",
       "description": "极简 Linux 发行版，rootfs 仅数 MB，解压快、占用小",
-      "sizeBytes": 4000000,
+      "sizeBytes": 4026314,
       "distro": "alpine",
-      "path": "alpine/v3.23/releases/{abi}/alpine-minirootfs-3.23.5-{abi}.tar.gz",
+      "path": "alpine/v3.23/releases/{abi}/alpine-minirootfs-3.23.6-{abi}.tar.gz",
       "abiNames": { "arm64": "aarch64", "x86_64": "x86_64" }
     },
     {
       "id": "alpine-3.24",
       "name": "Alpine Linux",
-      "version": "3.24.1",
+      "version": "3.24.2",
       "description": "极简 Linux 发行版，rootfs 仅数 MB；当前最新稳定版",
-      "sizeBytes": 4000000,
+      "sizeBytes": 4028030,
       "distro": "alpine",
-      "path": "alpine/v3.24/releases/{abi}/alpine-minirootfs-3.24.1-{abi}.tar.gz",
+      "path": "alpine/v3.24/releases/{abi}/alpine-minirootfs-3.24.2-{abi}.tar.gz",
       "abiNames": { "arm64": "aarch64", "x86_64": "x86_64" }
     },
     {
@@ -76,7 +77,7 @@
       "name": "Ubuntu",
       "version": "20.04.5",
       "description": "Ubuntu 20.04 LTS (Focal) base rootfs",
-      "sizeBytes": 27000000,
+      "sizeBytes": 27763108,
       "distro": "ubuntu",
       "path": "ubuntu-base/releases/20.04/release/ubuntu-base-20.04.5-base-{abi}.tar.gz",
       "abiNames": { "arm64": "arm64", "x86_64": "amd64" }
@@ -86,7 +87,7 @@
       "name": "Ubuntu",
       "version": "22.04.5",
       "description": "Ubuntu 22.04 LTS (Jammy) base rootfs",
-      "sizeBytes": 28000000,
+      "sizeBytes": 29832285,
       "distro": "ubuntu",
       "path": "ubuntu-base/releases/22.04/release/ubuntu-base-22.04.5-base-{abi}.tar.gz",
       "abiNames": { "arm64": "arm64", "x86_64": "amd64" }
@@ -94,11 +95,11 @@
     {
       "id": "ubuntu-24.04",
       "name": "Ubuntu",
-      "version": "24.04.4",
+      "version": "24.04.5",
       "description": "Ubuntu 24.04 LTS (Noble) base rootfs，生态完整，适合作为主力开发环境",
-      "sizeBytes": 29000000,
+      "sizeBytes": 30028293,
       "distro": "ubuntu",
-      "path": "ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-{abi}.tar.gz",
+      "path": "ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-{abi}.tar.gz",
       "abiNames": { "arm64": "arm64", "x86_64": "amd64" }
     },
     {
@@ -106,7 +107,7 @@
       "name": "Ubuntu",
       "version": "26.04.1",
       "description": "Ubuntu 26.04 LTS (Resolute Raccoon) base rootfs，最新 LTS，生态完整",
-      "sizeBytes": 33000000,
+      "sizeBytes": 35092106,
       "distro": "ubuntu",
       "path": "ubuntu-base/releases/26.04/release/ubuntu-base-26.04.1-base-{abi}.tar.gz",
       "abiNames": { "arm64": "arm64", "x86_64": "amd64" }
@@ -114,9 +115,11 @@
     {
       "id": "debian-12",
       "name": "Debian",
-      "version": "12 (bookworm)",
+      "version": "12",
+      "versionSuffix": "(bookworm)",
+      "versionPath": "job/tianon/job/debuerreotype/job/{abi}/lastSuccessfulBuild/artifact/bookworm/rootfs.debian_version",
       "description": "Debian 12 稳定版，Docker 官方镜像同源 rootfs（debuerreotype 构建）",
-      "sizeBytes": 29000000,
+      "sizeBytes": 30627660,
       "distro": "debian",
       "path": "job/tianon/job/debuerreotype/job/{abi}/lastSuccessfulBuild/artifact/bookworm/rootfs.tar.xz",
       "abiNames": { "arm64": "arm64v8", "x86_64": "amd64" }
@@ -124,9 +127,11 @@
     {
       "id": "debian-13",
       "name": "Debian",
-      "version": "13 (trixie)",
+      "version": "13",
+      "versionSuffix": "(trixie)",
+      "versionPath": "job/tianon/job/debuerreotype/job/{abi}/lastSuccessfulBuild/artifact/trixie/rootfs.debian_version",
       "description": "Debian 13 最新稳定版，Docker 官方镜像同源 rootfs（debuerreotype 构建）",
-      "sizeBytes": 31000000,
+      "sizeBytes": 30894916,
       "distro": "debian",
       "path": "job/tianon/job/debuerreotype/job/{abi}/lastSuccessfulBuild/artifact/trixie/rootfs.tar.xz",
       "abiNames": { "arm64": "arm64v8", "x86_64": "amd64" }

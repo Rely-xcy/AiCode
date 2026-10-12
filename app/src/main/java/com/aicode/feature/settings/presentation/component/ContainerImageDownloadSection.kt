@@ -54,6 +54,9 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
+import com.aicode.feature.agent.domain.container.ContainerImageEol
+import com.aicode.feature.agent.domain.container.displayLabel
+import com.aicode.feature.agent.domain.container.eolStatus
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
 import com.aicode.feature.settings.presentation.ContainerImageDownloadUiState
 import compose.icons.FeatherIcons
@@ -89,6 +92,7 @@ private fun distroLogo(distro: String): Painter? = when (distro) {
 @Composable
 internal fun ContainerImageDownloadSection(
     catalog: List<ContainerImageEntry>,
+    imageVersions: Map<String, String>,
     state: ContainerImageDownloadUiState,
     downloadedImages: Map<String, DownloadedImageRecord>,
     sourceUnavailableIds: Set<String>,
@@ -131,6 +135,8 @@ internal fun ContainerImageDownloadSection(
                     val fileExists = record?.let { File(Uri.parse(it.fileUri).path ?: "").exists() } == true
                     DownloadImageRow(
                         entry = entry,
+                        displayName = entry.displayLabel(imageVersions[entry.id]),
+                        eol = entry.eolStatus(),
                         state = state,
                         isDownloaded = record != null && fileExists,
                         onOpenDetail = { detailEntry = entry },
@@ -144,6 +150,8 @@ internal fun ContainerImageDownloadSection(
     detailEntry?.let { entry ->
         ImageDetailSheet(
             entry = entry,
+            displayName = entry.displayLabel(imageVersions[entry.id]),
+            eol = entry.eolStatus(),
             state = state,
             record = downloadedImages[entry.id],
             sourceUnavailable = entry.id in sourceUnavailableIds,
@@ -166,7 +174,7 @@ internal fun ContainerImageDownloadSection(
         AlertDialog(
             onDismissRequest = { deleteEntry = null },
             title = { Text(stringResource(R.string.container_download_delete_title)) },
-            text = { Text(stringResource(R.string.container_download_delete_confirm, "${entry.name} ${entry.version}")) },
+            text = { Text(stringResource(R.string.container_download_delete_confirm, entry.displayLabel(imageVersions[entry.id]))) },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(entry.id)
@@ -180,10 +188,36 @@ internal fun ContainerImageDownloadSection(
     }
 }
 
-/** 列表行：图标 + 名称（已下载带徽章）/简介（下载中显示进度条）+ 右箭头；所有行可左滑，未下载时删除按钮禁用。 */
+/** 行内状态徽章：淡色底 + 语义色文字（「已下载」与 EOL 标注共用）。 */
+@Composable
+private fun StatusBadge(text: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    ) {
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
+    }
+}
+
+/** 分支支持状态徽章：即将停止支持（警告色）/ 已停止支持（错误色）；无需标注时什么都不画。 */
+@Composable
+private fun EolBadge(eol: ContainerImageEol) {
+    val (textRes, color) = when (eol) {
+        ContainerImageEol.SOON -> R.string.container_download_eol_soon to MaterialTheme.semanticColors.warning
+        ContainerImageEol.ENDED -> R.string.container_download_eol_ended to MaterialTheme.colorScheme.error
+        ContainerImageEol.NONE -> return
+    }
+    StatusBadge(text = stringResource(textRes), color = color)
+}
+
+/** 列表行：图标 + 名称（已下载/EOL 带徽章）/简介（下载中显示进度条）+ 右箭头；所有行可左滑，未下载时删除按钮禁用。 */
 @Composable
 private fun DownloadImageRow(
     entry: ContainerImageEntry,
+    displayName: String,
+    eol: ContainerImageEol,
     state: ContainerImageDownloadUiState,
     isDownloaded: Boolean,
     onOpenDetail: () -> Unit,
@@ -238,7 +272,7 @@ private fun DownloadImageRow(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "${entry.name} ${entry.version}",
+                        text = displayName,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -246,19 +280,12 @@ private fun DownloadImageRow(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     if (isDownloaded) {
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 6.dp)
-                                .background(MaterialTheme.semanticColors.success.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.container_download_done),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.semanticColors.success
-                            )
-                        }
+                        StatusBadge(
+                            text = stringResource(R.string.container_download_done),
+                            color = MaterialTheme.semanticColors.success
+                        )
                     }
+                    EolBadge(eol)
                 }
                 downloading?.takeIf { it.entryId == entry.id }?.let { d ->
                     Spacer(modifier = Modifier.height(6.dp))
@@ -307,6 +334,8 @@ private fun DownloadImageRow(
 @Composable
 private fun ImageDetailSheet(
     entry: ContainerImageEntry,
+    displayName: String,
+    eol: ContainerImageEol,
     state: ContainerImageDownloadUiState,
     record: DownloadedImageRecord?,
     sourceUnavailable: Boolean,
@@ -364,7 +393,7 @@ private fun ImageDetailSheet(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "${entry.name} ${entry.version}",
+                        text = displayName,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -374,6 +403,19 @@ private fun ImageDetailSheet(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.semanticColors.success
                         )
+                    }
+                    when (eol) {
+                        ContainerImageEol.SOON -> Text(
+                            text = stringResource(R.string.container_download_eol_soon),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.warning
+                        )
+                        ContainerImageEol.ENDED -> Text(
+                            text = stringResource(R.string.container_download_eol_ended),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        ContainerImageEol.NONE -> Unit
                     }
                 }
             }
