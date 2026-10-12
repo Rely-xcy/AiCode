@@ -58,6 +58,7 @@ import com.aicode.feature.settings.data.remote.ApkVerifyResult
 import com.aicode.feature.settings.data.remote.ForkUpdateCheckService
 import com.aicode.feature.settings.data.remote.UpdateAsset
 import com.aicode.feature.settings.data.remote.UpdateCheckResult
+import com.aicode.feature.settings.data.remote.UpdateCheckService
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
