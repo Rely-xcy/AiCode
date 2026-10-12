@@ -39,22 +39,36 @@ jobs:
 
           cp data/container-images.json "$RUNNER_TEMP/container-images.json"
 
-          # 与 data 分支现存文件比对，无变化则跳过（避免无意义提交）。
-          git fetch origin data || true
-          if git show origin/data:data/container-images.json > "$RUNNER_TEMP/container-images.old.json" 2>/dev/null; then
-            if cmp -s "$RUNNER_TEMP/container-images.old.json" data/container-images.json; then
+          # data 分支由多个同步任务共同写入（models.json / container-images.json），因此必须基于其
+          # 现有内容增量重建、只覆盖本次负责的文件。关键：**远端已有 data 分支时，取不到就中止发布**，
+          # 绝不能退化成空树快照——那会把别的任务刚发布的文件删掉。只有远端确实还没有该分支时才从空树创建。
+          set +e
+          git ls-remote --exit-code --heads origin data > /dev/null 2>&1
+          ls_remote_code=$?
+          set -e
+          case "$ls_remote_code" in
+            0) base_tree="origin/data" ;;
+            2) base_tree=""; echo "远端尚无 data 分支，将首次创建" ;;
+            *) echo "无法确认 data 分支状态（git ls-remote 退出码 $ls_remote_code），中止发布以免覆盖其它数据文件"; exit 1 ;;
+          esac
+
+          if [ -n "$base_tree" ]; then
+            git fetch origin data
+            # 与远端现存文件比对，无变化则跳过（避免无意义提交）
+            if git show origin/data:data/container-images.json > "$RUNNER_TEMP/container-images.old.json" 2>/dev/null \
+               && cmp -s "$RUNNER_TEMP/container-images.old.json" data/container-images.json; then
               echo "镜像目录无变动，跳过提交"
               exit 0
             fi
           fi
 
-          # data 分支由多个同步任务共同写入（models.json / container-images.json），
-          # 因此必须保留其现有内容，只覆盖本次负责的文件——不能 orphan 清空重建，
-          # 否则会把别的任务刚发布的文件删掉。
-          # 同时仍以「单个无父提交」发布，保持 data 分支只有最新快照、不累积历史。
-          git checkout --orphan data-snapshot
-          if git rev-parse --verify origin/data >/dev/null 2>&1; then
-            git read-tree origin/data
+          # 仍以「单个无父提交」发布，保持 data 分支只有最新快照、不累积历史。
+          # 用带随机后缀的临时分支名：checkout --orphan 遇到同名分支会直接 fatal，
+          # 固定名字会让重跑或日后再合并两个同步任务时炸掉。
+          snapshot_branch="data-snapshot-$$-$RANDOM"
+          git checkout --orphan "$snapshot_branch"
+          if [ -n "$base_tree" ]; then
+            git read-tree "$base_tree"
           else
             git read-tree --empty
           fi
