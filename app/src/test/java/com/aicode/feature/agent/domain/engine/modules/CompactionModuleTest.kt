@@ -15,6 +15,7 @@ import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -175,7 +176,7 @@ class CompactionModuleTest {
 
         // 没过硬线：不折叠、不精简，返回 null（编排不变），消息逐条原对象
         assertNull(call)
-        verify(exactly = 0) { compactor.compact(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { compactor.compact(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
         val usage = assertNotNull(h.usageHolder.usage.value["s1"])
         assertTrue(usage.currentTokens >= usage.softThreshold)
         assertTrue(usage.currentTokens < usage.hardThreshold)
