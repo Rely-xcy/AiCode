@@ -100,6 +100,21 @@ data class ContainerImageCatalogData(
     val images: List<ContainerImageEntry> = emptyList()
 )
 
+/** 目录 JSON 统一用宽松解析：新增字段（如后续加 generatedAt）不该让老版本 App 整份目录报废。 */
+private val catalogJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * 解析目录 JSON，供 [ContainerImageCatalog] 的三级读取逐级尝试。
+ *
+ * 内容为空、JSON 非法、或解析出来一个条目都没有，一律返回 null——调用方据此继续往下一级回退。
+ * 这是「断网首启也不能出现空列表」的兜底点：任何一级坏数据都必须能被识别出来而不是当成有效目录。
+ */
+internal fun parseContainerImageCatalog(raw: String?): ContainerImageCatalogData? {
+    if (raw.isNullOrBlank()) return null
+    val parsed = runCatching { catalogJson.decodeFromString<ContainerImageCatalogData>(raw) }.getOrNull()
+    return parsed?.takeIf { it.images.isNotEmpty() }
+}
+
 /**
  * 可下载镜像目录，三级来源：**内存 → 仓库磁盘缓存 → 内置 assets**（与 ProviderPresetLibrary 同构）。
  *
@@ -136,7 +151,9 @@ class ContainerImageCatalog @Inject constructor(
         if (!loaded) {
             val fromDisk = runCatching { RepoDataFetcher(context, branch = REMOTE_BRANCH).readLocalCache(REMOTE_PATH) }
                 .getOrNull()
-            _catalog.value = parse(fromDisk) ?: parse(readAsset()) ?: ContainerImageCatalogData()
+            _catalog.value = parseContainerImageCatalog(fromDisk)
+                ?: parseContainerImageCatalog(readAsset())
+                ?: ContainerImageCatalogData()
             loaded = true
         }
         return _catalog.value.images
@@ -158,18 +175,11 @@ class ContainerImageCatalog @Inject constructor(
             is RepoDataFetcher.FetchResult.FallbackDiskCache -> result.content
             else -> null
         }
-        val parsed = parse(content)
+        val parsed = parseContainerImageCatalog(content)
         if (parsed != null) {
             _catalog.value = parsed
             loaded = true
         }
-    }
-
-    /** 解析目录 JSON；内容为空或条目为空一律返回 null（调用方据此继续往下一级回退）。 */
-    private fun parse(raw: String?): ContainerImageCatalogData? {
-        if (raw.isNullOrBlank()) return null
-        val parsed = runCatching { json.decodeFromString<ContainerImageCatalogData>(raw) }.getOrNull()
-        return parsed?.takeIf { it.images.isNotEmpty() }
     }
 
     private fun readAsset(): String? = runCatching {
@@ -225,8 +235,6 @@ class ContainerImageCatalog @Inject constructor(
         /** CI 每日同步的远程目录：仓库 data 分支上的同一份 JSON（与 models.json 同分支）。 */
         const val REMOTE_BRANCH = "data"
         const val REMOTE_PATH = "data/container-images.json"
-
-        private val json = Json { ignoreUnknownKeys = true }
 
         /** 与 [com.aicode.feature.agent.domain.container.ContainerInstaller] 一致的架构判定：x86 设备走 x86_64，其余走 arm64。 */
         val CURRENT_ABI: String = if (Build.SUPPORTED_ABIS.any { it.contains("x86") }) "x86_64" else "arm64"
