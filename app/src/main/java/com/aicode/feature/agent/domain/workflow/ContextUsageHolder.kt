@@ -33,7 +33,7 @@ data class ContextUsage(
     val reportedTokens: Int,
     /** 判定用的模型窗口，也是界面百分比的分母。 */
     val contextLimit: Int,
-    /** 实际生效的软精简线（已被档位上限约束过）。 */
+    /** 实际生效的软精简线（已被档位上限约束过）；只作展示兼容，请求链路已不消费。 */
     val softThreshold: Int,
     /** 实际生效的硬压缩线；[hardEnabled] 为 false 时为 0。 */
     val hardThreshold: Int,

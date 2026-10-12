@@ -18,8 +18,8 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * 上下文预算的测试：窗口档位、硬/软线、兜底线、保留最近原文的取值，
- * 以及 agent 工作流侧对它们的应用（软精简、兜底截断、只写模型副本、摘录与守卫）。
+ * 上下文预算的测试：窗口档位、硬线、兜底线、保留最近原文的取值，
+ * 以及 agent 工作流侧对它们的应用（兜底截断、摘录与守卫；软精简已随阶段 1 移除）。
  *
  * 被测类型是 [ModelContextPolicy]（settings 域）与 [ContextCompactor]：预算规则原先由 agent 域的
  * ContextBudgetPolicy 承载，引擎化重构时并入了 ModelContextPolicy，本文件名沿用至今，
@@ -43,50 +43,52 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `硬上限按档位留出 headroom`() {
-        assertEquals(54_000, ModelContextPolicy.tierFor(64_000).hardThreshold)
-        assertEquals(108_000, ModelContextPolicy.tierFor(128_000).hardThreshold)
+    fun `硬上限按档位留出 headroom（约窗口的 90%）`() {
+        assertEquals(57_600, ModelContextPolicy.tierFor(64_000).hardThreshold)
+        assertEquals(115_200, ModelContextPolicy.tierFor(128_000).hardThreshold)
     }
 
     @Test
     fun `有效硬线取百分比与档位上限的较小值`() {
         val window = 128_000
         val tier = ModelContextPolicy.tierFor(window)
-        // 85% × 128k = 108_800 > 档位上限 108_000 → 取上限
-        assertEquals(108_000, minOf(window * 85 / 100, tier.hardThreshold))
+        // 85% × 128k = 108_800 < 档位上限 115_200 → 取百分比
+        assertEquals(108_800, minOf(window * 85 / 100, tier.hardThreshold))
         // 50% × 128k = 64_000 < 上限 → 取百分比
         assertEquals(64_000, minOf(window * 50 / 100, tier.hardThreshold))
+        // 100% 也会被封在档位上限（~90%）
+        assertEquals(115_200, minOf(window * 100 / 100, tier.hardThreshold))
     }
 
     @Test
     fun `生效阈值与判定同源：压缩模块与界面取同一份`() {
-        // 128K 走 GENEROUS：档位上限 108K 把 85% 的 108.8K 压下来
+        // 128K 走 GENEROUS：档位上限 115.2K 高于 85% 的 108.8K，按百分比生效
         val generous = ModelContextPolicy.thresholds(128_000, softPercent = 40, hardPercent = 85)
         assertEquals(128_000, generous.contextLimit)
-        assertEquals(108_000, generous.hard)
+        assertEquals(108_800, generous.hard)
         assertEquals(51_200, generous.soft)
         assertTrue(generous.hardEnabled)
 
-        // 1M 窗口：85% = 850K，没碰上档位上限 980K
+        // 1M 窗口：85% = 850K，档位上限 900K
         val million = ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 85)
         assertEquals(850_000, million.hard)
         assertEquals(400_000, million.soft)
 
-        // 64K 走 STANDARD：上限 54K 把 54.4K 压下来
-        assertEquals(54_000, ModelContextPolicy.thresholds(64_000, softPercent = 40, hardPercent = 85).hard)
+        // 64K 走 STANDARD：85% = 54.4K，档位上限 57.6K → 取百分比
+        assertEquals(54_400, ModelContextPolicy.thresholds(64_000, softPercent = 40, hardPercent = 85).hard)
     }
 
     @Test
     fun `用户把硬线设为 100% 也会被档位上限封顶`() {
-        // 1M 窗口仍只到 980K（给输出与提示词留 headroom）
-        assertEquals(980_000, ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 100).hard)
+        // 1M 窗口封在档位上限 900K（窗口的 90%，给输出与提示词留 headroom）
+        assertEquals(900_000, ModelContextPolicy.thresholds(1_000_000, softPercent = 40, hardPercent = 100).hard)
     }
 
     @Test
     fun `软线始终低于硬线`() {
-        // 软线也填到 100%：被封在硬线之下，不会抢在硬压缩前面触发
+        // 软线只作只读兼容展示（请求链路已不消费），但取值规则保持封在硬线之下
         val thresholds = ModelContextPolicy.thresholds(128_000, softPercent = 100, hardPercent = 85)
-        assertEquals(107_999, thresholds.soft)
+        assertEquals(108_799, thresholds.soft)
         assertTrue(thresholds.soft < thresholds.hard)
     }
 
@@ -112,13 +114,13 @@ class ContextBudgetPolicyTest {
 
     @Test
     fun `设置页显示的三个数取自同一份策略`() {
-        // 「实际触发线 850,000（窗口 1,000,000，档位上限 980,000）」：三个数都由这里算出，不另算一套
+        // 「实际触发线 850,000（窗口 1,000,000，档位上限 900,000）」：三个数都由这里算出，不另算一套
         val window = 1_000_000
         val thresholds = ModelContextPolicy.thresholds(window, softPercent = 40, hardPercent = 85)
 
         assertEquals(850_000, thresholds.hard)
         assertEquals(1_000_000, thresholds.contextLimit)
-        assertEquals(980_000, ModelContextPolicy.tierFor(window).hardThreshold)
+        assertEquals(900_000, ModelContextPolicy.tierFor(window).hardThreshold)
         assertEquals(400_000, thresholds.soft)
     }
 
@@ -129,150 +131,6 @@ class ContextBudgetPolicyTest {
         assertEquals(60_000, ModelContextPolicy.preserveRecentTokens(1_000_000))
         // 小窗口：25% 低于下限，收敛到 2k
         assertEquals(2_000, ModelContextPolicy.preserveRecentTokens(4_000))
-    }
-
-    @Test
-    fun `软精简在预算内时原样返回`() {
-        val messages = listOf(tool("a".repeat(400)))
-        val result = compactor().softTrim(messages, targetTokens = 10_000)
-        assertSame(messages, result)
-    }
-
-    @Test
-    fun `软精简只裁到够用就停`() {
-        // 两条各 40k 字符（约 10k token），目标是裁掉一条多一点就能落回
-        val first = tool("a".repeat(40_000))
-        val second = tool("b".repeat(40_000))
-        val messages = listOf(first, second)
-
-        val result = compactor().softTrim(messages, targetTokens = 12_000)
-
-        // 从最长的开始裁：第一条被裁短，第二条保持原对象不动
-        assertNotNull((result[0] as AgentMessage.ToolResultMessage).modelResult)
-        assertSame(second, result[1])
-    }
-
-    @Test
-    fun `软精简不碰最近三轮的工具内容`() {
-        // 历史（三轮以前）：一个大工具输出，应当被精简
-        val history = tool("a".repeat(40_000))
-        // 最近三轮：每轮「用户消息 + 大工具输出」，都不该被动
-        val recent = (1..3).flatMap { round ->
-            listOf(
-                AgentMessage.UserMessage(content = "第 $round 轮"),
-                tool("b".repeat(40_000))
-            )
-        }
-        val messages = listOf(history) + recent
-
-        val result = compactor().softTrim(messages, targetTokens = 1)
-
-        // 只有历史那条被精简，最近三轮的六条一律原对象不动
-        assertNotNull((result[0] as AgentMessage.ToolResultMessage).modelResult)
-        for (index in 1 until result.size) {
-            assertSame(messages[index], result[index], "最近三轮里的第 $index 条不该被软精简")
-        }
-    }
-
-    /**
-     * 投影前沿（已投影消息里最靠后那条）之前的历史本轮不再回头动：改动点只前进，
-     * 前缀缓存的失效范围逐次收窄。
-     *
-     * 旧实现的可动区间是 `0 until historyEnd`：第一次削了 toolB（体量最大），第二次会把更早的
-     * toolA 也一起削掉，等于把改动点往回推——之前省下的缓存也跟着一起作废。
-     */
-    @Test
-    fun `已投影之后才是可动区，更早的历史不再回头重写`() {
-        val toolA = tool("a".repeat(20_000), id = "tool-a")
-        val toolB = tool("b".repeat(30_000), id = "tool-b")
-        val messages = listOf(toolA, toolB) + recentRounds()
-        val compactor = compactor()
-
-        // 第一次只要求削掉一丁点：按体量先削最大的 toolB，更早的 toolA 不动
-        val once = compactor.softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
-        assertNotNull((once[1] as AgentMessage.ToolResultMessage).modelResult, "体量最大的 toolB 应先被削")
-        assertSame(toolA, once[0])
-
-        // 第二次预算再紧也够不到前沿之前：toolA 仍为 null，且整体无改动 → 返回原引用
-        val twice = compactor.softTrim(once, targetTokens = 1)
-        assertNull((twice[0] as AgentMessage.ToolResultMessage).modelResult, "前沿之前的 toolA 不该被回头重写")
-        assertSame(once, twice)
-    }
-
-    /**
-     * 粗筛（H）：阈值线上的工具结果必须仍被削 —— 粗筛不能把它当“太短”跳过。
-     *
-     * 3001 字符刚过 softTrim 自己的门限（`current.length <= SOFT_TRIM_TOOL_CHARS` 就跳过），
-     * 是历史里唯一该被削的一条。
-     */
-    @Test
-    fun `软精简不因粗筛漏掉刚过阈值的工具结果`() {
-        val borderline = tool("a".repeat(3_001))
-        val messages = listOf(borderline) + recentRounds()
-
-        val result = compactor().softTrim(messages, targetTokens = 1)
-
-        assertNotNull((result[0] as AgentMessage.ToolResultMessage).modelResult, "刚过阈值的工具结果必须仍被软精简")
-    }
-
-    /** 粗筛（H）的另一头：阈值（含）以下的工具结果本来就不该动，整体应返回原引用。 */
-    @Test
-    fun `软精简不碰阈值及以下的工具结果`() {
-        val messages = listOf(tool("a".repeat(3_000))) + recentRounds()
-
-        assertSame(messages, compactor().softTrim(messages, targetTokens = 1))
-    }
-
-    /** 粗筛（H）：工具参数的阈值与 args 裁剪预算同一口径（SOFT_TRIM_TOOL_CHARS）。 */
-    @Test
-    fun `软精简约在参数阈值线上的助手消息仍会被缩`() {
-        val borderline = bigWriteFileCall("a".repeat(3_001))
-        val messages = listOf(borderline) + recentRounds()
-
-        val result = compactor().softTrim(messages, targetTokens = 1)
-
-        val trimmed = result[0] as AgentMessage.AssistantMessage
-        assertNotNull(trimmed.toolCalls.single().modelArguments, "刚过阈值的工具参数必须仍被缩")
-        // 原文一字不动：执行、UI、落库读的都是 arguments
-        assertEquals(3_001, (trimmed.toolCalls.single().arguments["content"] as JsonPrimitive).content.length)
-    }
-
-    @Test
-    fun `软精简不碰参数阈值及以下的助手消息`() {
-        val messages = listOf(bigWriteFileCall("a".repeat(3_000))) + recentRounds()
-
-        assertSame(messages, compactor().softTrim(messages, targetTokens = 1))
-    }
-
-    /** 最近三轮的占位消息：把前面的历史挡在保护线之外，自身不会被软精简。 */
-    private fun recentRounds(): List<AgentMessage> = (1..3).flatMap { round ->
-        listOf(
-            AgentMessage.UserMessage(content = "第 $round 轮"),
-            tool("b".repeat(400))
-        )
-    }
-
-    @Test
-    fun `软精简幂等且不动 UI 用的完整内容`() {
-        val original = tool("a".repeat(40_000))
-        val compactor = compactor()
-
-        val once = compactor.softTrim(listOf(original), targetTokens = 1)
-        val twice = compactor.softTrim(once, targetTokens = 1)
-
-        // 第二次没有可裁内容 → 返回同一引用
-        assertSame(once, twice)
-        // result（UI 与持久化）始终是完整内容，只有 modelResult 变短
-        val trimmed = once[0] as AgentMessage.ToolResultMessage
-        assertEquals(40_000, trimmed.result.length)
-        assertTrue(trimmed.modelResult!!.length < 40_000)
-    }
-
-    @Test
-    fun `不碰非工具消息`() {
-        val user = AgentMessage.UserMessage(content = "x".repeat(40_000))
-        val result = compactor().softTrim(listOf(user), targetTokens = 1)
-        assertSame(user, result[0])
     }
 
     @Test
@@ -292,60 +150,30 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `软精简参数只写模型副本，原文一字不动`() {
+    fun `摘录是纯函数：原文不动，重复计算结果一致`() {
         val text = "x".repeat(20_000)
-        val original = AgentMessage.AssistantMessage(
-            id = "m1",
-            content = "",
-            toolCalls = listOf(
-                ToolCall(
-                    id = "c1",
-                    name = "write",
-                    arguments = mapOf(
-                        "path" to JsonPrimitive("a.txt"),
-                        "content" to JsonPrimitive(text)
-                    )
-                )
-            )
-        )
-        val compactor = compactor()
+        val excerpt1 = assertNotNull(bulkArgumentExcerptOf(text, "a.txt", limit = 4_000))
+        val excerpt2 = assertNotNull(bulkArgumentExcerptOf(text, "a.txt", limit = 4_000))
 
-        val once = compactor.softTrim(listOf(original), targetTokens = 1)
-        val trimmedCall = (once[0] as AgentMessage.AssistantMessage).toolCalls.single()
-
-        // arguments（执行 / 界面 / 落库用）保持原文；小字段（path）也不动
-        assertEquals(original.toolCalls.single().arguments, trimmedCall.arguments)
-        assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
-        assertEquals("a.txt", (trimmedCall.arguments["path"] as JsonPrimitive).content)
-
-        // 只有模型那一份被换成摘录（原文照旧能从磁盘读回来，摘录只是为了省 token）
-        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
-        assertTrue(modelContent.length < text.length, "副本应该比原文短")
+        // 原文字符串不可变，这里钉住「同一输入永远得到同一输出」（投影确定性 → 缓存友好）
+        assertEquals(excerpt1, excerpt2)
+        assertTrue(excerpt1.length < text.length, "摘录应该比原文短")
         assertTrue(
-            modelContent.startsWith(BULK_EXCERPT_HEAD),
-            "大块正文应换成可读摘录，实际：${modelContent.take(80)}"
+            excerpt1.startsWith(BULK_EXCERPT_HEAD),
+            "大块正文应换成可读摘录，实际：${excerpt1.take(80)}"
         )
-        assertEquals(trimmedCall.modelArguments, trimmedCall.effectiveArguments)
-
-        // 幂等：第二次仍以 arguments 为输入，算出同一份副本，不会越削越短
-        assertEquals(once, compactor.softTrim(once, targetTokens = 1))
     }
 
     @Test
     fun `摘录带禁令，模型侧副本没有可直接回写的正文`() {
         val text = "x".repeat(20_000)
-        val original = bigWriteFileCall(text)
 
-        val trimmedCall =
-            (compactor().softTrim(listOf(original), targetTokens = 1)[0] as AgentMessage.AssistantMessage).toolCalls.single()
-        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
+        val modelContent = assertNotNull(bulkArgumentExcerptOf(text, "a.txt", limit = 4_000))
 
-        // 执行/落库用的原文一字不动，只有模型那一份换成摘录
-        assertEquals(text, (trimmedCall.arguments["content"] as JsonPrimitive).content)
         assertTrue(modelContent.contains("严禁"), "摘录要明确禁止回写，实际：$modelContent")
         assertTrue(modelContent.contains("readFile") && modelContent.contains("a.txt"), "摘录必须给出把全文读回来的指针")
 
-        // 软精简产出的摘录，必须正好是执行边界守卫认得的形态（否则守卫漏拦）
+        // 指针化产出的摘录，必须正好是执行边界守卫认得的形态（否则守卫漏拦）
         assertEquals(
             "content",
             omittedBulkArgumentKeyOf(
@@ -368,9 +196,8 @@ class ContextBudgetPolicyTest {
         assertTrue(text.length > 4_000)
         assertTrue(text.contains(middleLine))
 
-        val once = compactor().softTrim(listOf(bigWriteFileCall(text)), targetTokens = 1)
-        val trimmedCall = (once[0] as AgentMessage.AssistantMessage).toolCalls.single()
-        val modelContent = (assertNotNull(trimmedCall.modelArguments)["content"] as JsonPrimitive).content
+        val once = assertNotNull(bulkArgumentExcerptOf(text, "a.txt", limit = 4_000))
+        val modelContent = once
 
         // 形态：哨兵 + 一行说明 + 保留的原文 + 一行省略标记 + 保留的原文
         assertTrue(modelContent.startsWith(BULK_EXCERPT_HEAD), modelContent.take(80))
@@ -404,8 +231,8 @@ class ContextBudgetPolicyTest {
         assertTrue(head.length + tail.length > modelContent.length / 2, "摘录应以保留的原文内容为主")
         assertTrue(modelContent.length * 2 <= text.length, "摘录 ${modelContent.length} / 原文 ${text.length}")
 
-        // 幂等：重复精简仍以 arguments 为输入，算出同一份摘录
-        assertEquals(once, compactor().softTrim(once, targetTokens = 1))
+        // 幂等：同一输入重复计算，算出同一份摘录
+        assertEquals(once, bulkArgumentExcerptOf(text, "a.txt", limit = 4_000))
     }
 
     @Test
@@ -463,46 +290,6 @@ class ContextBudgetPolicyTest {
         // 普通正文、非 bulk 字段
         assertNull(omittedBulkArgumentKeyOf(mapOf("content" to JsonPrimitive("fun main() { println(1) }"))))
         assertNull(omittedBulkArgumentKeyOf(mapOf("path" to JsonPrimitive(BULK_EXCERPT_HEAD))))
-    }
-
-    @Test
-    fun `近期被引用的历史工具内容不按体量优先削`() {
-        // 历史里两条体积接近的大块参数：legacy.txt 没人再用，Main.kt 最近三轮还在改
-        val legacyCall = bigCall("c-legacy", "legacy.txt", "x".repeat(40_000))
-        val pinnedCall = bigCall("c-pinned", "Main.kt", "y".repeat(41_000))
-        val messages = listOf(legacyCall, pinnedCall) + recentRoundsTouching("Main.kt")
-
-        // 只要求削掉一丁点（比整份估算少 1 token）：够用就停，所以排序里的第一条会被削，其余不动
-        val result = compactor().softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
-
-        assertNotNull(
-            (result[0] as AgentMessage.AssistantMessage).toolCalls.single().modelArguments,
-            "没人再用的历史大块参数应当先被削"
-        )
-        assertSame(messages[1], result[1], "最近三轮还在改的同一文件，不该排在体积前面被削")
-
-        // 只降级不豁免：预算真的不够时，受保护的那些仍要削得动，否则软精简不再收敛
-        val squeezed = compactor().softTrim(messages, targetTokens = 1)
-        assertNotNull((squeezed[1] as AgentMessage.AssistantMessage).toolCalls.single().modelArguments)
-    }
-
-    @Test
-    fun `近期被引用的工具结果同样降级到最后`() {
-        // 工具结果自身不带路径，靠它的调用 id 反查回当初读写的文件
-        val messages = listOf(
-            readCall("c-legacy", "legacy.txt"),
-            tool("x".repeat(40_000), id = "c-legacy", toolName = "readFile"),
-            readCall("c-other", "other.txt"),
-            tool("z".repeat(40_000), id = "c-other", toolName = "readFile"),
-            readCall("c-pinned", "Main.kt"),
-            tool("y".repeat(41_000), id = "c-pinned", toolName = "readFile")
-        ) + recentRoundsTouching("Main.kt")
-
-        // 同样只要求削掉一丁点：排序第一条（没人再用的那条）被削，近期引用的那条不动
-        val result = compactor().softTrim(messages, targetTokens = TokenEstimator.estimateMessages(messages) - 1)
-
-        assertNotNull((result[1] as AgentMessage.ToolResultMessage).modelResult, "没人再用的历史工具输出应当先被削")
-        assertSame(messages[5], result[5], "近期还在用的文件那条结果不该抢先被削")
     }
 
     @Test
@@ -608,11 +395,11 @@ class ContextBudgetPolicyTest {
     /**
      * 真机那一轮的回归：上一轮 真实 352,982 / 原始估算 523,798，本轮历史形状相同、估算仍是 523,798。
      *
-     * 校准把「上一轮确认的高估 170,816」减掉 → 判定 352,982（窗口 1,000,000 的 35.3%）→ **不触发软精简**。
-     * 修复前判定 = max(352,982, 523,798) = 523,798（52.4%）≥ 软线 400,000 → 白跑一轮软精简。
+     * 校准把「上一轮确认的高估 170,816」减掉 → 判定 352,982。软精简已移除，这里钉住的是
+     * 校准算法本身：判定值必须按校准后的数走，而不是原始估算。
      */
     @Test
-    fun `上一轮的高估被校准掉后不再触发软精简`() {
+    fun `上一轮的高估被校准掉后判定值回到真实水平`() {
         val real = 352_982
         val estimated = 523_798
         val calibrated = TokenEstimator.calibrated(estimated, baselineEstimate = 523_798, baselineUsage = real)
@@ -641,55 +428,7 @@ class ContextBudgetPolicyTest {
 
         assertEquals(300_000, calibrated)
         assertTrue(maxOf(380_000, calibrated) < thresholds.soft) // 真实 38 万仍在线下
-        assertTrue(maxOf(500_000, calibrated) >= thresholds.soft) // 真实 50 万 → 触发软精简
-    }
-
-    private fun bigWriteFileCall(text: String) = AgentMessage.AssistantMessage(
-        id = "m1",
-        content = "",
-        toolCalls = listOf(
-            ToolCall(
-                id = "c1",
-                name = "writeFile",
-                arguments = mapOf(
-                    "path" to JsonPrimitive("a.txt"),
-                    "content" to JsonPrimitive(text)
-                )
-            )
-        )
-    )
-
-    private fun bigCall(id: String, path: String, text: String) = AgentMessage.AssistantMessage(
-        id = "a-$id",
-        content = "",
-        toolCalls = listOf(
-            ToolCall(
-                id = id,
-                name = "writeFile",
-                arguments = mapOf("path" to JsonPrimitive(path), "content" to JsonPrimitive(text))
-            )
-        )
-    )
-
-    private fun readCall(id: String, path: String) = AgentMessage.AssistantMessage(
-        id = "a-$id",
-        content = "",
-        toolCalls = listOf(ToolCall(id = id, name = "readFile", arguments = mapOf("path" to JsonPrimitive(path))))
-    )
-
-    /** 最近三轮：每轮一个「用户消息 + 改 [path] 的工具调用 + 结果」，足够撑出近期引用。 */
-    private fun recentRoundsTouching(path: String) = (1..3).flatMap { round ->
-        listOf(
-            AgentMessage.UserMessage(content = "第 $round 轮"),
-            AgentMessage.AssistantMessage(
-                id = "recent-$round",
-                content = "",
-                toolCalls = listOf(
-                    ToolCall(id = "recent-call-$round", name = "editFile", arguments = mapOf("path" to JsonPrimitive(path)))
-                )
-            ),
-            tool("ok", id = "recent-call-$round", toolName = "editFile")
-        )
+        assertTrue(maxOf(500_000, calibrated) >= thresholds.soft) // 真实 50 万 → 超过兼容展示线
     }
 
     /** 多行正文：摘录切点按行对齐，给守卫测试用一份头尾可辨认的文本。 */

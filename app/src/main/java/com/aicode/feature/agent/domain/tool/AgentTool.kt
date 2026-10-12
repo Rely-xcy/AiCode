@@ -155,10 +155,11 @@ data class ToolCall(
     val name: String,
     val arguments: Map<String, JsonElement>,
     /**
-     * 软精简后的参数投影，只用于发给模型的请求；[arguments] 始终是原文（UI/落库/执行都用它）。
+     * 参数投影后的副本，只用于发给模型的请求；[arguments] 始终是原文（UI/落库/执行都用它）。
      *
-     * 与工具结果的 modelResult 对称：toolCalls 是 JSON 文本列，旧数据没有本字段，
-     * 因此必须可空 + 有默认值，反序列化才能回落（不需要 DB 迁移）。
+     * 旧软精简（已移除）曾写入本字段；入口指针化改为每轮从原文重算、不落库，
+     * 本字段只承载存量数据（阶段 3 删）。与工具结果的 modelResult 对称：toolCalls 是 JSON 文本列，
+     * 旧数据没有本字段，因此必须可空 + 有默认值，反序列化才能回落（不需要 DB 迁移）。
      */
     val modelArguments: Map<String, JsonElement>? = null
 )

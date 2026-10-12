@@ -14,8 +14,6 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.presentation.MessageRole
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -27,9 +25,8 @@ import javax.inject.Singleton
 /**
  * 上下文变换器：只负责「怎么改消息」，不负责「什么时候改」。
  *
- * 阈值、档位、软硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
- * 本类只提供三个变换，便于单独验证：
- * - [softTrim]：不调模型的投影式精简（只改喂模型的 modelResult / modelArguments，并把改动写回库行，见 [persistProjections]）；
+ * 阈值、档位、硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
+ * 本类只提供两个变换，便于单独验证：
  * - [compact]：调摘要模型折叠早期对话，并把结果落库；
  * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库）。
  *
@@ -46,20 +43,8 @@ class ContextCompactor @Inject constructor(
     private companion object {
         const val TAG = "ContextCompactor"
 
-        /** 落库工具调用投影用的编码器；与回放侧的 `Json { ignoreUnknownKeys = true }` 同形。 */
-        val JSON = Json
-
-        /** 软精简时单条工具输出的保留上限（比硬压缩宽松，尽量少丢信息）。 */
-        const val SOFT_TRIM_TOOL_CHARS = 3_000
-
-        /** 软精简后追加在尾部的标记，用于幂等判断。 */
-        const val SOFT_TRIM_MARKER = "\n[工具输出已精简以节省上下文]"
-
-        /**
-         * 软精简不动的最近轮数：这几轮里的工具调用与工具输出一律保留。
-         * 软线只有 40%，离撞窗还远，没必要为它牺牲还在用的内容。
-         */
-        const val SOFT_TRIM_PROTECTED_TURNS = 3
+        /** 送进摘要请求前对单条工具输出的保留上限（只在摘要请求内生效，不改历史）。 */
+        const val TRIM_FOR_SUMMARY_CHARS = 3_000
 
         /** 兜底截断的单条消息下限：再短就没法干活了，宁可让它超窗。 */
         const val MIN_MESSAGE_TOKENS = 64
@@ -70,284 +55,7 @@ class ContextCompactor @Inject constructor(
     }
 
     /**
-     * 软精简：把历史里超长的工具输出与工具参数裁短，直到估算落回 [targetTokens] 以内。
-     *
-     * 四个要点：
-     * 1. 只改喂模型的那一份，不动落库/UI 的内容：工具输出改 `modelResult`（`result` 保持完整），
-     *    工具参数改 `modelArguments`（`arguments` 保持完整），两者都是 copy() 出新对象，原对象不动；
-     *    改动的几条随行写回库行（见 [persistProjections]），回放才能把投影带出、前沿跨轮次保留；
-     * 2. **只削已结束的轮次**：范围是本轮起点（最后一条用户消息）之前的历史；本轮的工具调用
-     *    与工具输出一律不动——刚写进去的文件正文体积最大，只看体量会把它排在第一个削掉，
-     *    而下一次调用最需要的恰恰是它（也是"占位符被拄回磁盘"那个 bug 的根源）。
-     *    40% 是软线，真逼近窗口时由硬压缩与 enforceWindowLimit 兑底。
-     * 3. 每一轮里先处理工具参数（纯冗余：文件已写到磁盘、正文能 read 回来），再处理工具输出；
-     *    同一类按长度从大到小裁、够用就停——不做无差别全裁，避免把还有用的输出也削掉；
-     * 4. 近期引用只降优先级：最近几轮用过同一文件/同一调用 id 的历史内容排到最后（见
-     *    [isRecentlyReferenced]）。它是「模型现在还在对着它干活」的弱证据，不够格免死（软线
-     *    本就是该省的地方），但能让体积排序不再拿正在用的内容开刀；跳过哪几条会写进日志；
-     * 5. 幂等：已带标记/已重建的不再处理，重复调用不会把内容越裁越短；并且只动「投影前沿」之后
-     *    的内容（前沿 = 已投影消息里最靠后那条），改动点只前进、不回退，缓存失效范围逐次收窄。
-     *
-     * 未产生变化时返回原列表引用，便于调用方判断要不要更新状态。
-     */
-    fun softTrim(messages: List<AgentMessage>, targetTokens: Int): List<AgentMessage> {
-        if (messages.isEmpty()) return messages
-        var estimate = TokenEstimator.estimateMessages(messages)
-        if (estimate <= targetTokens) return messages
-
-        var changed = false
-        val result = messages.toMutableList()
-
-        // 工具参数投影：write/edit 把整个文件塞进 arguments，而这段正文对模型是纯冗余——
-        // 文件已经在磁盘上，需要时 read 回来即可，但每一轮请求都要原样再发一遍。
-        // 这就是工具结果那层 modelResult 的对称做法：精简结果写进 modelArguments，
-        // arguments 一字不动，所以 UI / 落库 / 真正执行拿到的永远是原文。
-        // 幂等靠「永远以 arguments 为输入」：重复精简只会算出同一份副本，不会越削越短。
-        // 只削「已结束的轮次」：范围是最近 SOFT_TRIM_PROTECTED_TURNS 轮之前的历史。
-        // 最近几轮从用户消息开始的一切——助手发出的工具调用、以及它们的工具输出——一律不动：
-        // 1. 它们是模型此刻正在用的内容。刚写进去的文件正文往往体积最大，只看体量会把它排在
-        //    第一个削掉，而下一次调用最需要的恰恰是它（“占位符被拄回磁盘”那个 bug 的根源）；
-        // 2. 40% 是软线，离窗口上限还远，没理由为此牺牲正在用的内容。真逼近窗口时由硬压缩
-        //    （85% / 92%）与 enforceWindowLimit 兑底，那才是该动近几轮的时机。
-        val userIndices = messages.indices.filter { messages[it] is AgentMessage.UserMessage }
-        val historyEnd = when {
-            userIndices.size > SOFT_TRIM_PROTECTED_TURNS ->
-                userIndices[userIndices.size - SOFT_TRIM_PROTECTED_TURNS]
-            userIndices.isNotEmpty() -> userIndices.first()
-            else -> messages.size
-        }
-        if (historyEnd <= 0) return messages
-
-        // 投影前沿：已经投影过的消息里最靠后那一条的位置。它之前的历史本轮一律不再动。
-        // 幂等只能保证同一条消息不会被越削越短，保证不了新的一次裁剪不会回头去改更早的消息——
-        // 而前缀缓存以第一处改动为界，往回动一次就把那处往后的缓存全部作废（连之前省下的也搭上）。
-        // 边界只前进，改动点才只前进，失效范围才会逐次收窄。
-        val frontier = messages.indexOfLast { it.isSoftProjected() }
-        val trimFrom = if (frontier < 0) 0 else frontier
-
-        // 近期引用：最近几轮还在操作的文件与用过的本地调用 id。命中的历史内容只降级（排到最后），
-        // 不做豁免：预算真不够时仍要削得动，否则软精简就失去意义。
-        val callPaths = toolCallPathsById(messages)
-        val recent = collectRecentReferences(messages, historyEnd)
-        val argCandidates = (trimFrom until historyEnd)
-            .filter { index -> isSoftTrimArgCandidate(messages[index]) }
-            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
-        val argDeferred = argCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
-        val resultCandidates = (trimFrom until historyEnd)
-            .filter { index -> isSoftTrimResultCandidate(messages[index]) }
-            .sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
-        val resultDeferred = resultCandidates.filter { isRecentlyReferenced(messages[it], recent, callPaths) }
-
-        val trimmedIndices = mutableSetOf<Int>()
-        for (index in argCandidates.filterNot { it in argDeferred } + argDeferred) {
-            if (estimate <= targetTokens) break
-            val message = result[index] as AgentMessage.AssistantMessage
-            val rebuilt = message.toolCalls.map { call -> rebuildToolCallArguments(call, SOFT_TRIM_TOOL_CHARS) }
-            if (rebuilt == message.toolCalls) continue
-            val trimmed = message.copy(toolCalls = rebuilt)
-            estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
-            result[index] = trimmed
-            trimmedIndices.add(index)
-            changed = true
-        }
-
-        for (index in resultCandidates.filterNot { it in resultDeferred } + resultDeferred) {
-            if (estimate <= targetTokens) break
-            val message = result[index] as AgentMessage.ToolResultMessage
-            val current = message.modelResult ?: message.result
-            if (current.length <= SOFT_TRIM_TOOL_CHARS || current.endsWith(SOFT_TRIM_MARKER)) continue
-            val trimmed = message.copy(modelResult = headTailTrim(current, SOFT_TRIM_TOOL_CHARS) + SOFT_TRIM_MARKER)
-            estimate -= TokenEstimator.estimateMessage(message) - TokenEstimator.estimateMessage(trimmed)
-            result[index] = trimmed
-            trimmedIndices.add(index)
-            changed = true
-        }
-
-        // 不动的理由要能让人查得下去：只说“有 N 条被保护”没法核，得把工具名、
-        // 路径/调用 id 一并打出来。
-        val deferred = argDeferred + resultDeferred
-        if (changed && deferred.isNotEmpty()) {
-            val skipped = deferred.count { it !in trimmedIndices }
-            FileLogger.i(
-                TAG,
-                "软精简把 ${deferred.size} 条近期被引用的历史工具内容排到最后（最近 $SOFT_TRIM_PROTECTED_TURNS 轮用到同一文件或同一调用 id），" +
-                    "本次跳过 $skipped 条（估算 $estimate / 目标 $targetTokens）：" +
-                    deferred.joinToString("、", limit = 8) { describeToolMessage(messages[it]) }
-            )
-        }
-        // 投影落库：只写本轮真正改动的几条，让投影前沿跨轮次保留（见 [persistProjections]）。
-        if (changed) persistProjections(result, trimmedIndices)
-
-        return if (changed) result else messages
-    }
-
-    /**
-     * 把本轮真正改动的投影写回库行（只写软精简这一条线）。
-     *
-     * 为什么落库：投影此前只活在内存态——每轮重建历史即丢失，软精简要从头重算，投影前沿恒为 -1，
-     * 「改动点只前进」也就只在单轮内成立。写回后回放能把投影带出（见 MessagePersistenceUseCase），
-     * 前沿跨轮次保留，前缀缓存的失效范围才真正逐次收窄。
-     *
-     * 只处理 [indices] 里真正被改的那几条：发送前兜底的截断不在此列（它走 [enforceWindowLimit]，
-     * 不落库）——兜底是逼近窗口时的应急硬截，落库会把应急形态永久冻住。
-     *
-     * 只写模型可见的那一份：工具结果写 modelResult（result 保持原文），工具参数写回该行的
-     * toolCallsJson（arguments 仍是原文，只多出 modelArguments）。执行、权限、界面、落库正文
-     * 读的都是 arguments / result，一字不动。
-     *
-     * 库行 id：assistant 行就是消息 id；tool 行是 "tool_<callId>"（见界面落库侧）。本轮新造、
-     * 尚未落库的消息 id 为空，且都在软精简区间之外，跳过即可。
-     *
-     * 用非挂起的 DAO 方法：softTrim 是同步变换，调用点固定跑在 [com.aicode.di.CompactionWork]
-     * 的后台调度器上（Dispatchers.Default），不会撞上 Room 的主线程检查。写失败只记日志——
-     * 投影本身仍照常返回，不影响本次请求。
-     *
-     * 已知取舍：投影一旦落库，回放时它就是「已投影」，而前沿只前进、不回收——用户换成更大窗口的
-     * 模型后，这些旧投影仍按原样发出去（不会因为窗口变大而自动还原全文）。这不是硬伤：投影本身
-     * 留了头尾可读内容与 readFile 回读指针（见 [bulkArgumentExcerptOf]），模型需要时能读回原文，
-     * 只是上下文里少了一部分冗余正文；真要还原，开新会话或回退到投影之前即可。
-     */
-    private fun persistProjections(messages: List<AgentMessage>, indices: Set<Int>) {
-        for (index in indices) {
-            when (val message = messages.getOrNull(index)) {
-                is AgentMessage.AssistantMessage ->
-                    if (message.id.isNotBlank() && message.toolCalls.any { it.modelArguments != null }) {
-                        runCatching {
-                            agentMessageDao.updateToolCallsJson(message.id, JSON.encodeToString(message.toolCalls))
-                        }.onFailure { FileLogger.w(TAG, "写回工具参数投影失败（行 ${message.id}）", it) }
-                    }
-
-                is AgentMessage.ToolResultMessage -> {
-                    val projection = message.modelResult
-                    if (message.id.isNotBlank() && projection != null) {
-                        runCatching {
-                            agentMessageDao.updateModelResult("tool_${message.id}", projection)
-                        }.onFailure { FileLogger.w(TAG, "写回工具结果投影失败（行 tool_${message.id}）", it) }
-                    }
-                }
-
-                is AgentMessage.UserMessage -> Unit
-
-                null -> Unit
-            }
-        }
-    }
-
-    /**
-     * 软精简粗筛（工具参数）：只保留**真有可能被削**的消息。
-     *
-     * 判据与 [rebuildToolCallArguments] 的跳过条件逐字对应，所以是等价改写、不是近似：
-     * 它只在「某个参数值的长度超过本次预算」时才改动调用，而 softTrim 给的预算就是
-     * [SOFT_TRIM_TOOL_CHARS]（大块正文类再受 [BULK_ARG_LIMIT_CHARS] 封顶，两个值都 ≥ 3000，
-     * 取小仍是 [SOFT_TRIM_TOOL_CHARS]）。摘录省不下时退回占位说明，同样是「值变短了」。
-     *
-     * 为什么用字符数而不是 token：[softTrim] 自己的门限就是字符数
-     * （`current.length <= SOFT_TRIM_TOOL_CHARS` 就跳过），所以两者不可能因为 CJK / 拉丁的
-     * 字符-token 比差异而分歧。
-     */
-    private fun isSoftTrimArgCandidate(message: AgentMessage): Boolean {
-        if (message !is AgentMessage.AssistantMessage || message.toolCalls.isEmpty()) return false
-        return message.toolCalls.any { call ->
-            call.arguments.values.any { value -> value.argumentText().length > SOFT_TRIM_TOOL_CHARS }
-        }
-    }
-
-    /**
-     * 软精简粗筛（工具结果）：同样对齐裁剪循环的跳过条件
-     * （`current.length <= SOFT_TRIM_TOOL_CHARS` 或已带 [SOFT_TRIM_MARKER]）。
-     *
-     * 注意这里的 `modelResult ?: result` **不是** `modelToolResultText(...)` 的投影：
-     * 软精简的门限看的就是这两个字段之一，用投影长度会偏短（投影只留一句话）→ 可能漏削。
-     */
-    private fun isSoftTrimResultCandidate(message: AgentMessage): Boolean {
-        if (message !is AgentMessage.ToolResultMessage) return false
-        val current = message.modelResult ?: message.result
-        return current.length > SOFT_TRIM_TOOL_CHARS && !current.endsWith(SOFT_TRIM_MARKER)
-    }
-
-    /**
-     * 这条消息是不是已经被软精简投影过。
-     *
-     * 工具结果认 [SOFT_TRIM_MARKER]：发送前兜底（[enforceWindowLimit]）也会写 `modelResult`，
-     * 但不带这个标记，不会被误当成本模块的投影而把前沿推得太靠后。工具参数看是否已经重建过
-     * `modelArguments`（软精简与兜底共用 [rebuildToolCallArguments]，这里区分不开，而兜底只在
-     * 逼近窗口时才跑，不是常态）。
-     *
-     * 用来定位「投影前沿」：已投影消息里最靠后那一条的位置，就是本轮不许再回头越过的边界。
-     */
-    private fun AgentMessage.isSoftProjected(): Boolean = when (this) {
-        is AgentMessage.AssistantMessage -> toolCalls.any { it.modelArguments != null }
-        is AgentMessage.ToolResultMessage -> modelResult?.endsWith(SOFT_TRIM_MARKER) == true
-        is AgentMessage.UserMessage -> false
-    }
-
-    /**
-     * 最近几轮引用到的文件路径与工具调用 id。
-     *
-     * 判据只看工具调用参数：它是「模型此刻在操作什么」最直接的证据，不猜语义、不读自然语言，
-     * 所以结果确定、可解释。ids 里也收下工具结果自带的 id：同一段历史被重复回放时
-     * （压缩失败重试、存档回读）历史消息会与近轮拿到同一个 id，那一份同样属于「还在用」。
-     */
-    private data class RecentReferences(val paths: Set<String>, val ids: Set<String>)
-
-    private fun collectRecentReferences(messages: List<AgentMessage>, from: Int): RecentReferences {
-        val paths = mutableSetOf<String>()
-        val ids = mutableSetOf<String>()
-        for (index in from until messages.size) {
-            when (val message = messages[index]) {
-                is AgentMessage.AssistantMessage -> message.toolCalls.forEach { call ->
-                    ids.add(call.id)
-                    toolArgumentPathOf(call.arguments)?.let(paths::add)
-                }
-
-                is AgentMessage.ToolResultMessage -> ids.add(message.id)
-                is AgentMessage.UserMessage -> {}
-            }
-        }
-        return RecentReferences(paths, ids)
-    }
-
-    /** 全部历史里「工具调用 id → 目标路径」：工具结果自身不带路径，靠它的 id 反查回那次调用。 */
-    private fun toolCallPathsById(messages: List<AgentMessage>): Map<String, String> {
-        val paths = mutableMapOf<String, String>()
-        messages.forEach { message ->
-            if (message is AgentMessage.AssistantMessage) {
-                message.toolCalls.forEach { call ->
-                    toolArgumentPathOf(call.arguments)?.let { paths[call.id] = it }
-                }
-            }
-        }
-        return paths
-    }
-
-    /** 这条历史内容是不是「最近几轮还在引用」的：碰过同一文件，或带同一个工具调用 id。 */
-    private fun isRecentlyReferenced(
-        message: AgentMessage,
-        recent: RecentReferences,
-        callPaths: Map<String, String>
-    ): Boolean = when (message) {
-        is AgentMessage.AssistantMessage ->
-            message.id in recent.ids || message.toolCalls.any { call ->
-                call.id in recent.ids || toolArgumentPathOf(call.arguments)?.let { it in recent.paths } == true
-            }
-
-        is AgentMessage.ToolResultMessage ->
-            message.id in recent.ids || callPaths[message.id]?.let { it in recent.paths } == true
-
-        is AgentMessage.UserMessage -> false
-    }
-
-    /** 日志里的身份描述：工具名 + 调用 id，够定位是哪一条，不打印正文。 */
-    private fun describeToolMessage(message: AgentMessage): String = when (message) {
-        is AgentMessage.AssistantMessage ->
-            message.toolCalls.joinToString("+") { "${it.name}#${it.id}" }.ifEmpty { "助手消息#${message.id}" }
-
-        is AgentMessage.ToolResultMessage -> "${message.toolName}#${message.id}"
-        is AgentMessage.UserMessage -> "用户消息#${message.id}"
-    }
-
-    /**
-     * 发送前兜底：软精简/硬压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
+     * 发送前兜底：硬压缩之后估算仍逼近窗口时，对超长消息本身做硬截断。
      *
      * 压缩只能把老消息收进摘要，动不了「单条消息本身就超窗」——tail 至少要保留一条，
      * 而那条可能是一次巨大的工具输出或超长粘贴。不兜底就只能让请求硬撞窗口上限。
@@ -898,8 +606,8 @@ class ContextCompactor @Inject constructor(
         return trimmed.map { msg ->
             when {
                 msg is AgentMessage.UserMessage && msg.images.isNotEmpty() -> msg.copy(images = emptyList())
-                msg is AgentMessage.ToolResultMessage && (msg.modelResult ?: msg.result).length > SOFT_TRIM_TOOL_CHARS ->
-                    msg.copy(result = msg.result.take(SOFT_TRIM_TOOL_CHARS) + "\n[Tool output truncated for compaction]")
+                msg is AgentMessage.ToolResultMessage && msg.result.length > TRIM_FOR_SUMMARY_CHARS ->
+                    msg.copy(result = msg.result.take(TRIM_FOR_SUMMARY_CHARS) + "\n[Tool output truncated for compaction]")
 
                 else -> msg
             }
@@ -1029,7 +737,7 @@ internal val BULK_ARG_KEYS = setOf(
 private val PATH_ARG_KEYS = setOf("path", "file_path", "filepath", "file")
 
 /**
- * 软精简留下的占位说明（整段替换体）。
+ * 旧软精简（已移除）留下的占位说明（整段替换体）；入口指针化省不下时也退回这一形态。
  *
  * 文案里必须带那句禁令：模型看到占位说明后，可能把它当成「文件正文」抄进新的 writeFile 调用，
  * 照抄执行就会把占位文字写进磁盘（已实际发生过）。禁令只是降低概率，真正兜底的是执行边界的
@@ -1106,7 +814,7 @@ internal fun bulkArgumentExcerptOf(text: String, path: String?, limit: Int): Str
         append('\n')
         append(tail)
     }
-    // 摘录必须显著短于原文：调用方（软精简的估算记账、兜底截断的等比换算）都假定换过之后更短。
+    // 摘录必须显著短于原文：兜底截断的等比换算等调用方都假定换过之后更短。
     if (excerpt.length * 2 > text.length) return null
     return excerpt
 }

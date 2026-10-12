@@ -5,7 +5,7 @@ object ModelContextPolicy {
     const val MIN_PRESERVE_RECENT_TOKENS = 2_000
     const val MAX_PRESERVE_RECENT_TOKENS = 60_000
 
-    /** 兜底线（发送前硬截断超长消息）占窗口的比例：软精简与硬压缩都做完仍超过该比例时才用。 */
+    /** 兜底线（发送前硬截断超长消息）占窗口的比例：硬压缩做完仍超过该比例时才用。 */
     const val GUARD_BUDGET_PERCENT = 92
 
     /** 保留最近原文的预算占窗口比例：留够原文，压缩后模型才不会「不记得」刚发生的事。 */
@@ -16,7 +16,7 @@ object ModelContextPolicy {
         /** < 32K：不自动压缩，靠提示用户新建会话。 */
         DISABLED,
 
-        /** 32K–64K：只做软精简（截断历史工具输出），不调摘要模型。 */
+        /** 32K–64K：不做硬压缩（该档不再有软精简，只靠入口指针化 + 发送前兜底续命）。 */
         SOFT_ONLY,
 
         /** 64K–128K：软精简 + 摘要压缩。 */
@@ -49,13 +49,13 @@ object ModelContextPolicy {
 
         contextWindow < 128_000 -> TierPolicy(
             tier = Tier.STANDARD,
-            hardThreshold = contextWindow - 10_000,
+            hardThreshold = contextWindow - contextWindow / 10,
             preserveRecentTokens = preserveRecentTokens(contextWindow)
         )
 
         else -> TierPolicy(
             tier = Tier.GENEROUS,
-            hardThreshold = contextWindow - 20_000,
+            hardThreshold = contextWindow - contextWindow / 10,
             preserveRecentTokens = preserveRecentTokens(contextWindow)
         )
     }
@@ -87,9 +87,11 @@ object ModelContextPolicy {
      * 用户设置的两个百分比 → 实际生效阈值。
      *
      * 生效值 = min(窗口 × 用户百分比, 该档位的绝对上限)：档位上限是为了给输出与提示词留 headroom，
-     * 大窗口下用户设的 85% 可能被压到更低（如 128K 窗口：85% = 108.8K 被上限 108K 压住）。
-     * 软线必须严格低于硬线，否则软精简永远轮不到（硬压缩先到）；窗口太小、档位不允许硬压缩时
-     * 软线按窗口 90% 封顶。
+     * 大窗口下用户设的 85% 可能被压到更低（如 64K 窗口：档位上限 90% = 57.6K 高于 54.4K，不压；
+     * 百分比填得更高时被封在档位上限）。硬线设计目标为 ~90%（上下文压缩重设计 §7）。
+     *
+     * `softPercent` 与 [Thresholds.soft] 是软精简阈值的只读兼容入口（阶段 1 后请求链路已不消费
+     * 软线），保留只为不破坏既有形状与界面取数，仍按旧规则算出。
      */
     fun thresholds(contextLimit: Int, softPercent: Int, hardPercent: Int): Thresholds {
         val tier = tierFor(contextLimit)
