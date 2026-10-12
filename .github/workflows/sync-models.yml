@@ -9,9 +9,9 @@ on:
 permissions:
   contents: write
 
-# 同一时刻只允许一次同步，避免两次运行撞车后互相覆盖 data 分支。
+# 与 sync-container-images 共用同一 group：两者都写 data 分支，串行执行避免并发互相覆盖。
 concurrency:
-  group: sync-models
+  group: sync-data-branch
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 备份新生成的文件，随后清空工作区改用 orphan 单提交发布，避免机器产物污染 main。
+          # 备份新生成的文件，随后改用 orphan 单提交发布，避免机器产物污染 main。
           cp data/models.json "$RUNNER_TEMP/models.json"
 
           # 与 data 分支现存文件比对，无变化则跳过（避免无意义提交）。
@@ -49,12 +49,18 @@ jobs:
             fi
           fi
 
-          # orphan 分支承载数据：每次覆盖成单个提交，data 分支始终只有最新快照。
+          # data 分支由多个同步任务共同写入（models.json / container-images.json），
+          # 因此必须保留其现有内容，只覆盖本次负责的文件——不能 orphan 清空重建，
+          # 否则会把别的任务刚发布的文件删掉。
+          # 同时仍以「单个无父提交」发布，保持 data 分支只有最新快照、不累积历史。
           git checkout --orphan data-snapshot
-          git rm -rf --cached . > /dev/null
-          git clean -fdx > /dev/null
+          if git rev-parse --verify origin/data >/dev/null 2>&1; then
+            git read-tree origin/data
+          else
+            git read-tree --empty
+          fi
           mkdir -p data
           cp "$RUNNER_TEMP/models.json" data/models.json
-          git add data/models.json
-          git commit -m "chore(data): 同步 models.dev 完整元数据"
+          git add -f data/models.json
+          git commit -q -m "chore(data): 同步 models.dev 完整元数据"
           git push -f origin HEAD:data
