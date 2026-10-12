@@ -8,9 +8,7 @@ import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.presentation.MessageRole
-import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -21,7 +19,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -193,14 +190,12 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     /**
-     * 软精简投影落库后跨轮回放：带出的是投影版（modelResult / modelArguments），
-     * 而原文（result / arguments）一字未动——“模型可见那份 / 落库那份”分离在回放侧仍成立。
-     *
-     * 同时钉住“投影前沿跨轮次保留”的前提：回放拿到的必须是投影版，否则下一轮会把已落库的
-     * 投影当新内容重算。
+     * 旧投影字段（modelResult / modelArguments）的读取路径保留：库里已有的投影值随回放带出，
+     * 而原文（result / arguments）一字未动——「模型可见那份 / 落库那份」分离在回放侧仍成立。
+     * 软精简已随阶段 1 移除，不再有新写入；本用例直接写库模拟阶段 1 之前的存量数据。
      */
     @Test
-    fun softTrimProjectionPersistsAndSurvivesReplay() = runTest {
+    fun legacyProjectionPersistsAndSurvivesReplay() = runTest {
         val dao = db.agentMessageDao()
         val callId = "call-1"
         val bigText = "a".repeat(5_000)
@@ -234,35 +229,45 @@ class MessagePersistenceUseCaseHistoryTest {
                     toolCallId = callId,
                     toolName = "writeFile"
                 ),
-                // 三条用户消息把上面两条推到最近三轮保护线之外，软精简才会动它们。
+                // 三条用户消息模拟一段历史会话，与投影无关。
                 user("u1", timestamp = 200, content = "一"),
                 user("u2", timestamp = 300, content = "二"),
                 user("u3", timestamp = 400, content = "三")
             )
         )
 
-        val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
-        val compactor = ContextCompactor(
-            agentMessageDao = dao,
-            systemPromptProvider = mockk(relaxed = true),
-            llmCallRecordDao = mockk(relaxed = true),
-            compactedHistoryArchive = mockk(relaxed = true)
-        )
-        // targetTokens=1 逼出软精简：保护线之前的两条（工具参数与工具结果）都会被削并写回库。
+        // 模拟阶段 1 之前的存量数据：软精简已移除，直接把投影写进库行。
         // 落库走的是非挂起 DAO（生产路径在 Dispatchers.Default 上），测试要切到 IO 才不撞
         // Room 的主线程检查。
-        val trimmed = withContext(Dispatchers.IO) { compactor.softTrim(history, targetTokens = 1) }
-        assertTrue(trimmed !== history)
+        withContext(Dispatchers.IO) {
+            dao.updateModelResult("tool_$callId", bigText.take(1_000))
+            dao.updateToolCallsJson(
+                "assistant-1",
+                json.encodeToString(
+                    listOf(
+                        ToolCall(
+                            id = callId,
+                            name = "writeFile",
+                            arguments = mapOf(
+                                "path" to JsonPrimitive("a.txt"),
+                                "content" to JsonPrimitive(bigText)
+                            ),
+                            modelArguments = mapOf("content" to JsonPrimitive(bigText.take(1_000)))
+                        )
+                    )
+                )
+            )
+        }
 
         // 换一个实例绕过 buildHistory 的内存缓存，读回库里的最新形态。
         val replayed = MessagePersistenceUseCase(dao, db).buildHistory(SESSION, NO_PENDING_MARKER)
 
         val tool = replayed.filterIsInstance<AgentMessage.ToolResultMessage>().single()
-        assertNotNull("落库后回放应带出 modelResult 投影", tool.modelResult)
+        assertNotNull("存量投影应随回放带出 modelResult", tool.modelResult)
         assertEquals(bigText, tool.result)
 
         val call = replayed.filterIsInstance<AgentMessage.AssistantMessage>().single().toolCalls.single()
-        assertNotNull("落库后回放应带出 modelArguments 投影", call.modelArguments)
+        assertNotNull("存量投影应随回放带出 modelArguments", call.modelArguments)
         assertEquals(bigText, (call.arguments["content"] as JsonPrimitive).content)
     }
 

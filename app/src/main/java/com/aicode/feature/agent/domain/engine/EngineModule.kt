@@ -49,7 +49,7 @@ data class EngineContext(
  * 窗口与模型信息由调用方递进来（引擎不自己解析模型目录）：[windowProvider] 是决定
  * 「上下文快撑满谁」的主聊天模型，[summaryProvider] 是执行摘要生成的压缩专用模型，
  * 两者分离避免小窗口压缩模型导致过早压缩；[summaryProvider] 为 null 表示本轮
- * 只能做不调模型的软精简与兜底。
+ * 只做发送前兜底。
  */
 data class LlmCall(
     val messages: List<AgentMessage>,

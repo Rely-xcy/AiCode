@@ -64,18 +64,18 @@ class ModelContextPolicyTest {
     }
 
     @Test
-    fun tierFor_standard_leaves10kHeadroom() {
+    fun tierFor_standard_capAt90Percent() {
         val policy = ModelContextPolicy.tierFor(64_000)
         assertEquals(ModelContextPolicy.Tier.STANDARD, policy.tier)
-        assertEquals(54_000, policy.hardThreshold)
+        assertEquals(57_600, policy.hardThreshold)
     }
 
     @Test
-    fun tierFor_generous_leaves20kHeadroom() {
+    fun tierFor_generous_capAt90Percent() {
         val policy = ModelContextPolicy.tierFor(128_000)
         assertEquals(ModelContextPolicy.Tier.GENEROUS, policy.tier)
-        assertEquals(108_000, policy.hardThreshold)
-        // 1M 窗口同档：上限 = 窗口 - 20k
-        assertEquals(980_000, ModelContextPolicy.tierFor(1_000_000).hardThreshold)
+        assertEquals(115_200, policy.hardThreshold)
+        // 1M 窗口同档：上限 = 窗口的 90%
+        assertEquals(900_000, ModelContextPolicy.tierFor(1_000_000).hardThreshold)
     }
 }
