@@ -384,7 +384,9 @@ def main() -> int:
         return 1
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
+    # newline="\n"：Windows 上 Python 默认把 \n 写成 \r\n，会让本地生成结果与仓库里的 LF 版本不一致，
+    # 而 CI 的“无变化则跳过提交”判定依赖逐字节比对
+    with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
         f.write("\n")
     print(f"已写出 {args.out}（{len(payload['images'])} 个条目）")
