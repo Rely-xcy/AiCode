@@ -32,8 +32,8 @@ class ToolOutputStore @Inject constructor(
     private companion object {
         const val TAG = "ToolOutputStore"
         const val OUTPUT_DIR = "tool-output"
-        const val HEAD_CHARS = 20_000
-        const val TAIL_CHARS = 20_000
+        const val HEAD_CHARS = 8_000
+        const val TAIL_CHARS = 2_000
         const val MAX_INLINE_CHARS = HEAD_CHARS + TAIL_CHARS
         val LARGE_TEXT_FIELDS = listOf("output", "content", "text", "stdout", "stderr", "body", "result")
         val TIMESTAMP_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
