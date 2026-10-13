@@ -4,6 +4,7 @@ import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.testutil.TestFileAccessProvider
 import kotlinx.coroutines.test.runTest
@@ -27,7 +28,7 @@ class WriteFileToolStaleWriteTest {
     private val fileAccess = TestFileAccessProvider()
     private val versions = FileVersionRegistry()
 
-    private fun tool() = WriteFileTool(fileAccess, WorkspaceFileLock(), versions)
+    private fun tool() = WriteFileTool(fileAccess, WorkspaceWriteSignal(), WorkspaceFileLock(), versions)
 
     private fun context(sessionId: String) = AgentContext(
         currentFile = null,

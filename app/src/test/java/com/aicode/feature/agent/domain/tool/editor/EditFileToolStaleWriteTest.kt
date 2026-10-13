@@ -4,6 +4,7 @@ import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.testutil.TestFileAccessProvider
@@ -33,7 +34,7 @@ class EditFileToolStaleWriteTest {
     private val fileAccess = TestFileAccessProvider()
     private val versions = FileVersionRegistry()
 
-    private fun tool() = EditFileTool(fileAccess, WorkspaceFileLock(), versions)
+    private fun tool() = EditFileTool(fileAccess, WorkspaceWriteSignal(), WorkspaceFileLock(), versions)
 
     private fun context(sessionId: String) = AgentContext(
         currentFile = null,
@@ -155,7 +156,7 @@ class EditFileToolStaleWriteTest {
             override fun fingerprint(path: String): String? =
                 throw IllegalStateException("模拟：文件过大，无法计算指纹")
         }
-        val guardedTool = EditFileTool(throwing, WorkspaceFileLock(), versions)
+        val guardedTool = EditFileTool(throwing, WorkspaceWriteSignal(), WorkspaceFileLock(), versions)
         // 先登记一条版本，确保校验逻辑真的会走到 fingerprint 调用
         versions.record("s1", fileAccess.toDisplayPath(file.path), "sha256:whatever")
 
