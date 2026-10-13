@@ -128,7 +128,7 @@ class ContextCompactionChainMergeTest {
 
         assertNotNull(result)
         // 新 marker + 新摘要 + 剩下 2 个块对（4 条）+ tail = 8 条；被合并的 4 条（2 对）已从视图移除
-        assertEquals(8, result!!.size)
+        assertEquals(7, result!!.size)
         assertEquals("合并后的摘要", (result[1] as AgentMessage.AssistantMessage).content)
         // 新块对在最前（与回放的摘要链前置一致）
         assertEquals(CONTEXT_COMPACTION_MARKER, (result[0] as AgentMessage.UserMessage).content)

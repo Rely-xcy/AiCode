@@ -36,8 +36,9 @@ class ContextBudgetPolicyTest {
 
     @Test
     fun `小窗口不启用硬压缩`() {
+        // 只有 <32K（DISABLED）不启用；32K 以上并入 STANDARD（90%），随软精简删除不再有例外档。
         assertEquals(0, ModelContextPolicy.tierFor(16_000).hardThreshold)
-        assertEquals(0, ModelContextPolicy.tierFor(63_000).hardThreshold)
+        assertEquals(63_000 - 63_000 / 10, ModelContextPolicy.tierFor(63_000).hardThreshold)
     }
 
     @Test
@@ -91,13 +92,12 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `小窗口不启用硬压缩，软线按窗口 90% 封顶`() {
-        val softOnly = ModelContextPolicy.thresholds(32_000, softPercent = 40, hardPercent = 85)
-        assertFalse(softOnly.hardEnabled)
-        assertEquals(0, softOnly.hard)
-        assertEquals(12_800, softOnly.soft)
-        // 百分比填得再大也不超过窗口 90%
-        assertEquals(28_800, ModelContextPolicy.thresholds(32_000, softPercent = 100, hardPercent = 85).soft)
+    fun `32K 档并入标准档：硬线 90% 启用，软线不再消费`() {
+        val standard = ModelContextPolicy.thresholds(32_000, softPercent = 40, hardPercent = 85)
+        assertTrue(standard.hardEnabled)
+        assertEquals(28_800, standard.hard)
+        // 软线字段保留为只读兼容（请求链路已不消费），但归一化规则不变：封顶在窗口 90% 下。
+        assertEquals(12_800, standard.soft)
 
         val disabled = ModelContextPolicy.thresholds(16_000, softPercent = 40, hardPercent = 85)
         assertFalse(disabled.hardEnabled)
