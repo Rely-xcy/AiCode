@@ -11,7 +11,7 @@ sealed class AgentMessage {
 
     @Serializable
     data class UserMessage(
-        val id: String = "",
+        override val id: String = "",
         val content: String,
         val images: List<AgentImage> = emptyList(),
         /**
@@ -23,7 +23,7 @@ sealed class AgentMessage {
 
     @Serializable
     data class AssistantMessage(
-        val id: String = "",
+        override val id: String = "",
         val content: String,
         val toolCalls: List<ToolCall> = emptyList(),
         /** 本轮模型的思考过程（对应 OpenAI/DeepSeek 的 reasoning_content）。回传上下文时需要原样发回，否则 DeepSeek 思考模式会报 400 错误。 */
@@ -41,7 +41,7 @@ sealed class AgentMessage {
 
     @Serializable
     data class ToolResultMessage(
-        val id: String = "",
+        override val id: String = "",
         val toolName: String,
         val result: String,
         val images: List<AgentImage> = emptyList()
