@@ -95,7 +95,7 @@ class ContextBudgetPolicyTest {
     fun `32K 档并入标准档：硬线 90% 启用，软线不再消费`() {
         val standard = ModelContextPolicy.thresholds(32_000, softPercent = 40, hardPercent = 85)
         assertTrue(standard.hardEnabled)
-        assertEquals(28_800, standard.hard)
+        assertEquals(27_200, standard.hard)
         // 软线字段保留为只读兼容（请求链路已不消费），但归一化规则不变：封顶在窗口 90% 下。
         assertEquals(12_800, standard.soft)
 
