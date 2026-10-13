@@ -15,7 +15,7 @@ import org.junit.Test
 /**
  * 参数指针化模块（上下文压缩重设计 §9 阶段 0）的行为钉子。
  *
- * 核心契约：纯函数投影——只改本轮请求的内存副本，`arguments` 原文不落库、不写 `modelArguments`，
+ * 核心契约：纯函数投影——只改本轮请求的内存副本，`arguments` 原文不落库、不持久化，
  * 同一输入永远得到同一输出（确定性 → 缓存友好）。
  */
 class ArgumentProjectionModuleTest {
@@ -46,8 +46,6 @@ class ArgumentProjectionModuleTest {
         assertEquals("src/A.kt", (projectedCall.arguments["path"] as JsonPrimitive).content)
         // 原文对象未被改写：投影只存在于返回的消息副本里
         assertEquals(original, (message.toolCalls[0].arguments["content"] as JsonPrimitive).content)
-        // 不写 modelArguments：投影载体是 arguments 的内存副本
-        assertNull(projectedCall.modelArguments)
     }
 
     @Test

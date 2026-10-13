@@ -67,9 +67,11 @@ data class AgentMessageEntity(
     // 追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
     @ColumnInfo(defaultValue = "0")
     val isInterjection: Boolean = false,
-    // 仅 TOOL 行：旧软精简写下的「喂模型那份」投影文本（result 保持原文，永不改写）。
-    // 软精简已移除，不再有新写入；回放时优先取它（存量兼容），界面与落库读 result。
-    // 阶段 3 删字段。追加在末尾：备份 DTO 映射按位置参数，插到中间会错位。
+    // 仅 TOOL 行：旧软精简（已移除）曾写下的「喂模型那份」投影文本。
+    // 阶段 3 已停止读写：Kotlin 侧不能再删——Room 的 TableInfo 校验用 Map 全等比较列集，
+    // 表里已存在的列不在实体里会直接报 "Migration didn't properly handle"，删列需表重建得不偿失。
+    // 列留在表中成为僵尸数据，由 @Deprecated 禁止任何新引用。
+    @Deprecated("投影字段已退役：不读写，仅为兼容存量表结构保留")
     val modelResult: String? = null,
     // 仅 isContextSummary 行：本摘要块覆盖的原文边界（被折叠的最后一条消息的 timestamp）。
     // 回放据此裁窗口（该边界之前的原文由摘要块链代表，不再重复回放）。追加在末尾：备份 DTO 按位置映射。

@@ -2,11 +2,9 @@ package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import io.mockk.mockk
 import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -376,20 +374,14 @@ class ContextBudgetPolicyTest {
     }
 
     @Test
-    fun `旧数据 toolCalls JSON 缺少 modelArguments 时反序列化回落原文`() {
+    fun `旧数据 toolCalls JSON 带 modelArguments 键时忽略并回落原文`() {
         val json = Json { ignoreUnknownKeys = true }
-        val legacy = """[{"id":"c1","name":"write","arguments":{"path":"a.txt","content":"正文"}}]"""
+        val legacy = """[{"id":"c1","name":"write","arguments":{"path":"a.txt","content":"正文"},"modelArguments":{"content":"[已省略]"}}]"""
 
         val decoded = json.decodeFromString<List<ToolCall>>(legacy).single()
 
-        assertNull(decoded.modelArguments)
-        assertEquals("正文", (decoded.effectiveArguments["content"] as JsonPrimitive).content)
-
-        // 带副本重新序列化后仍能读回副本（同一 JSON 列，不需要 DB 迁移）
-        val withModel = decoded.copy(modelArguments = mapOf("content" to JsonPrimitive("[已省略 2 字符]")))
-        val roundTrip = json.decodeFromString<List<ToolCall>>(json.encodeToString(listOf(withModel))).single()
-        assertEquals("[已省略 2 字符]", (roundTrip.effectiveArguments["content"] as JsonPrimitive).content)
-        assertEquals("正文", (roundTrip.arguments["content"] as JsonPrimitive).content)
+        // modelArguments 字段已删除，旧 JSON 里的同名键被 ignoreUnknownKeys 忽略，arguments 原文完整读回
+        assertEquals("正文", (decoded.arguments["content"] as JsonPrimitive).content)
     }
 
     /**

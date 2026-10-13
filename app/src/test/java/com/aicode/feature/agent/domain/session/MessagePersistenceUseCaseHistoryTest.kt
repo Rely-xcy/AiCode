@@ -18,7 +18,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -190,12 +189,12 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     /**
-     * 旧投影字段（modelResult / modelArguments）的读取路径保留：库里已有的投影值随回放带出，
-     * 而原文（result / arguments）一字未动——「模型可见那份 / 落库那份」分离在回放侧仍成立。
-     * 软精简已随阶段 1 移除，不再有新写入；本用例直接写库模拟阶段 1 之前的存量数据。
+     * 旧投影列的存量兼容：库里已有的 modelResult / modelArguments 值不参与回放与估算，
+     * 原文（result / arguments）一字未动——「原文才是唯一真相」。
+     * 投影字段已随阶段 3 停止读写；实体上的 modelResult 列仅为兼容存量表结构保留。
      */
     @Test
-    fun legacyProjectionPersistsAndSurvivesReplay() = runTest {
+    fun legacyProjectionValuesAreIgnoredOnReplay() = runTest {
         val dao = db.agentMessageDao()
         val callId = "call-1"
         val bigText = "a".repeat(5_000)
@@ -236,26 +235,18 @@ class MessagePersistenceUseCaseHistoryTest {
             )
         )
 
-        // 模拟阶段 1 之前的存量数据：软精简已移除，直接把投影写进库行。
-        // 落库走的是非挂起 DAO（生产路径在 Dispatchers.Default 上），测试要切到 IO 才不撞
-        // Room 的主线程检查。
+        // 模拟阶段 1 之前的存量数据：直接把投影写进库行（DAO 的 updateModelResult 已删，用原生 SQL）。
         withContext(Dispatchers.IO) {
-            dao.updateModelResult("tool_$callId", bigText.take(1_000))
-            dao.updateToolCallsJson(
-                "assistant-1",
-                json.encodeToString(
-                    listOf(
-                        ToolCall(
-                            id = callId,
-                            name = "writeFile",
-                            arguments = mapOf(
-                                "path" to JsonPrimitive("a.txt"),
-                                "content" to JsonPrimitive(bigText)
-                            ),
-                            modelArguments = mapOf("content" to JsonPrimitive(bigText.take(1_000)))
-                        )
-                    )
-                )
+            db.openHelper.writableDatabase.execSQL(
+                "UPDATE agent_messages SET modelResult = ? WHERE id = ?",
+                arrayOf(bigText.take(1_000), "tool_$callId")
+            )
+            // toolCallsJson 里带旧软精简的 modelArguments 键：字段已从 ToolCall 删除，
+            // 反序列化靠 ignoreUnknownKeys 忽略它，原文 arguments 完整读回。
+            val legacyJson = """[{"id":"$callId","name":"writeFile","arguments":{"path":"a.txt","content":${json.encodeToString(bigText)}},"modelArguments":{"content":${json.encodeToString(bigText.take(1_000))}}}]"""
+            db.openHelper.writableDatabase.execSQL(
+                "UPDATE agent_messages SET toolCallsJson = ? WHERE id = ?",
+                arrayOf(legacyJson, "assistant-1")
             )
         }
 
@@ -263,11 +254,9 @@ class MessagePersistenceUseCaseHistoryTest {
         val replayed = MessagePersistenceUseCase(dao, db).buildHistory(SESSION, NO_PENDING_MARKER)
 
         val tool = replayed.filterIsInstance<AgentMessage.ToolResultMessage>().single()
-        assertNotNull("存量投影应随回放带出 modelResult", tool.modelResult)
         assertEquals(bigText, tool.result)
 
         val call = replayed.filterIsInstance<AgentMessage.AssistantMessage>().single().toolCalls.single()
-        assertNotNull("存量投影应随回放带出 modelArguments", call.modelArguments)
         assertEquals(bigText, (call.arguments["content"] as JsonPrimitive).content)
     }
 

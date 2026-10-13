@@ -44,7 +44,6 @@ import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.domain.tool.ToolOutputStore
 import com.aicode.feature.agent.domain.tool.ToolStreamEvent
-import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.aicode.feature.agent.domain.tool.toTransportString
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.MODE_REMINDER_PREFIX
@@ -570,8 +569,7 @@ class StatefulAgentWorkflow @Inject constructor(
                             id = batchResult.id,
                             toolName = batchResult.toolName,
                             result = batchResult.result,
-                            images = batchResult.images,
-                            modelResult = modelToolResultText(batchResult.toolName, batchResult.result)
+                            images = batchResult.images
                         )
                     )
                 }
@@ -1974,7 +1972,7 @@ internal fun autoApproveSkipsAsk(
 /**
  * 执行边界守卫：工具调用参数里某个大块正文字段「整串」就是上下文精简的占位说明时，返回拦截原因。
  *
- * 历史里旧软精简（已移除）只改模型可见的那份副本（`modelArguments`），模型可能把这句占位说明当成文件正文抄进新的
+ * 历史里旧软精简（已移除）只改模型可见的那份副本，模型可能把这句占位说明当成文件正文抄进新的
  * `writeFile`，而执行读的是原文——照抄执行就会把占位文字写进磁盘。入口指针化产出的摘录形态同理。
  * 这里在落盘前拦下：参数里没有真正文，重试也无意义，必须先 read 回全文。
  *

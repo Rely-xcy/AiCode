@@ -5,7 +5,6 @@ import android.util.Base64
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
@@ -149,8 +148,7 @@ object TokenEstimator {
                 "${message.thinkingBlocksJson?.length ?: -1}:${message.toolCalls.size}:${message.hashCode()}"
 
         is AgentMessage.ToolResultMessage ->
-            "t:${message.toolName}:${message.result.length}:${message.modelResult?.length ?: -1}:" +
-                "${message.images.size}:${message.hashCode()}"
+            "t:${message.toolName}:${message.result.length}:${message.images.size}:${message.hashCode()}"
     }
 
     private fun estimateMessageUncached(message: AgentMessage): Int = ceil(messageCost(message).total).toInt()
@@ -183,8 +181,7 @@ object TokenEstimator {
             rebuilt.add(textCost(message.signature))
             message.toolCalls.forEach { call ->
                 rebuilt.add(textCost(call.name))
-                // 用实际喂模型的参数（modelArguments 优先），否则旧投影在库时估算与实发不一致。
-                rebuilt.add(textCost(call.effectiveArguments.toString()))
+                rebuilt.add(textCost(call.arguments.toString()))
             }
             val snapshot = textCost(message.thinkingBlocksJson)
             val winner = if (rebuilt.total >= snapshot.total) rebuilt else snapshot
@@ -193,12 +190,10 @@ object TokenEstimator {
         }
 
         is AgentMessage.ToolResultMessage -> {
-            // 用实际喂模型的那份文本（modelResult 优先，其次文件类工具的投影结果）：
-            // 库里的历史行没有 modelResult，直接拿 result 估会把 editFile/writeFile 带回的整份 diff
-            // 当成模型收到的内容（实际只收到一句话投影），大文件写过一次就白涨几万 token。
-            val text = message.modelResult
-                ?: modelToolResultText(message.toolName, message.result)
-                ?: message.result
+            // 文件类工具只把投影文本喂给模型（入口指针化，同 provider 侧口径）：
+            // 直接拿 result 估会把 editFile/writeFile 带回的整份 diff 当成模型收到的内容，
+            // 大文件写过一次就白涨几万 token。
+            val text = modelToolResultText(message.toolName, message.result) ?: message.result
             val cost = textCost(message.toolName)
             cost.add(textCost(text))
             cost.image += message.images.sumOf { estimateImageTokens(it) }

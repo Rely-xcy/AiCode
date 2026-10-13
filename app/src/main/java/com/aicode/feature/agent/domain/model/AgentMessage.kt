@@ -13,8 +13,7 @@ sealed class AgentMessage {
         val images: List<AgentImage> = emptyList(),
         /**
          * 模式变化时注入的模式提醒。**不拼进 [content]**：界面渲染、落库、编辑都只认 content（用户原话），
-         * 提醒只在组装请求时由 [modelFacingContent] 拼回模型侧文本。与 [ToolCall.modelArguments] 同一套对称。
-         * null 表示这条消息没有提醒（绝大多数消息如此）。
+         * 提醒只在组装请求时由 [modelFacingContent] 拼回模型侧文本。null 表示这条消息没有提醒（绝大多数消息如此）。
          */
         val modelReminder: String? = null
     ) : AgentMessage()
@@ -42,9 +41,7 @@ sealed class AgentMessage {
         val id: String = "",
         val toolName: String,
         val result: String,
-        val images: List<AgentImage> = emptyList(),
-        /** 仅喂模型的精简结果文本；null 时回退用 [result]。UI 与持久化仍用 result。 */
-        val modelResult: String? = null
+        val images: List<AgentImage> = emptyList()
     ) : AgentMessage()
 }
 
@@ -69,7 +66,6 @@ val AgentMessage.id: String
  * 喂模型的用户消息文本：提醒（[AgentMessage.UserMessage.modelReminder]）在末尾拼回。
  * 所有 provider 的请求组装与 [com.aicode.feature.agent.domain.workflow.TokenEstimator] 都必须走本入口，
  * 否则界面干净了、模型却收不到提醒（估算也会与实际请求不一致）。
- * 与工具参数的 `effectiveArguments`（见 `domain/tool/AgentTool.kt`）对称：取「模型可见的那份」只此一处。
  */
 val AgentMessage.UserMessage.modelFacingContent: String
     get() {

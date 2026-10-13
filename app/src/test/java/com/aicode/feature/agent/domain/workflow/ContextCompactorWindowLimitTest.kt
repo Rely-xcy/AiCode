@@ -30,7 +30,7 @@ import org.junit.Test
  * 兜底这一条是「单条消息本身就超窗」的唯一防线：压缩只能把老消息收进摘要，动不了单条消息本身，
  * 而 tail 至少要留一条——那一条常常就是一次巨大的工具输出或超长粘贴。ContextCompactor 的 KDoc
  * 对此写得很直白：「不兜底就只能让请求硬撞窗口上限」。本文件把它钉住：一条两万字符的消息喂进去，
- * 出来的必须还在预算量级上，并且只改喂模型的那一份投影（落库/UI 的原文一字不动）。
+ * 出来的必须还在预算量级上，并且截断/摘录只写在发送用的内存副本上（不落库）。
  *
  * 关于余量：[ContextCompactor.headTailTrim] 追加的「已省略中间 N 字符」标记本身也要算 token，
  * 但它是截断之后才拼上去的、没有计入 target，所以收尾时可能略超预算。同口径的容忍在
@@ -106,16 +106,15 @@ class ContextCompactorWindowLimitTest {
         val result = compactor.enforceWindowLimit(listOf(huge), BUDGET)
 
         val out = result[0] as AgentMessage.ToolResultMessage
-        // 落库 / UI / 工具执行读的都是 result，必须一字不动
-        assertEquals(huge.result, out.result)
-        val modelFacing = out.modelResult
-        assertNotNull("喂模型的那一份应当被截断后写进 modelResult", modelFacing)
-        assertTrue((modelFacing as String).length < huge.result.length)
+        // 喂模型的那一份就是 result 本身（投影已退役）：截断写在内存副本上，不落库
+        val modelFacing = out.result
+        assertNotNull("喂模型的那一份应当被截断", modelFacing)
+        assertTrue(modelFacing.length < huge.result.length)
         assertTrue(TokenEstimator.estimateMessages(result) <= BUDGET + MARKER_OVERHEAD_TOKENS)
     }
 
     @Test
-    fun `超预算的工具参数换成摘录且 arguments 保持原文`() {
+    fun `超预算的工具参数换成摘录写在内存副本上`() {
         val content = JsonPrimitive("汉".repeat(20_000))
         val call = ToolCall(
             id = "call-1",
@@ -128,12 +127,12 @@ class ContextCompactorWindowLimitTest {
         val result = compactor.enforceWindowLimit(listOf(huge), BUDGET)
 
         val out = result[0] as AgentMessage.AssistantMessage
-        assertEquals("参数原文必须一字不动", call.arguments, out.toolCalls[0].arguments)
-        val projection = out.toolCalls[0].modelArguments
-        assertNotNull("喂模型的那一份应当换成摘录", projection)
-        assertTrue((projection as Map<*, *>).isNotEmpty())
-        val after = TokenEstimator.estimateMessages(result)
-        assertTrue("兜底后仍有 $after tokens（预算 $BUDGET）", after <= BUDGET + EXCERPT_OVERHEAD_TOKENS)
+        // 投影写在内存副本的 arguments 上：摘录显著短于原文，且原文对象未被改写
+        val projected = out.toolCalls[0].arguments["content"] as JsonPrimitive
+        assertTrue(projected.content.length < content.content.length)
+        assertEquals(call.arguments["path"], out.toolCalls[0].arguments["path"])
+        assertEquals(content, (huge.toolCalls[0].arguments["content"] as JsonPrimitive))
+        assertTrue(TokenEstimator.estimateMessages(result) <= BUDGET + EXCERPT_OVERHEAD_TOKENS)
     }
 
     @Test

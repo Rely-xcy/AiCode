@@ -12,7 +12,6 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonParser
 import javax.inject.Inject
@@ -649,9 +648,8 @@ class OpenAIAdapter @Inject constructor(
                 }
                 is AgentMessage.ToolResultMessage -> {
                     // 文件类工具喂模型用精简投影文本（减少完整 diff 回传的 token），UI/持久化仍走完整 result。
-                    val modelText = message.modelResult
-                        ?: modelToolResultText(message.toolName, message.result)
-                        ?: message.result
+                    val modelText =
+                        modelToolResultText(message.toolName, message.result) ?: message.result
                     val content: Any = if (message.images.isNotEmpty()) {
                         val parts = mutableListOf<Map<String, Any>>()
                         if (modelText.isNotBlank()) {
@@ -829,7 +827,7 @@ class OpenAIAdapter @Inject constructor(
             type = "function",
             function = com.aicode.feature.agent.data.remote.openai.OpenAIFunctionCall(
                 name = toolCall.name,
-                arguments = JsonObject(toolCall.effectiveArguments).toString()
+                arguments = JsonObject(toolCall.arguments).toString()
             )
         )
     }

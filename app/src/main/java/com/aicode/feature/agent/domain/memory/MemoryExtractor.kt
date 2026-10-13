@@ -79,7 +79,7 @@ class MemoryExtractor @Inject constructor(
         is AgentMessage.UserMessage -> "user: ${message.content.take(MAX_MESSAGE_CHARS)}"
         is AgentMessage.AssistantMessage -> "assistant: ${message.content.take(MAX_MESSAGE_CHARS)}"
         is AgentMessage.ToolResultMessage ->
-            "tool(${message.toolName}): ${(message.modelResult ?: message.result).take(MAX_TOOL_CHARS)}"
+            "tool(${message.toolName}): ${message.result.take(MAX_TOOL_CHARS)}"
     }
 
     /**

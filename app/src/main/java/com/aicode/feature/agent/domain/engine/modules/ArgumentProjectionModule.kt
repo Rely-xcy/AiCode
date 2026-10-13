@@ -23,7 +23,7 @@ import javax.inject.Singleton
  * 与软精简的关键差异——这里是**纯函数投影，不落库**：
  * - 每次组装请求时从原文（`ToolCall.arguments`）确定性重算，
  *   同一输入永远得到同一输出，逐字节稳定，不破坏前缀缓存；
- * - 不写 `modelArguments`（软精简的持久载体），`arguments` 原文一字不动——执行、UI、落库、
+ * - 不写持久投影（软精简的持久载体已删除），`arguments` 原文一字不动——执行、UI、落库、
  *   TokenEstimator 的原文基线全部不受影响；
  * - 因此**没有「投影前沿」问题**：不落库意味着没有跨轮持久改动，每轮从原文重算，改哪儿都不会
  *   让历史前缀的字节变掉（历史里的原文本来就没变过）。
@@ -76,7 +76,7 @@ class ArgumentProjectionModule @Inject constructor() : EngineModule {
             FileLogger.i(
                 TAG,
                 "参数指针化 会话=${ctx.sessionId ?: "-"} " +
-                    "大字段摘录节省约 $savedTokens tokens（纯函数投影，未落库、未写 modelArguments）"
+                    "大字段摘录节省约 $savedTokens tokens（纯函数投影，未落库）"
             )
         }
         return call.copy(messages = projected)

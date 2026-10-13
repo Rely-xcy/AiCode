@@ -7,7 +7,6 @@ import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonParser
 import kotlinx.serialization.json.Json
@@ -128,7 +127,7 @@ internal fun buildResponsesInput(
                             "type" to ResponsesItem.FUNCTION_CALL,
                             "call_id" to call.id,
                             "name" to call.name,
-                            "arguments" to JsonObject(call.effectiveArguments).toString()
+                            "arguments" to JsonObject(call.arguments).toString()
                         )
                     )
                 }
@@ -195,9 +194,7 @@ private fun AgentMessage.UserMessage.toResponsesContent(): Any {
 /** 工具结果：纯文本直接给字符串，带图时用 part 列表（Responses 允许 function_call_output 内含图片）。 */
 private fun AgentMessage.ToolResultMessage.toResponsesOutput(): Any {
     // 文件类工具喂模型用精简投影文本，UI/持久化仍走完整 result。
-    val modelText = modelResult
-        ?: modelToolResultText(toolName, result)
-        ?: result
+    val modelText = modelToolResultText(toolName, result) ?: result
     if (images.isEmpty()) return modelText
     val parts = mutableListOf<Map<String, Any>>()
     if (modelText.isNotBlank()) {

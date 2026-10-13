@@ -413,9 +413,7 @@ class MessagePersistenceUseCase @Inject constructor(
                             AgentMessage.ToolResultMessage(
                                 id = tcId,
                                 toolName = e.toolName ?: "unknown",
-                                result = e.content,
-                                // 旧软精简（已移除）落库的投影：回放时原样带出（result 仍是原文）。
-                                modelResult = e.modelResult
+                                result = e.content
                             )
                         )
                     }

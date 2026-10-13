@@ -142,23 +142,6 @@ interface AgentMessageDao {
     @Query("UPDATE agent_messages SET modelReminder = :reminder WHERE id = :id")
     suspend fun updateModelReminder(id: String, reminder: String)
 
-    /**
-     * 写回工具结果的模型投影（仅 TOOL 行）。
-     *
-     * 软精简（阶段 1 移除）曾是唯一调用点；阶段 3 删字段前保留本方法，
-     * 库里的旧投影值由回放侧「有则用」读取，不再有新写入。
-     */
-    @Query("UPDATE agent_messages SET modelResult = :modelResult WHERE id = :id")
-    fun updateModelResult(id: String, modelResult: String?)
-
-    /**
-     * 写回工具调用的模型投影（仅 ASSISTANT 行）。
-     *
-     * 与 [updateModelResult] 同理：软精简移除后不再有新写入，阶段 3 前保留。
-     */
-    @Query("UPDATE agent_messages SET toolCallsJson = :toolCallsJson WHERE id = :id")
-    fun updateToolCallsJson(id: String, toolCallsJson: String)
-
     @Query("DELETE FROM agent_messages WHERE id = :id")
     suspend fun deleteMessageById(id: String)
 

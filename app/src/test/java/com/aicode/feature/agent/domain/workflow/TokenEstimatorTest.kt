@@ -106,11 +106,14 @@ class TokenEstimatorTest {
     }
 
     @Test
-    fun `工具结果按实际喂模型的 modelResult 估算`() {
-        val full = AgentMessage.ToolResultMessage(toolName = "read", result = "x".repeat(40_000), modelResult = "短")
-        val projected = AgentMessage.ToolResultMessage(toolName = "read", result = "x".repeat(40_000))
-        assertTrue(TokenEstimator.estimateMessage(full) < TokenEstimator.estimateMessage(projected))
-        assertTrue(TokenEstimator.estimateMessage(full) < 100)
+    fun `文件类工具结果按投影文本估算，非文件类按原文`() {
+        // editFile 的完整 result（整份 diff）不会原文回传给模型，估算必须走投影口径
+        val edit = AgentMessage.ToolResultMessage(
+            toolName = "editFile",
+            result = """{"status":"success","data":{"path":"a.txt","replacements":1,"hunks":[{"diff":"${"x".repeat(40_000)}"}]}}"""
+        )
+        val plain = AgentMessage.ToolResultMessage(toolName = "read", result = "短")
+        assertTrue(TokenEstimator.estimateMessage(plain) < TokenEstimator.estimateMessage(edit))
     }
 
     @Test

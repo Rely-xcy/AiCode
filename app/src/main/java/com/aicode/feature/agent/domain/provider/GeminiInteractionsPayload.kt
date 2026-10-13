@@ -7,7 +7,6 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
@@ -148,9 +147,7 @@ private fun AgentMessage.UserMessage.toInteractionContent(): List<Map<String, An
  */
 private fun AgentMessage.ToolResultMessage.toInteractionResult(): Any {
     // 文件类工具喂模型用精简投影文本，UI/持久化仍走完整 result。
-    val modelText = modelResult
-        ?: modelToolResultText(toolName, result)
-        ?: result
+    val modelText = modelToolResultText(toolName, result) ?: result
     return if (modelText.isBlank()) {
         listOf(textContent(modelText))
     } else {
@@ -195,11 +192,11 @@ internal fun decodeInteractionSteps(json: String): List<JsonObject>? {
  * 工具入参 → Gson 树。直接把 kotlinx 的 JsonObject 交给 Gson 会按反射序列化它的内部字段
  * （得到 `{"body":...,"isString":true}` 这种垃圾），必须先转成文本再让 Gson 解析回来。
  *
- * 取值走 [effectiveArguments]：发给模型的是参数投影后的副本（原文回传会白白撑大请求）。
+ * 取值直接用 [arguments]：参数投影只存在于本轮请求组装的内存副本（阶段 0 入口指针化，不落库）。
  */
 private fun ToolCall.argumentsAsJson(): JsonElement =
     runCatching {
-        JsonParser.parseString(kotlinx.serialization.json.JsonObject(effectiveArguments).toString())
+        JsonParser.parseString(kotlinx.serialization.json.JsonObject(arguments).toString())
     }.getOrElse { JsonObject() }
 
 /** 会话历史里由我们自己拼出、不该出现在模型产出快照里的 step 类型。 */

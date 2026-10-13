@@ -411,7 +411,7 @@ class ContextCompactor @Inject constructor(
         return rows.firstOrNull { it.content == content }?.timestamp
     }
 
-    /** 把单条消息的正文压到 [budgetTokens] 以内；工具结果改写 modelResult，其余改写 content。 */
+    /** 把单条消息的正文压到 [budgetTokens] 以内；产出是发送前的内存副本（不落库）。 */
     private fun truncateMessage(message: AgentMessage, budgetTokens: Int): AgentMessage {
         val currentTokens = TokenEstimator.estimateMessage(message)
         if (currentTokens <= budgetTokens) return message
@@ -427,9 +427,9 @@ class ContextCompactor @Inject constructor(
 
         return when (message) {
             is AgentMessage.ToolResultMessage -> {
-                val current = message.modelResult ?: message.result
+                val current = message.result
                 if (current.length <= limitOf(current)) message
-                else message.copy(modelResult = headTailTrim(current, limitOf(current)))
+                else message.copy(result = headTailTrim(current, limitOf(current)))
             }
 
             is AgentMessage.UserMessage ->
@@ -458,8 +458,8 @@ class ContextCompactor @Inject constructor(
      * 工具参数按字段重建：把「能重新读回来」的大块正文换成可读摘录（头尾逐字 + 省略说明 +
      * readFile 回读指针），其它超长值头尾截断，小字段（路径、命令开头这类定位信息）原样保留。
      *
-     * 结果写进 `modelArguments`，`arguments` 保持原文——执行、UI、落库都读 arguments。
-     * 每次都以 `arguments`（原文）为输入重算，所以重复精简是幂等的（不会拿上一次的副本再削）。
+     * 结果直接写进本副本的 `arguments`：[enforceWindowLimit] 是发送前兜底，产出只活在本次请求里
+     * （不落库）；每次都以原文重算，重复截断是幂等的。
      *
      * 为什么给摘录而不是整段占位说明：占位说明把「我写过什么」从模型视野里整个抹掉——
      * 模型看不到文件当时的结构与收尾状态，只能整份重新 read 才敢接着改，也更容易把占位文字
@@ -498,7 +498,7 @@ class ContextCompactor @Inject constructor(
                 }
             }
         }
-        return if (changed) call.copy(modelArguments = rebuilt) else call
+        return if (changed) call.copy(arguments = rebuilt) else call
     }
 
     /** 参数里的目标文件路径：摘录的回读指针与「近期引用」判据共用它，口径只有这一处。 */

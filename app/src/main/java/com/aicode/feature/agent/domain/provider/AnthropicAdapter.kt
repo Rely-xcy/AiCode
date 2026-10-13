@@ -13,7 +13,6 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
-import com.aicode.feature.agent.domain.tool.effectiveArguments
 import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.defaultProviderApiPath
@@ -513,7 +512,7 @@ class AnthropicAdapter @Inject constructor(
 
                     for (toolCall in message.toolCalls) {
                          @Suppress("UNCHECKED_CAST")
-                         val inputMap = jsonElementToMap(JsonObject(toolCall.effectiveArguments)) as Map<String, Any>
+                         val inputMap = jsonElementToMap(JsonObject(toolCall.arguments)) as Map<String, Any>
 
                          contentBlocks.add(
                             AnthropicContentBlock(
@@ -535,9 +534,8 @@ class AnthropicAdapter @Inject constructor(
                     // 防御性清理：跳过没有配对 tool_use 的孤立 tool_result
                     if (!lastAssistantHadToolUse) continue
                     // 文件类工具喂模型用精简投影文本（减少完整 diff 回传的 token），UI/持久化仍走完整 result。
-                    val modelText = message.modelResult
-                        ?: modelToolResultText(message.toolName, message.result)
-                        ?: message.result
+                    val modelText =
+                        modelToolResultText(message.toolName, message.result) ?: message.result
                     val content: Any = if (message.images.isNotEmpty()) {
                         val contentList = mutableListOf<AnthropicContentBlock>()
                         if (modelText.isNotBlank()) {
