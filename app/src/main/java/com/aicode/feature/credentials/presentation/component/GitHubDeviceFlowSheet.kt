@@ -86,9 +86,11 @@ internal fun GitHubDeviceFlowSheet(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
 
-    // 成功后短暂展示反馈再自动收起；未安装 App 时保留弹层供用户继续操作
+    // 成功后短暂展示反馈再自动收起；需要用户处理（去安装 / 权限或状态需确认）时保留弹层
     LaunchedEffect(state) {
-        if (state is QuickLoginUiState.Success && !state.needsInstall) {
+        if (state is QuickLoginUiState.Success &&
+            !state.needsInstall && !state.installUnknown && !state.readOnly
+        ) {
             delay(1400)
             onSuccessDismiss()
         }
@@ -157,6 +159,9 @@ internal fun GitHubDeviceFlowSheet(
                     SuccessContent(
                         username = state.username,
                         needsInstall = state.needsInstall,
+                        installUnknown = state.installUnknown,
+                        readOnly = state.readOnly,
+                        repositories = state.repositories,
                         context = context,
                         onSuccessDismiss = onSuccessDismiss
                     )
@@ -461,6 +466,9 @@ private fun AwaitingContent(
 private fun SuccessContent(
     username: String,
     needsInstall: Boolean,
+    installUnknown: Boolean,
+    readOnly: Boolean,
+    repositories: List<String>,
     context: Context,
     onSuccessDismiss: () -> Unit
 ) {
@@ -563,8 +571,80 @@ private fun SuccessContent(
                 }
             }
         }
+
+        if (repositories.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(Radius.lg),
+                color = MaterialTheme.semanticColors.cardSurface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Spacing.lg),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    Text(
+                        text = stringResource(R.string.credential_device_repos_granted, repositories.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    repositories.take(REPOS_PREVIEW_LIMIT).forEach { repo ->
+                        Text(
+                            text = "· $repo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (repositories.size > REPOS_PREVIEW_LIMIT) {
+                        Text(
+                            text = stringResource(
+                                R.string.credential_device_repos_more,
+                                repositories.size - REPOS_PREVIEW_LIMIT
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        if (readOnly) {
+            LoginWarningCard(stringResource(R.string.credential_device_readonly))
+        }
+        if (installUnknown) {
+            LoginWarningCard(stringResource(R.string.credential_device_install_unknown))
+        }
     }
 }
+
+/** 登录结果里的提醒卡片（只读令牌 / 安装状态未知）。 */
+@Composable
+private fun LoginWarningCard(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.lg),
+        color = MaterialTheme.semanticColors.warningContainer.copy(alpha = 0.4f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.semanticColors.warning.copy(alpha = 0.3f)
+        )
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.lg),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+/** 已授权仓库列表的展示上限：只让用户确认「认得我的仓库」，不在弹层里铺满一屏。 */
+private const val REPOS_PREVIEW_LIMIT = 8
 
 /** 失败态 */
 @Composable

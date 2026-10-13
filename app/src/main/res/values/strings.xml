@@ -879,6 +879,10 @@
     <string name="credential_device_install_required">已登录为 %1$s。还需把 AiCode 安装到你的仓库，之后才能推送/拉取代码。</string>
     <string name="credential_device_install_now">去安装</string>
     <string name="credential_device_install_later">稍后</string>
+    <string name="credential_device_repos_granted">已授权仓库（%1$d 个）</string>
+    <string name="credential_device_repos_more">…另有 %1$d 个</string>
+    <string name="credential_device_readonly">当前授权只有只读权限，推送代码会被拒绝。可改用个人令牌（PAT），或在 GitHub 上把 AiCode 的仓库权限改为 Read and write。</string>
+    <string name="credential_device_install_unknown">暂时无法确认 AiCode 是否已安装到你的仓库（查询受限）。若推送失败，可改用个人令牌（PAT）。</string>
     <string name="credential_device_failed_title">授权未能完成</string>
     <string name="credential_device_failed">登录失败：%1$s</string>
     <string name="credential_device_expired">设备码已过期，请重试</string>

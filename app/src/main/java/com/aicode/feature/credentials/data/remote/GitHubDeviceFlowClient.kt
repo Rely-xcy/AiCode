@@ -38,6 +38,22 @@ sealed interface GitHubTokenPollResult {
     data class Error(val code: String) : GitHubTokenPollResult
 }
 
+/** GitHub App 在当前用户下的安装情况（三态，不再用 Boolean 混「未安装」与「查不到」）。 */
+sealed interface AppInstall {
+    /** 已安装；[repositories] 是本次安装已授权的仓库全名（查不到时为空），[contentsWrite] 为 false 时推送会被拒。 */
+    data class Installed(
+        val installationId: Long,
+        val repositories: List<String>,
+        val contentsWrite: Boolean
+    ) : AppInstall
+
+    /** 确实未安装：应引导用户去安装页。 */
+    data object NotInstalled : AppInstall
+
+    /** 无法确认（网络/权限受限）：不据此弹「去安装」，但也不假装一切正常。 */
+    data object Unknown : AppInstall
+}
+
 /** GitHub App 的 slug（安装页 URL 用），与 App 名称对应。 */
 const val GITHUB_APP_SLUG = "aicode-app"
 
@@ -101,8 +117,7 @@ class GitHubDeviceFlowClient @Inject constructor() {
         }
     }
 
-    /** 轮询用户是否已完成授权；成功时返回 access token，未完成返回 [GitHubTokenPollResult.Pending]。 */
-    suspend fun pollAccessToken(deviceCode: String): GitHubTokenPollResult = withContext(Dispatchers.IO) {
+    /** 轮询用户是否已完成授权；成功时返回 access token，未完成返回 [GitHubTokenPollResult.Pending]。 */    suspend fun pollAccessToken(deviceCode: String): GitHubTokenPollResult = withContext(Dispatchers.IO) {
         val form = FormBody.Builder()
             .add("client_id", GITHUB_APP_CLIENT_ID)
             .add("device_code", deviceCode)
@@ -143,20 +158,55 @@ class GitHubDeviceFlowClient @Inject constructor() {
     }
 
     /**
-     * 判断当前用户是否已安装本 GitHub App（决定是否需要在登录后引导去安装）。
-     * 仅授权而未安装时，令牌没有仓库访问权，需引导用户到安装页选择仓库。
+     * 查询本 App 在该用户下的安装情况与权限。
+     *
+     * 为什么必须分三态：`/user/installations` 在「确实未安装」与「令牌权限不够/查询失败」两种情形下
+     * 都会给出空结果，以前只用 Boolean 会把二者混为一谈（且调用方还把异常当成「已安装」），
+     * 于是要么误报「去安装」、要么什么都不提示、也不列出已授权仓库。
      */
-    suspend fun isAppInstalled(accessToken: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun queryAppInstall(accessToken: String): AppInstall = withContext(Dispatchers.IO) {
+        val resp = runCatching {
+            val req = Request.Builder()
+                .url(USER_INSTALLATIONS_URL)
+                .header("Accept", "application/vnd.github+json")
+                .header("Authorization", "Bearer $accessToken")
+                .build()
+            SHARED_CLIENT.newCall(req).execute().use { it.code to it.body?.string().orEmpty() }
+        }.getOrNull() ?: return@withContext AppInstall.Unknown
+
+        val (code, body) = resp
+        if (code !in 200..299) return@withContext AppInstall.Unknown
+        val installations = runCatching {
+            JsonParser.parseString(body).asJsonObject.getAsJsonArray("installations")
+        }.getOrNull() ?: return@withContext AppInstall.Unknown
+
+        val match = installations.mapNotNull { it.asJsonObject }.firstOrNull {
+            it.get("app_slug")?.asString == GITHUB_APP_SLUG
+        } ?: return@withContext AppInstall.NotInstalled
+
+        val installationId = match.get("id")?.asLong ?: return@withContext AppInstall.Unknown
+        // 安装响应里带该 App 在本安装下被授予的权限；contents=write 才能推送。
+        val contentsWrite = match.getAsJsonObject("permissions")
+            ?.get("contents")?.asString?.equals("write", ignoreCase = true) == true
+        AppInstall.Installed(
+            installationId = installationId,
+            repositories = fetchInstallationRepositories(accessToken, installationId),
+            contentsWrite = contentsWrite
+        )
+    }
+
+    /** 列出某个安装下已授权的仓库全名；查不到时返回空列表（不因此把「已安装」判成失败）。 */
+    private fun fetchInstallationRepositories(accessToken: String, installationId: Long): List<String> = runCatching {
         val req = Request.Builder()
-            .url(USER_INSTALLATIONS_URL)
+            .url("$USER_INSTALLATIONS_URL/$installationId/repositories?per_page=100")
             .header("Accept", "application/vnd.github+json")
             .header("Authorization", "Bearer $accessToken")
             .build()
         SHARED_CLIENT.newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
-            val installations = JsonParser.parseString(body).asJsonObject.getAsJsonArray("installations")
-                ?: return@withContext false
-            installations.any { it.asJsonObject.get("app_slug")?.asString == GITHUB_APP_SLUG }
+            JsonParser.parseString(body).asJsonObject.getAsJsonArray("repositories")
+                ?.mapNotNull { it.asJsonObject.get("full_name")?.asString }
+                .orEmpty()
         }
-    }
+    }.getOrDefault(emptyList())
 }
