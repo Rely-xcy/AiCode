@@ -264,6 +264,8 @@
     <string name="settings_network_guide_more">See the online docs for more devices and details</string>
     <string name="settings_agent_sound_title">Agent completion notification</string>
     <string name="settings_agent_sound_subtitle">Pop a notification when agent finishes in background</string>
+    <string name="settings_live_notification_title">Live notifications</string>
+    <string name="settings_live_notification_subtitle">Show live progress notifications while the AI works in the background</string>
     <string name="agent_complete_notification_title">Task complete</string>
     <string name="agent_complete_notification_body">Tap to view</string>
     <string name="agent_complete_notification_background_body">Background task "%1$s" finished</string>
@@ -275,6 +277,9 @@
     <string name="notification_keepalive_enabled">Keepalive enabled</string>
     <string name="notification_channel_agent_complete">Agent completion notifications</string>
     <string name="notification_channel_agent_complete_desc">Notifications shown when the agent finishes in background</string>
+    <string name="notification_channel_agent_live">AI live progress</string>
+    <string name="notification_channel_agent_live_desc">Notifications showing the current progress while the AI works in the background</string>
+    <string name="notification_agent_live_title_multi">%1$d tasks running</string>
     <string name="settings_app_permissions">App Permissions</string>
     <string name="settings_permission_apk_install">Install unknown apps</string>
     <string name="settings_permission_apk_install_desc">Allow installing APK packages</string>

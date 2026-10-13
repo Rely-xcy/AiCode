@@ -40,6 +40,7 @@ import com.aicode.feature.agent.domain.shizuku.ShizukuPeerInfo
 import com.aicode.feature.agent.domain.shizuku.ShizukuState
 import com.aicode.feature.settings.presentation.VscreenRootChannelState
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Activity
 import compose.icons.feathericons.Bell
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Eye
@@ -257,8 +258,8 @@ internal fun AppPermissionsSection(
 }
 
 /**
- * 「后台运行」二级页：保活、屏幕常亮、Agent 完成通知三个开关。
- * 两个需要通知权限的开关（保活、提示音）开启前先检测并申请通知权限（Android 13+），
+ * 「后台运行」二级页：保活、屏幕常亮、Agent 完成通知、实时通知四个开关。
+ * 需要通知权限的开关（保活、提示音、实时通知）开启前先检测并申请通知权限（Android 13+），
  * 系统不再弹授权框时弹窗引导去系统设置手动开启。
  */
 @Composable
@@ -268,7 +269,9 @@ internal fun BackgroundRunSection(
     screenOnEnabled: Boolean,
     onToggleScreenOn: (Boolean) -> Unit,
     agentSoundEnabled: Boolean,
-    onToggleAgentSound: (Boolean) -> Unit
+    onToggleAgentSound: (Boolean) -> Unit,
+    liveNotificationEnabled: Boolean,
+    onToggleLiveNotification: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     var showNotificationDeniedDialog by remember { mutableStateOf(false) }
@@ -343,6 +346,20 @@ internal fun BackgroundRunSection(
                         checked = agentSoundEnabled,
                         onCheckedChange = { enabled ->
                             toggleWithNotificationPermission(onToggleAgentSound, enabled)
+                        }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Activity,
+                title = stringResource(R.string.settings_live_notification_title),
+                subtitle = stringResource(R.string.settings_live_notification_subtitle),
+                trailing = {
+                    AppSwitch(
+                        checked = liveNotificationEnabled,
+                        onCheckedChange = { enabled ->
+                            toggleWithNotificationPermission(onToggleLiveNotification, enabled)
                         }
                     )
                 }

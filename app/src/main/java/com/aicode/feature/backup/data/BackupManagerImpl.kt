@@ -43,6 +43,7 @@ import com.aicode.feature.settings.data.repository.CompactionModelSettingsReposi
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.ScreenOnSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.repository.SyncSettingsRepository
@@ -92,6 +93,7 @@ class BackupManagerImpl @Inject constructor(
     private val permissionRulesRepository: PermissionRulesRepository,
     private val themeSettingsRepository: ThemeSettingsRepository,
     private val keepaliveSettingsRepository: KeepaliveSettingsRepository,
+    private val liveNotificationSettingsRepository: LiveNotificationSettingsRepository,
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
@@ -369,6 +371,7 @@ class BackupManagerImpl @Inject constructor(
         themePresetId = if (options.appSettings) themeSettingsRepository.presetSnapshot() else null,
         dynamicColorEnabled = if (options.appSettings) themeSettingsRepository.dynamicColorSnapshot() else false,
         keepaliveEnabled = if (options.appSettings) keepaliveSettingsRepository.snapshot() else false,
+        liveNotificationEnabled = if (options.appSettings) liveNotificationSettingsRepository.snapshot() else false,
         screenOnEnabled = if (options.appSettings) screenOnSettingsRepository.snapshot() else false,
         agentSoundEnabled = if (options.appSettings) agentSoundSettingsRepository.snapshot() else false,
         autoRemoveStaleModels = if (options.appSettings) generalSettingsRepository.autoRemoveStaleModelsSnapshot() else true,
@@ -782,6 +785,7 @@ class BackupManagerImpl @Inject constructor(
             meta.themeMode?.let { themeSettingsRepository.restore(it) }
             themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
             keepaliveSettingsRepository.restore(meta.keepaliveEnabled)
+            liveNotificationSettingsRepository.restore(meta.liveNotificationEnabled)
             screenOnSettingsRepository.restore(meta.screenOnEnabled)
             agentSoundSettingsRepository.restore(meta.agentSoundEnabled)
             generalSettingsRepository.restoreAutoRemoveStaleModels(meta.autoRemoveStaleModels)

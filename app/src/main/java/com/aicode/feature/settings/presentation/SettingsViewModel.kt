@@ -76,6 +76,7 @@ import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.repository.ProxyConfig
@@ -395,6 +396,7 @@ class SettingsViewModel @Inject constructor(
     private val keepaliveSettingsRepository: KeepaliveSettingsRepository,
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
+    private val liveNotificationSettingsRepository: LiveNotificationSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val languageSettingsRepository: LanguageSettingsRepository,
     private val mcpConfigRepository: McpConfigRepository,
@@ -587,6 +589,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _agentSoundEnabled = MutableStateFlow(false)
     val agentSoundEnabled: StateFlow<Boolean> = _agentSoundEnabled.asStateFlow()
+
+    private val _liveNotificationEnabled = MutableStateFlow(false)
+    val liveNotificationEnabled: StateFlow<Boolean> = _liveNotificationEnabled.asStateFlow()
 
     private val _autoRemoveStaleModels = MutableStateFlow(true)
     val autoRemoveStaleModels: StateFlow<Boolean> = _autoRemoveStaleModels.asStateFlow()
@@ -1085,6 +1090,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 agentSoundSettingsRepository.enabledFlow.collectLatest {
                     _agentSoundEnabled.value = it
+                }
+            }
+
+            launch {
+                liveNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _liveNotificationEnabled.value = it
                 }
             }
 
@@ -2148,6 +2159,12 @@ class SettingsViewModel @Inject constructor(
     fun setAgentSoundEnabled(enabled: Boolean) {
         viewModelScope.launch {
             agentSoundSettingsRepository.setEnabled(enabled)
+        }
+    }
+
+    fun setLiveNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            liveNotificationSettingsRepository.setEnabled(enabled)
         }
     }
 

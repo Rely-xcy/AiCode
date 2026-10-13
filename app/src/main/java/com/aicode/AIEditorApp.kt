@@ -754,6 +754,17 @@ class AIEditorApp : Application(), Configuration.Provider {
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(agentChannel)
+
+            // AI 工作期间的实时通知（Android 16 Live Updates）：静默，由系统决定是否提升到状态栏/锁屏。
+            val liveChannel = NotificationChannel(
+                "agent_live",
+                getString(R.string.notification_channel_agent_live),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.notification_channel_agent_live_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(liveChannel)
         }
     }
 }

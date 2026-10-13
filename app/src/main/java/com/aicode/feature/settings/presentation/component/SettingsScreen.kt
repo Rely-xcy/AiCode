@@ -238,6 +238,7 @@ fun SettingsScreen(
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
+    val liveNotificationEnabled by viewModel.liveNotificationEnabled.collectAsStateWithLifecycle()
     val autoRemoveStaleModels by viewModel.autoRemoveStaleModels.collectAsStateWithLifecycle()
     val startupSessionMode by viewModel.startupSessionMode.collectAsStateWithLifecycle()
     val firstByteTimeoutSec by viewModel.firstByteTimeoutSec.collectAsStateWithLifecycle()
@@ -1215,7 +1216,9 @@ fun SettingsScreen(
                     screenOnEnabled = screenOnEnabled,
                     onToggleScreenOn = { viewModel.setScreenOnEnabled(it) },
                     agentSoundEnabled = agentSoundEnabled,
-                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
+                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) },
+                    liveNotificationEnabled = liveNotificationEnabled,
+                    onToggleLiveNotification = { viewModel.setLiveNotificationEnabled(it) }
                 )
                 SettingsSection.TokenStats -> TokenStatsSection(
                     state = tokenStats,

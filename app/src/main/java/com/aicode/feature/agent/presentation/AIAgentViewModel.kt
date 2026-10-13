@@ -39,6 +39,7 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
 import com.aicode.feature.settings.data.repository.StartupSessionMode
 import com.aicode.feature.agent.domain.model.AgentContext
@@ -99,7 +100,9 @@ import com.aicode.feature.agent.domain.mention.FileMentionRepository
 import com.aicode.feature.agent.domain.mention.FileMentionState
 import com.aicode.feature.agent.domain.skill.Skill
 import com.aicode.feature.agent.presentation.AgentAttachment
+import com.aicode.feature.agent.presentation.notification.AgentLiveNotificationManager
 import com.aicode.feature.agent.presentation.component.RewindOption
+import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
 import com.aicode.feature.agent.presentation.component.formatTokenCount
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -165,6 +168,8 @@ class AIAgentViewModel @Inject constructor(
     private val containerOsDetector: ContainerOsDetector,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val keepaliveSettings: KeepaliveSettingsRepository,
+    private val liveNotificationSettings: LiveNotificationSettingsRepository,
+    private val agentLiveNotificationManager: AgentLiveNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -1278,6 +1283,48 @@ class AIAgentViewModel @Inject constructor(
 
         viewModelScope.launch {
             keepaliveSettings.enabledFlow.collect { userKeepaliveEnabled = it }
+        }
+
+        // 实时通知开关关闭时立即撤销。
+        viewModelScope.launch {
+            liveNotificationSettings.enabledFlow.collectLatest { enabled ->
+                if (!enabled) agentLiveNotificationManager.dismiss()
+            }
+        }
+
+        // 实时通知：聚合各会话的「正在…」状态（多会话合并为一条），仅 App 在后台时由管理器展示。
+        viewModelScope.launch {
+            combine(
+                _agentStates,
+                _runningTools,
+                _preparingTools,
+                _compactingSessions
+            ) { states, tools, preparing, compacting ->
+                states.filterValues { it is AgentUIState.Loading || it is AgentUIState.Streaming }
+                    .keys
+                    .associateWith { sid ->
+                        val toolName = tools[sid]?.values?.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
+                            ?: preparing[sid]
+                        when {
+                            toolName != null -> context.getString(toolRunningLabelRes(toolName))
+                            compacting[sid] == true -> context.getString(R.string.chat_compressing_context)
+                            else -> context.getString(R.string.chat_status_thinking)
+                        }
+                    }
+            }.debounce(500)
+                .collect { statusMap ->
+                    val running = statusMap.mapNotNull { (sid, label) ->
+                        val session = sessionUseCase.getSessionById(sid) ?: return@mapNotNull null
+                        // 子代理会话并入父会话展示，避免父子重复。
+                        if (session.parentId != null) return@mapNotNull null
+                        AgentLiveNotificationManager.RunningSession(
+                            sessionId = sid,
+                            title = session.title.ifBlank { context.getString(R.string.chat_new_session_btn) },
+                            statusLabel = label
+                        )
+                    }
+                    agentLiveNotificationManager.update(running)
+                }
         }
 
         // 订阅子代理生命周期事件（类比 terminal 的 notify=true 异步回调）：

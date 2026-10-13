@@ -411,8 +411,8 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
-    // Core Android
-    implementation("androidx.core:core:1.16.0")
+    // Core Android（1.17.0 起提供 NotificationCompat 的实时通知推广接口 setRequestPromotedOngoing）
+    implementation("androidx.core:core:1.17.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
