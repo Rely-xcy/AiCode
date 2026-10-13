@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.vscreen.VsInputTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsLogcatTool
 import com.aicode.feature.agent.domain.tool.vscreen.VsObserveTool
 import com.aicode.feature.agent.domain.tool.vscreen.VsStartTool
 import com.aicode.feature.agent.domain.tool.vscreen.VsStopTool
@@ -32,6 +33,7 @@ class VirtualScreenModule @Inject constructor(
     private val vsStopTool: VsStopTool,
     private val vsInputTool: VsInputTool,
     private val vsObserveTool: VsObserveTool,
+    private val vsLogcatTool: VsLogcatTool,
     private val systemPromptProvider: Lazy<SystemPromptProvider>
 ) : EngineModule {
 
@@ -52,7 +54,7 @@ class VirtualScreenModule @Inject constructor(
         if (ctx.isSubAgent) {
             emptyList()
         } else {
-            listOf(vsStartTool, vsStopTool, vsInputTool, vsObserveTool)
+            listOf(vsStartTool, vsStopTool, vsInputTool, vsObserveTool, vsLogcatTool)
         }
 
     private fun strategy(): String? {

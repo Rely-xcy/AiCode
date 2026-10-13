@@ -19,7 +19,8 @@ class VirtualScreenController @Inject constructor(
     private val rootShell: RootShell,
     private val manager: VirtualScreenManager,
     private val guard: VirtualScreenGuard,
-    private val screenshotStore: ScreenshotStore
+    private val screenshotStore: ScreenshotStore,
+    private val foregroundGuard: VirtualScreenForegroundGuard
 ) {
 
     suspend fun tap(x: Int, y: Int): Result<String> =
@@ -73,8 +74,48 @@ class VirtualScreenController @Inject constructor(
         return Result.success(target.absolutePath)
     }
 
+    /**
+     * 读目标 app 的 logcat 片段做断言依据（crash / ANR 关键字）。
+     *
+     * 优先按 pid 过滤（`pidof` 拿不到时退到全量再按包名过滤），返回「结论行 + 末尾原文」：
+     * 模型要的是「崩没崩」，不是几百行日志。
+     */
+    suspend fun logcat(packageName: String?, lines: Int): Result<String> {
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        val pkg = packageName ?: screen.packageName
+        val pid = rootShell.run("pidof $pkg", SHORT_TIMEOUT_MS).output.trim()
+        val command = if (pid.isNotEmpty()) {
+            "logcat -d -t $lines --pid=$pid"
+        } else {
+            "logcat -d -t ${lines * 5}"
+        }
+        val dump = rootShell.run(command, LOGCAT_TIMEOUT_MS)
+        if (!dump.ok) {
+            return Result.failure(
+                IllegalStateException("读取 logcat 失败（exit=${dump.exitCode}）。原始输出：${dump.output.trim().take(400)}")
+            )
+        }
+        val all = dump.output.lineSequence().filter { it.isNotBlank() }.toList()
+        val relevant = if (pid.isEmpty()) all.filter { it.contains(pkg) } else all
+        val crashes = relevant.filter { line -> CRASH_KEYWORDS.any { line.contains(it) } }
+        val head = buildString {
+            append("目标 $pkg：")
+            if (pid.isEmpty()) append("进程未在运行（pidof 无输出）；") else append("pid=$pid；")
+            append(if (crashes.isEmpty()) "未发现 crash/ANR 关键字" else "发现 ${crashes.size} 条 crash/ANR 相关行")
+        }
+        val body = relevant.takeLast(lines).joinToString("\n")
+        return Result.success(buildString {
+            append(head)
+            if (body.isNotEmpty()) append("\n\n---\n").append(body.take(MAX_RETURN_CHARS))
+        })
+    }
+
     private suspend fun inject(action: String, buildCommand: (Int) -> String): Result<String> {
         val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        // 前台让路：用户在真机屏上操作被测 app 时先暂停注入（设计 §4.2.1）。
+        if (foregroundGuard.isBlockingRealScreen(screen.packageName)) {
+            return Result.failure(IllegalStateException(foregroundGuard.pausedMessage(screen.packageName)))
+        }
         if (!guard.isAuthorized(screen.sessionId)) {
             return Result.failure(
                 IllegalStateException("本会话尚未获得虚拟屏授权（授权随 vscreen_start 建立、随 vscreen_stop 失效）。")
@@ -94,5 +135,10 @@ class VirtualScreenController @Inject constructor(
         const val TAG = "VirtualScreenController"
         const val INJECT_TIMEOUT_MS = 10_000L
         const val CAPTURE_TIMEOUT_MS = 15_000L
+        const val SHORT_TIMEOUT_MS = 5_000L
+        const val LOGCAT_TIMEOUT_MS = 15_000L
+        const val MAX_RETURN_CHARS = 4_000
+
+        val CRASH_KEYWORDS = listOf("FATAL EXCEPTION", "ANR in", "beginning of crash", "SIGSEGV", "Fatal signal")
     }
 }
