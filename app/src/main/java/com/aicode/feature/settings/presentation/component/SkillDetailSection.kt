@@ -76,6 +76,21 @@ internal fun SkillDetailSection(
             )
         }
 
+        // 卡片 2.5：触发词（只读）——有才显示，没配置的技能不占空间。
+        if (entry.triggers.isNotEmpty()) {
+            SettingsGroupHeader(text = stringResource(R.string.skills_triggers_label))
+            SettingsGroup {
+                Text(
+                    text = entry.triggers.joinToString("、"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.lg, vertical = 12.dp)
+                )
+            }
+        }
+
         // 卡片 3：正文（Markdown 渲染）
         SettingsGroupHeader(text = stringResource(R.string.skills_instructions))
         SettingsGroup {

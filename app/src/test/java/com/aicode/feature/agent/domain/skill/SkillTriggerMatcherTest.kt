@@ -50,8 +50,9 @@ class SkillTriggerMatcherTest {
 
     @Test
     fun `大小写不敏感`() {
+        // hitWord 返回技能配置的触发词原文（非消息 token 原文）
         assertEquals(listOf("reverse"), hitWords("REVERSE this", "reverse"))
-        assertEquals(listOf("Reverse"), hitWords("do a Reverse thing", "reverse"))
+        assertEquals(listOf("reverse"), hitWords("do a Reverse thing", "reverse"))
     }
 
     @Test
@@ -73,17 +74,26 @@ class SkillTriggerMatcherTest {
 
     @Test
     fun `同技能多触发词命中取更长者`() {
-        val hits = SkillTriggerMatcher.match("帮我 reverse engineering 逆向", listOf(skill("reverse engineering", "逆向")))
+        val hits = SkillTriggerMatcher.match("帮我 reverse 逆向", listOf(skill("reverse", "逆向")))
         assertEquals(1, hits.size)
-        assertEquals("reverse engineering", hits.first().hitWord)
+        assertEquals("reverse", hits.first().hitWord)
     }
 
     @Test
     fun `多技能命中按触发词长度排序`() {
         val short = Skill(name = "short", description = "", triggers = listOf("逆向"), instructions = "")
-        val long = Skill(name = "long", description = "", triggers = listOf("逆向 分析"), instructions = "")
-        val hits = SkillTriggerMatcher.match("帮我 逆向 分析 这个", listOf(short, long))
+        val long = Skill(name = "long", description = "", triggers = listOf("逆向分析"), instructions = "")
+        val hits = SkillTriggerMatcher.match("帮我 逆向分析 逆向", listOf(short, long))
         assertEquals(listOf("long", "short"), hits.map { it.skill.name })
+    }
+
+    @Test
+    fun `含空格的触发词被sanitize丢弃`() {
+        // 多词触发词在 token 全等规则下永远命中不了，解析/保存时就要丢弃，不留「配了没用」的假象
+        assertEquals(emptyList<String>(), SkillTriggerMatcher.sanitize(listOf("reverse engineering", "逆向")))
+        assertEquals(listOf("逆向"), SkillTriggerMatcher.sanitize(listOf(" 逆向 ", "a", "逆向")))
+        val hits = SkillTriggerMatcher.match("逆向", listOf(skill("reverse engineering", "逆向")))
+        assertEquals(listOf("逆向"), hits.map { it.hitWord })
     }
 
     // ---- 边界 ----

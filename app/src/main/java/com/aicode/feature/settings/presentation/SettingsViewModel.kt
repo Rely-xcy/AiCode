@@ -283,7 +283,9 @@ data class SkillUiEntry(
     val disabled: Boolean,
     val instructions: String,
     /** 手写技能里的 `required_tools`，编辑页不展示，保存时原样写回。 */
-    val requiredTools: List<String> = emptyList()
+    val requiredTools: List<String> = emptyList(),
+    /** 自然语言触发词：消息中空格分隔独立出现即自动注入正文。 */
+    val triggers: List<String> = emptyList()
 )
 
 /** 子代理列表页的 UI 状态：定义内容 + 来源作用域 + 启停状态。 */
@@ -1567,7 +1569,8 @@ class SettingsViewModel @Inject constructor(
                         scope = entry.scope,
                         disabled = entry.skill.name.lowercase() in disabled,
                         instructions = entry.skill.instructions,
-                        requiredTools = entry.skill.requiredTools
+                        requiredTools = entry.skill.requiredTools,
+                        triggers = entry.skill.triggers
                     )
                 }
             }

@@ -1268,6 +1268,9 @@
     <string name="skills_scope_project">当前项目</string>
     <string name="skills_name_hint">建议用英文小写，如 pdf-report</string>
     <string name="skills_description_hint">简述何时该用它，AI 据此判断要不要加载</string>
+    <string name="skills_triggers_label">触发词</string>
+    <string name="skills_triggers_hint">如：逆向, 脱壳, reverse</string>
+    <string name="skills_triggers_help">消息中以空格分隔的独立词命中时自动注入本技能正文（如「帮我 逆向 看看」）；需逗号分隔，至少 2 个字符，不支持带空格的词组</string>
     <string name="skills_instructions_hint">写清这类任务的标准流程与注意事项，支持 Markdown</string>
     <string name="skills_editor_error_invalid_name">名称不合法：不能为空，也不能包含路径分隔符等特殊字符</string>
     <string name="skills_editor_error_empty_instructions">指令正文不能为空</string>

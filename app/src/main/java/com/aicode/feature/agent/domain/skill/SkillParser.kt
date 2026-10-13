@@ -61,6 +61,9 @@ object SkillParser {
             FileLogger.w(TAG, "解析 triggers 失败", e)
             emptyList()
         }
+        // 多词触发词在「空格分词全等」规则下永远命中不了（见 SkillTriggerMatcher），解析时就丢弃，
+        // 不留「配了没用」的假象；<2 字符也在这里拦掉。
+        triggers.filter { it.length >= 2 && !Regex("[\\s\u3000]+").containsMatchIn(it) }
 
         return Skill(
             name = name,
