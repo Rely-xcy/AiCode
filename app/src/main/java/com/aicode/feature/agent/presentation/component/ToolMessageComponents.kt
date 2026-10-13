@@ -84,6 +84,9 @@ import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Database
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Globe
+import compose.icons.feathericons.HelpCircle
+import compose.icons.feathericons.Image
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Tool
@@ -591,9 +594,12 @@ internal fun ToolStatusIcon(running: Boolean, isError: Boolean, toolName: String
 /** 工具名字形映射：键与 [com.aicode.feature.agent.domain.tool.ToolRegistry] 注册名一致（比对时忽略大小写）。 */
 private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase()) {
     "editfile", "writefile", "generateimage" -> FeatherIcons.Edit3
-    "readfile", "list", "sendfile", "viewimage" -> FeatherIcons.FileText
-    "search", "websearch", "webfetch", "browser" -> FeatherIcons.Search
+    "readfile", "list", "sendfile" -> FeatherIcons.FileText
+    "viewimage" -> FeatherIcons.Image
+    "search", "websearch", "webfetch" -> FeatherIcons.Search
+    "browser" -> FeatherIcons.Globe
     "bash", "terminal" -> FeatherIcons.Terminal
+    "askuserquestion" -> FeatherIcons.HelpCircle
     "todo" -> FeatherIcons.Check
     "task" -> FeatherIcons.Cpu
     "memory" -> FeatherIcons.Database
@@ -612,9 +618,12 @@ private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase
 @StringRes
 internal fun toolRunningLabelRes(toolName: String?): Int = when (toolName?.lowercase()) {
     "editfile", "writefile" -> R.string.chat_status_editing_file
-    "readfile", "list", "sendfile", "viewimage" -> R.string.chat_status_reading_file
-    "search", "websearch", "webfetch", "browser" -> R.string.chat_status_searching_web
+    "readfile", "list", "sendfile" -> R.string.chat_status_reading_file
+    "viewimage" -> R.string.chat_status_viewing_image
+    "search", "websearch", "webfetch" -> R.string.chat_status_searching_web
+    "browser" -> R.string.chat_status_browsing_web
     "bash", "terminal" -> R.string.chat_status_running_command
+    "askuserquestion" -> R.string.chat_status_asking_user
     "generateimage" -> R.string.chat_status_generating_image
     "todo" -> R.string.chat_status_updating_todo
     "task" -> R.string.chat_status_starting_subagent

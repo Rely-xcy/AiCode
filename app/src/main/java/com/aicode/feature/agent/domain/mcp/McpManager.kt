@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -178,6 +179,9 @@ class McpManager @Inject constructor(
         } catch (e: McpAuthRequiredException) {
             FileLogger.i(TAG, "[${cfg.name}] 需要 OAuth 授权（${System.currentTimeMillis() - t0}ms）")
             McpServerStatus(cfg.name, McpServerStatus.State.NEEDS_AUTH)
+        } catch (e: CancellationException) {
+            // reload 被新的配置/工作区变更取消是正常流程，不当连接失败上报。
+            throw e
         } catch (e: Exception) {
             FileLogger.e(TAG, "[${cfg.name}] 连接失败（${System.currentTimeMillis() - t0}ms）", e)
             McpServerStatus(cfg.name, McpServerStatus.State.FAILED, error = e.message)

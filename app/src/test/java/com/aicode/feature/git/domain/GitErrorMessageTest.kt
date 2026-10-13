@@ -28,14 +28,14 @@ class GitErrorMessageTest {
     @Test
     fun invalidReference_returnsNotFoundHint() {
         val raw = "fatal: invalid reference: nope"
-        assertEquals("分支或引用不存在", GitErrorMessage.friendly(raw))
+        assertEquals("分支、标签或提交不存在", GitErrorMessage.friendly(raw))
     }
 
     @Test
     fun localChangesWouldBeOverwritten_returnsStashHint() {
         val raw = "error: Your local changes to the following files would be overwritten by checkout:\n" +
             "\tapp/src/Main.kt\nPlease commit your changes or stash them before you switch branches."
-        assertEquals("本地有未提交的改动会被覆盖，请先提交或暂存后再切换", GitErrorMessage.friendly(raw))
+        assertEquals("本地有未提交的改动会被覆盖，请先提交或储藏后再切换分支", GitErrorMessage.friendly(raw))
     }
 
     // ── 远程不可用 / 无权限 ─────────────────────────────────────
@@ -77,7 +77,7 @@ class GitErrorMessageTest {
     @Test
     fun passwordAuthenticationNotSupported_returnsCredentialHint() {
         val raw = "remote: Password authentication is not supported for GitHub."
-        assertEquals("远程鉴权失败，请检查凭据配置（用户名/密码/Token）", GitErrorMessage.friendly(raw))
+        assertEquals("远程鉴权失败，未提供有效凭据，请检查凭据配置", GitErrorMessage.friendly(raw))
     }
 
     // ── 仓库不存在 ──────────────────────────────────────────────
@@ -151,7 +151,8 @@ class GitErrorMessageTest {
 
     @Test
     fun noMatch_returnsRaw() {
-        val raw = "error: pathspec 'missing.txt' did not match any file(s) known to git"
+        // 样本必须是 git 侧确实没被映射的输出：pathspec 这类现在已有友好提示，当「未命中」样本就错了。
+        val raw = "fatal: bad config line 1 in file .git/config"
         assertEquals(raw, GitErrorMessage.friendly(raw))
     }
 

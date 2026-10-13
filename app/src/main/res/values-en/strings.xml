@@ -631,6 +631,7 @@
     <string name="editor_unsaved_title">Unsaved changes</string>
     <string name="editor_unsaved_message">This file has unsaved changes. Save them?</string>
     <string name="editor_save_and_exit">Save and exit</string>
+    <string name="editor_save_and_switch">Save and switch</string>
     <string name="editor_dont_save">Don\'t save</string>
     <string name="editor_md_preview">Preview Markdown</string>
     <string name="editor_md_show_source">Show source</string>
@@ -715,7 +716,10 @@
     <string name="chat_status_running_command">Running command</string>
     <string name="chat_status_editing_file">Editing file</string>
     <string name="chat_status_reading_file">Reading file</string>
+    <string name="chat_status_viewing_image">Viewing image</string>
     <string name="chat_status_searching_web">Searching the web</string>
+    <string name="chat_status_browsing_web">Controlling browser</string>
+    <string name="chat_status_asking_user">Asking user</string>
     <string name="chat_status_generating_image">Generating image</string>
     <string name="chat_status_updating_todo">Updating to-dos</string>
     <string name="chat_status_starting_subagent">Starting sub-agent</string>
@@ -726,6 +730,7 @@
     <string name="chat_tool_calls_count">%1$d tool calls</string>
     <string name="chat_turn_running">Running</string>
     <string name="chat_turn_completed">Completed in %1$s</string>
+    <string name="chat_turn_completed_plain">Completed</string>
     <string name="chat_context_usage">Context %1$d%% used (%2$s)</string>
     <string name="chat_bg_command_done">Background command completed</string>
     <string name="chat_bg_commands_done">%1$d background tasks completed</string>

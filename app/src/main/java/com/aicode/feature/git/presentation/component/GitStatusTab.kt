@@ -109,6 +109,7 @@ internal fun StatusTab(
     onDeleteUntracked: (String) -> Unit,
     onToggleUntrackedDir: (String) -> Unit,
     onCopyPath: (String) -> Unit,
+    onStashOpen: () -> Unit = {},
     onStashSave: (String?, Boolean) -> Unit = { _, _ -> },
     onStashPop: (String) -> Unit = {},
     onStashApply: (String) -> Unit = {},
@@ -260,7 +261,10 @@ internal fun StatusTab(
                     label = stringResource(R.string.git_tab_stash),
                     icon = FeatherIcons.Archive,
                     enabled = !busy,
-                    onClick = { showStashSheet = true },
+                    onClick = {
+                        onStashOpen()
+                        showStashSheet = true
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 ActionButton(

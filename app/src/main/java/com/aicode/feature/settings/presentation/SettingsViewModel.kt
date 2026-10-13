@@ -2006,6 +2006,27 @@ class SettingsViewModel @Inject constructor(
         return line.contains("[$serverName]") || line.contains("mcp__${serverName}__")
     }
 
+    /** 标准日志行的开头（时间 + 等级），用于区分堆栈续行。与 FileLogger 落盘格式对齐。 */
+    private val logLinePrefixRegex = Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (?:VERBOSE|DEBUG|INFO|WARN|ERROR) """)
+
+    /**
+     * 按 MCP server 过滤日志：命中的标准日志行连同其后的堆栈续行一并保留。
+     * 堆栈续行本身不含 tag 与 server 名，逐行匹配会把报错的堆栈整段丢掉。
+     */
+    private fun filterMcpServerLines(rawLines: List<String>, serverName: String): List<String> {
+        val result = ArrayList<String>()
+        var keepContinuation = false
+        for (line in rawLines) {
+            if (logLinePrefixRegex.containsMatchIn(line)) {
+                keepContinuation = isMcpServerLogLine(line, serverName)
+                if (keepContinuation) result.add(line)
+            } else if (keepContinuation) {
+                result.add(line)
+            }
+        }
+        return result
+    }
+
     fun refreshLogs(filterServerName: String? = _logViewerState.value.filterServerName, silent: Boolean = false) {
         loadLogs(
             filterServerName = filterServerName?.takeIf { it.isNotBlank() },
@@ -2050,7 +2071,7 @@ class SettingsViewModel @Inject constructor(
                     val filteredLines = if (filterServerName.isNullOrBlank()) {
                         rawLines
                     } else {
-                        rawLines.filter { line -> isMcpServerLogLine(line, filterServerName) }
+                        filterMcpServerLines(rawLines, filterServerName)
                     }
                     val visibleLines = filteredLines.takeLast(MAX_LOG_LINES)
 

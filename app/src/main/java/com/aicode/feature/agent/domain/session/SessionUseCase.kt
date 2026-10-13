@@ -115,6 +115,12 @@ class SessionUseCase @Inject constructor(
         return chatSessionDao.getLatestRootSessionByWorkspace(workspacePath)
     }
 
+    /** 工作区下可复用的空会话（从未发送过消息的根会话，取最近更新的一个），供「新建会话」直接切过去。 */
+    suspend fun getEmptySessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
+        return chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath)
+            .firstOrNull { !agentMessageDao.hasMessages(it.id) }
+    }
+
     /** 回收工作区下多余的空会话（从未发送过消息），保留 [keepId]；保证列表最多一个空会话。 */
     suspend fun recycleEmptySessions(workspacePath: String, keepId: String? = null): Int {
         var count = 0

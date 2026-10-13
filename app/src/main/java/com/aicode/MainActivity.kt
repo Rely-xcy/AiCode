@@ -84,6 +84,7 @@ import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
 import com.aicode.feature.editor.presentation.CodeEditorScreen
+import com.aicode.feature.editor.presentation.EditorLeaveGuard
 import com.aicode.feature.browser.presentation.BrowserScreen
 import com.aicode.feature.git.presentation.GitViewModel
 import com.aicode.feature.credentials.presentation.component.CredentialScreen
@@ -484,6 +485,8 @@ fun AppNavigation(
     var paneEditorPath by rememberSaveable { mutableStateOf("") }
     var paneEditorLine by rememberSaveable { mutableIntStateOf(0) }
     var paneSplit by rememberSaveable { mutableFloatStateOf(DEFAULT_PANE_SPLIT) }
+    // 右栏编辑器有未保存修改时，换文件前先弹保存提示（窄窗全屏编辑器由返回键拦截，不经过这里）。
+    val editorLeaveGuard = remember { EditorLeaveGuard() }
 
     // 右栏打开时返回键先收起它。限定聊天页：其他页面右栏不渲染，不能在那里吞掉返回事件。
     BackHandler(
@@ -496,9 +499,19 @@ fun AppNavigation(
     // 打开文件：大屏进右栏，窄窗跳全屏编辑器页。
     val openFile: (String, Int, Boolean) -> Unit = { filePath, line, fromDrawer ->
         if (expanded) {
-            paneEditorPath = filePath
-            paneEditorLine = line
-            paneKind = WorkbenchPaneKind.EDITOR
+            val apply = {
+                paneEditorPath = filePath
+                paneEditorLine = line
+                paneKind = WorkbenchPaneKind.EDITOR
+            }
+            // 重复点同一个文件：内容不换，只是重新走到目标行（交给编辑器的行定位 effect），
+            // 不必问「要不要保存」——保存与否都不影响结果。
+            if (paneKind == WorkbenchPaneKind.EDITOR && paneEditorPath == filePath) {
+                apply()
+            } else {
+                // 编辑器里有未保存修改时，由编辑器先弹保存提示，确认后再换。
+                editorLeaveGuard.requestLeave(apply)
+            }
             // 常驻侧栏不需要关；平板竖屏等仍用 modal 抽屉的情况下选完文件要收起。
             if (!permanentDrawer) scope.launch { drawerState.close() }
         } else {
@@ -547,7 +560,13 @@ fun AppNavigation(
     // popUpTo 折叠栈后，返回键从终端/Git 只会回聊天页，不会进入空栈。
     val openWorkbench: (WorkbenchPaneKind) -> Unit = { target ->
         if (expanded) {
-            paneKind = if (paneKind == target) WorkbenchPaneKind.NONE else target
+            val next = if (paneKind == target) WorkbenchPaneKind.NONE else target
+            // 从编辑器切走（含再点一次图标收起）同样会丢掉未保存的修改，走同一套确认。
+            if (paneKind == WorkbenchPaneKind.EDITOR && next != WorkbenchPaneKind.EDITOR) {
+                editorLeaveGuard.requestLeave { paneKind = next }
+            } else {
+                paneKind = next
+            }
         } else {
             val route = when (target) {
                 WorkbenchPaneKind.TERMINAL -> "terminal"
@@ -717,6 +736,7 @@ fun AppNavigation(
                                 editorLine = paneEditorLine,
                                 onClose = { paneKind = WorkbenchPaneKind.NONE },
                                 onOpenFile = { path -> openFile(path, 0, false) },
+                                editorLeaveGuard = editorLeaveGuard,
                                 modifier = Modifier.weight(1f - paneSplit)
                             )
                         }

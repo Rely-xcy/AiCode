@@ -626,6 +626,7 @@
     <string name="editor_unsaved_title">未保存的修改</string>
     <string name="editor_unsaved_message">当前文件有未保存的修改，是否保存？</string>
     <string name="editor_save_and_exit">保存并退出</string>
+    <string name="editor_save_and_switch">保存并切换</string>
     <string name="editor_dont_save">不保存</string>
     <string name="editor_md_preview">预览 Markdown</string>
     <string name="editor_md_show_source">显示源码</string>
@@ -715,7 +716,10 @@
     <string name="chat_status_running_command">正在执行命令</string>
     <string name="chat_status_editing_file">正在编辑文件</string>
     <string name="chat_status_reading_file">正在读取文件</string>
+    <string name="chat_status_viewing_image">正在查看图片</string>
     <string name="chat_status_searching_web">正在联网搜索</string>
+    <string name="chat_status_browsing_web">正在操作浏览器</string>
+    <string name="chat_status_asking_user">正在询问用户</string>
     <string name="chat_status_generating_image">正在生成图片</string>
     <string name="chat_status_updating_todo">正在整理待办</string>
     <string name="chat_status_starting_subagent">正在启动子代理</string>
@@ -726,6 +730,7 @@
     <string name="chat_tool_calls_count">%1$d 次工具调用</string>
     <string name="chat_turn_running">执行中</string>
     <string name="chat_turn_completed">已完成 %1$s</string>
+    <string name="chat_turn_completed_plain">已完成</string>
     <string name="chat_context_usage">上下文已用 %1$d%%（%2$s）</string>
     <string name="chat_bg_command_done">后台命令已完成</string>
     <string name="chat_bg_commands_done">%1$d 个后台任务已完成</string>

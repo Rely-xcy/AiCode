@@ -213,6 +213,7 @@ fun GitScreen(
                                     snackbarHostState.showSnackbar(context.getString(R.string.git_toast_path_copied))
                                 }
                             },
+                            onStashOpen = viewModel::loadStashes,
                             onStashSave = viewModel::stashSave,
                             onStashPop = viewModel::stashPop,
                             onStashApply = viewModel::stashApply,
