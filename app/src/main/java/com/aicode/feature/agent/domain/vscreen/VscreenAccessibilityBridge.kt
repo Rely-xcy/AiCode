@@ -103,11 +103,15 @@ internal fun formatUiNodes(nodes: List<UiNode>, limit: Int): String {
     if (nodes.isEmpty()) return "（未取到任何节点）"
     val sb = StringBuilder()
     nodes.take(limit).forEachIndexed { index, node ->
+        // 密码框的文本/描述一律不输出：桥里已置空，但格式化层再兜一道，
+        // 免得日后有人直接构造 UiNode 时把凭据漏出去。
+        val text = if (node.password) null else node.text
+        val desc = if (node.password) null else node.contentDescription
         sb.append(" ".repeat(node.depth.coerceAtMost(MAX_INDENT)))
         sb.append('[').append(index).append("] ").append(node.className.ifBlank { "View" })
         if (node.password) sb.append(" (密码框，内容已略)")
-        node.text?.takeIf { it.isNotBlank() }?.let { sb.append(" text=\"").append(it).append('"') }
-        node.contentDescription?.takeIf { it.isNotBlank() }?.let { sb.append(" desc=\"").append(it).append('"') }
+        text?.takeIf { it.isNotBlank() }?.let { sb.append(" text=\"").append(it).append('"') }
+        desc?.takeIf { it.isNotBlank() }?.let { sb.append(" desc=\"").append(it).append('"') }
         node.viewId?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let { sb.append(" id=").append(it) }
         sb.append(" bounds=").append(node.bounds)
         if (node.clickable) sb.append(" clickable")
