@@ -59,10 +59,8 @@ internal fun GeneralSettingsSection(
     enterToSend: Boolean,
     onToggleEnterToSend: (Boolean) -> Unit,
     compactionThresholdPercent: Int,
-    softCompactionThresholdPercent: Int,
     /** 实际生效的触发线（按默认模型窗口算）；取不到时为 null，只显示百分比。 */
     effectiveCompaction: EffectiveCompactionThresholds? = null,
-    onSetSoftCompactionThresholdPercent: (Int) -> Unit,
     onSetCompactionThresholdPercent: (Int) -> Unit,
     sendFileMaxSizeMb: Int,
     onSetSendFileMaxSizeMb: (Int) -> Unit,
@@ -74,7 +72,6 @@ internal fun GeneralSettingsSection(
     var editingStreamIdleTimeout by remember { mutableStateOf(false) }
     var editingMaxNetworkRetries by remember { mutableStateOf(false) }
     var editingCompactionThreshold by remember { mutableStateOf(false) }
-    var editingSoftCompactionThreshold by remember { mutableStateOf(false) }
     var editingSendFileMaxSize by remember { mutableStateOf(false) }
 
     Column(
@@ -137,30 +134,6 @@ internal fun GeneralSettingsSection(
                 trailing = {
                     Text(
                         text = stringResource(R.string.settings_percent_value, compactionThresholdPercent),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText
-                    )
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.settings_soft_compaction_threshold),
-                subtitle = buildString {
-                    append(stringResource(R.string.settings_soft_compaction_threshold_desc))
-                    // 软线会被硬线压低（软 = min(窗口×软线%, 硬线-1)），右侧显的百分比在那种情况下已经不成立。
-                    effectiveCompaction?.let { effective ->
-                        val percent = effectivePercent(effective.thresholds.soft, effective.thresholds.contextLimit)
-                        if (percent < softCompactionThresholdPercent) {
-                            append('\n')
-                            append(stringResource(R.string.settings_compaction_effective_soft_capped, percent))
-                        }
-                    }
-                },
-                onClick = { editingSoftCompactionThreshold = true },
-                trailing = {
-                    Text(
-                        text = stringResource(R.string.settings_percent_value, softCompactionThresholdPercent),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
                     )
@@ -336,21 +309,6 @@ internal fun GeneralSettingsSection(
                 editingCompactionThreshold = false
             },
             onDismiss = { editingCompactionThreshold = false }
-        )
-    }
-
-    if (editingSoftCompactionThreshold) {
-        NumberInputDialog(
-            title = stringResource(R.string.settings_soft_compaction_threshold),
-            initialValue = softCompactionThresholdPercent,
-            hint = stringResource(R.string.settings_compaction_threshold_input_hint),
-            minValue = 1,
-            maxValue = 100,
-            onConfirm = {
-                onSetSoftCompactionThresholdPercent(it)
-                editingSoftCompactionThreshold = false
-            },
-            onDismiss = { editingSoftCompactionThreshold = false }
         )
     }
 

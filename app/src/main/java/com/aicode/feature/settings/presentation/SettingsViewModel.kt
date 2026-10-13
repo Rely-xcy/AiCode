@@ -601,7 +601,6 @@ class SettingsViewModel @Inject constructor(
     val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
 
     private val _softCompactionThresholdPercent = MutableStateFlow(GeneralSettingsRepository.DEFAULT_SOFT_COMPACTION_THRESHOLD_PERCENT)
-    val softCompactionThresholdPercent: StateFlow<Int> = _softCompactionThresholdPercent.asStateFlow()
 
     /**
      * 压缩阈值的**实际生效值**，供设置页显示「实际触发线」。
@@ -2140,12 +2139,6 @@ class SettingsViewModel @Inject constructor(
     fun setCompactionThresholdPercent(percent: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setCompactionThresholdPercent(percent)
-        }
-    }
-
-    fun setSoftCompactionThresholdPercent(percent: Int) {
-        viewModelScope.launch {
-            generalSettingsRepository.setSoftCompactionThresholdPercent(percent)
         }
     }
 
