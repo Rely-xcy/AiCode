@@ -13,6 +13,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import com.aicode.core.net.AppProxy
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.TombstoneParser
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -52,6 +54,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val MAX_EXIT_RECORDS = 20
         /** 单条退出 trace 落盘时保留的字节上限（按字节截断，避免超大 trace 撑爆内存）。 */
         private const val TRACE_HEAD_BYTES = 16 * 1024
+
+        /** 崩溃 tombstone 落盘目录保留的文件数上限（超出则删除最旧的）。 */
+        private const val MAX_CRASH_TRACE_FILES = 20
         /**
          * 无 Java 异常、只能靠 ApplicationExitInfo 补记的退出原因（API 30+）。
          * 不包含 REASON_CRASH（Java 崩溃已由 installCrashHandler + CrashActivity 完整记录）。
@@ -596,13 +601,54 @@ class AIEditorApp : Application(), Configuration.Provider {
         append("，pss=").append(info.pss / 1024 / 1024).append("MB")
         append("，rss=").append(info.rss / 1024 / 1024).append("MB")
         info.description?.let { append("，描述=").append(it) }
-        readTraceHead(info.traceInputStream)?.let { append("\n").append(it) }
+        if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            append("\n").append(describeNativeTrace(info.traceInputStream, info.timestamp))
+        } else {
+            readTraceHead(info.traceInputStream)?.let { append("\n").append(it) }
+        }
+    }
+
+    /**
+     * native 崩溃的 trace 是 tombstone 的 protobuf（见 [TombstoneParser]）。原样落盘一份（无损，
+     * 便于线下用 protobuf 工具重解析），并解析成可读文本内联——不再走 [readTraceHead] 的可打印过滤，
+     * 那条路径会丢掉线程边界、无法定位到崩溃线程。
+     */
+    private fun describeNativeTrace(stream: java.io.InputStream?, timestamp: Long): String {
+        val bytes = runCatching { stream?.use { it.readBytes() } }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) return "trace: (无)"
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date(timestamp))
+        val dir = FileLogger.logDirectory()?.let { File(it, "crash-traces").apply { mkdirs() } }
+        val rawPath = dir?.let { d ->
+            File(d, "tombstone-$stamp.pb").also { f ->
+                runCatching { f.writeBytes(bytes) }
+                    .onFailure { FileLogger.w(TAG, "落盘原始 tombstone 失败", it) }
+            }.absolutePath
+        }
+        pruneCrashTraces(dir)
+        val body = TombstoneParser.parse(bytes)
+            ?: readTraceHead(bytes.inputStream())
+            ?: "(无可读内容)"
+        val where = rawPath?.let { "\n原始 tombstone: $it" } ?: ""
+        return "trace:\n$body$where"
+    }
+
+    /** 崩溃 tombstone 目录只保留最新的 [MAX_CRASH_TRACE_FILES] 个文件，避免无上限增长。 */
+    private fun pruneCrashTraces(dir: File?) {
+        if (dir == null) return
+        runCatching {
+            val files = dir.listFiles { f -> f.isFile && f.name.startsWith("tombstone-") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: return
+            if (files.size <= MAX_CRASH_TRACE_FILES) return
+            files.drop(MAX_CRASH_TRACE_FILES).forEach { it.delete() }
+        }
     }
 
     /**
      * 读取 trace 前 [TRACE_HEAD_BYTES] 字节（按字节限长，避免超大 trace 撑爆内存），
-     * 并只保留其中的可打印文本片段。native 崩溃的 trace 是 tombstone 的 protobuf 二进制、
-     * ANR 可能是压缩流，直接按 UTF-8 转字符串会变成大量乱码并撑大日志，故按字节过滤出可见串。
+     * 并只保留其中的可打印文本片段。用于 ANR 等非 native 退出（trace 可能是压缩流），
+     * 或 tombstone 解析失败时的兜底；直接按 UTF-8 转字符串会变成大量乱码并撑大日志。
      * 无 trace 或无可见内容时返回 null。
      */
     private fun readTraceHead(stream: java.io.InputStream?): String? {
