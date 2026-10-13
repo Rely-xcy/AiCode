@@ -90,8 +90,9 @@ class SkillTriggerMatcherTest {
     @Test
     fun `含空格的触发词被sanitize丢弃`() {
         // 多词触发词在 token 全等规则下永远命中不了，解析/保存时就要丢弃，不留「配了没用」的假象
-        assertEquals(emptyList<String>(), SkillTriggerMatcher.sanitize(listOf("reverse engineering", "逆向")))
+        assertEquals(emptyList<String>(), SkillTriggerMatcher.sanitize(listOf("reverse engineering")))
         assertEquals(listOf("逆向"), SkillTriggerMatcher.sanitize(listOf(" 逆向 ", "a", "逆向")))
+        // 同一个技能里配了一个多词 + 一个单词：多词被丢，单词照常命中
         val hits = SkillTriggerMatcher.match("逆向", listOf(skill("reverse engineering", "逆向")))
         assertEquals(listOf("逆向"), hits.map { it.hitWord })
     }
