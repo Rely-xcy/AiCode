@@ -43,7 +43,7 @@ class ContainerImageVersionProbe @Inject constructor() {
             client.newCall(Request.Builder().url(url).build()).execute().use { response ->
                 if (!response.isSuccessful) return@use null
                 // 版本文件只有十几字节；peekBody 限读，避免把异常的大响应体（如 HTML 错误页）整个读进来
-                response.peekBody(MAX_BODY_BYTES).string().trim().takeIf { VERSION_PATTERN.matches(it) }
+                normalizeImageVersion(response.peekBody(MAX_BODY_BYTES).string())
             }
         }.onFailure { FileLogger.d(TAG, "版本探测失败 url=$url: ${it.message}") }.getOrNull()
 
@@ -54,12 +54,17 @@ class ContainerImageVersionProbe @Inject constructor() {
     companion object {
         private const val TAG = "ContainerImageVersionProbe"
         private const val MAX_BODY_BYTES = 64L
-
-        /**
-         * 版本号白名单式校验：以数字开头，只含数字/字母/点/下划线/加号/连字符，长度受限。
-         * 目的是把 HTML 错误页、跳转页挡在外面，避免把一段 HTML 当成版本号显示。
-         * 典型匹配：`12.15`、`3.21.8`、`20.04.5`。
-         */
-        private val VERSION_PATTERN = Regex("""^[0-9][0-9A-Za-z._+-]{0,31}$""")
     }
 }
+
+/**
+ * 把探测到的原始响应文本规整为可信的版本号；不像版本号的一律返回 null。
+ *
+ * 这是白名单而非黑名单：以数字开头，只含数字/字母/点/下划线/加号/连字符，长度受限。
+ * 目的是把 HTML 错误页、跳转页、鉴权页面挡在外面——把一段 HTML 当成版本号显示给用户
+ * 比完全不显示更糟。典型匹配：`12.15`、`3.21.8`、`20.04.5`。
+ */
+internal fun normalizeImageVersion(raw: String?): String? =
+    raw?.trim()?.takeIf(IMAGE_VERSION_PATTERN::matches)
+
+private val IMAGE_VERSION_PATTERN = Regex("""^[0-9][0-9A-Za-z._+-]{0,31}$""")
