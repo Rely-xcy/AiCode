@@ -184,6 +184,7 @@ internal fun McpServerRow(
         else -> when (status.state) {
             McpServerStatus.State.CONNECTED -> stringResource(R.string.mcp_connected)
             McpServerStatus.State.CONNECTING -> stringResource(R.string.mcp_connecting)
+            McpServerStatus.State.NEEDS_AUTH -> stringResource(R.string.mcp_needs_auth)
             McpServerStatus.State.FAILED -> stringResource(R.string.mcp_connection_failed)
             McpServerStatus.State.DISABLED -> stringResource(R.string.mcp_disabled)
         }

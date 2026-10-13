@@ -1159,11 +1159,9 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
-                // 先做存量数据归一，再开始收集，避免升级后的第一帧闪出旧顺序：
-                // 1) 首次启动写入内置 Alpine 默认项（置位标记后不再自动补回）；
-                // 2) 把存量列表顺序归一为「新建在前」的显示序（此后顺序由用户拖拽决定，不再实时排序）。
+                // 首次启动写入内置 Alpine 默认项（置位标记后不再自动补回）；
+                // 列表顺序由 ListOrderStore 拖拽表决定（fork 架构），无存量归一步骤。
                 containerSettingsRepository.ensureBuiltinDefault()
-                containerSettingsRepository.ensureProfileDisplayOrder()
                 containerSettingsRepository.customProfilesFlow.collectLatest {
                     // 列表顺序 = 用户拖拽顺序表（ListOrderStore，不在表里的按创建时间降序补在后面），
                     // 没拖过则保持原行为：按添加时间降序（新的在前）；旧数据 createdAt 同为 0 时保持存储顺序
@@ -2311,23 +2309,6 @@ class SettingsViewModel @Inject constructor(
     fun saveCustomContainerProfile(profile: ContainerProfile) {
         viewModelScope.launch {
             containerSettingsRepository.upsertCustomProfile(profile)
-        }
-    }
-
-    /**
-     * 容器列表长按拖拽排序：同步更新内存顺序（列表已重排 UI 才重绘，避免松手瞬间回跳），
-     * 再异步持久化新顺序（存储顺序即显示顺序）。
-     */
-    fun reorderContainerProfiles(fromIndex: Int, toIndex: Int) {
-        if (fromIndex == toIndex) return
-        val current = _customProfiles.value
-        if (fromIndex !in current.indices || toIndex !in current.indices) return
-        val reordered = current.toMutableList().apply {
-            add(toIndex, removeAt(fromIndex))
-        }
-        _customProfiles.value = reordered
-        viewModelScope.launch {
-            containerSettingsRepository.reorderCustomProfiles(reordered.map { it.id })
         }
     }
 

@@ -759,6 +759,7 @@
 
     <!-- Container Settings -->
     <string name="container_reset">重置</string>
+    <string name="container_active">当前使用中</string>
     <string name="container_add_image">添加镜像</string>
     <string name="container_remote_ssh">远程 SSH</string>
     <string name="container_custom_image">自定义镜像</string>

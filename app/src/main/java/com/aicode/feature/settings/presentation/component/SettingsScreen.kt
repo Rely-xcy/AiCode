@@ -1149,10 +1149,7 @@ fun SettingsScreen(
                     },
                     resetState = containerReset,
                     onRestoreBuiltin = { viewModel.restoreBuiltinAlpine() },
-                    remoteConnections = remoteConnections,
-                    onReorder = { fromIndex, toIndex ->
-                        viewModel.reorderContainerProfiles(fromIndex, toIndex)
-                    }
+                    remoteConnections = remoteConnections
                 )
                 SettingsSection.ContainerDownloads -> ContainerImageDownloadSection(
                     catalog = imageCatalog,

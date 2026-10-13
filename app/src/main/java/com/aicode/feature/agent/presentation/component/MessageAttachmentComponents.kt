@@ -256,7 +256,7 @@ internal suspend fun openSentAttachment(
     // 外部本地目录工作区、自定义挂载源的文件不在 FileProvider 目录树内，先拷进 cacheDir 再授权。
     if (isApk(attachment)) {
         val installable = withContext(Dispatchers.IO) {
-            if (isShareable(context, local)) local else copyToShareCache(context, local)
+            if (isShareable(context, localFile)) localFile else copyToShareCache(context, localFile)
         }
         if (installable == null) {
             Toast.makeText(context, context.getString(R.string.chat_open_file_unshareable), Toast.LENGTH_SHORT).show()

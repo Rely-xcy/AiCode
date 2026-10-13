@@ -138,7 +138,7 @@ internal fun UpdateCheckDialog(
                 TextButton(onClick = onDownload) { Text(stringResource(R.string.about_update_retry)) }
             },
             dismissButton = {
-                TextButton(onClick = { onOpenRelease(state.previous.latestTag) }) {
+                TextButton(onClick = { onOpenDownload(githubReleaseUrl(state.previous.latestTag)) }) {
                     Text(stringResource(R.string.about_update_browser))
                 }
             }
