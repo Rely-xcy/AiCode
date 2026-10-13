@@ -31,8 +31,15 @@ data class ContainerImageEntry(
      * 留空表示该条目版本固定、无需探测。
      */
     val versionPath: String = "",
-    /** 上游 EOL 日期（`yyyy-MM-dd`），留空表示未知；用于列表标注即将/已经停止支持的分支。 */
+    /** 上游 EOL 日期（`yyyy-MM-dd`），留空表示未知；这是**完全结束**日（含延长支持期）。 */
     val eol: String = "",
+    /**
+     * **常规支持**结束日（`yyyy-MM-dd`）。过了它但未过 [eol] 说明只剩延长支持期
+     * （Ubuntu 的 ESM / Debian 的 LTS）。留空表示该发行版没有两段式支持周期（如 Alpine）。
+     */
+    val supportEnds: String = "",
+    /** 延长支持计划名（如 `ESM` / `LTS`），用于把「已进入延长支持」说清楚；留空则用通用文案。 */
+    val supportExtension: String = "",
     val description: String = "",
     val sizeBytes: Long = 0,
     /** 所属发行版（对应全局 sources 表的键，如 alpine/ubuntu）。 */
@@ -48,22 +55,44 @@ data class ContainerImageEntry(
 )
 
 /** 发行版分支的支持状态，用于列表标注。 */
-enum class ContainerImageEol { NONE, SOON, ENDED }
+enum class ContainerImageEol {
+    /** 正常，无需标注。 */
+    NONE,
+
+    /** 某个支持期将在 [EOL_SOON_DAYS] 天内结束（常规支持或完全结束都算）。 */
+    SOON,
+
+    /** 已过常规支持、仍在延长支持期（Ubuntu 的 ESM / Debian 的 LTS）。 */
+    EXTENDED,
+
+    /** 已过完全结束日，彻底停止支持。 */
+    ENDED
+}
 
 /**
- * 按条目自带的 [ContainerImageEntry.eol] 判断支持状态：
- * 已过期为 [ContainerImageEol.ENDED]，距今不足 [EOL_SOON_DAYS] 天为 [ContainerImageEol.SOON]。
- * 未配置 eol 或日期非法一律返回 [ContainerImageEol.NONE]（宁可漏标也不误标）。
- * [today] 可注入，便于单测。
+ * 按条目自带的支持周期判断状态（两级）：
+ *
+ * - 已过 [ContainerImageEntry.eol]（完全结束）→ [ContainerImageEol.ENDED]；
+ * - 任一支持期距今不足 [EOL_SOON_DAYS] 天 → [ContainerImageEol.SOON]（迫近的截止优先提示）；
+ * - 已过 [ContainerImageEntry.supportEnds] 但未过 eol → [ContainerImageEol.EXTENDED]；
+ * - 其余 → [ContainerImageEol.NONE]。
+ *
+ * 未配置日期或日期非法一律当作「不知道」——宁可漏标也不误标。[today] 可注入，便于单测。
  */
 fun ContainerImageEntry.eolStatus(today: java.time.LocalDate = java.time.LocalDate.now()): ContainerImageEol {
-    val eolDate = runCatching { java.time.LocalDate.parse(eol) }.getOrNull() ?: return ContainerImageEol.NONE
-    return when {
-        eolDate.isBefore(today) -> ContainerImageEol.ENDED
-        eolDate.toEpochDay() - today.toEpochDay() < EOL_SOON_DAYS -> ContainerImageEol.SOON
-        else -> ContainerImageEol.NONE
-    }
+    val eolDate = parseIsoDateOrNull(eol) ?: return ContainerImageEol.NONE
+    // 当天到期仍算「即将」而非「已停止」：isBefore 不含当天
+    if (eolDate.isBefore(today)) return ContainerImageEol.ENDED
+    if (eolDate.toEpochDay() - today.toEpochDay() < EOL_SOON_DAYS) return ContainerImageEol.SOON
+
+    val supportDate = parseIsoDateOrNull(supportEnds) ?: return ContainerImageEol.NONE
+    if (supportDate.isBefore(today)) return ContainerImageEol.EXTENDED
+    return if (supportDate.toEpochDay() - today.toEpochDay() < EOL_SOON_DAYS) ContainerImageEol.SOON
+    else ContainerImageEol.NONE
 }
+
+private fun parseIsoDateOrNull(raw: String): java.time.LocalDate? =
+    runCatching { java.time.LocalDate.parse(raw) }.getOrNull()
 
 /** EOL 预警窗口：距停止支持不足这些天即标注。 */
 const val EOL_SOON_DAYS = 30L
@@ -71,20 +100,46 @@ const val EOL_SOON_DAYS = 30L
 /**
  * 展示用名称：发行版名 + 版本 + 可选后缀。
  * [resolvedVersion] 为运行时探测到的精确版本（如 Debian 的 `12.15`），为空时退回条目内置的 [ContainerImageEntry.version]。
+ * 版本里已经带了后缀就不重复追加——旧记录的版本号是 `12 (bookworm)` 这种含后缀的写法。
  */
-fun ContainerImageEntry.displayLabel(resolvedVersion: String? = null): String =
-    listOf(name, resolvedVersion?.takeIf { it.isNotBlank() } ?: version, versionSuffix)
-        .filter { it.isNotBlank() }
-        .joinToString(" ")
+fun ContainerImageEntry.displayLabel(resolvedVersion: String? = null): String {
+    val shown = resolvedVersion?.takeIf { it.isNotBlank() } ?: version
+    val suffix = versionSuffix.takeIf { it.isNotBlank() && !shown.contains(it) }.orEmpty()
+    return listOf(name, shown, suffix).filter { it.isNotBlank() }.joinToString(" ")
+}
 
 /**
  * 已下载的文件是否落后于目录当前版本。
- * [downloadedVersion] 为空（升级前留下的旧记录）时返回 false——宁可漏提示，也不能把用户刚下好的东西误报成「有新版」。
+ * [downloadedVersion] 为空时返回 false——宁可漏提示，也不能把用户刚下好的东西误报成「有新版」。
  */
 fun hasNewerVersion(downloadedVersion: String?, currentVersion: String): Boolean =
     !downloadedVersion.isNullOrBlank() &&
         currentVersion.isNotBlank() &&
         downloadedVersion != currentVersion
+
+/**
+ * 从下载文件名里取回版本号。
+ *
+ * 下载器一直用 `download_<条目 id>_<版本>_<时间戳>.<扩展名>` 命名，所以**升级前写入的旧记录**
+ * （那时已下载记录还没有「下载时版本」字段）也能靠文件名判断「磁盘上这份是不是该重下了」，
+ * 不必做数据迁移。
+ *
+ * 版本段按「不含下划线的任意字符」匹配，而不是只认数字：旧版 Debian 条目的版本号写作
+ * `12 (bookworm)`（含空格与括号），收紧成正则会把这类记录漏掉。
+ *
+ * 解析不出、或 id 对不上（防误配）返回空串，调用方按「不知道版本」处理而不是误报。
+ */
+fun versionFromDownloadFileName(entryId: String, fileUriOrPath: String): String {
+    if (entryId.isBlank() || fileUriOrPath.isBlank()) return ""
+    val fileName = fileUriOrPath.substringAfterLast('/')
+    val match = DOWNLOAD_FILE_NAME.matchEntire(fileName) ?: return ""
+    val (id, version) = match.destructured
+    return if (id == entryId) version else ""
+}
+
+/** 与 ContainerImageDownloader 的文件命名保持一致：download_<id>_<version>_<时间戳>.<tar.gz|tgz|tar.xz> */
+private val DOWNLOAD_FILE_NAME =
+    Regex("""^download_(.+)_([^_]+)_\d+\.(?:tar\.gz|tgz|tar\.xz)$""")
 
 /** 一个下载源：中英文显示名 + 各发行版的前缀（缺失/为空表示该源不提供此发行版）。 */
 @Serializable

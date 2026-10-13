@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerProfile
+import com.aicode.feature.agent.domain.container.versionFromDownloadFileName
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -33,7 +34,7 @@ data class DownloadedImageRecord(
     /**
      * 下载当时的版本号（如 `3.21.8` / `12.15`）。
      * 目录版本会随上游刷新，而磁盘上的文件不会跟着变，靠它才能判断「已下载的是不是旧补丁」。
-     * 空串表示升级前留下的旧记录，此时不参与「有新版」判定（宁可漏提示也不误报）。
+     * 空串表示升级前留下的旧记录，此时由 [effectiveVersion] 退回文件名解析。
      */
     val version: String = "",
     val installed: Boolean = false
@@ -112,6 +113,14 @@ internal fun removeDownloadedImageEntry(
     current: List<DownloadedImageRecord>,
     entryId: String
 ): List<DownloadedImageRecord> = current.filterNot { it.entryId == entryId }
+
+/**
+ * 磁盘上这份下载文件的版本号：记录字段优先；升级前的旧记录没有该字段，
+ * 退回从下载文件名解析（文件名一直带版本号），这样旧记录也能正确提示「有新版」，不必做数据迁移。
+ * 两者都拿不到时返回空串，调用方按「不知道版本」处理，不误报。
+ */
+fun DownloadedImageRecord.effectiveVersion(): String =
+    version.takeIf { it.isNotBlank() } ?: versionFromDownloadFileName(entryId, fileUri)
 
 /**
  * 持久化当前选中的容器 profile 与用户自定义 profile 列表。

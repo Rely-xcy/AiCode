@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.container
 
 import java.io.File
+import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -158,6 +159,16 @@ class ContainerImageCatalogParseTest {
             assertTrue("${entry.id} 缺名称或版本", entry.name.isNotBlank() && entry.version.isNotBlank())
             listOf("arm64", "x86_64").forEach { abi ->
                 assertTrue("${entry.id} 缺 $abi 的目录名映射", entry.abiNames[abi].isNullOrBlank().not())
+            }
+            // 支持周期必须自洽：有中间态时「常规支持结束」不能晚于「完全结束」，
+            // 否则两级判定会得出互相矛盾的状态
+            if (entry.supportEnds.isNotBlank()) {
+                val support = LocalDate.parse(entry.supportEnds)
+                val eol = LocalDate.parse(entry.eol)
+                assertTrue(
+                    "${entry.id} 的 supportEnds(${entry.supportEnds}) 晚于 eol(${entry.eol})",
+                    !support.isAfter(eol)
+                )
             }
         }
     }

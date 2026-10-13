@@ -59,6 +59,7 @@ import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.agent.domain.container.eolStatus
 import com.aicode.feature.agent.domain.container.hasNewerVersion
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
+import com.aicode.feature.settings.data.repository.effectiveVersion
 import com.aicode.feature.settings.presentation.ContainerImageDownloadUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
@@ -140,7 +141,7 @@ internal fun ContainerImageDownloadSection(
                         entry = entry,
                         displayName = entry.displayLabel(imageVersions[entry.id]),
                         eol = entry.eolStatus(),
-                        hasNewerVersion = hasNewerVersion(record?.version, resolvedVersion),
+                        hasNewerVersion = hasNewerVersion(record?.effectiveVersion(), resolvedVersion),
                         state = state,
                         isDownloaded = record != null && fileExists,
                         onOpenDetail = { detailEntry = entry },
@@ -157,7 +158,7 @@ internal fun ContainerImageDownloadSection(
             displayName = entry.displayLabel(imageVersions[entry.id]),
             eol = entry.eolStatus(),
             hasNewerVersion = hasNewerVersion(
-                downloadedImages[entry.id]?.version,
+                downloadedImages[entry.id]?.effectiveVersion(),
                 imageVersions[entry.id] ?: entry.version
             ),
             state = state,
@@ -209,15 +210,32 @@ private fun StatusBadge(text: String, color: Color) {
     }
 }
 
-/** 分支支持状态徽章：即将停止支持（警告色）/ 已停止支持（错误色）；无需标注时什么都不画。 */
+/** 支持状态文案与配色；无需标注返回 null。行内徽章与详情页共用，避免两处文案漂移。 */
 @Composable
-private fun EolBadge(eol: ContainerImageEol) {
-    val (textRes, color) = when (eol) {
-        ContainerImageEol.SOON -> R.string.container_download_eol_soon to MaterialTheme.semanticColors.warning
-        ContainerImageEol.ENDED -> R.string.container_download_eol_ended to MaterialTheme.colorScheme.error
-        ContainerImageEol.NONE -> return
+private fun eolStatusText(entry: ContainerImageEntry, eol: ContainerImageEol): Pair<String, Color>? = when (eol) {
+    ContainerImageEol.SOON ->
+        stringResource(R.string.container_download_eol_soon) to MaterialTheme.semanticColors.warning
+
+    ContainerImageEol.EXTENDED -> {
+        val text = if (entry.supportExtension.isBlank()) {
+            stringResource(R.string.container_download_eol_extended_generic)
+        } else {
+            stringResource(R.string.container_download_eol_extended, entry.supportExtension)
+        }
+        text to MaterialTheme.semanticColors.warning
     }
-    StatusBadge(text = stringResource(textRes), color = color)
+
+    ContainerImageEol.ENDED ->
+        stringResource(R.string.container_download_eol_ended) to MaterialTheme.colorScheme.error
+
+    ContainerImageEol.NONE -> null
+}
+
+/** 分支支持状态徽章；无需标注时什么都不画。 */
+@Composable
+private fun EolBadge(entry: ContainerImageEntry, eol: ContainerImageEol) {
+    val status = eolStatusText(entry, eol) ?: return
+    StatusBadge(text = status.first, color = status.second)
 }
 
 /** 列表行：图标 + 名称（已下载/EOL 带徽章）/简介（下载中显示进度条）+ 右箭头；所有行可左滑，未下载时删除按钮禁用。 */
@@ -301,7 +319,7 @@ private fun DownloadImageRow(
                             )
                         }
                     }
-                    EolBadge(eol)
+                    EolBadge(entry, eol)
                 }
                 downloading?.takeIf { it.entryId == entry.id }?.let { d ->
                     Spacer(modifier = Modifier.height(6.dp))
@@ -425,18 +443,12 @@ private fun ImageDetailSheet(
                             else MaterialTheme.semanticColors.success
                         )
                     }
-                    when (eol) {
-                        ContainerImageEol.SOON -> Text(
-                            text = stringResource(R.string.container_download_eol_soon),
+                    eolStatusText(entry, eol)?.let { (text, color) ->
+                        Text(
+                            text = text,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.warning
+                            color = color
                         )
-                        ContainerImageEol.ENDED -> Text(
-                            text = stringResource(R.string.container_download_eol_ended),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        ContainerImageEol.NONE -> Unit
                     }
                 }
             }
@@ -468,6 +480,21 @@ private fun ImageDetailSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 两级支持周期的确切日期：徽章只说「已进入延长支持」，具体到哪天要能查到
+                if (entry.supportEnds.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.container_download_eol_support_ends, entry.supportEnds),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (entry.eol.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.container_download_eol_fully_ends, entry.eol),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))

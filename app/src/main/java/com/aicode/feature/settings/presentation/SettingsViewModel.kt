@@ -69,6 +69,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
+import com.aicode.feature.settings.data.repository.effectiveVersion
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -2538,10 +2539,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val profile = ContainerProfile(
                 id = "custom-${System.currentTimeMillis()}",
-                // 用**下载时**记录的版本命名：目录版本可能已被上游刷新，而磁盘上的文件不会跟着变，
-                // 用当前目录版本命名会出现「名字写着 3.21.8、实际解压的是 3.21.7」。
+                // 用**磁盘上这份文件的实际版本**命名：记录字段优先，升级前的旧记录退回文件名解析，
+                // 都拿不到才用目录当前版本。否则会出现「名字写着 3.21.8、实际解压的是 3.21.7」。
                 name = entry.displayLabel(
-                    record?.version?.takeIf { it.isNotBlank() } ?: _imageVersions.value[entry.id]
+                    record?.effectiveVersion()?.takeIf { it.isNotBlank() } ?: _imageVersions.value[entry.id]
                 ),
                 rootfsSource = RootfsSource.LocalFile(fileUri),
                 shellPath = null,
@@ -2550,11 +2551,12 @@ class SettingsViewModel @Inject constructor(
             )
             containerSettingsRepository.upsertCustomProfile(profile)
             // 保留已下载记录（含下载时的版本号，供「有新版」判定），仅标记已导入；UI 状态不消失。
+            // 旧记录在这里顺带把文件名解析出的版本回写进去，下次就不必再解析。
             containerSettingsRepository.upsertDownloadedImage(
                 DownloadedImageRecord(
                     entryId = entryId,
                     fileUri = fileUri,
-                    version = record?.version.orEmpty(),
+                    version = record?.effectiveVersion().orEmpty(),
                     installed = true
                 )
             )

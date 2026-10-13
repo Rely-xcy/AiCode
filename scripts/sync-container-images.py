@@ -150,6 +150,7 @@ def build_alpine(base: str, cycles: list, prev_by_id: dict) -> list:
                 distro="alpine",
                 cycle=cycle,
                 version=version,
+                # Alpine 只有单一 EOL，没有「常规支持 → 延长支持」两段，故 support_ends 留空
                 eol=row.get("eol") or "",
                 size=max(sizes),
                 path=f"alpine/{branch}/releases/{{abi}}/alpine-minirootfs-{version}-{{abi}}.tar.gz",
@@ -188,7 +189,12 @@ def build_ubuntu(base: str, cycles: list, prev_by_id: dict) -> list:
                 distro="ubuntu",
                 cycle=cycle,
                 version=version,
-                eol=row.get("eol") or "",
+                # Ubuntu 的字段口径与其他两家不同：常规（标准）支持结束在 `eol`，
+                # 之后的 ESM 结束在 `extendedSupport`。故这里把 eol 映射到 ESM 结束，
+                # support_ends 映射到标准支持结束——App 侧两级判定才能统一。
+                eol=row.get("extendedSupport") or row.get("eol") or "",
+                support_ends=row.get("eol") or "",
+                support_extension="ESM",
                 size=max(sizes),
                 path=f"ubuntu-base/releases/{cycle}/release/ubuntu-base-{version}-base-{{abi}}.tar.gz",
                 sha_by_abi={abi: sums[(v, ABI_NAMES["ubuntu"][abi])] for abi, v in per_abi.items()},
@@ -223,7 +229,10 @@ def build_debian(base: str, cycles: list, prev_by_id: dict) -> list:
                 distro="debian",
                 cycle=cycle,
                 version=version,
+                # Debian 的 `support` 是常规支持结束（之后移交 LTS 团队），`eol` 是含 LTS 的完全结束
                 eol=row.get("eol") or "",
+                support_ends=row.get("support") or "",
+                support_extension="LTS",
                 size=max(sizes),
                 path=f"{artifact_path}/rootfs.tar.xz",
                 sha_by_abi={},  # Jenkins artifact 不提供校验和，App 侧跳过校验
@@ -248,9 +257,15 @@ def _entry(
     sha_by_abi: dict,
     fallback_description: str,
     prev_by_id: dict,
+    support_ends: str = "",
+    support_extension: str = "",
     extra: dict | None = None,
 ) -> dict:
-    """按固定键序拼条目（稳定顺序 → JSON diff 干净）。文案优先沿用内置 assets 里人工写的版本。"""
+    """按固定键序拼条目（稳定顺序 → JSON diff 干净）。文案优先沿用内置 assets 里人工写的版本。
+
+    支持周期分两级：[support_ends] 是**常规支持**结束日（过了就只剩延长支持），[eol] 是**完全结束**日。
+    两者相同（或常规支持缺失，如 Alpine）时 [support_ends] 留空——没有中间态就不该多发一个字段。
+    """
     entry_id = f"{distro}-{cycle}"
     prev = prev_by_id.get(entry_id) or {}
     out = {
@@ -268,6 +283,10 @@ def _entry(
             "path": path,
         }
     )
+    if support_ends and support_ends != eol:
+        out["supportEnds"] = support_ends
+        if support_extension:
+            out["supportExtension"] = support_extension
     if sha_by_abi:
         out["sha256ByAbi"] = sha_by_abi
     out["abiNames"] = ABI_NAMES[distro]
@@ -358,6 +377,18 @@ def self_test() -> int:
     ]
     ubuntu_picked = [r["cycle"] for r in select_cycles(ubuntu_rows, "ubuntu", today)]
     check("select_cycles Ubuntu 只收 LTS", ubuntu_picked, ["26.04", "24.04"])
+
+    def mk(support_ends, extension, eol):
+        return _entry(
+            distro="debian", cycle="12", version="12.15", eol=eol, size=1, path="p",
+            sha_by_abi={}, fallback_description="d", prev_by_id={},
+            support_ends=support_ends, support_extension=extension,
+        )
+
+    check("常规支持与完全结束同日_不下发中间态", "supportEnds" in mk("2028-06-30", "LTS", "2028-06-30"), False)
+    check("常规支持缺失_不下发中间态", "supportEnds" in mk("", "LTS", "2028-06-30"), False)
+    check("常规支持更早_下发 supportEnds", mk("2026-07-11", "LTS", "2028-06-30").get("supportEnds"), "2026-07-11")
+    check("延长支持计划名一并下发", mk("2026-07-11", "LTS", "2028-06-30").get("supportExtension"), "LTS")
 
     if failures:
         print("自测失败：")

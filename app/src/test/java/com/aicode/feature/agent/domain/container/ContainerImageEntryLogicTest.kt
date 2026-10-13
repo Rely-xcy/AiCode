@@ -21,7 +21,9 @@ class ContainerImageEntryLogicTest {
         version: String = "12",
         versionSuffix: String = "",
         versionPath: String = "",
-        eol: String = ""
+        eol: String = "",
+        supportEnds: String = "",
+        supportExtension: String = ""
     ) = ContainerImageEntry(
         id = "debian-12",
         name = name,
@@ -29,6 +31,8 @@ class ContainerImageEntryLogicTest {
         versionSuffix = versionSuffix,
         versionPath = versionPath,
         eol = eol,
+        supportEnds = supportEnds,
+        supportExtension = supportExtension,
         path = "some/rootfs.tar.xz"
     )
 
@@ -53,6 +57,15 @@ class ContainerImageEntryLogicTest {
         val e = entry(name = "Alpine Linux", version = "3.21.8")
 
         assertEquals("Alpine Linux 3.21.8", e.displayLabel())
+    }
+
+    @Test
+    fun displayLabel_版本里已含后缀_不重复追加() {
+        // 旧记录的版本号是 `12 (bookworm)` 这种自带后缀的写法，再拼一次会变成
+        // 「Debian 12 (bookworm) (bookworm)」
+        val e = entry(version = "12", versionSuffix = "(bookworm)")
+
+        assertEquals("Debian 12 (bookworm)", e.displayLabel("12 (bookworm)"))
     }
 
     @Test
@@ -100,6 +113,110 @@ class ContainerImageEntryLogicTest {
         )
     }
 
+    // ---- 两级支持周期（Ubuntu 的 ESM / Debian 的 LTS）----
+
+    @Test
+    fun eolStatus_已过常规支持但未完全结束_标记延长支持() {
+        val today = LocalDate.of(2026, 10, 12)
+        // Debian 12 的实际数据：常规支持 2026-07-11 已结束，LTS 到 2028-06-30
+        val e = entry(eol = "2028-06-30", supportEnds = "2026-07-11", supportExtension = "LTS")
+
+        assertEquals(ContainerImageEol.EXTENDED, e.eolStatus(today))
+    }
+
+    @Test
+    fun eolStatus_Ubuntu实际数据_已过标准支持进入ESM() {
+        // Ubuntu 20.04：标准支持 2025-05-31 结束，ESM 到 2030-04-23。
+        // 按旧口径（只比一个日期）它会被误标成「已停止支持」——这正是本次修掉的口径问题。
+        val e = entry(eol = "2030-04-23", supportEnds = "2025-05-31", supportExtension = "ESM")
+
+        assertEquals(ContainerImageEol.EXTENDED, e.eolStatus(LocalDate.of(2026, 10, 13)))
+    }
+
+    @Test
+    fun eolStatus_常规支持将在预警窗口内结束_标记即将停止支持() {
+        val today = LocalDate.of(2026, 10, 12)
+        val e = entry(eol = "2028-06-30", supportEnds = today.plusDays(10).toString())
+
+        assertEquals(ContainerImageEol.SOON, e.eolStatus(today))
+    }
+
+    @Test
+    fun eolStatus_完全结束在即_即使处于延长支持期也优先提示即将停止() {
+        val today = LocalDate.of(2026, 10, 12)
+        // 迫近的截止比「已进入延长支持」更该被看见
+        val e = entry(eol = today.plusDays(5).toString(), supportEnds = "2024-01-01", supportExtension = "LTS")
+
+        assertEquals(ContainerImageEol.SOON, e.eolStatus(today))
+    }
+
+    @Test
+    fun eolStatus_两个日期相同_不产生延长支持态() {
+        val today = LocalDate.of(2026, 10, 12)
+        // 脚本对没有中间态的发行版会省略 supportEnds；即便上游给了相同值也不该标成「延长支持」
+        val e = entry(eol = "2028-06-30", supportEnds = "2028-06-30", supportExtension = "LTS")
+
+        assertEquals(ContainerImageEol.NONE, e.eolStatus(today))
+    }
+
+    @Test
+    fun eolStatus_常规支持日期非法_按无中间态处理() {
+        val today = LocalDate.of(2026, 10, 12)
+        val e = entry(eol = "2028-06-30", supportEnds = "不是日期")
+
+        assertEquals(ContainerImageEol.NONE, e.eolStatus(today))
+    }
+
+    // ---- 旧记录的版本号回退：从下载文件名解析 ----
+
+    @Test
+    fun 文件名解析_三种扩展名都能取出版本() {
+        assertEquals("3.21.7", versionFromDownloadFileName("alpine-3.21", "download_alpine-3.21_3.21.7_1699999999999.tar.gz"))
+        assertEquals("3.21.7", versionFromDownloadFileName("alpine-3.21", "download_alpine-3.21_3.21.7_1699999999999.tgz"))
+        assertEquals("12.15", versionFromDownloadFileName("debian-12", "download_debian-12_12.15_1699999999999.tar.xz"))
+    }
+
+    @Test
+    fun 文件名解析_支持file协议uri() {
+        val uri = "file:///data/user/0/com.aicode/files/rootfs_images/download_alpine-3.21_3.21.7_1699999999999.tar.gz"
+
+        assertEquals("3.21.7", versionFromDownloadFileName("alpine-3.21", uri))
+    }
+
+    @Test
+    fun 文件名解析_条目id对不上_返回空串() {
+        // 防误配：文件名里的 id 与当前条目不一致时不猜
+        assertEquals("", versionFromDownloadFileName("alpine-3.22", "download_alpine-3.21_3.21.7_1699999999999.tar.gz"))
+    }
+
+    @Test
+    fun 文件名解析_不符合命名规则_返回空串() {
+        assertEquals("", versionFromDownloadFileName("alpine-3.21", ""))
+        assertEquals("", versionFromDownloadFileName("", "download_alpine-3.21_3.21.7_1.tar.gz"))
+        assertEquals("", versionFromDownloadFileName("alpine-3.21", "rootfs.tar.gz"))
+        assertEquals("", versionFromDownloadFileName("alpine-3.21", "download_alpine-3.21_3.21.7.tar.gz"))
+    }
+
+    @Test
+    fun 文件名解析_旧版Debian版本号含空格与括号_也能取出() {
+        // 旧版目录里 Debian 的 version 写作 `12 (bookworm)`，下载文件名照抄了它；
+        // 只认数字的正则会漏掉这类记录，让旧用户看不到「有新版」
+        val name = "download_debian-12_12 (bookworm)_1699999999999.tar.xz"
+
+        assertEquals("12 (bookworm)", versionFromDownloadFileName("debian-12", name))
+    }
+
+    @Test
+    fun hasNewerVersion_旧版Debian记录_能识别出有新版() {
+        // 串起旧记录 -> 文件名 -> 与当前探测版本比对的完整链路
+        val legacyVersion = versionFromDownloadFileName(
+            "debian-12",
+            "download_debian-12_12 (bookworm)_1699999999999.tar.xz"
+        )
+
+        assertEquals(true, hasNewerVersion(legacyVersion, "12.15"))
+    }
+
     @Test
     fun json_解析新增字段() {
         val parsed = json.decodeFromString(
@@ -111,7 +228,9 @@ class ContainerImageEntryLogicTest {
               "version": "12",
               "versionSuffix": "(bookworm)",
               "versionPath": "job/{abi}/artifact/bookworm/rootfs.debian_version",
-              "eol": "2026-11-01",
+              "eol": "2028-06-30",
+              "supportEnds": "2026-07-11",
+              "supportExtension": "LTS",
               "path": "job/{abi}/artifact/bookworm/rootfs.tar.xz",
               "abiNames": { "arm64": "arm64v8", "x86_64": "amd64" }
             }
@@ -120,7 +239,9 @@ class ContainerImageEntryLogicTest {
 
         assertEquals("(bookworm)", parsed.versionSuffix)
         assertEquals("job/{abi}/artifact/bookworm/rootfs.debian_version", parsed.versionPath)
-        assertEquals("2026-11-01", parsed.eol)
+        assertEquals("2028-06-30", parsed.eol)
+        assertEquals("2026-07-11", parsed.supportEnds)
+        assertEquals("LTS", parsed.supportExtension)
     }
 
     @Test
@@ -140,6 +261,8 @@ class ContainerImageEntryLogicTest {
         assertEquals("", parsed.versionSuffix)
         assertEquals("", parsed.versionPath)
         assertEquals("", parsed.eol)
+        assertEquals("", parsed.supportEnds)
+        assertEquals("", parsed.supportExtension)
         assertEquals(emptyMap<String, String>(), parsed.sha256ByAbi)
         assertEquals("Alpine Linux 3.21.7", parsed.displayLabel())
     }

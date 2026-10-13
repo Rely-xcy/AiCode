@@ -868,6 +868,10 @@
     <string name="container_download_checksum_failed">Checksum mismatch — the file may be truncated or tampered with. Please retry.</string>
     <string name="container_download_eol_soon">Support ending soon</string>
     <string name="container_download_eol_ended">No longer supported</string>
+    <string name="container_download_eol_extended">In %1$s extended support</string>
+    <string name="container_download_eol_extended_generic">In extended support</string>
+    <string name="container_download_eol_support_ends">Standard support ended: %1$s</string>
+    <string name="container_download_eol_fully_ends">Fully end-of-life: %1$s</string>
     <string name="container_download_size">Size: %1$s</string>
     <string name="container_download_delete_title">Delete downloaded image</string>
     <string name="container_download_delete_confirm">Delete the downloaded file for "%1$s"? Imported containers will not be able to extract again.</string>
