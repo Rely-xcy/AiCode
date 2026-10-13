@@ -22,6 +22,7 @@ class SkillParserTest {
                     name = name,
                     description = description,
                     requiredTools = requiredTools,
+                    triggers = emptyList(),
                     instructions = instructions
                 )
             )
@@ -77,6 +78,7 @@ class SkillParserTest {
             name = "plain",
             description = "d",
             requiredTools = emptyList(),
+            triggers = emptyList(),
             instructions = "正文"
         )
 
