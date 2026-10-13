@@ -879,6 +879,10 @@
     <string name="credential_device_install_required">Signed in as %1$s. You still need to install AiCode on your repositories before pushing/pulling code.</string>
     <string name="credential_device_install_now">Install</string>
     <string name="credential_device_install_later">Later</string>
+    <string name="credential_device_repos_granted">Authorized repositories (%1$d)</string>
+    <string name="credential_device_repos_more">…and %1$d more</string>
+    <string name="credential_device_readonly">This authorization is read-only, so pushes will be rejected. Switch to a personal access token (PAT), or change AiCode's repository permission to Read and write on GitHub.</string>
+    <string name="credential_device_install_unknown">Could not confirm whether AiCode is installed on your repositories (query restricted). If pushes fail, switch to a personal access token (PAT).</string>
     <string name="credential_device_failed_title">Authorization Incomplete</string>
     <string name="credential_device_failed">Sign-in failed: %1$s</string>
     <string name="credential_device_expired">Device code expired, please retry</string>

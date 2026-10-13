@@ -7,6 +7,7 @@ import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.credentials.data.CredentialInjectSettingsRepository
+import com.aicode.feature.credentials.data.remote.AppInstall
 import com.aicode.feature.credentials.data.remote.GitHubDeviceFlowClient
 import com.aicode.feature.credentials.data.remote.GitHubTokenPollResult
 import com.aicode.feature.credentials.domain.model.GitCredential
@@ -34,7 +35,17 @@ sealed interface QuickLoginUiState {
     data object Idle : QuickLoginUiState
     data object RequestingCode : QuickLoginUiState
     data class Awaiting(val userCode: String, val verificationUri: String) : QuickLoginUiState
-    data class Success(val username: String, val needsInstall: Boolean) : QuickLoginUiState
+    data class Success(
+        val username: String,
+        /** App 确实未安装：引导去安装页。 */
+        val needsInstall: Boolean,
+        /** 安装情况查询失败（网络/权限受限）：既不报「去安装」，也不假装一切正常。 */
+        val installUnknown: Boolean = false,
+        /** 安装已授权但只有只读权限：推送会被拒，提前提醒改用 PAT 或调权限。 */
+        val readOnly: Boolean = false,
+        /** 本次安装已授权的仓库全名（用于让用户看到「到底认得哪些仓库」）。 */
+        val repositories: List<String> = emptyList()
+    ) : QuickLoginUiState
     data class Failed(val message: String) : QuickLoginUiState
 }
 
@@ -341,10 +352,24 @@ class CredentialViewModel @Inject constructor(
             _quickLogin.value = QuickLoginUiState.Failed(e.message ?: context.getString(R.string.credential_device_unknown_error))
             return
         }
-        // 仅授权未安装时令牌无仓库访问权：检测失败时按已安装处理，避免误报打扰。
-        val installed = runCatching { gitHubDeviceFlow.isAppInstalled(accessToken) }.getOrDefault(true)
+        // 仅授权未安装时令牌无仓库访问权：按三态处理，不再把「查询失败」当「已安装」。
+        val install = runCatching { gitHubDeviceFlow.queryAppInstall(accessToken) }
+            .getOrDefault(AppInstall.Unknown)
         runCatching { syncInjectionIfEnabled() }
-        _quickLogin.value = QuickLoginUiState.Success(login, needsInstall = !installed)
+        _quickLogin.value = when (install) {
+            is AppInstall.Installed -> QuickLoginUiState.Success(
+                username = login,
+                needsInstall = false,
+                readOnly = !install.contentsWrite,
+                repositories = install.repositories
+            )
+            AppInstall.NotInstalled -> QuickLoginUiState.Success(username = login, needsInstall = true)
+            AppInstall.Unknown -> QuickLoginUiState.Success(
+                username = login,
+                needsInstall = false,
+                installUnknown = true
+            )
+        }
     }
 
     /** 拉取用户名：网络抖动时重试若干次，避免刚拿到令牌就因瞬时断网判失败。 */
