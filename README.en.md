@@ -127,6 +127,14 @@ If AiCode is helpful to you, give it a [Star](https://github.com/jieapi/aicode) 
 - [Termux](https://github.com/termux/termux-app) — Android terminal emulator, provided terminal components and PRoot solution
 - [Kelivo](https://github.com/Chevey339/kelivo) — Cross-platform LLM chat client, AI conversation UI design reference
 
+## Disclaimer
+
+AiCode is provided "as is", for learning, research and lawful software development only. Using it for any illegal or infringing purpose is strictly prohibited, including but not limited to unauthorized access to, cracking or reverse engineering of others' software or systems, circumventing technological protection measures, stealing or leaking others' data, or distributing malicious code.
+
+You bear all risks and responsibility for your use of this software. The authors and contributors shall not be liable for any loss arising from your use of, or inability to use, this software, nor for any act you perform using it or its consequences.
+
+If you do not agree with this disclaimer, please stop using the software and uninstall it immediately.
+
 ## License
 
 This project is licensed under [GPL-3.0](LICENSE).

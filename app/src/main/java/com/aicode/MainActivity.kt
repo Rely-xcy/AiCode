@@ -83,6 +83,7 @@ import com.aicode.feature.agent.presentation.component.AIChatPanel
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
+import com.aicode.feature.disclaimer.presentation.DisclaimerGate
 import com.aicode.feature.editor.presentation.CodeEditorScreen
 import com.aicode.feature.editor.presentation.EditorLeaveGuard
 import com.aicode.feature.browser.presentation.BrowserScreen
@@ -157,6 +158,10 @@ class MainActivity : ComponentActivity() {
     /** 首次启动引导的进度持久化。 */
     @Inject
     lateinit var onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository
+
+    /** 免责声明的同意状态持久化。 */
+    @Inject
+    lateinit var disclaimerRepository: com.aicode.feature.disclaimer.data.DisclaimerRepository
 
     @Inject
     lateinit var browserManager: com.aicode.feature.agent.domain.tool.browser.BrowserManager
@@ -267,6 +272,8 @@ class MainActivity : ComponentActivity() {
                         com.aicode.feature.credentials.presentation.component.GlobalCredentialDialogHost(
                             bridge = credentialRequestBridge
                         )
+                        // 首次启动免责声明门控：独立弹窗，覆盖所有页面。
+                        DisclaimerGate(repository = disclaimerRepository)
                         if (bgPath != null && bgAlpha > 0f) {
                             val screen = LocalView.current
                             val bitmap by produceState<ImageBitmap?>(initialValue = null, bgPath) {

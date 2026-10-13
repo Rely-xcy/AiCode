@@ -478,6 +478,13 @@
     <string name="about_update_verify_not_newer">Package version is not newer than the installed one</string>
     <string name="about_update_install_failed">No app available to install packages</string>
 
+    <!-- Disclaimer -->
+    <string name="about_disclaimer">Disclaimer</string>
+    <string name="disclaimer_title">Disclaimer</string>
+    <string name="disclaimer_body">AiCode is free and open-source software provided “as is”, for learning, research and lawful software development only.\n\nYou must comply with the laws and regulations of your jurisdiction and the terms of any service you use. Using this software for any illegal or infringing purpose is strictly prohibited, including but not limited to: unauthorized access to, cracking or reverse engineering of others’ software or systems, circumventing technological protection measures, stealing or leaking others’ data, distributing malicious code, or any other act that infringes the lawful rights of others.\n\nYou bear all risks and responsibility for your use of this software. The authors and contributors shall not be liable for any direct or indirect loss arising from your use of, or inability to use, this software, nor for any act you perform using this software or its consequences.\n\nIf you do not agree with this disclaimer, please stop using the software and uninstall it immediately.</string>
+    <string name="disclaimer_accept">I have read and agree</string>
+    <string name="disclaimer_decline">Disagree</string>
+
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>
     <string name="ask_supplement">Supplement</string>
