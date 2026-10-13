@@ -57,10 +57,11 @@ class ModelContextPolicyTest {
     }
 
     @Test
-    fun tierFor_below64k_softOnly() {
+    fun tierFor_32k_standard_90percent() {
+        // 32–64K 档并入 STANDARD（设计 §10.5：SOFT_ONLY 随软精简删除，该档改为「只指针化 + 折叠/兜底」）。
         val policy = ModelContextPolicy.tierFor(32_000)
-        assertEquals(ModelContextPolicy.Tier.SOFT_ONLY, policy.tier)
-        assertEquals(0, policy.hardThreshold)
+        assertEquals(ModelContextPolicy.Tier.STANDARD, policy.tier)
+        assertEquals(32_000 - 32_000 / 10, policy.hardThreshold)
     }
 
     @Test

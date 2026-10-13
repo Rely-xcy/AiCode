@@ -16,8 +16,6 @@ object ModelContextPolicy {
         /** < 32K：不自动压缩，靠提示用户新建会话。 */
         DISABLED,
 
-        /** 32K–64K：不做硬压缩（该档不再有软精简，只靠入口指针化 + 发送前兜底续命）。 */
-        SOFT_ONLY,
 
         /** 64K–128K：软精简 + 摘要压缩。 */
         STANDARD,
@@ -39,12 +37,6 @@ object ModelContextPolicy {
             tier = Tier.DISABLED,
             hardThreshold = 0,
             preserveRecentTokens = MIN_PRESERVE_RECENT_TOKENS
-        )
-
-        contextWindow < 64_000 -> TierPolicy(
-            tier = Tier.SOFT_ONLY,
-            hardThreshold = 0,
-            preserveRecentTokens = preserveRecentTokens(contextWindow)
         )
 
         contextWindow < 128_000 -> TierPolicy(

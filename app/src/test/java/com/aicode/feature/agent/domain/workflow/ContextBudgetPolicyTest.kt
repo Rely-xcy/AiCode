@@ -29,7 +29,7 @@ class ContextBudgetPolicyTest {
     @Test
     fun `窗口档位按窗口大小分四档`() {
         assertEquals(ModelContextPolicy.Tier.DISABLED, ModelContextPolicy.tierFor(16_000).tier)
-        assertEquals(ModelContextPolicy.Tier.SOFT_ONLY, ModelContextPolicy.tierFor(32_000).tier)
+        assertEquals(ModelContextPolicy.Tier.STANDARD, ModelContextPolicy.tierFor(32_000).tier)
         assertEquals(ModelContextPolicy.Tier.STANDARD, ModelContextPolicy.tierFor(64_000).tier)
         assertEquals(ModelContextPolicy.Tier.GENEROUS, ModelContextPolicy.tierFor(128_000).tier)
     }
