@@ -6,6 +6,9 @@ import com.aicode.feature.agent.domain.tool.ToolCall
 
 @Serializable
 sealed class AgentMessage {
+    /** 消息 id：子类各自持有（同名字段），基类抽象出来供跨形态列表统一取 id（残留气泡认 id、链合并视图过滤等场景）。 */
+    abstract val id: String
+
     @Serializable
     data class UserMessage(
         val id: String = "",
