@@ -1641,6 +1641,38 @@ class AIAgentViewModel @Inject constructor(
                 return@launch
             }
         }
+
+        // 技能关键词自动触发（见「技能关键词触发设计.md」）：普通消息中把某个技能的触发词作为
+        // 空格分隔的独立词说出时，把该技能正文注入 modelRequest（落库/气泡仍是用户原话）。
+        // 斜杠命令已在上面分流返回，优先级天然更高；自动触发轮次（/init、后台通知）不参与匹配。
+        val effectiveModelRequest = if (isAutoTrigger || request.startsWith("/")) {
+            modelRequest
+        } else {
+            val hits = slashCommandRegistry.findTriggered(request, sessionId)
+            if (hits.isEmpty()) {
+                modelRequest
+            } else {
+                val primary = hits.first()
+                val injection = buildString {
+                    if (primary.deduped) {
+                        appendLine("（技能 ${primary.skill.name} 已在本会话加载过，完整指令可用 loadSkill 取回）")
+                    } else {
+                        appendLine("[触发技能 ${primary.skill.name} · 用户消息中命中关键词「${primary.hitWord}」]")
+                        appendLine(primary.skill.instructions)
+                    }
+                    val others = hits.drop(1)
+                    if (others.isNotEmpty()) {
+                        appendLine("（同时命中技能：${others.joinToString("、") { it.skill.name }}，相关任务可用 loadSkill 工具加载）")
+                    }
+                    if (!primary.deduped) {
+                        appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
+                    }
+                }
+                val prefix = modelRequest.takeIf { it != request }?.plus("\n\n")
+                (prefix ?: "") + request + "\n\n" + injection.trimEnd()
+            }
+        }
+
         // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
         val currentSession = sessionUseCase.getSessionById(sessionId)
         if (currentSession != null && (currentSession.providerId.isNullOrBlank() || currentSession.model.isNullOrBlank())) {
@@ -1770,7 +1802,7 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
             agentWorkflow.executeEvents(
-                userRequest = modelRequest,
+                userRequest = effectiveModelRequest,
                 context = agentContext,
                 tools = tools
             ).collect { event ->

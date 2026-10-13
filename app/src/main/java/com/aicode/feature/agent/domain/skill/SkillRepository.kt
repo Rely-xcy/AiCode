@@ -87,6 +87,7 @@ class SkillRepository @Inject constructor(
             name = name,
             description = form.description,
             requiredTools = form.requiredTools,
+            triggers = form.triggers,
             instructions = form.instructions
         )
 

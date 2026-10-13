@@ -54,10 +54,19 @@ object SkillParser {
             emptyList()
         }
 
+        val triggers = try {
+            val raw = frontmatter["triggers"]
+            if (raw is List<*>) raw.filterIsInstance<String>().map { it.trim() }.filter { it.isNotEmpty() } else emptyList()
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "解析 triggers 失败", e)
+            emptyList()
+        }
+
         return Skill(
             name = name,
             description = description,
             requiredTools = requiredTools,
+            triggers = triggers,
             dirPath = null,
             instructions = body.trim()
         )
@@ -100,12 +109,14 @@ object SkillParser {
         name: String,
         description: String,
         requiredTools: List<String>,
+        triggers: List<String>,
         instructions: String
     ): String = buildString {
         appendLine("---")
         appendLine("name: ${quote(name)}")
         appendLine("description: ${quote(description)}")
         if (requiredTools.isNotEmpty()) appendLine("required_tools: [${requiredTools.joinToString(", ")}]")
+        if (triggers.isNotEmpty()) appendLine("triggers: [${triggers.joinToString(", ")}]")
         appendLine("---")
         appendLine(instructions.trim())
     }
