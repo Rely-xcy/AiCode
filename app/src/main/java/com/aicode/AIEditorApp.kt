@@ -2,6 +2,7 @@ package com.aicode
 
 import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
@@ -45,6 +46,23 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val KEY_CRASH_UI_SHOWING = "crash_ui_showing"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
         private const val KEY_CRASH_COUNT = "crash_count"
+        /** ApplicationExitInfo 增量游标：已处理过的最大退出时间戳，避免重复上报历史退出。 */
+        private const val KEY_LAST_EXIT_TIMESTAMP = "last_exit_timestamp"
+        /** ApplicationExitInfo 读取的历史退出记录条数上限。 */
+        private const val MAX_EXIT_RECORDS = 20
+        /** 单条退出 trace 落盘时保留的字节上限（按字节截断，避免超大 trace 撑爆内存）。 */
+        private const val TRACE_HEAD_BYTES = 16 * 1024
+        /**
+         * 无 Java 异常、只能靠 ApplicationExitInfo 补记的退出原因（API 30+）。
+         * 不包含 REASON_CRASH（Java 崩溃已由 installCrashHandler + CrashActivity 完整记录）。
+         */
+        private val ABNORMAL_EXIT_REASONS = setOf(
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+            ApplicationExitInfo.REASON_SIGNALED
+        )
         /** 10 秒内的连续崩溃视为密集崩溃。 */
         private const val CRASH_RESET_WINDOW_MS = 10_000L
         /** 密集崩溃达到 3 次触发硬熔断退出，杜绝死循环。 */
@@ -217,6 +235,8 @@ class AIEditorApp : Application(), Configuration.Provider {
         }
         super.onCreate()
         logDeviceInfo()
+        // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
+        appScope.launch { reportAbnormalExits() }
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
@@ -521,6 +541,117 @@ class AIEditorApp : Application(), Configuration.Provider {
             }
             Process.killProcess(Process.myPid())
         }
+    }
+
+    /**
+     * 读取历史进程退出原因（ApplicationExitInfo，API 30+），把 Java 未捕获异常处理器覆盖不到的
+     * 异常退出（native 崩溃、ANR、低内存被杀、初始化失败、被信号杀死）补记到日志。
+     *
+     * 用 SharedPreferences 记录已处理的最大时间戳做增量：首次运行只建立基线，不回捞旧记录；
+     * 与最近一次 Java 崩溃时间窗重叠的记录跳过，避免与 CrashActivity 链路重复上报。
+     * 低版本（< API 30）无此 API，静默跳过。
+     */
+    private fun reportAbnormalExits() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        runCatching {
+            val am = getSystemService(ActivityManager::class.java)
+            val records = am.getHistoricalProcessExitReasons(packageName, 0, MAX_EXIT_RECORDS)
+            if (records.isEmpty()) return@runCatching
+            val prefs = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE)
+            val lastSeen = prefs.getLong(KEY_LAST_EXIT_TIMESTAMP, 0L)
+            // 首次运行（尚无游标）只建立基线，不回捞安装前的历史退出，避免一次刷出大量旧记录。
+            if (lastSeen == 0L) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, records.maxOf { it.timestamp }).apply()
+                return@runCatching
+            }
+            val lastJavaCrash = prefs.getLong(KEY_LAST_CRASH_TIME, 0L)
+            var maxTimestamp = lastSeen
+            records.sortedBy { it.timestamp }.forEach { info ->
+                if (info.timestamp <= lastSeen) return@forEach
+                maxTimestamp = maxOf(maxTimestamp, info.timestamp)
+                if (info.reason !in ABNORMAL_EXIT_REASONS) return@forEach
+                // 与最近一次 Java 崩溃属同一次退出（时间窗内）时跳过，避免两条链路重复上报。
+                if (lastJavaCrash > 0 &&
+                    kotlin.math.abs(info.timestamp - lastJavaCrash) < CRASH_RESET_WINDOW_MS * 3
+                ) {
+                    return@forEach
+                }
+                FileLogger.e(TAG, "检测到上次异常退出：\n${describeExit(info)}", null)
+            }
+            if (maxTimestamp != lastSeen) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, maxTimestamp).apply()
+            }
+        }.onFailure { FileLogger.w(TAG, "读取历史进程退出原因失败", it) }
+    }
+
+    /** 组装单条异常退出的可读描述：原因、时间、状态、重要级、内存、描述与 trace 首部。 */
+    private fun describeExit(info: ApplicationExitInfo): String = buildString {
+        append("原因=").append(exitReasonName(info.reason))
+        append("，时间=").append(
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                .format(java.util.Date(info.timestamp))
+        )
+        append("，status=").append(info.status)
+        append("，importance=").append(info.importance)
+        append("，pss=").append(info.pss / 1024 / 1024).append("MB")
+        append("，rss=").append(info.rss / 1024 / 1024).append("MB")
+        info.description?.let { append("，描述=").append(it) }
+        readTraceHead(info.traceInputStream)?.let { append("\n").append(it) }
+    }
+
+    /**
+     * 读取 trace 前 [TRACE_HEAD_BYTES] 字节（按字节限长，避免超大 trace 撑爆内存），
+     * 并只保留其中的可打印文本片段。native 崩溃的 trace 是 tombstone 的 protobuf 二进制、
+     * ANR 可能是压缩流，直接按 UTF-8 转字符串会变成大量乱码并撑大日志，故按字节过滤出可见串。
+     * 无 trace 或无可见内容时返回 null。
+     */
+    private fun readTraceHead(stream: java.io.InputStream?): String? {
+        if (stream == null) return null
+        return runCatching {
+            stream.use { input ->
+                val buffer = ByteArray(TRACE_HEAD_BYTES)
+                var read = 0
+                while (read < buffer.size) {
+                    val n = input.read(buffer, read, buffer.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read <= 0) return@use null
+                val sb = StringBuilder()
+                val current = StringBuilder()
+                fun flush() {
+                    if (current.length >= 4) {
+                        if (sb.isNotEmpty()) sb.append('\n')
+                        sb.append(current)
+                    }
+                    current.setLength(0)
+                }
+                for (i in 0 until read) {
+                    val b = buffer[i].toInt() and 0xFF
+                    if (b in 0x20..0x7E || b == 0x09) {
+                        current.append(b.toChar())
+                    } else {
+                        flush()
+                    }
+                }
+                flush()
+                sb.toString().trim().takeIf { it.isNotEmpty() }?.let { "trace:\n$it" }
+            }
+        }.getOrNull()
+    }
+
+    /** ApplicationExitInfo 原因码 → 可读名称。 */
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "Java 崩溃"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native 崩溃"
+        ApplicationExitInfo.REASON_ANR -> "无响应（ANR）"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "低内存被系统杀死"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "初始化失败"
+        ApplicationExitInfo.REASON_SIGNALED -> "被信号杀死"
+        ApplicationExitInfo.REASON_EXIT_SELF -> "主动退出"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "用户主动结束"
+        ApplicationExitInfo.REASON_OTHER -> "其它原因"
+        else -> "未知（$reason）"
     }
 
     /**
