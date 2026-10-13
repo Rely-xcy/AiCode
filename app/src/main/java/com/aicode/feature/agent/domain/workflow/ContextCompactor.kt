@@ -501,7 +501,9 @@ class ContextCompactor @Inject constructor(
         blockCount: Int
     ): List<AgentMessage>? {
         val blocks = chain.blocks.take(blockCount)
-        if (blocks.isEmpty() || sessionId == null) return null
+        // 合并单块没有意义（产出的还是一块），块数 < 2 直接不合并——调用方（tryChainMerge）
+        // 用 mergeCount>0 已拦过一次，这里再拦一层：直接单测本函数时也保持同样语义。
+        if (blocks.size < 2 || sessionId == null) return null
         val boundary = blocks.maxOf { it.summary.foldsUpToTimestamp }
 
         // 合并请求的输入材料：各旧块的 marker + summary 行 + 一条合并指令。

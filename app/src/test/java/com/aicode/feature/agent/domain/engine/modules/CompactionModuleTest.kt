@@ -377,7 +377,8 @@ class CompactionModuleTest {
             )
         )
 
-        // 合并失败（未标任何行），主折叠照常成功（发过 CompactionFinished）
+        // 合并确实被触发（13 块 > 12），但合并请求被完整性闸门拒绝（截断）——
+        // 失败发生在「标记旧块」之前，所以标记一次都没发生。
         coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
         assertTrue(events.any { it is AgentEvent.CompactionFinished })
         assertNotNull(result)
