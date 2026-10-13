@@ -1,7 +1,7 @@
 package com.aicode.feature.agent.domain.tool.vscreen
 
 import com.aicode.feature.agent.domain.model.AgentContext
-import com.aicode.feature.agent.domain.tool.AgentTool
+import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolParameter
@@ -22,7 +22,7 @@ import javax.inject.Inject
  */
 class VsInputTool @Inject constructor(
     private val controller: VirtualScreenController
-) : AgentTool() {
+) : AbstractContextualTool() {
 
     override val name = "vscreen_input"
 

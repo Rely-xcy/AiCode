@@ -1,7 +1,7 @@
 package com.aicode.feature.agent.domain.tool.vscreen
 
 import com.aicode.feature.agent.domain.model.AgentContext
-import com.aicode.feature.agent.domain.tool.AgentTool
+import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.ToolCapability
@@ -26,7 +26,7 @@ import javax.inject.Inject
 class VsStartTool @Inject constructor(
     private val manager: VirtualScreenManager,
     private val guard: VirtualScreenGuard
-) : AgentTool() {
+) : AbstractContextualTool() {
 
     override val name = "vscreen_start"
 
