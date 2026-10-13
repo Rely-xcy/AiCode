@@ -6,7 +6,9 @@
 ### 何时用
 - 需要「实际点进去看」才能验证的测试项：界面跳转、按钮行为、状态变化、崩溃复现。
 - 用 `vscreen_start` 开屏（**每次创建都会向用户弹一次确认**，本场测试只需确认这一次），返回 `displayId`。
-- 操作顺序：`vscreen_observe`（先截图看清界面）→ 判断坐标 → `vscreen_input`（tap/swipe/text/key）。
+- 操作顺序：`vscreen_observe`（先看界面）→ 判断坐标 → `vscreen_input`（tap/swipe/text/key）。
+- `vscreen_observe` 默认 `mode=tree`：返回控件树（控件名、文本、坐标、可点性），**比截图省很多 token，优先用**；
+  取不到（未开无障碍服务 / 目标 app 不暴露语义）时会提示，此时改用 `mode=screenshot` 看图。
 
 ### 硬规则
 - **用完必须 `vscreen_stop`**：测试结束或放弃时立刻收屏，否则屏会一直存活、授权也不收回。中途出错也要收。

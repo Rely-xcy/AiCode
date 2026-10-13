@@ -73,6 +73,20 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 虚拟屏读屏：只在用户手动开启后生效，按 displayId 导出节点树（只读、不拦截输入、不注入手势）。 -->
+        <service
+            android:name=".feature.agent.domain.vscreen.VscreenAccessibilityService"
+            android:exported="true"
+            android:label="@string/vscreen_accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/vscreen_accessibility_service" />
+        </service>
+
         <!-- Shizuku：用于以 adb shell 身份执行命令（UserService）。
              permission 声明为 INTERACT_ACROSS_USERS_FULL 是官方要求，防止普通应用访问该 provider。 -->
         <provider

@@ -882,6 +882,8 @@
     <string name="credential_device_repos_granted">Authorized repositories (%1$d)</string>
     <string name="credential_device_repos_more">…and %1$d more</string>
     <string name="credential_device_readonly">This authorization is read-only, so pushes will be rejected. Switch to a personal access token (PAT), or change AiCode\'s repository permission to Read and write on GitHub.</string>
+    <string name="vscreen_accessibility_service_label">AiCode screen reader</string>
+    <string name="vscreen_accessibility_service_desc">Only used by AiCode to read UI controls while running automated tests on a virtual display (exports the node tree for that display; read-only, never intercepts input). Screenshots still work when this is off.</string>
     <string name="credential_device_install_unknown">Could not confirm whether AiCode is installed on your repositories (query restricted). If pushes fail, switch to a personal access token (PAT).</string>
     <string name="credential_device_failed_title">Authorization Incomplete</string>
     <string name="credential_device_failed">Sign-in failed: %1$s</string>

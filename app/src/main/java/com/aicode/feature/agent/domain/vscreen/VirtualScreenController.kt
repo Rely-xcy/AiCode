@@ -75,6 +75,32 @@ class VirtualScreenController @Inject constructor(
     }
 
     /**
+     * 读虚拟屏目标界面的**控件树**（无障碍）。
+     *
+     * 比截图省 token：文本 + 坐标就能让模型知道「有哪些按钮、点哪里」；
+     * 取不到时不静默降级，把两条可选路径（开无障碍 / 改截图）直说。
+     */
+    suspend fun tree(limit: Int): Result<String> {
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        if (!VscreenAccessibilityBridge.isReady) {
+            return Result.failure(
+                IllegalStateException(
+                    "无障碍服务未开启：到「设置 → 无障碍」开启「AiCode 虚拟屏读屏」后重试；或改用 mode=screenshot。"
+                )
+            )
+        }
+        val nodes = VscreenAccessibilityBridge.capture(screen.displayId, limit)
+        if (nodes.isEmpty()) {
+            return Result.failure(
+                IllegalStateException(
+                    "displayId=${screen.displayId} 未取到控件节点（界面可能还没画出来，或该 app 未暴露无障碍语义）。可改用 mode=screenshot。"
+                )
+            )
+        }
+        return Result.success(formatUiNodes(nodes, limit))
+    }
+
+    /**
      * 读目标 app 的 logcat 片段做断言依据（crash / ANR 关键字）。
      *
      * 优先按 pid 过滤（`pidof` 拿不到时退到全量再按包名过滤），返回「结论行 + 末尾原文」：

@@ -882,6 +882,8 @@
     <string name="credential_device_repos_granted">已授权仓库（%1$d 个）</string>
     <string name="credential_device_repos_more">…另有 %1$d 个</string>
     <string name="credential_device_readonly">当前授权只有只读权限，推送代码会被拒绝。可改用个人令牌（PAT），或在 GitHub 上把 AiCode 的仓库权限改为 Read and write。</string>
+    <string name="vscreen_accessibility_service_label">AiCode 虚拟屏读屏</string>
+    <string name="vscreen_accessibility_service_desc">仅供 AiCode 在虚拟屏上做自动化测试时读取界面控件（按虚拟屏导出节点树，只读取、不拦截输入）。不开启时虚拟屏仍可用截图观察。</string>
     <string name="credential_device_install_unknown">暂时无法确认 AiCode 是否已安装到你的仓库（查询受限）。若推送失败，可改用个人令牌（PAT）。</string>
     <string name="credential_device_failed_title">授权未能完成</string>
     <string name="credential_device_failed">登录失败：%1$s</string>
