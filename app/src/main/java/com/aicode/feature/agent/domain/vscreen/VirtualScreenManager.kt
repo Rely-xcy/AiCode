@@ -25,7 +25,9 @@ class VirtualScreenManager @Inject constructor(
         val displayId: Int,
         val sessionId: String,
         val packageName: String,
-        val createdAtMs: Long = System.currentTimeMillis()
+        val createdAtMs: Long = System.currentTimeMillis(),
+        /** 存活上限到期时间戳（含）：到点后下一次工具调用会把它自动销毁。 */
+        val expiresAtMs: Long = createdAtMs + DEFAULT_LIFETIME_MS
     )
 
     @Volatile
@@ -46,7 +48,8 @@ class VirtualScreenManager @Inject constructor(
         activity: String?,
         width: Int,
         height: Int,
-        density: Int
+        density: Int,
+        lifetimeMs: Long = DEFAULT_LIFETIME_MS
     ): Result<Screen> {
         if (current != null) {
             return Result.failure(IllegalStateException("已有虚拟屏在运行（displayId=${current?.displayId}），先 vscreen_stop 再开新的。"))
@@ -80,7 +83,12 @@ class VirtualScreenManager @Inject constructor(
             )
         }
 
-        val screen = Screen(displayId = displayId, sessionId = sessionId, packageName = packageName)
+        val screen = Screen(
+            displayId = displayId,
+            sessionId = sessionId,
+            packageName = packageName,
+            expiresAtMs = System.currentTimeMillis() + lifetimeMs.coerceAtLeast(MIN_LIFETIME_MS)
+        )
         current = screen
         FileLogger.i(TAG, "虚拟屏已就绪：displayId=$displayId，目标=$packageName")
         return Result.success(screen)
@@ -100,6 +108,24 @@ class VirtualScreenManager @Inject constructor(
         }
         FileLogger.i(TAG, "虚拟屏已销毁：displayId=${screen.displayId}")
         return Result.success(Unit)
+    }
+
+    /**
+     * 取当前屏并做存活检查：超过存活上限就地销毁（懒检查）。
+     *
+     * 用惰性检查而不是后台定时器：忘了 stop 的兜底只需在「下一次真要用屏」时生效，
+     * 后台计时器反而要额外管生命周期与线程。
+     */
+    suspend fun ensureAlive(): Result<Screen> {
+        val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
+        if (System.currentTimeMillis() > screen.expiresAtMs) {
+            val minutes = (screen.expiresAtMs - screen.createdAtMs) / 60_000
+            stop()
+            return Result.failure(
+                IllegalStateException("虚拟屏已超过存活上限（${minutes}分钟）被自动销毁，需要时重新 vscreen_start。")
+            )
+        }
+        return Result.success(screen)
     }
 
     /** 取当前屏，没有时返回失败并给出可照做的提示。 */
@@ -124,6 +150,10 @@ class VirtualScreenManager @Inject constructor(
         const val CREATE_TIMEOUT_MS = 20_000L
         const val LAUNCH_TIMEOUT_MS = 20_000L
         const val REMOVE_TIMEOUT_MS = 10_000L
+
+        /** 单屏默认存活上限（30 分钟）：忘 stop 的兜底，可由任务参数放宽。 */
+        const val DEFAULT_LIFETIME_MS = 30 * 60 * 1000L
+        const val MIN_LIFETIME_MS = 60 * 1000L
 
         /** [temp] 未验证：`cmd display create-virtual-display` 并非所有 ROM 都提供同名子命令。 */
         const val CREATE_TEMPLATE = "cmd display create-virtual-display --name %s --width %d --height %d --density %d"

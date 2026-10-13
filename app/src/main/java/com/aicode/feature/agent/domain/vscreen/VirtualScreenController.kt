@@ -18,7 +18,8 @@ import javax.inject.Singleton
 class VirtualScreenController @Inject constructor(
     private val rootShell: RootShell,
     private val manager: VirtualScreenManager,
-    private val guard: VirtualScreenGuard
+    private val guard: VirtualScreenGuard,
+    private val screenshotStore: ScreenshotStore
 ) {
 
     suspend fun tap(x: Int, y: Int): Result<String> =
@@ -48,7 +49,7 @@ class VirtualScreenController @Inject constructor(
      * [com.aicode.feature.agent.domain.tool.ToolOutputStore] 指针化，不塞进上下文。
      */
     suspend fun screenshot(outputDir: String): Result<String> {
-        val screen = manager.current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
         val dir = File(outputDir).apply { mkdirs() }
         val target = File(dir, "vscreen-${screen.displayId}-${System.currentTimeMillis()}.png")
         val capture = rootShell.run(
@@ -66,12 +67,14 @@ class VirtualScreenController @Inject constructor(
         if (!target.exists() || target.length() == 0L) {
             return Result.failure(IllegalStateException("截帧命令成功但未落盘：${target.absolutePath}"))
         }
+        screenshotStore.warnIfOversized(target)
+        screenshotStore.prune(dir)
         FileLogger.i(TAG, "虚拟屏截帧：${target.absolutePath}（${target.length()} 字节）")
         return Result.success(target.absolutePath)
     }
 
     private suspend fun inject(action: String, buildCommand: (Int) -> String): Result<String> {
-        val screen = manager.current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
         if (!guard.isAuthorized(screen.sessionId)) {
             return Result.failure(
                 IllegalStateException("本会话尚未获得虚拟屏授权（授权随 vscreen_start 建立、随 vscreen_stop 失效）。")

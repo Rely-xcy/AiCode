@@ -67,6 +67,12 @@ class VsStartTool @Inject constructor(
             type = ParameterType.INTEGER,
             description = "虚拟屏密度（dpi），默认 $DEFAULT_DENSITY",
             required = false
+        ),
+        "lifetimeMinutes" to ToolParameter(
+            name = "lifetimeMinutes",
+            type = ParameterType.INTEGER,
+            description = "单屏存活上限（分钟），默认 $DEFAULT_LIFETIME_MINUTES，上限 $MAX_LIFETIME_MINUTES；到点后下一次操作会自动销毁该屏。",
+            required = false
         )
     )
 
@@ -98,8 +104,18 @@ class VsStartTool @Inject constructor(
         val width = args["width"]?.jsonPrimitive?.intOrNull ?: DEFAULT_WIDTH
         val height = args["height"]?.jsonPrimitive?.intOrNull ?: DEFAULT_HEIGHT
         val density = args["density"]?.jsonPrimitive?.intOrNull ?: DEFAULT_DENSITY
+        val lifetimeMinutes = (args["lifetimeMinutes"]?.jsonPrimitive?.intOrNull ?: DEFAULT_LIFETIME_MINUTES)
+            .coerceIn(1, MAX_LIFETIME_MINUTES)
 
-        return manager.start(sessionId, pkg, activity, width, height, density).fold(
+        return manager.start(
+            sessionId = sessionId,
+            packageName = pkg,
+            activity = activity,
+            width = width,
+            height = height,
+            density = density,
+            lifetimeMs = lifetimeMinutes * 60_000L
+        ).fold(
             onSuccess = { screen ->
                 // 授权随屏生效：只有真建成了才放行后续操作。
                 guard.authorize(sessionId)
@@ -118,5 +134,7 @@ class VsStartTool @Inject constructor(
         const val DEFAULT_WIDTH = 1080
         const val DEFAULT_HEIGHT = 1920
         const val DEFAULT_DENSITY = 320
+        const val DEFAULT_LIFETIME_MINUTES = 30
+        const val MAX_LIFETIME_MINUTES = 180
     }
 }
