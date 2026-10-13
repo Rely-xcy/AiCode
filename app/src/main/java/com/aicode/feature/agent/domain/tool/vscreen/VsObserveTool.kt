@@ -10,6 +10,7 @@ import com.aicode.feature.agent.domain.vscreen.VirtualScreenController
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import javax.inject.Inject
 
