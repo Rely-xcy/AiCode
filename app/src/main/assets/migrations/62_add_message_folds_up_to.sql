@@ -11,13 +11,15 @@ ALTER TABLE agent_messages ADD COLUMN foldsUpToTimestamp INTEGER NOT NULL DEFAUL
 -- 保留区起点，保守回填对残留块给出的边界与存活块相同；残留块本身在读取侧另有兜底
 -- （foldsUpToTimestamp = 0 才走旧规则）不会重复回放，见 MessagePersistenceUseCase。
 -- 边界取不到（摘要行之前没有 isCompacted 普通行）时保持 0，同样落入读取侧兜底。
+-- 标量子查询无行时返回 NULL 而不是不返回行：不套 IFNULL 会直接撞 NOT NULL 约束，
+-- 整个迁移（在同一事务里）回滚，升级失败。
 UPDATE agent_messages
-SET foldsUpToTimestamp = (
+SET foldsUpToTimestamp = IFNULL((
     SELECT MAX(timestamp) FROM agent_messages m2
     WHERE m2.sessionId = agent_messages.sessionId
       AND m2.isCompacted = 1
       AND m2.isContextSummary = 0
       AND m2.isCompactionMarker = 0
       AND m2.timestamp < agent_messages.timestamp
-)
+), 0)
 WHERE isContextSummary = 1 AND isCompacted = 0 AND foldsUpToTimestamp = 0;
