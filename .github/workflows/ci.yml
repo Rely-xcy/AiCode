@@ -6,7 +6,8 @@ name: CI
 on:
   push:
     # main 保持对上游干净需要它守；fork/release 出包（Beta）前也需要它守。
-    branches: [ main, fork/release ]
+    # [temp] root 分支：虚拟屏实验件也要跑 CI（仅 root 分支保留此行）。
+    branches: [ main, fork/release, root ]
     # 纯文档/资源改动不影响构建产物，跳过 CI 省时间（public 仓库虽不扣额度，但省 11 分钟等待）。
     # 注意：只要本次 push 含任一非忽略路径的改动，CI 仍会触发。
     paths-ignore:
