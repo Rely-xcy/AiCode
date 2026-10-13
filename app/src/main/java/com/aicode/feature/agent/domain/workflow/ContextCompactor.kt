@@ -51,6 +51,9 @@ class ContextCompactor @Inject constructor(
         const val MIN_TRUNCATE_CHARS = 200
 
         const val COMPACT_PROMPT_FILE = "agent/compact-summary.md"
+
+        /** 链合并（阶段 4）专用提示词：对多份旧摘要再归纳。 */
+        const val MERGE_PROMPT_FILE = "agent/compact-chain-merge.md"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
     }
 
@@ -217,15 +220,7 @@ class ContextCompactor @Inject constructor(
         // 拿它换掉整段历史是负收益——原文进了存档，上下文里只留下残缺说明。
         // 判据全部来自已有响应对象，不发额外请求。
         val usage = callUsage
-        val summaryIssue = when {
-            summaryResponse.isBlank() -> "摘要为空"
-            usage == null -> "摘要响应未返回用量信息"
-            usage.toolCalls.isNotEmpty() ->
-                "摘要响应里带了 ${usage.toolCalls.size} 个工具调用（压缩请求不带工具）"
-            usage.isTruncated -> "摘要响应被输出上限截断（stopReason=${usage.stopReason}）"
-            usage.isAborted -> "摘要响应被服务端中止（stopReason=${usage.stopReason}）"
-            else -> null
-        }
+        val summaryIssue = summaryIssueOf(summaryResponse, usage)
         if (summaryIssue != null) {
             FileLogger.w(TAG, "摘要响应不可用，放弃本次压缩（不落库、不标记 head）：$summaryIssue")
             onEvent(AgentEvent.CompactionFailed("摘要响应不可用：$summaryIssue"))
@@ -391,6 +386,263 @@ class ContextCompactor @Inject constructor(
         }
 
         return compactedResult
+    }
+
+    /**
+     * 摘要响应完整性闸门（折叠与链合并共用）：空 / 无用量 / 带工具调用 / 截断 / 中止，
+     * 一律视为不可用。判据全部来自已有响应对象，不发额外请求。
+     */
+    private fun summaryIssueOf(summaryResponse: String, usage: AIResponse?): String? = when {
+        summaryResponse.isBlank() -> "摘要为空"
+        usage == null -> "摘要响应未返回用量信息"
+        usage.toolCalls.isNotEmpty() ->
+            "摘要响应里带了 ${usage.toolCalls.size} 个工具调用（压缩请求不带工具）"
+        usage.isTruncated -> "摘要响应被输出上限截断（stopReason=${usage.stopReason}）"
+        usage.isAborted -> "摘要响应被服务端中止（stopReason=${usage.stopReason}）"
+        else -> null
+    }
+
+    /** 记录一次压缩类 LLM 调用（折叠与链合并共用，kind=compaction），失败不影响主流程。 */
+    private suspend fun recordCompactionCall(
+        summaryProvider: AIProvider,
+        sessionId: String?,
+        callStartWall: Long,
+        durationMillis: Int,
+        callUsage: AIResponse?,
+        callCompleted: Boolean,
+        callError: String?
+    ) {
+        runCatching {
+            llmCallRecordDao.insert(
+                LlmCallRecordEntity(
+                    sessionId = sessionId,
+                    providerId = summaryProvider.providerId.ifBlank { null },
+                    model = summaryProvider.model,
+                    kind = "compaction",
+                    inputTokens = callUsage?.inputTokens ?: 0,
+                    outputTokens = callUsage?.outputTokens ?: 0,
+                    cachedInputTokens = callUsage?.cachedInputTokens ?: 0,
+                    cacheCreationTokens = callUsage?.cacheCreationTokens ?: 0,
+                    ttfbMillis = null,
+                    durationMillis = durationMillis,
+                    status = if (callCompleted) "success" else "error",
+                    errorMessage = callError,
+                    stopReason = callUsage?.stopReason,
+                    createdAt = callStartWall
+                )
+            )
+        }
+    }
+
+    /**
+     * 摘要链现状（折叠记账与链合并判定共用）。
+     *
+     * 只统计新语义块（`foldsUpToTimestamp > 0` 且未淘汰）：legacy 单块（边界为 0）在回放侧走
+     * 兼容路径（只取最新一个、不抬窗口边界），既不参与边界计算也不能被合并——合并它会把
+     * 「head 已标 isCompacted 的旧语义历史」的回放责任转移到一个新块上，而新块的窗口裁剪
+     * 规则与旧语义不一致，回退面算不清。
+     */
+    data class ChainStatus(
+        /** 未淘汰的新语义块数（marker+summary 各一行，块数按 summary 行计）。 */
+        val blockCount: Int,
+        /** 最大的覆盖边界：该边界之前的原文已由摘要链代表。 */
+        val latestBoundary: Long,
+        /** 摘要块链（S0..Sk）的估算 token，用于对照「摘要区占窗口 15%」的合并线。 */
+        val summaryTokens: Int,
+        /** 未淘汰的新语义块（按 timestamp 升序），每块 = marker 行（可空）+ summary 行。 */
+        val blocks: List<Block>
+    ) {
+        data class Block(val marker: AgentMessageEntity?, val summary: AgentMessageEntity)
+    }
+
+    /** 读库统计摘要链现状；库读取失败返回 null（调用方跳过合并，不影响主流程）。 */
+    suspend fun summaryChainStatus(sessionId: String): ChainStatus? {
+        if (sessionId.isBlank()) return null
+        val rows = runCatching { agentMessageDao.getMessagesBySessionOnce(sessionId) }
+            .getOrElse { return null }
+        val blocks = mutableListOf<ChainStatus.Block>()
+        for ((index, row) in rows.withIndex()) {
+            if (!row.isContextSummary || row.isCompacted || row.foldsUpToTimestamp <= 0L) continue
+            val marker = rows.getOrNull(index - 1)?.takeIf { it.isCompactionMarker && !it.isCompacted }
+            blocks.add(ChainStatus.Block(marker, row))
+        }
+        return ChainStatus(
+            blockCount = blocks.size,
+            latestBoundary = blocks.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L,
+            summaryTokens = TokenEstimator.estimateText(blocks.joinToString("\n") { it.summary.content }),
+            blocks = blocks
+        )
+    }
+
+    /**
+     * 链合并：把摘要链最旧的 [blockCount] 个块（含各自的 marker 行）归纳成**一块**新摘要。
+     *
+     * 与 [compact] 的差异：输入材料不是原始对话而是旧摘要本身；覆盖边界取被合并块中最大的
+     * `foldsUpToTimestamp`；提交动作是把被合并块行（marker + summary）标 `isCompacted = 1`
+     * （[AgentMessageDao.markChainBlocksCompacted]，回放侧已过滤）并追加一对新的
+     * marker + summary 行——这是设计 §4 里「唯一动前端标记的操作」。
+     *
+     * 归档取舍：**不重复归档**。被合并块的覆盖范围当初折叠时已各自归档过
+     * （每次 [compact] 都把 head 原文写进 CompactedHistoryArchive，路径附在摘要正文里），
+     * 合并产出的新摘要把「各份摘要里引用的归档路径」逐条保留（见 compact-chain-merge.md），
+     * 原文退路不变；再归档一次只会重复消耗存储配额（归档目录有 32MB/30 文件的保留上限）。
+     *
+     * 失败语义：任何一步失败都返回 null；提交顺序是「先插新块、后标旧块、标失败删新块」，
+     * 任何中间态都不会丢历史。调用方（CompactionModule）在硬折叠判定之前调用本方法，
+     * 失败只记日志、下轮再试，不影响主折叠。
+     *
+     * @return 合并后的消息视图；不可合并（块不够、摘要不可用、不省空间）返回 null。
+     */
+    suspend fun mergeOldestChainBlocks(
+        messages: List<AgentMessage>,
+        chain: ChainStatus,
+        summaryProvider: AIProvider,
+        sessionId: String?,
+        blockCount: Int
+    ): List<AgentMessage>? {
+        val blocks = chain.blocks.take(blockCount)
+        if (blocks.isEmpty() || sessionId == null) return null
+        val boundary = blocks.maxOf { it.summary.foldsUpToTimestamp }
+
+        // 合并请求的输入材料：各旧块的 marker + summary 行 + 一条合并指令。
+        // marker 行保留：模型要能看出「这是 N 份独立摘要」，而不是一份散乱的历史。
+        val material = blocks.flatMap { block ->
+            buildList {
+                block.marker?.let {
+                    add(AgentMessage.UserMessage(id = it.id, content = it.content))
+                }
+                add(AgentMessage.AssistantMessage(id = block.summary.id, content = block.summary.content))
+            }
+        }
+        if (material.isEmpty()) return null
+        val instruction = systemPromptProvider.resolvePrompt(MERGE_PROMPT_FILE)
+            .replace(LEADING_COMMENT, "")
+            .replace("{{INSTRUCTION}}", "请把下面 ${blocks.size} 份接手摘要归纳成一份新的接手摘要。")
+        val requestMessages = material + listOf(AgentMessage.UserMessage(content = instruction))
+
+        val callStartElapsed = SystemClock.elapsedRealtime()
+        val callStartWall = System.currentTimeMillis()
+        var callError: String? = null
+        var callCompleted = false
+        var callUsage: AIResponse? = null
+        val mergeResponse = try {
+            val response = summaryProvider.complete(
+                systemPrompt = "你是一个上下文压缩引擎。本次请求中的对话历史仅作为输入材料，不要继续其中任何任务，不要调用任何工具，只输出接手摘要。",
+                messages = requestMessages,
+                tools = emptyList(),
+                // 合并同样是一次性调用：被合并块标掉后，这段输入前缀不会再出现。
+                cacheTail = false
+            )
+            callUsage = response
+            callCompleted = true
+            response.content
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            callError = e.message ?: e.javaClass.simpleName
+            FileLogger.w(TAG, "链合并摘要调用失败，本轮放弃合并（不影响主折叠）", e)
+            recordCompactionCall(
+                summaryProvider, sessionId, callStartWall,
+                (SystemClock.elapsedRealtime() - callStartElapsed).toInt(), callUsage, callCompleted, callError
+            )
+            return null
+        }
+        val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
+        recordCompactionCall(
+            summaryProvider, sessionId, callStartWall, durationMillis,
+            callUsage, callCompleted, callError
+        )
+
+        // 与折叠同一套完整性闸门：半份合并摘要换掉 N 份旧摘要同样是负收益。
+        val usage = callUsage
+        val issue = summaryIssueOf(mergeResponse, usage)
+        if (issue != null) {
+            FileLogger.w(TAG, "链合并摘要响应不可用，放弃本次合并（不标记任何行）：$issue")
+            return null
+        }
+
+        // 新块落点：最旧被合并块之前（各 -1 防撞），保证回放链内顺序稳定——新块（代表最旧历史）
+        // 排在最前。同 timestamp 不冲突（主键是 id，REPLACE 只按 id）；落在更早的普通行附近
+        // 也不影响窗口裁剪：回放的窗口起点只看各块的 foldsUpToTimestamp，不看块行自身的时间戳。
+        val oldestTs = blocks.first().marker?.timestamp ?: blocks.first().summary.timestamp
+        val markerTs = (oldestTs - 1).coerceAtLeast(1L)
+
+        val markerId = UUID.randomUUID().toString()
+        val summaryId = UUID.randomUUID().toString()
+        val markerMessage = AgentMessage.UserMessage(id = markerId, content = CONTEXT_COMPACTION_MARKER)
+        val summaryMessage = AgentMessage.AssistantMessage(id = summaryId, content = mergeResponse, toolCalls = emptyList())
+
+        // 「真的更小了」闸门（与 compact 同源）：合并后的视图必须小于当前视图，否则不提交。
+        // 当前视图 = 现有消息；合并后视图 = 去掉被合并块行 + 新块对。
+        // 合并后的内存视图与回放一致：新块对在最前（摘要链前置），其余消息原序跟上。
+        val removedIds = blocks.flatMap { listOfNotNull(it.marker?.id, it.summary.id) }.toSet()
+        val mergedResult = listOf(markerMessage, summaryMessage) +
+            messages.filter { it.id !in removedIds }
+        val beforeTokens = TokenEstimator.estimateMessages(messages)
+        val afterTokens = TokenEstimator.estimateMessages(mergedResult)
+        if (afterTokens >= beforeTokens) {
+            FileLogger.w(
+                TAG,
+                "链合并没换来空间，放弃本次合并（不标记任何行）：合并前约 $beforeTokens tokens，合并后约 $afterTokens tokens"
+            )
+            return null
+        }
+
+        // 提交顺序与 compact 同源：先插新块，再标旧块；标旧块失败则删掉刚插的新块恢复原链。
+        // 中间态是「新旧块同时回放」——语义重复但不丢数据；反过来的顺序（先标后插）一旦插入失败
+        // 就会出现「旧块已标、新摘要缺失」的丢失面，回放直接缺掉这段历史。
+        try {
+            agentMessageDao.insert(
+                AgentMessageEntity(
+                    id = markerId,
+                    sessionId = sessionId,
+                    role = MessageRole.USER.name,
+                    content = CONTEXT_COMPACTION_MARKER,
+                    timestamp = markerTs,
+                    isCompactionMarker = true
+                )
+            )
+            agentMessageDao.insert(
+                AgentMessageEntity(
+                    id = summaryId,
+                    sessionId = sessionId,
+                    role = MessageRole.ASSISTANT.name,
+                    content = summaryMessage.content,
+                    timestamp = markerTs + 1,
+                    isContextSummary = true,
+                    foldsUpToTimestamp = boundary
+                )
+            )
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "链合并落库新摘要失败，放弃本次合并（旧块未标）", e)
+            return null
+        }
+        val marked = runCatching { agentMessageDao.markChainBlocksCompacted(sessionId, removedIds.toList()) }
+            .getOrElse {
+                FileLogger.w(TAG, "链合并标记旧块失败，回滚新摘要块", it)
+                runCatching { agentMessageDao.deleteMessageById(markerId) }
+                    .onFailure { FileLogger.w(TAG, "链合并回滚 marker 失败，回放会多出一条孤立 marker", it) }
+                runCatching { agentMessageDao.deleteMessageById(summaryId) }
+                    .onFailure { FileLogger.w(TAG, "链合并回滚摘要失败，会残留一份未标旧块的新摘要", it) }
+                return null
+            }
+        if (marked == 0) {
+            // 标记未命中：旧块可能刚被回退逻辑动过。同样回滚新块，保持链原样。
+            runCatching { agentMessageDao.deleteMessageById(markerId) }
+            runCatching { agentMessageDao.deleteMessageById(summaryId) }
+            FileLogger.w(TAG, "链合并标记旧块未命中任何行，已回滚新块，放弃本次合并")
+            return null
+        }
+
+        FileLogger.i(
+            TAG,
+            "链合并记账 会话=$sessionId 合并前块数=${chain.blockCount} 合并批=${blocks.size} " +
+                "合并后块数=${chain.blockCount - blocks.size + 1} 合并前摘要估算=${chain.summaryTokens}tokens " +
+                "合并后摘要估算=${TokenEstimator.estimateText(mergeResponse)}tokens " +
+                "新边界=$boundary 耗时=${durationMillis}ms 摘要长度=${mergeResponse.length} " +
+                "输入估算=${TokenEstimator.estimateMessages(material)}tokens"
+        )
+        return mergedResult
     }
 
     /**

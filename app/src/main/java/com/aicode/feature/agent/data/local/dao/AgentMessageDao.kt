@@ -131,6 +131,28 @@ interface AgentMessageDao {
     @Query("SELECT * FROM agent_messages WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: String): AgentMessageEntity?
 
+    /**
+     * 链合并（阶段 4）：把 [ids] 里的摘要块行（marker + summary）标为已淘汰，返回受影响行数。
+     *
+     * 为什么按 id 集合而不是按 timestamp 范围：合并批取的是「最旧的 N 个未淘汰块」,
+     * marker 与 summary 的落点是人工安排的相邻时间戳，但会话里还可能同时存在 legacy 残留对
+     * （foldsUpToTimestamp=0）与同 timestamp 的普通行，范围判据会把不相干的行卷进来；
+     * id 集合精确到行，且只匹配摘要块两类行，误标面最小。
+     *
+     * 与旧语义折叠的 [markMessagesCompactedBeforeTimestamp] 不同，这里**不写**
+     * `compactedBySummaryId` 归属：归属只在「原文行」上有意义（回退时按它找回原文），
+     * 被合并块是摘要行——它们的原文当初折叠时已各自归档（CompactedHistoryArchive），
+     * 不需要也不应该被回退逻辑放回上下文（回退后窗口边界后移，原文自然重新回放）。
+     */
+    @Query(
+        """
+        UPDATE agent_messages SET isCompacted = 1
+        WHERE sessionId = :sessionId AND id IN (:ids)
+          AND (isContextSummary = 1 OR isCompactionMarker = 1)
+        """
+    )
+    suspend fun markChainBlocksCompacted(sessionId: String, ids: List<String>): Int
+
     /** 会话是否已有任何消息（LIMIT 1 快速判断，避免全量读取）。 */
     @Query("SELECT EXISTS(SELECT 1 FROM agent_messages WHERE sessionId = :sessionId LIMIT 1)")
     suspend fun hasMessages(sessionId: String): Boolean

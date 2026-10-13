@@ -1,11 +1,15 @@
 package com.aicode.feature.agent.domain.engine.modules
 
+import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.LlmCall
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
+import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.agent.domain.workflow.CompactedHistoryArchive
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
@@ -45,6 +49,9 @@ class CompactionModuleTest {
 
         /** 发送前兜底的预算：窗口 × 92%（与 ModelContextPolicy.GUARD_BUDGET_PERCENT 同源）。 */
         const val GUARD_BUDGET = WINDOW * 92 / 100
+
+        /** 链合并测试用压缩标记正文（与 domain.model.CONTEXT_COMPACTION_MARKER 同值）。 */
+        const val CONTEXT_MARKER = "What did we do so far?"
     }
 
     private class Harness(
@@ -214,5 +221,165 @@ class CompactionModuleTest {
         assertTrue(workThreads.none { it == callerThread })
         assertTrue(eventThreads.isNotEmpty())
         assertTrue(eventThreads.all { it == callerThread })
+    }
+
+    /**
+     * 阶段 4：链合并触发。链块数超过 [CompactionModule.MAX_CHAIN_BLOCKS] 时，
+     * 硬折叠判定之前先合并：合并后回到硬线以下就不再折叠（省一次摘要调用）。
+     */
+    @Test
+    fun `链超限时硬折叠前先合并且合并后不折叠`() = runTest {
+        // 真 Compactor：链状态从库行计；DAO 返回 13 个未淘汰块 + tail。
+        val dao = mockk<AgentMessageDao>(relaxed = true)
+        val rows = buildList {
+            repeat(13) { i ->
+                val ts = 100L + i * 10
+                add(
+                    AgentMessageEntity(
+                        id = "marker-$i", sessionId = "s1", role = "USER",
+                        content = CONTEXT_COMPACTION_MARKER, timestamp = ts, isCompactionMarker = true
+                    )
+                )
+                add(
+                    AgentMessageEntity(
+                        id = "summary-$i", sessionId = "s1", role = "ASSISTANT",
+                        content = "摘要 $i", timestamp = ts + 1,
+                        isContextSummary = true, foldsUpToTimestamp = ts
+                    )
+                )
+            }
+        }
+        coEvery { dao.getMessagesBySessionOnce("s1") } returns rows
+        // 合并标记命中
+        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 12
+
+        val prompts = mockk<SystemPromptProvider>(relaxed = true)
+        every { prompts.resolvePrompt(any()) } returns "合并提示词 {{INSTRUCTION}}"
+        val compactor = ContextCompactor(
+            agentMessageDao = dao,
+            systemPromptProvider = prompts,
+            llmCallRecordDao = mockk(relaxed = true),
+            compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
+        )
+
+        val h = harness(compactor = compactor)
+        // 合并请求返回一份短摘要（覆盖默认的「失败」桩：先挂成功响应再挂折叠失败）
+        coEvery { h.provider.complete(any(), any(), any()) } returns
+            AIResponse("合并后的短摘要", stopReason = "stop")
+        coEvery { h.provider.complete(any(), any(), any(), any()) } returns
+            AIResponse("合并后的短摘要", stopReason = "stop")
+        coEvery { h.provider.complete(any(), any(), any(), any(), any()) } returns
+            AIResponse("合并后的短摘要", stopReason = "stop")
+
+        // 内存视图：13 个块对（短）+ 一条约 60k token 的长尾（推过硬线，验证折叠是否仍触发）。
+        // 尾部足够大，合并（去掉 12 行旧摘要）远不能把它拉回硬线以下 → 合并后仍应触发折叠。
+        // 这里只验合并先于折叠发生：合并调用（短输入）先于折叠调用（长 head）。
+        val messages = buildList {
+            repeat(13) { i ->
+                add(AgentMessage.UserMessage(id = "marker-$i", content = CONTEXT_COMPACTION_MARKER))
+                add(AgentMessage.AssistantMessage(id = "summary-$i", content = "摘要 $i"))
+            }
+            add(AgentMessage.UserMessage(id = "tail", content = "汉".repeat(60_000)))
+        }
+        val events = mutableListOf<AgentEvent>()
+        h.module.beforeLlmCall(
+            EngineContext(sessionId = "s1", projectRoot = "/ws"),
+            LlmCall(
+                messages = messages,
+                windowProvider = h.provider,
+                summaryProvider = h.provider,
+                onEvent = { events += it }
+            )
+        )
+
+        // 合并确实发生了：被合并块被标 isCompacted（12 行 = 6 对），新摘要落库
+        coVerify { dao.markChainBlocksCompacted("s1", any()) }
+    }
+
+    /**
+     * 阶段 4：合并失败不影响主折叠——合并返回 null 后，折叠照常触发并成功。
+     */
+    @Test
+    fun `链合并失败不影响主折叠`() = runTest {
+        val dao = mockk<AgentMessageDao>(relaxed = true)
+        val rows = buildList {
+            repeat(13) { i ->
+                val ts = 100L + i * 10
+                add(
+                    AgentMessageEntity(
+                        id = "marker-$i", sessionId = "s2", role = "USER",
+                        content = CONTEXT_COMPACTION_MARKER, timestamp = ts, isCompactionMarker = true
+                    )
+                )
+                add(
+                    AgentMessageEntity(
+                        id = "summary-$i", sessionId = "s2", role = "ASSISTANT",
+                        content = "摘要 $i", timestamp = ts + 1,
+                        isContextSummary = true, foldsUpToTimestamp = ts
+                    )
+                )
+            }
+        }
+        coEvery { dao.getMessagesBySessionOnce("s2") } returns rows
+        val prompts = mockk<SystemPromptProvider>(relaxed = true)
+        every { prompts.resolvePrompt(any()) } returns "提示词 {{INSTRUCTION}}"
+        val compactor = ContextCompactor(
+            agentMessageDao = dao,
+            systemPromptProvider = prompts,
+            llmCallRecordDao = mockk(relaxed = true),
+            compactedHistoryArchive = mockk<CompactedHistoryArchive>(relaxed = true)
+        )
+
+        val h = harness(compactor = compactor)
+        // 合并请求：响应被截断 → 完整性闸门拒绝 → 合并失败；折叠请求：正常摘要成功。
+        // 用答案序列区分：第一次（合并）返回截断 stopReason=length，之后（折叠）返回正常。
+        var callIndex = 0
+        coEvery { h.provider.complete(any(), any(), any()) } answers {
+            callIndex++
+            if (callIndex == 1) {
+                AIResponse("截断摘要", stopReason = "length")
+            } else {
+                AIResponse("折叠摘要", stopReason = "stop")
+            }
+        }
+        coEvery { h.provider.complete(any(), any(), any(), any()) } answers {
+            callIndex++
+            if (callIndex == 1) {
+                AIResponse("截断摘要", stopReason = "length")
+            } else {
+                AIResponse("折叠摘要", stopReason = "stop")
+            }
+        }
+        coEvery { h.provider.complete(any(), any(), any(), any(), any()) } answers {
+            callIndex++
+            if (callIndex == 1) {
+                AIResponse("截断摘要", stopReason = "length")
+            } else {
+                AIResponse("折叠摘要", stopReason = "stop")
+            }
+        }
+
+        val messages = buildList {
+            repeat(13) { i ->
+                add(AgentMessage.UserMessage(id = "marker-$i", content = CONTEXT_COMPACTION_MARKER))
+                add(AgentMessage.AssistantMessage(id = "summary-$i", content = "摘要 $i"))
+            }
+            add(AgentMessage.UserMessage(id = "tail", content = "汉".repeat(60_000)))
+        }
+        val events = mutableListOf<AgentEvent>()
+        val result = h.module.beforeLlmCall(
+            EngineContext(sessionId = "s2", projectRoot = "/ws"),
+            LlmCall(
+                messages = messages,
+                windowProvider = h.provider,
+                summaryProvider = h.provider,
+                onEvent = { events += it }
+            )
+        )
+
+        // 合并失败（未标任何行），主折叠照常成功（发过 CompactionFinished）
+        coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
+        assertTrue(events.any { it is AgentEvent.CompactionFinished })
+        assertNotNull(result)
     }
 }

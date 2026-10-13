@@ -98,6 +98,14 @@ class CompactionModule @Inject constructor(
     private val lastRawEstimates = ConcurrentHashMap<String, Int>()
 
     /**
+     * 上一次链合并失败的位点：会话 id → 合并失败时的总估算 token。
+     *
+     * 语义同 [foldFailedTokens]：失败不能每轮重试，但也不能关掉链合并本身——
+     * 上下文相对位点再长出 [MERGE_RETRY_GROWTH_PERCENT]% 后允许再试。
+     */
+    private val mergeFailedTokens = ConcurrentHashMap<String, Int>()
+
+    /**
      * 调模型前的上下文处理入口：只负责把整段判定与压缩体搬到主线程之外。
      *
      * 为什么必须搬：本模块与 [ContextCompactor] 全程没有线程切换，调用链是
@@ -165,6 +173,23 @@ class CompactionModule @Inject constructor(
                 thresholds = thresholds
             )
         )
+        // 链合并（阶段 4，设计 §4/§7）：独立于折叠的动作，放在硬折叠判定**之前**——
+        // 链超限本身占着窗口预算，合并可能直接让请求回到硬线以下，省一次折叠。
+        // 成功后替换 messages 与判定量，后续折叠判定与发送前兜底都拿合并后的视图走；
+        // 失败只记日志、记位点、下轮再试：不影响折叠判定，更不影响本轮请求。
+        // call.force 不触发链合并：用户手动点的是「折叠」，不是另一次低频维护动作。
+        var effectiveMessages = messages
+        var effectiveCurrentTokens = currentTokens
+        if (call.summaryProvider != null && ctx.sessionId != null && !call.force) {
+            val merged = tryChainMerge(ctx, call, messages, contextLimit, currentTokens)
+            if (merged != null) {
+                effectiveMessages = merged
+                effectiveCurrentTokens =
+                    maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0,
+                        TokenEstimator.estimateMessages(merged) + call.overheadTokens)
+            }
+        }
+
         // 折叠被跳过有两种来由，都只针对「再折一次」：上一轮折完仍超线（可折的 head 已经折掉了），
         // 或上一轮硬折叠直接失败。两者都等上下文相对位点又长出 [REFOLD_GROWTH_PERCENT]% 才再试；
         // call.force 不受抑制（用户手动点了就该干活）。判据只决定折不折，模块其余职责照跑——
@@ -172,16 +197,16 @@ class CompactionModule @Inject constructor(
         val foldedPoint = ctx.sessionId?.let { foldedStillOverTokens[it] }
         val failedPoint = ctx.sessionId?.let { foldFailedTokens[it] }
         val foldDeferred = foldedPoint != null &&
-            currentTokens < foldedPoint + foldedPoint * REFOLD_GROWTH_PERCENT / 100
+            effectiveCurrentTokens < foldedPoint + foldedPoint * REFOLD_GROWTH_PERCENT / 100
         val retryDeferred = failedPoint != null &&
-            currentTokens < failedPoint + failedPoint * REFOLD_GROWTH_PERCENT / 100
+            effectiveCurrentTokens < failedPoint + failedPoint * REFOLD_GROWTH_PERCENT / 100
         val reachedHard = hardAllowed &&
-            (call.force || (currentTokens >= hardThreshold && !foldDeferred && !retryDeferred))
-        if (hardAllowed && !call.force && currentTokens >= hardThreshold && (foldDeferred || retryDeferred)) {
+            (call.force || (effectiveCurrentTokens >= hardThreshold && !foldDeferred && !retryDeferred))
+        if (hardAllowed && !call.force && effectiveCurrentTokens >= hardThreshold && (foldDeferred || retryDeferred)) {
             FileLogger.i(
                 TAG,
                 "会话 ${ctx.sessionId ?: "-"} ${if (retryDeferred) "上次硬折叠失败" else "折叠后仍超线"}" +
-                    "（位点 ${if (retryDeferred) failedPoint else foldedPoint} tokens，当前 $currentTokens " +
+                    "（位点 ${if (retryDeferred) failedPoint else foldedPoint} tokens，当前 $effectiveCurrentTokens " +
                     "未再长出 $REFOLD_GROWTH_PERCENT%），本轮跳过重复折叠，只做发送前兜底"
             )
         }
@@ -197,7 +222,7 @@ class CompactionModule @Inject constructor(
                 "上下文判定 会话=${ctx.sessionId ?: "-"} 子代理=${ctx.isSubAgent} " +
                     "真实=${call.lastInputTokens} 估算=$estimated（原始 $rawEstimate，含 system+工具开销 ${call.overheadTokens}" +
                     "${if (baselineEstimate != null) "，校准基线 $baselineEstimate" else "，未校准"}）" +
-                    "判定=$currentTokens 窗口=$contextLimit " +
+                    "判定=$effectiveCurrentTokens 窗口=$contextLimit " +
                     "硬线=${if (hardAllowed) hardThreshold.toString() else "未启用"}" +
                     "；消息构成 cjk=${composition.cjk} alnum=${composition.alnum} " +
                     "other=${composition.other} 图片=${composition.image} 消息数=${composition.messages}" +
@@ -206,13 +231,13 @@ class CompactionModule @Inject constructor(
         }
 
         // 单条消息也可能本身就超窗：只有估算还没逼近窗口时才允许按条数早退。
-        if (!call.force && messages.size <= 2 && currentTokens < contextLimit) {
+        if (!call.force && effectiveMessages.size <= 2 && effectiveCurrentTokens < contextLimit) {
             // 这一轮不改编排，发出去的就是 messages：记下它的量供下一轮校准配对。
             rememberRawEstimate(ctx, rawEstimate)
             return null
         }
 
-        var result = messages
+        var result = effectiveMessages
         var compacted = false
 
         if (reachedHard) {
@@ -223,11 +248,11 @@ class CompactionModule @Inject constructor(
             } else {
                 FileLogger.i(
                     TAG,
-                    "会话 ${ctx.sessionId ?: "-"} 上下文约 $currentTokens tokens（窗口 $contextLimit，" +
+                    "会话 ${ctx.sessionId ?: "-"} 上下文约 $effectiveCurrentTokens tokens（窗口 $contextLimit，" +
                         "${ModelContextPolicy.tierFor(contextLimit).tier}），" +
                         "${if (call.force) "手动强制压缩" else "达到硬压缩线 $hardThreshold"}，开始折叠早期对话"
                 )
-                call.onEvent(AgentEvent.CompactionStarted(currentTokens))
+                call.onEvent(AgentEvent.CompactionStarted(effectiveCurrentTokens))
                 val compactedMessages = compactor.get().compact(
                     messages = result,
                     summaryProvider = summaryProvider,
@@ -238,7 +263,7 @@ class CompactionModule @Inject constructor(
                     contextLimit = contextLimit,
                     // 触发判定用的那个数（含 system/工具开销）。带下去只为了记账日志能自洽：
                     // 单看折叠记账的「折叠前消息估算」会比硬线低几千 token，看着像不该折却折了。
-                    decisionTokens = currentTokens,
+                    decisionTokens = effectiveCurrentTokens,
                     // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
                     // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
                     // 注意：这一步**不受**「长期记忆自动沉淀」开关控制（用户 2026-09-30 明确要求保持独立）——
@@ -279,7 +304,7 @@ class CompactionModule @Inject constructor(
                         FileLogger.w(
                             TAG,
                             "会话 ${ctx.sessionId ?: "-"} 折叠后仍超线：折叠后约 $afterFold tokens" +
-                                "（折叠前判定 $currentTokens，硬线 $hardThreshold，窗口 $contextLimit），" +
+                                "（折叠前判定 $effectiveCurrentTokens，硬线 $hardThreshold，窗口 $contextLimit），" +
                                 "保留区与固定开销已占满可回收空间，不再重复折叠"
                         )
                         ctx.sessionId?.let { foldedStillOverTokens[it] = afterFold }
@@ -303,7 +328,7 @@ class CompactionModule @Inject constructor(
                     // 本轮与随后几轮不再原地重试硬折叠（否则每次 LLM 调用都白试一次），
                     // 上下文安全由 92% 兜底线与发送前硬截断负责。
                     FileLogger.w(TAG, "硬压缩未产出结果")
-                    ctx.sessionId?.let { foldFailedTokens[it] = currentTokens }
+                    ctx.sessionId?.let { foldFailedTokens[it] = effectiveCurrentTokens }
                 }
             }
         }
@@ -326,6 +351,71 @@ class CompactionModule @Inject constructor(
      * 每个出口都要记：出口不止一个（按条数早退、无改动返回、返回缩过的消息），漏一处就会让下一轮
      * 拿着过期的基线去算差额——那比不校准更糟（会把别人的偏差算到本轮头上）。
      */
+    /**
+     * 链合并尝试（阶段 4，设计 §4/§7）：链块数 > [MAX_CHAIN_BLOCKS] 或摘要区估算 > 窗口
+     * [CHAIN_SUMMARY_PERCENT]% 时，把最旧一半块合并成一块。放在硬折叠判定之前调用：
+     * 链超限本身占着窗口预算，合并可能直接让请求回到硬线以下，省一次折叠。
+     *
+     * 失败处理：任何失败（读库、摘要调用、闸门拒绝、落库）都返回 null 且不影响主折叠——
+     * 折叠照常成功，只记一条日志；同时记下失败位点（[mergeFailedTokens]），
+     * 避免链超限的会话每次 LLM 调用都白花一次合并调用。
+     *
+     * @return 合并后的消息视图；未触发或失败返回 null（调用方沿用原消息）。
+     */
+    private suspend fun tryChainMerge(
+        ctx: EngineContext,
+        call: LlmCall,
+        messages: List<AgentMessage>,
+        contextLimit: Int,
+        currentTokens: Int
+    ): List<AgentMessage>? {
+        val sessionId = ctx.sessionId ?: return null
+        val summaryProvider = call.summaryProvider ?: return null
+        val failedPoint = mergeFailedTokens[sessionId]
+        if (failedPoint != null &&
+            currentTokens < failedPoint + failedPoint * MERGE_RETRY_GROWTH_PERCENT / 100
+        ) {
+            return null
+        }
+        val chain = compactor.get().summaryChainStatus(sessionId) ?: return null
+        val overBlocks = chain.blockCount > MAX_CHAIN_BLOCKS
+        val overSummary = chain.summaryTokens > contextLimit * CHAIN_SUMMARY_PERCENT / 100
+        if (!overBlocks && !overSummary) return null
+        // 合并批大小（设计 §8）：每次合并最旧的 maxBlocks / 2 个块。「摘要区超占比」但块数
+        // 不足一半时全并到剩一块——单块链没有合并收益，不把链清空。
+        val mergeCount = (MAX_CHAIN_BLOCKS / 2).coerceAtMost(chain.blockCount - 1)
+        if (mergeCount <= 0) return null
+        val startedAt = System.currentTimeMillis()
+        FileLogger.i(
+            TAG,
+            "链合并触发 会话=$sessionId 块数=${chain.blockCount}（上限 $MAX_CHAIN_BLOCKS）" +
+                "摘要区估算=${chain.summaryTokens}tokens（窗口 $contextLimit 的 $CHAIN_SUMMARY_PERCENT%=" +
+                "${contextLimit * CHAIN_SUMMARY_PERCENT / 100}）合并批=$mergeCount"
+        )
+        val merged = try {
+            compactor.get().mergeOldestChainBlocks(
+                messages = messages,
+                chain = chain,
+                summaryProvider = summaryProvider,
+                sessionId = sessionId,
+                blockCount = mergeCount
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "链合并异常，不影响主折叠，下轮再试", e)
+            null
+        }
+        if (merged == null) {
+            FileLogger.w(TAG, "链合并未产出结果（不影响主折叠），记失败位点等下轮重试")
+            mergeFailedTokens[sessionId] = currentTokens
+            return null
+        }
+        mergeFailedTokens.remove(sessionId)
+        FileLogger.i(TAG, "链合并完成 会话=$sessionId 总耗时=${System.currentTimeMillis() - startedAt}ms")
+        return merged
+    }
+
     private fun rememberRawEstimate(ctx: EngineContext, rawTokens: Int) {
         ctx.sessionId?.let { lastRawEstimates[it] = rawTokens }
     }
@@ -343,6 +433,7 @@ class CompactionModule @Inject constructor(
         ctx.sessionId?.let { foldedStillOverTokens.remove(it) }
         ctx.sessionId?.let { foldFailedTokens.remove(it) }
         ctx.sessionId?.let { lastRawEstimates.remove(it) }
+        ctx.sessionId?.let { mergeFailedTokens.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
@@ -371,5 +462,24 @@ class CompactionModule @Inject constructor(
          * 本身是成功的（只是没把上下文压到线下）。
          */
         const val OVER_LINE_TOOL_NAME = "上下文压缩提示"
+
+        /**
+         * 摘要链块数上限（设计 §8）：超过即触发链合并，把最旧一半合并成一块。
+         * 频率极低（每 maxBlocks 次折叠一次），不进设置 UI。
+         */
+        const val MAX_CHAIN_BLOCKS = 12
+
+        /**
+         * 摘要区窗口占比触发线（设计 §8，~15%）：摘要块链的估算 token 超过窗口的这个比例
+         * 时也触发链合并（块数不多但单块摘要写得长的场景）。
+         */
+        const val CHAIN_SUMMARY_PERCENT = 15
+
+        /**
+         * 链合并失败后的重试抑制：比照折叠失败（[foldFailedTokens]）的思路，失败位点记下来，
+         * 上下文比位点再长出 [REFOLD_GROWTH_PERCENT]% 才重试——否则链超限的会话每次 LLM 调用
+         * 都白花一次合并模型调用。
+         */
+        const val MERGE_RETRY_GROWTH_PERCENT = REFOLD_GROWTH_PERCENT
     }
 }
