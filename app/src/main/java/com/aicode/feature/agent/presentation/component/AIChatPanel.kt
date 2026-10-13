@@ -327,8 +327,28 @@ internal fun buildChatItems(
 ): List<ChatRenderItem> {
     val items = ArrayList<ChatRenderItem>(messages.size)
     val (leading, turns) = splitChatTurns(messages)
-    // 轮首之前的散消息（会话开头就出现的助手/工具输出，罕见）不折叠，原样常显。
-    leading.forEach { items += messageRenderItems(it) }
+    // 窗口从某一轮中间切开时，最前面那一截缺轮首、不是完整的轮：它的过程项同样折进一个折叠头，
+    // 避免把一段半轮摊在历史最前面；块尾若是上一轮的最终回复则照旧常显，不跟着折起来。
+    if (leading.isNotEmpty()) {
+        val headKey = leadingHeadKey(leading.last())
+        val resultId = leading.last().takeIf { it.isResultCandidate() }?.id
+        val process = buildTurnProcessItems(leading, resultId, groupOverrides)
+        if (process.isNotEmpty()) {
+            items += ChatRenderItem(
+                message = leading.last(),
+                key = "$headKey#header",
+                contentType = TURN_HEADER_CONTENT_TYPE,
+                turnHeader = TurnHeaderState(
+                    key = headKey,
+                    endMessageId = null,
+                    running = false,
+                    expanded = turnOverrides[headKey] ?: false,
+                ),
+                turnProcess = process,
+            )
+        }
+        items += buildTurnPersistentItems(leading, resultId)
+    }
     var runningFromHere = false
     for (turn in turns) {
         // 「正在跑」= 「activeTurnKey 起、往后都算」，不是「等于 activeTurnKey」：运行期间若出现后续轮，
@@ -480,6 +500,29 @@ internal fun actionableResultIds(
         }
     }
     return ids
+}
+
+/**
+ * 被窗口截断、找不到轮首的那一截过程（见 [buildChatItems]）的折叠头 key。
+ *
+ * 取块尾消息 id 而非块首：窗口继续向前补加载时新消息插在块首，块尾不变、key 保持稳定。
+ */
+private fun leadingHeadKey(lastMessage: AgentUIMessage): String = "turn:head:${lastMessage.id}"
+
+/** 轮内「常显」项（保持原序）：结果正文（拆块，不重复渲染思考）与压缩卡片 / 通知 / 带附件工具。 */
+private fun buildTurnPersistentItems(
+    messages: List<AgentUIMessage>,
+    resultId: String?,
+): List<ChatRenderItem> {
+    val out = ArrayList<ChatRenderItem>()
+    for (message in messages) {
+        if (message.id == resultId) {
+            messageRenderItems(message).forEach { out += it.copy(reasoningVisible = false) }
+        } else if (message.isPersistentInTurn()) {
+            out += messageRenderItems(message)
+        }
+    }
+    return out
 }
 
 /**
