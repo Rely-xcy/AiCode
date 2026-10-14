@@ -52,6 +52,7 @@ import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
@@ -365,12 +366,12 @@ private fun MemoryRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(rowBackground)
-                .padding(start = Spacing.lg, end = Spacing.lg, top = 11.dp, bottom = 11.dp),
+                .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(40.dp)
                     .background(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(8.dp)
@@ -424,6 +425,15 @@ private fun MemoryRow(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+
+            Spacer(modifier = Modifier.width(Spacing.sm))
+
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.semanticColors.subtleText,
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }
