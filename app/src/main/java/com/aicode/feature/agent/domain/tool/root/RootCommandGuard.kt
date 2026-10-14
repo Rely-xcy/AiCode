@@ -35,7 +35,38 @@ object RootCommandGuard {
 
     private val REBOOT_TARGETS = listOf("bootloader", "fastboot", "edl", "recovery", "recovery-mode")
 
+    /**
+     * 默认放行的命令**首 token**（只读调试与无害的界面操作）。
+     *
+     * 不在名单里的命令默认拒绝，需调用方显式传 `allowUnsafe=true`（弹窗会标注风险）——
+     * 这是「可控范围」的主要手段：模型默认只能做只读/调试类的事，能改系统的那一步必须由人显式解锁。
+     */
+    private val ALLOWED_COMMANDS = setOf(
+        // 只读系统信息
+        "dumpsys", "getprop", "ls", "cat", "ps", "pidof", "top", "df", "du", "stat",
+        "id", "date", "uptime", "uname", "whoami", "logcat", "service",
+        // 输入注入与取帧（虚拟屏自动化测试用）
+        "input", "screencap", "screenshot", "wm", "settings", "cmd",
+        // 应用信息与控制（不改系统分区）
+        "pm", "am", "monkey",
+        // 其它只读工具
+        "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum", "toybox"
+    )
+
+    /** 只允许读的 `settings` / `cmd` 子命令；写子命令一律不在默认白名单。 */
+    private val SETTINGS_READ_ONLY = listOf("settings get", "settings list")
+
     data class Rejection(val reason: String)
+
+    /** 首 token 是否在默认白名单内（`settings` 另按只读子命令判定）。 */
+    fun isAllowlisted(command: String): Boolean {
+        val normalized = command.replace(Regex("\\s+"), " ").trim().lowercase()
+        if (normalized.isEmpty()) return false
+        val first = normalized.substringBefore(' ')
+        if (first !in ALLOWED_COMMANDS) return false
+        if (first == "settings") return SETTINGS_READ_ONLY.any { normalized.startsWith(it) }
+        return true
+    }
 
     /**
      * 判定一条命令是否予以拒绝；null 表示放行。
@@ -98,6 +129,18 @@ object RootCommandGuard {
         }
         if (lower.contains("fastboot") || DESTRUCTIVE_KEYWORDS.any { lower.contains(it.lowercase()) }) {
             return Rejection("拒绝执行：该命令涉及刷机模式或清除设备数据，风险不可逆，已拦截。")
+        }
+
+        // 5) 命令拼接/替换/管道进 shell：静态拦不了里面藏什么，一律拒绝
+        //    （否则 `rm -rf $(echo /system)` 这类写法能绕过上面的路径判定）。
+        if (Regex("\\$\\(").containsMatchIn(normalized) || normalized.contains('`') ||
+            Regex("(^|[\\s;&|])(eval|exec)\\s").containsMatchIn(lower) ||
+            Regex("\\|\\s*(sh|bash|ash|busybox)\\b").containsMatchIn(lower)
+        ) {
+            return Rejection(
+                "拒绝执行：命令包含命令替换 / eval / 管道进 shell，无法静态判定其实际作用，已拦截。" +
+                    "请改写成不依赖拼接的单条命令。"
+            )
         }
 
         return null

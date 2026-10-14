@@ -29,7 +29,11 @@
 
 ### 内置安全闸门（代码级，不靠劝说）
 
-为了防止把手机搞坏，下列命令**在发出前就被直接拒绝**（不看权限规则、不受 AUTO 模式影响），并在工具结果里说明原因：
+**默认只放行白名单命令**（只读调试与无害的界面操作）：
+
+`dumpsys`、`getprop`、`ls`、`cat`、`ps`、`pidof`、`top`、`df`、`du`、`stat`、`id`、`date`、`uptime`、`uname`、`whoami`、`logcat`、`service`、`input`、`screencap`、`wm`、`settings get`、`pm`（列表/信息类）、`am`、`monkey`、`ip`、`mount`、`free` 等。
+
+白名单外的命令**必顶显式解锁**（工具参数 `allowUnsafe=true`）才会执行，且弹窗会明确标注「非白名单、已显式解锁」。下列命令则**无论是否解锁都直接拒绝**（不看权限规则、不受 AUTO 模式影响）：
 
 | 拦截面 | 例子 |
 | --- | --- |
@@ -38,10 +42,9 @@
 | 直接写块设备 | `dd … of=/dev/block/…` |
 | 向系统分区写入 | `echo x > /system/…`、`cp x /system/…`、`chmod 777 /system/…` |
 | 进刷机 / 恢复模式、清数据 | `reboot bootloader/edl/recovery`、`MASTER_CLEAR`、`--wipe_data` |
+| 命令拼接 / 管道进 shell | `rm -rf $(echo /system)`、`… \| sh`、`eval …` |
 
-**放行**的是普通调试与数据目录操作：`dumpsys`/`getprop`/`ls`/`cat`（只读）、`input`、`screencap`、`pm list`/`am start`、对 `/sdcard` 等数据目录的读写。
-
-普通重启（`reboot`）不拦，但会弹窗由你确认；刷机这类操作请照旧在电脑上用官方工具手动做。
+普通重启（`reboot`）不硬拦，但不在白名单里——需显式解锁 + 弹窗确认；刷机这类操作请照旧在电脑上用官方工具手动做。
 
 ## 使用示例
 

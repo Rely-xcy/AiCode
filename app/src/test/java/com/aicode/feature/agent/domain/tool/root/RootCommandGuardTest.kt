@@ -1,7 +1,9 @@
 package com.aicode.feature.agent.domain.tool.root
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -89,5 +91,36 @@ class RootCommandGuardTest {
     fun `空命令不拦（由调用方报参数错误）`() {
         assertNull(RootCommandGuard.check(""))
         assertNull(RootCommandGuard.check("   "))
+    }
+
+    @Test
+    fun `命令拼接与管道进 shell 被拦`() {
+        assertNotNull(RootCommandGuard.check("rm -rf \$(echo /system)"))
+        assertNotNull(RootCommandGuard.check("ls `echo /system`"))
+        assertNotNull(RootCommandGuard.check("eval rm -rf /system"))
+        assertNotNull(RootCommandGuard.check("echo cm0gLXJmIC8= | sh"))
+    }
+
+    // ---- 白名单（默认只能跑只读/调试类）----
+
+    @Test
+    fun `白名单内的命令`() {
+        assertTrue(RootCommandGuard.isAllowlisted("dumpsys display"))
+        assertTrue(RootCommandGuard.isAllowlisted("input -d 2 tap 1 2"))
+        assertTrue(RootCommandGuard.isAllowlisted("screencap -d 2 -p /sdcard/a.png"))
+        assertTrue(RootCommandGuard.isAllowlisted("getprop ro.build.version.release"))
+        assertTrue(RootCommandGuard.isAllowlisted("pm list packages"))
+        assertTrue(RootCommandGuard.isAllowlisted("settings get global airplane_mode_on"))
+    }
+
+    @Test
+    fun `白名单外的命令需显式解锁`() {
+        assertFalse(RootCommandGuard.isAllowlisted("rm -rf /sdcard/x"))
+        assertFalse(RootCommandGuard.isAllowlisted("cp /sdcard/a /sdcard/b"))
+        assertFalse(RootCommandGuard.isAllowlisted("chmod 777 /sdcard/x"))
+        assertFalse(RootCommandGuard.isAllowlisted("reboot"))
+        assertFalse(RootCommandGuard.isAllowlisted(""))
+        // settings 只放只读子命令
+        assertFalse(RootCommandGuard.isAllowlisted("settings put global airplane_mode_on 1"))
     }
 }

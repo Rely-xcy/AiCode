@@ -13,6 +13,7 @@ import com.aicode.feature.agent.domain.vscreen.RootShell
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -62,6 +63,13 @@ class RootTool @Inject constructor(
             type = ParameterType.INTEGER,
             description = "命令最长执行时间（秒），默认 $DEFAULT_TIMEOUT_SECONDS 秒，上限 $MAX_TIMEOUT_SECONDS 秒。",
             required = false
+        ),
+        "allowUnsafe" to ToolParameter(
+            name = "allowUnsafe",
+            type = ParameterType.BOOLEAN,
+            description = "非白名单命令需要显式置 true 才会执行（弹窗会标注风险）。先看看不用这个参数能不能达到目的；" +
+                "绝不可逆的操作（刷机/写系统分区/清数据）即使置 true 也会被硬拦截。",
+            required = false
         )
     )
 
@@ -70,6 +78,9 @@ class RootTool @Inject constructor(
         return seconds.coerceIn(1L, MAX_TIMEOUT_SECONDS) * 1000L
     }
 
+    private fun resolveAllowUnsafe(args: Map<String, JsonElement>): Boolean =
+        args["allowUnsafe"]?.jsonPrimitive?.booleanOrNull ?: false
+
     override fun buildPermissionRequest(
         callId: String,
         args: Map<String, JsonElement>,
@@ -77,12 +88,19 @@ class RootTool @Inject constructor(
     ): PendingToolPermission {
         val command = args["command"]?.jsonPrimitive?.contentOrNull ?: "未知命令"
         val timeoutSeconds = resolveTimeoutMs(args) / 1000L
+        val unlocked = !RootCommandGuard.isAllowlisted(command) && resolveAllowUnsafe(args)
         return PendingToolPermission(
             id = callId,
             toolName = name,
-            title = "确认执行 root 命令",
+            title = if (unlocked) "确认执行 root 命令（非白名单，已显式解锁）" else "确认执行 root 命令",
             summary = command,
-            details = "将以设备 root（uid 0）身份在 Android 系统上执行。\n超时：${timeoutSeconds} 秒",
+            details = buildString {
+                append("将以设备 root（uid 0）身份在 Android 系统上执行。\n超时：${timeoutSeconds} 秒")
+                if (unlocked) {
+                    append("\n\n注意：该命令不在只读/调试白名单内，是调用方显式传 allowUnsafe=true 解锁的。")
+                    append("请确认这条命令确实是你想让它做的。")
+                }
+            },
             argsPreview = argsPreview
         )
     }
@@ -91,11 +109,22 @@ class RootTool @Inject constructor(
         val command = args["command"]?.jsonPrimitive?.contentOrNull
             ?: return ToolResult.Error("缺少必需参数：command")
 
-        // 安全闸门先于一切：设备级的不可逆动作（刷机/格式化/写系统分区/清数据）直接拒绝，
+        // 安全闸门先于一切：设备级的不可逆动作（刷机/格式化/写系统分区/清数据/命令拼接）直接拒绝，
         // 不看权限规则、不受 AUTO 模式影响。
         RootCommandGuard.check(command)?.let { rejection ->
             FileLogger.w(TAG, "Root 命令被安全闸门拦下：$command")
             return ToolResult.Error(rejection.reason, code = "ROOT_COMMAND_BLOCKED")
+        }
+
+        // 白名单之外默认不放行：需要调用方显式传 allowUnsafe=true（弹窗会标注风险）。
+        // 目的是把「AI 默认只能做只读/调试类操作」变成硬约束，而不是靠提示词自觉。
+        if (!RootCommandGuard.isAllowlisted(command) && !resolveAllowUnsafe(args)) {
+            return ToolResult.Error(
+                "该命令不在默认白名单内（白名单为只读调试类：dumpsys/getprop/ls/cat/ps/logcat/input/screencap/wm/pm 等）。" +
+                    "确有必要时重调并传 allowUnsafe=true，会向用户弹窗标注风险由其决定；" +
+                    "刷机/写系统分区/清数据类命令即使传 allowUnsafe 也会被硬拦截。",
+                code = "ROOT_COMMAND_NOT_ALLOWLISTED"
+            )
         }
 
         if (!rootShell.isAvailable()) {
