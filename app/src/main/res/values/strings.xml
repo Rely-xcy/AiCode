@@ -984,9 +984,10 @@
     <string name="git_files_changed">%1$s 个文件改动</string>
     <string name="git_no_files_changed">该提交无文件改动</string>
     <string name="git_loading_files">正在加载改动文件…</string>
-    <string name="git_not_a_repo">当前工作区不是 Git 仓库</string>
-    <string name="git_init_desc">初始化后会在此创建 .git，之后可暂存、提交、关联远程。</string>
-    <string name="git_init_repo">初始化 Git 仓库</string>
+    <string name="git_not_a_repo">当前工作区还不是 Git 仓库</string>
+    <string name="git_init_desc_primary">可在此初始化新仓库，开始版本管理</string>
+    <string name="git_init_desc_secondary">若子目录已有 Git 仓库，也可直接选择使用</string>
+    <string name="git_init_repo">初始化新仓库</string>
     <string name="git_clone_repo">克隆远程仓库</string>
     <string name="git_clone_dialog_title">克隆 Git 仓库</string>
     <string name="git_clone_desc">将远程仓库克隆到当前工作区根目录（工作区需为空）。若为私有仓库，可先在右上角凭据管理中配置访问凭据。</string>
@@ -1007,6 +1008,11 @@
     <string name="git_unstage_all_confirm">将取消所有文件的暂存，但不会删除文件内容。确定继续吗？</string>
     <string name="git_pull_dirty_confirm">当前工作区有未提交改动，拉取可能导致冲突。建议先提交或暂存。仍要继续拉取吗？</string>
     <string name="git_pull_continue">继续拉取</string>
+    <string name="git_switch_repo">切换仓库</string>
+    <string name="git_pick_existing_repo">选择已有仓库</string>
+    <string name="git_repo_selector_title">选择仓库</string>
+    <string name="git_repo_not_repo">非仓库</string>
+    <string name="git_pick_repo_empty">当前工作区没有可选的目录</string>
     <string name="git_push_master_confirm_title">分支命名建议</string>
     <string name="git_push_master_confirm_desc">当前本地分支为 master，GitHub 与 GitLab 推荐使用 main 作为默认主分支。是否将本地分支重命名为 main 后再推送？</string>
     <string name="git_push_rename_to_main">重命名为 main 并推送</string>
@@ -1023,6 +1029,8 @@
     <string name="git_toast_action_failed">%1$s失败：%2$s</string>
     <string name="git_toast_checkout_success">已切换到 %1$s</string>
     <string name="git_toast_checkout_failed">切换失败：%1$s</string>
+    <string name="git_toast_not_repo">该目录不是 Git 仓库</string>
+    <string name="git_toast_switch_repo_failed">切换仓库失败：%1$s</string>
     <string name="git_toast_diff_failed">加载差异失败</string>
     <string name="git_toast_path_copied">已复制路径</string>
     <string name="git_action_stage_all">全部暂存</string>

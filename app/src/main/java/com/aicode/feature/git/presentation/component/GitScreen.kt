@@ -4,6 +4,8 @@ import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +30,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -45,6 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.ClipEntry
@@ -53,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,6 +67,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.GitStatusColors
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.ui.FloatingTabBar
@@ -72,7 +79,9 @@ import com.aicode.feature.git.presentation.GitViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Activity
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Download
+import compose.icons.feathericons.Folder
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.GitCommit
 import compose.icons.feathericons.Key
@@ -138,7 +147,32 @@ fun GitScreen(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.git_title)) },
+                title = {
+                    Column {
+                        Text(stringResource(R.string.git_title))
+                        val currentRepo = state.currentRepo
+                        if (currentRepo != null) {
+                            Row(
+                                modifier = Modifier.clickable { viewModel.showRepoPicker() },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = repoDisplayName(currentRepo),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    FeatherIcons.ChevronDown,
+                                    contentDescription = stringResource(R.string.git_switch_repo),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = settingsPageBackground(),
                     titleContentColor = MaterialTheme.colorScheme.onBackground
@@ -174,7 +208,8 @@ fun GitScreen(
                 state.notARepo -> NotARepoState(
                     busy = state.busy,
                     onInit = viewModel::initRepo,
-                    onClone = viewModel::cloneRepo
+                    onClone = viewModel::cloneRepo,
+                    onPickExisting = viewModel::showRepoPicker
                 )
                 else -> HorizontalPager(
                     state = pagerState,
@@ -275,6 +310,17 @@ fun GitScreen(
             )
         }
     }
+    }
+
+    if (state.repoPickerVisible) {
+        RepoPickerSheet(
+            workspaceRoot = state.workspaceRoot,
+            subdirs = state.subdirs,
+            repos = state.repos,
+            currentRepo = state.currentRepo,
+            onSelect = viewModel::switchRepo,
+            onDismiss = viewModel::hideRepoPicker
+        )
     }
 
     if (showPullConfirm) {
@@ -423,12 +469,13 @@ internal fun EmptyState(text: String) {
     }
 }
 
-/** 非仓库态：文案 + 「初始化 Git 仓库」/「克隆远程仓库」按钮（成功后自动刷新进仓库态）。 */
+/** 非仓库态：文案 + 「初始化 Git 仓库」/「克隆远程仓库」/「选择已有仓库」按钮（成功后自动刷新进仓库态）。 */
 @Composable
 private fun NotARepoState(
     busy: Boolean,
     onInit: () -> Unit,
-    onClone: (String) -> Unit
+    onClone: (String) -> Unit,
+    onPickExisting: () -> Unit
 ) {
     var showCloneDialog by remember { mutableStateOf(false) }
 
@@ -444,7 +491,12 @@ private fun NotARepoState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                stringResource(R.string.git_init_desc),
+                stringResource(R.string.git_init_desc_primary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(R.string.git_init_desc_secondary),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -472,6 +524,11 @@ private fun NotARepoState(
                         Text(stringResource(R.string.git_clone_repo))
                     }
                 }
+                OutlinedButton(onClick = onPickExisting) {
+                    Icon(FeatherIcons.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(Spacing.xs))
+                    Text(stringResource(R.string.git_pick_existing_repo))
+                }
             }
         }
     }
@@ -484,6 +541,123 @@ private fun NotARepoState(
                 onClone(url)
             }
         )
+    }
+}
+
+/** 仓库路径 → 显示名（最后一段路径；根目录用完整路径）。 */
+private fun repoDisplayName(path: String): String =
+    path.trimEnd('/').substringAfterLast('/').ifBlank { path }
+
+/** 显示名：工作区名/子目录名（如 default/git1）；工作区根本身只显示工作区名。 */
+private fun repoDisplayPath(path: String, workspaceRoot: String): String {
+    val rootName = workspaceRoot.trimEnd('/').substringAfterLast('/')
+    val relative = path.removePrefix(workspaceRoot.trimEnd('/')).trimStart('/')
+    return if (relative.isBlank()) rootName else "$rootName/$relative"
+}
+
+/**
+ * 仓库选择弹窗：列出工作区根与其一层直接子目录，Git 仓库可点选，非 Git 目录灰显并标注。
+ * 既用于多仓库切换（顶栏入口），也用于非仓库态「选择已有仓库」，能看到实际扫描范围。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RepoPickerSheet(
+    workspaceRoot: String,
+    subdirs: List<String>,
+    repos: List<String>,
+    currentRepo: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val entries = remember(workspaceRoot, subdirs) {
+        (if (workspaceRoot.isNotBlank()) listOf(workspaceRoot) else emptyList()) + subdirs
+    }
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.git_repo_selector_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.md)
+            )
+            if (entries.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.git_pick_repo_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = Spacing.md)
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    items(entries, key = { it }) { path ->
+                        RepoPickerRow(
+                            path = path,
+                            workspaceRoot = workspaceRoot,
+                            isRepo = path in repos,
+                            isSelected = path == currentRepo,
+                            onClick = { onSelect(path) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RepoPickerRow(
+    path: String,
+    workspaceRoot: String,
+    isRepo: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.sm))
+            .then(if (isRepo) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            FeatherIcons.Folder,
+            contentDescription = null,
+            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Text(
+            text = repoDisplayPath(path, workspaceRoot),
+            style = MaterialTheme.typography.bodyLarge,
+            color = when {
+                isSelected -> MaterialTheme.colorScheme.primary
+                isRepo -> MaterialTheme.colorScheme.onSurface
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (!isRepo) {
+            Text(
+                text = stringResource(R.string.git_repo_not_repo),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
