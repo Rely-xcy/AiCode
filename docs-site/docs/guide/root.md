@@ -27,6 +27,22 @@
 - 在 AUTO（自动）模式下这一点也不放宽：`Root` 与 `Shizuku` 一样仍逐次弹窗。
 - PLAN（计划）模式下禁止调用（与 `Bash`、`terminal` 写操作同级）。
 
+### 内置安全闸门（代码级，不靠劝说）
+
+为了防止把手机搞坏，下列命令**在发出前就被直接拒绝**（不看权限规则、不受 AUTO 模式影响），并在工具结果里说明原因：
+
+| 拦截面 | 例子 |
+| --- | --- |
+| 递归删除根目录 / 系统分区 | `rm -rf /`、`rm -rf /system`、`rm -rf /data/system` |
+| 刷机、分区、格式化 | `fastboot …`、`mkfs.ext4 …`、`mke2fs …`、`parted …` |
+| 直接写块设备 | `dd … of=/dev/block/…` |
+| 向系统分区写入 | `echo x > /system/…`、`cp x /system/…`、`chmod 777 /system/…` |
+| 进刷机 / 恢复模式、清数据 | `reboot bootloader/edl/recovery`、`MASTER_CLEAR`、`--wipe_data` |
+
+**放行**的是普通调试与数据目录操作：`dumpsys`/`getprop`/`ls`/`cat`（只读）、`input`、`screencap`、`pm list`/`am start`、对 `/sdcard` 等数据目录的读写。
+
+普通重启（`reboot`）不拦，但会弹窗由你确认；刷机这类操作请照旧在电脑上用官方工具手动做。
+
 ## 使用示例
 
 让 AI 去做这类事时它就会用 `Root`：

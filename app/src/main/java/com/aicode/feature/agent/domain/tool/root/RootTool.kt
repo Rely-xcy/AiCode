@@ -44,6 +44,7 @@ class RootTool @Inject constructor(
     override val description =
         "通过设备 root（su，uid 0）在宿主 Android 系统上执行命令（`pm`/`am`/`cmd`/`dumpsys`/`input`/`screencap` 等），" +
             "用于辅助调试宿主系统与虚拟屏自动化测试。需设备已 root，且每次调用都会弹窗确认（不可「始终允许」）。" +
+            "安全闸门会直接拒绝可能损坏设备的命令（刷机/格式化/写系统分区/清数据），不要尝试绕过；" +
             "设备未 root 时会返回明确原因，不要反复重试。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
@@ -89,6 +90,13 @@ class RootTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val command = args["command"]?.jsonPrimitive?.contentOrNull
             ?: return ToolResult.Error("缺少必需参数：command")
+
+        // 安全闸门先于一切：设备级的不可逆动作（刷机/格式化/写系统分区/清数据）直接拒绝，
+        // 不看权限规则、不受 AUTO 模式影响。
+        RootCommandGuard.check(command)?.let { rejection ->
+            FileLogger.w(TAG, "Root 命令被安全闸门拦下：$command")
+            return ToolResult.Error(rejection.reason, code = "ROOT_COMMAND_BLOCKED")
+        }
 
         if (!rootShell.isAvailable()) {
             return ToolResult.Error(rootShell.unavailableReason(), code = "ROOT_NOT_AVAILABLE")

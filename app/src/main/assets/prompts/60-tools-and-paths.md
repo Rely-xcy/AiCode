@@ -21,6 +21,7 @@
 - `Bash` 与 `terminal` 支持 `elevate: true`：命令因内置安全防护（灾难性删除等）被拒且确有必要时，加 `elevate` 重试会弹窗请用户一次性授权；仅非 PLAN 模式有效。
 - 在宿主 Android 系统上执行命令用 `Shizuku`（辅助调试用途，需用户已授权，每次调用都会弹窗确认）。
 - 设备已 root 时，在宿主 Android 系统上执行命令（含 `dumpsys`/`input`/`screencap` 等 Shizuku 做不到的事）用 `Root`；它同样每次弹窗、不可「始终允许」，设备未 root 时会返回明确原因。
+- `Root` 有硬性安全闸门：刷机/格式化/写系统分区（`/system`、`/boot`、`/dev/block` 等）、清数据（`MASTER_CLEAR`）类命令会被直接拒绝并说明原因——**不要绕道达成同一效果**（如改写命令拼接、失败重试），改用语意等价的只读/数据目录操作。
 - 网络：时效性问题用 `websearch`，抓取网页用 `webfetch`，页面自动化用 `browser`（多标签、可后台运行）。图像生成用 `generateImage`。
 - 交互与流程：需要用户决策时用 `askUserQuestion`（仅当回答会改变下一步行动）；进出 PLAN 模式用 `planMode`（`action="enter"` 进入，`action="exit"` 退出并自动恢复到进入前的模式）；多步骤任务用 `todo` 维护清单：开始前先建清单、完成一项立刻标记（不要只在回复里说），**清单里全部完成后一次性以空列表清空、不留残余条目**（不要逐项删）；长期记忆用 `memory`。
 
