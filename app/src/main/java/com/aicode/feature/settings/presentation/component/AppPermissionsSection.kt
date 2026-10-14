@@ -371,7 +371,7 @@ internal fun BackgroundRunSection(
     }
 }
 
-/** 虚拟屏 root 通道探测状态对应的右侧文字。 */
+/** 设备 root 通道探测状态对应的右侧文字。 */
 @StringRes
 private fun VscreenRootChannelState.statusRes(): Int = when (this) {
     VscreenRootChannelState.UNKNOWN -> R.string.root_channel_status_unknown
