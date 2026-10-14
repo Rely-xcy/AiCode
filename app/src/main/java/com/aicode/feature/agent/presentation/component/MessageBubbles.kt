@@ -542,7 +542,10 @@ internal fun AgentMessageItem(
  * 整轮任务折叠头（最外层）：一行「执行中 / 已完成 Xs + 箭头」，点一下展开/收起整轮过程。
  *
  * 收起态用右箭头（ChevronRight），展开态用下箭头（ChevronDown）——与参考图一致；
- * 运行中（[running]）只显示「执行中」，完成后显示本轮耗时。风格对齐 [ToolCallGroupHeader]。
+ * 运行中（[running]）显示「执行中 · N 步」（[processCount]），完成后显示本轮耗时。
+ * 风格对齐 [ToolCallGroupHeader]。
+ *
+ * 过程项默认收起，这行是运行中唯一能看到「跑到第几步」的地方。
  */
 @Composable
 internal fun TurnCollapseHeader(
@@ -550,7 +553,8 @@ internal fun TurnCollapseHeader(
     durationMs: Long?,
     expanded: Boolean,
     onToggle: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    processCount: Int = 0
 ) {
     Row(
         modifier = modifier
@@ -567,6 +571,7 @@ internal fun TurnCollapseHeader(
     ) {
         Text(
             text = when {
+                running && processCount > 0 -> stringResource(R.string.chat_turn_running_steps, processCount)
                 running -> stringResource(R.string.chat_turn_running)
                 durationMs != null -> stringResource(R.string.chat_turn_completed, formatTaskDuration(durationMs))
                 // 拿不到耗时（被窗口截断的半轮、消息缺时间戳）时只说「已完成」，不留空档

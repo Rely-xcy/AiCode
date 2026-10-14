@@ -203,6 +203,8 @@ internal data class TurnHeaderState(
     val running: Boolean,
     /** 展开态（已含用户手动覆盖的结果）。 */
     val expanded: Boolean,
+    /** 本轮过程项数量（思考 + 工具分组 + 中间正文）：折叠行上显示「执行中 · N 步」。 */
+    val processCount: Int = 0,
 )
 
 /**
@@ -343,6 +345,7 @@ internal fun buildChatItems(
                     endMessageId = null,
                     running = false,
                     expanded = turnOverrides[headKey] ?: false,
+                    processCount = process.size,
                 ),
                 turnProcess = process,
             )
@@ -362,7 +365,10 @@ internal fun buildChatItems(
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
-        val expanded = turnOverrides[turn.key] ?: running
+        // 默认收起（含运行中的那一轮）：整轮过程（全部工具输出 + 思考）默认展开时高度巨大且
+        // 随流式逐帧增长，是「滑动时被拉回底部 / 跳顶」的位移来源；运行中改由折叠行显示
+        // 「执行中 · N 步」，想逐条看过程手动点开（展开态仍被持久化）。
+        val expanded = turnOverrides[turn.key] ?: false
         // 轮内按消息顺序产出：连续的过程项聚成一段轮头，遇到常显项或结果消息就在该处切断。
         // 常显项与结果正文因此在时间线原位独立成 item，不再被推到该轮最末（旧实现把它们固定排在轮末，
         // 晚于通知的助手消息又被折进轮头，结果常显项总沉在列表底部）。同一段内连续工具仍分组。
@@ -384,6 +390,7 @@ internal fun buildChatItems(
                     endMessageId = endAssistant?.id,
                     running = running,
                     expanded = expanded,
+                    processCount = segment.size + segmentTail.size,
                 ),
                 turnProcess = buildTurnProcessItems(
                     messages = segment,
@@ -1293,6 +1300,28 @@ fun AIChatPanel(
                 return Offset.Zero
             }
 
+            /**
+             * 内层滚动（思考窗口、工具输出卡片都自带内层滚动）先吃手势：剩余可用量经这里上抛，
+             * source 仍是 UserInput。
+             *
+             * 关键：以前只盯 onPreScroll，内层滚动手势在这层看不到 —— followBottom 一直是 true，
+             * 校准循环随即判定「跟丢」并把视口拉回底部（用户滑动时突然跳顶的真因）。
+             * 只要消费量或剩余量非 0 且来源是用户输入，就一律停跟随。
+             */
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source == NestedScrollSource.UserInput &&
+                    (consumed.y != 0f || available.y != 0f)
+                ) {
+                    userScrollGesture = true
+                    followBottom = false
+                }
+                return Offset.Zero
+            }
+
             override suspend fun onPreFling(available: Velocity): Velocity {
                 nestedFling = true
                 return Velocity.Zero
@@ -1457,9 +1486,12 @@ fun AIChatPanel(
                     }
                 } else {
                     // 收工那一刻内容未必已稳定（md 异步解析往往落在后面），再兜一小段再收手。
+                    // 一旦用户开始滑动（或跟随已被关掉）立即退出：这个尾窗以前会盲跑 1.2s，
+                    // 与“滑完松手”的惯性抢滚动，是跳动的来源之一。
                     val deadline = System.nanoTime() + CALIBRATE_TAIL_MS * 1_000_000L
                     while (System.nanoTime() < deadline) {
                         withFrameNanos { }
+                        if (!followBottom || userScrollGesture || pointerDown) break
                         calibrateToAnchor()
                     }
                 }
@@ -1625,6 +1657,7 @@ fun AIChatPanel(
                     running = header.running,
                     durationMs = header.endMessageId?.let { taskDurations[it] },
                     expanded = header.expanded,
+                    processCount = header.processCount,
                     onToggle = {
                         viewModel.setTurnExpanded(header.key, !header.expanded)
                         onToolItemToggled()

@@ -740,6 +740,7 @@
     <string name="chat_tool_failed">Tool failed</string>
     <string name="chat_tool_calls_count">%1$d tool calls</string>
     <string name="chat_turn_running">Running</string>
+    <string name="chat_turn_running_steps">Running · %1$d steps</string>
     <string name="chat_turn_completed">Completed in %1$s</string>
     <string name="chat_turn_completed_plain">Completed</string>
     <string name="chat_context_usage">Context %1$d%% used (%2$s)</string>
