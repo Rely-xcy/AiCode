@@ -1278,6 +1278,7 @@
     <string name="skills_scope_project">This project</string>
     <string name="skills_name_hint">Lowercase is recommended, e.g. pdf-report</string>
     <string name="skills_description_hint">When to use it; the AI decides whether to load it by this text</string>
+    <string name="chat_skill_triggered_chip">⚡ Skill triggered: %1$s</string>
     <string name="skills_triggers_label">Trigger words</string>
     <string name="skills_triggers_hint">e.g. reverse, unpack, triage</string>
     <string name="skills_triggers_help">The skill auto-injects when a trigger word appears as a standalone space-separated token in the message (e.g. "help me reverse this"); comma-separated, at least 2 chars, no multi-word phrases</string>

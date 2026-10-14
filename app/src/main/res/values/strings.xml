@@ -1278,6 +1278,7 @@
     <string name="skills_scope_project">当前项目</string>
     <string name="skills_name_hint">建议用英文小写，如 pdf-report</string>
     <string name="skills_description_hint">简述何时该用它，AI 据此判断要不要加载</string>
+    <string name="chat_skill_triggered_chip">⚡ 已触发技能：%1$s</string>
     <string name="skills_triggers_label">触发词</string>
     <string name="skills_triggers_hint">如：逆向, 脱壳, reverse</string>
     <string name="skills_triggers_help">消息中以空格分隔的独立词命中时自动注入本技能正文（如「帮我 逆向 看看」）；需逗号分隔，至少 2 个字符，不支持带空格的词组</string>

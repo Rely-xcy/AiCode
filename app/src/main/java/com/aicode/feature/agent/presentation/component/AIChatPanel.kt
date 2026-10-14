@@ -725,6 +725,8 @@ fun AIChatPanel(
     val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
     // 压缩判定发布的占用快照（含实际生效阈值），按会话分开存：取不到就说明本会话还没判定过。
     val contextUsages by viewModel.contextUsage.collectAsStateWithLifecycle()
+    // 本轮自然语言触发的技能（按用户消息 id）：仅用于气泡下方 chip。
+    val triggeredSkills by viewModel.triggeredSkills.collectAsStateWithLifecycle()
     val sessionContextUsage = contextUsages[currentSessionId]
     // 取不到快照时（表现为「没有环」）必须能自证原因：是本会话还没判定过，还是判定发的是别的会话。
     // 后者曾是「已触发压缩、环却只显示一小截」的根因，只在会话或快照归属变化时记一条。
@@ -1704,7 +1706,8 @@ fun AIChatPanel(
                     reasoningDurationMs = reasoningDurations[message.id],
                     taskDurationMs = taskDurations[message.id],
                     turnUsage = turnUsages[message.id],
-                    entryDelayMs = messageEntryDelays[message.id]
+                    entryDelayMs = messageEntryDelays[message.id],
+                    triggeredSkills = triggeredSkills[message.id].orEmpty()
                 )
             }
         }

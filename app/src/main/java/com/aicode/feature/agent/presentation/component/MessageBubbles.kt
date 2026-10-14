@@ -244,6 +244,8 @@ internal fun AgentMessageItem(
     reasoningDurationMs: Long? = null,
     /** 是否为分块的末块（渲染操作行、底部圆角、与下一条列表 item 的间距）；非分块消息恒为 true。 */
     isChunkFooter: Boolean = true,
+    /** 本轮消息自动触发的技能名（自然语言触发词命中）：仅用户消息渲染为气泡下方的小 chip。 */
+    triggeredSkills: List<String> = emptyList(),
 ) {
     if (message.isCompactionMarker) {
         // 压缩内部锚点不再渲染分隔线：摘要卡片已提供压缩反馈，避免与卡片重复。
@@ -431,8 +433,19 @@ internal fun AgentMessageItem(
                         val iconTint = MaterialTheme.colorScheme.onSurfaceVariant
                         // 排过内容才补间隔，否则本行首个元素会被凭空缩进一格
                         var emitted = false
+                        // 本轮自动触发了技能：行首给一个 chip，再排时间/操作（与相邻小字同级，不抢主色）。
+                        if (isUser && triggeredSkills.isNotEmpty()) {
+                            ChatTriggeredSkillChip(
+                                text = stringResource(
+                                    R.string.chat_skill_triggered_chip,
+                                    triggeredSkills.joinToString("、")
+                                )
+                            )
+                            emitted = true
+                        }
                         // 用户消息：时间戳排在复制按钮之前（对齐参考图里气泡下方的「17:55 ⧉」）
                         if (isUser) {
+                            if (emitted) Spacer(Modifier.width(Spacing.xs))
                             ChatMetaText(text = formatClockTime(message.timestamp))
                             emitted = true
                         }

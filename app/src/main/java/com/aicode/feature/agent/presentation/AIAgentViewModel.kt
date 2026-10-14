@@ -994,6 +994,14 @@ class AIAgentViewModel @Inject constructor(
      * 它们没有轮首用户行，界面按旧判据兜底，行为与改动前一致。
      */
     private val _runningTurnAnchorIds = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * 本轮自动触发的技能名（按用户消息 id）：仅用于气泡下方 chip，不落库。
+     * 内容已注入本轮请求，重开 App 后不再展示——属于「当时发生了什么」的即时反馈，不是历史数据。
+     */
+    private val _triggeredSkills = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val triggeredSkills: StateFlow<Map<String, List<String>>> = _triggeredSkills.asStateFlow()
+
     val currentSessionRunningTurnAnchorId: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
             if (id == null) flowOf<String?>(null) else _runningTurnAnchorIds.map { it[id] }
@@ -1646,32 +1654,32 @@ class AIAgentViewModel @Inject constructor(
         // 技能关键词自动触发（见「技能关键词触发设计.md」）：普通消息中把某个技能的触发词作为
         // 空格分隔的独立词说出时，把该技能正文注入 modelRequest（落库/气泡仍是用户原话）。
         // 斜杠命令已在上面分流返回，优先级天然更高；自动触发轮次（/init、后台通知）不参与匹配。
-        val effectiveModelRequest = if (isAutoTrigger || request.startsWith("/")) {
+        val triggeredHits = if (isAutoTrigger || request.startsWith("/")) {
+            emptyList()
+        } else {
+            slashCommandRegistry.findTriggered(request, sessionId)
+        }
+        val effectiveModelRequest = if (triggeredHits.isEmpty()) {
             modelRequest
         } else {
-            val hits = slashCommandRegistry.findTriggered(request, sessionId)
-            if (hits.isEmpty()) {
-                modelRequest
-            } else {
-                val primary = hits.first()
-                val injection = buildString {
-                    if (primary.deduped) {
-                        appendLine("（技能 ${primary.skill.name} 已在本会话加载过，完整指令可用 loadSkill 取回）")
-                    } else {
-                        appendLine("[触发技能 ${primary.skill.name} · 用户消息中命中关键词「${primary.hitWord}」]")
-                        appendLine(primary.skill.instructions)
-                    }
-                    val others = hits.drop(1)
-                    if (others.isNotEmpty()) {
-                        appendLine("（同时命中技能：${others.joinToString("、") { it.skill.name }}，相关任务可用 loadSkill 工具加载）")
-                    }
-                    if (!primary.deduped) {
-                        appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
-                    }
+            val primary = triggeredHits.first()
+            val injection = buildString {
+                if (primary.deduped) {
+                    appendLine("（技能 ${primary.skill.name} 已在本会话加载过，完整指令可用 loadSkill 取回）")
+                } else {
+                    appendLine("[触发技能 ${primary.skill.name} · 用户消息中命中关键词「${primary.hitWord}」]")
+                    appendLine(primary.skill.instructions)
                 }
-                val prefix = modelRequest.takeIf { it != request }?.plus("\n\n")
-                (prefix ?: "") + request + "\n\n" + injection.trimEnd()
+                val others = triggeredHits.drop(1)
+                if (others.isNotEmpty()) {
+                    appendLine("（同时命中技能：${others.joinToString("、") { it.skill.name }}，相关任务可用 loadSkill 工具加载）")
+                }
+                if (!primary.deduped) {
+                    appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
+                }
             }
+            val prefix = modelRequest.takeIf { it != request }?.plus("\n\n")
+            (prefix ?: "") + request + "\n\n" + injection.trimEnd()
         }
 
         // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
@@ -1720,6 +1728,10 @@ class AIAgentViewModel @Inject constructor(
             val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
             if (userMsgId != null) {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
+                // 本轮自动触发的技能名 → 气泡下方 chip（内存态，不落库：正文已注入本轮请求，重开后无需再展示）。
+                if (triggeredHits.isNotEmpty()) {
+                    _triggeredSkills.value = _triggeredSkills.value + (userMsgId to triggeredHits.map { it.skill.name })
+                }
                 // 登记本轮轮首用户行 id（见 [currentSessionRunningTurnAnchorId]）：界面靠它认定
                 // 「哪一轮还在跑」。后台通知轮次落的是通知行、不是轮起点，不登记。
                 if (!request.startsWith(BACKGROUND_NOTIFICATION_PREFIX)) {
