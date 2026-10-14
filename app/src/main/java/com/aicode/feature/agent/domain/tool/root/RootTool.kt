@@ -13,7 +13,6 @@ import com.aicode.feature.agent.domain.vscreen.RootShell
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -43,10 +42,9 @@ class RootTool @Inject constructor(
     override val name = "Root"
 
     override val description =
-        "通过设备 root（su，uid 0）在宿主 Android 系统上执行命令（`pm`/`am`/`cmd`/`dumpsys`/`input`/`screencap` 等），" +
+        "通过设备 root（su，uid 0）在宿主 Android 系统上执行**只读/调试类**命令（`dumpsys`/`getprop`/`ls`/`cat`/`ps`/`logcat`/`input`/`screencap`/`wm`/`settings get`/`pm list` 等），" +
             "用于辅助调试宿主系统与虚拟屏自动化测试。需设备已 root，且每次调用都会弹窗确认（不可「始终允许」）。" +
-            "安全闸门会直接拒绝可能损坏设备的命令（刷机/格式化/写系统分区/清数据），不要尝试绕过；" +
-            "设备未 root 时会返回明确原因，不要反复重试。"
+            "**白名单外的命令一律拒绝执行**（不提供解锁参数）：需要改系统、刷机、清数据这类操作请让用户在终端自己跑。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
@@ -63,13 +61,6 @@ class RootTool @Inject constructor(
             type = ParameterType.INTEGER,
             description = "命令最长执行时间（秒），默认 $DEFAULT_TIMEOUT_SECONDS 秒，上限 $MAX_TIMEOUT_SECONDS 秒。",
             required = false
-        ),
-        "allowUnsafe" to ToolParameter(
-            name = "allowUnsafe",
-            type = ParameterType.BOOLEAN,
-            description = "非白名单命令需要显式置 true 才会执行（弹窗会标注风险）。先看看不用这个参数能不能达到目的；" +
-                "绝不可逆的操作（刷机/写系统分区/清数据）即使置 true 也会被硬拦截。",
-            required = false
         )
     )
 
@@ -78,9 +69,6 @@ class RootTool @Inject constructor(
         return seconds.coerceIn(1L, MAX_TIMEOUT_SECONDS) * 1000L
     }
 
-    private fun resolveAllowUnsafe(args: Map<String, JsonElement>): Boolean =
-        args["allowUnsafe"]?.jsonPrimitive?.booleanOrNull ?: false
-
     override fun buildPermissionRequest(
         callId: String,
         args: Map<String, JsonElement>,
@@ -88,19 +76,12 @@ class RootTool @Inject constructor(
     ): PendingToolPermission {
         val command = args["command"]?.jsonPrimitive?.contentOrNull ?: "未知命令"
         val timeoutSeconds = resolveTimeoutMs(args) / 1000L
-        val unlocked = !RootCommandGuard.isAllowlisted(command) && resolveAllowUnsafe(args)
         return PendingToolPermission(
             id = callId,
             toolName = name,
-            title = if (unlocked) "确认执行 root 命令（非白名单，已显式解锁）" else "确认执行 root 命令",
+            title = "确认执行 root 命令",
             summary = command,
-            details = buildString {
-                append("将以设备 root（uid 0）身份在 Android 系统上执行。\n超时：${timeoutSeconds} 秒")
-                if (unlocked) {
-                    append("\n\n注意：该命令不在只读/调试白名单内，是调用方显式传 allowUnsafe=true 解锁的。")
-                    append("请确认这条命令确实是你想让它做的。")
-                }
-            },
+            details = "将以设备 root（uid 0）身份在 Android 系统上执行（仅限只读/调试类命令）。\n超时：${timeoutSeconds} 秒",
             argsPreview = argsPreview
         )
     }
@@ -109,20 +90,19 @@ class RootTool @Inject constructor(
         val command = args["command"]?.jsonPrimitive?.contentOrNull
             ?: return ToolResult.Error("缺少必需参数：command")
 
-        // 安全闸门先于一切：设备级的不可逆动作（刷机/格式化/写系统分区/清数据/命令拼接）直接拒绝，
-        // 不看权限规则、不受 AUTO 模式影响。
+        // 安全闸门先于一切：设备级的不可逆动作（刷机/格式化/写系统分区/清数据/命令拼接）直接拒绝。
         RootCommandGuard.check(command)?.let { rejection ->
             FileLogger.w(TAG, "Root 命令被安全闸门拦下：$command")
             return ToolResult.Error(rejection.reason, code = "ROOT_COMMAND_BLOCKED")
         }
 
-        // 白名单之外默认不放行：需要调用方显式传 allowUnsafe=true（弹窗会标注风险）。
-        // 目的是把「AI 默认只能做只读/调试类操作」变成硬约束，而不是靠提示词自觉。
-        if (!RootCommandGuard.isAllowlisted(command) && !resolveAllowUnsafe(args)) {
+        // 只有白名单（只读/调试类）命令能由 AI 自动执行。
+        // 这里**不提供任何解锁参数**：能不能改系统，不由 AI 决定，也不靠「拦得住」——
+        // 白名单外的需求一律回给用户，由其自行在终端执行（用户对设备负责）。
+        if (!RootCommandGuard.isAllowlisted(command)) {
             return ToolResult.Error(
-                "该命令不在默认白名单内（白名单为只读调试类：dumpsys/getprop/ls/cat/ps/logcat/input/screencap/wm/pm 等）。" +
-                    "确有必要时重调并传 allowUnsafe=true，会向用户弹窗标注风险由其决定；" +
-                    "刷机/写系统分区/清数据类命令即使传 allowUnsafe 也会被硬拦截。",
+                "该命令不在可自动执行的白名单内（白名单为只读/调试类：dumpsys/getprop/ls/cat/ps/logcat/input/screencap/wm/pm 等）。" +
+                    "为设备安全，AI 不会以 root 执行白名单外的命令。如需执行，请让用户在容器终端里自己跑。",
                 code = "ROOT_COMMAND_NOT_ALLOWLISTED"
             )
         }

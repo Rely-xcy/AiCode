@@ -114,7 +114,7 @@ class RootCommandGuardTest {
     }
 
     @Test
-    fun `白名单外的命令需显式解锁`() {
+    fun `白名单外的命令直接拒绝`() {
         assertFalse(RootCommandGuard.isAllowlisted("rm -rf /sdcard/x"))
         assertFalse(RootCommandGuard.isAllowlisted("cp /sdcard/a /sdcard/b"))
         assertFalse(RootCommandGuard.isAllowlisted("chmod 777 /sdcard/x"))

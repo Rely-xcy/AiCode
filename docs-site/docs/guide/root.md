@@ -29,22 +29,22 @@
 
 ### 内置安全闸门（代码级，不靠劝说）
 
-**默认只放行白名单命令**（只读调试与无害的界面操作）：
+**AI 只能执行白名单内的只读/调试类命令**，而且**没有解锁参数**——能不能改系统不由 AI 决定：
 
 `dumpsys`、`getprop`、`ls`、`cat`、`ps`、`pidof`、`top`、`df`、`du`、`stat`、`id`、`date`、`uptime`、`uname`、`whoami`、`logcat`、`service`、`input`、`screencap`、`wm`、`settings get`、`pm`（列表/信息类）、`am`、`monkey`、`ip`、`mount`、`free` 等。
 
-白名单外的命令**必顶显式解锁**（工具参数 `allowUnsafe=true`）才会执行，且弹窗会明确标注「非白名单、已显式解锁」。下列命令则**无论是否解锁都直接拒绝**（不看权限规则、不受 AUTO 模式影响）：
+白名单外的命令（包括 `cp`、`chmod`、`reboot` 这类本身不毁坏设备的）会被直接拒绝，工具会回复原因并建议「让用户自己在终端执行」。另外，即使命令在白名单内，也会再过一道硬拦截：
 
 | 拦截面 | 例子 |
 | --- | --- |
-| 递归删除根目录 / 系统分区 | `rm -rf /`、`rm -rf /system`、`rm -rf /data/system` |
-| 刷机、分区、格式化 | `fastboot …`、`mkfs.ext4 …`、`mke2fs …`、`parted …` |
+| 递归删除根目录 / 系统分区 | `rm -rf /`、`rm -rf /system` |
+| 刷机、分区、格式化 | `fastboot …`、`mkfs.ext4 …`、`parted …` |
 | 直接写块设备 | `dd … of=/dev/block/…` |
-| 向系统分区写入 | `echo x > /system/…`、`cp x /system/…`、`chmod 777 /system/…` |
-| 进刷机 / 恢复模式、清数据 | `reboot bootloader/edl/recovery`、`MASTER_CLEAR`、`--wipe_data` |
+| 向系统分区写入 | `echo x > /system/…`、`cp x /system/…` |
+| 进刷机 / 恢复模式、清数据 | `reboot bootloader/edl/recovery`、`MASTER_CLEAR` |
 | 命令拼接 / 管道进 shell | `rm -rf $(echo /system)`、`… \| sh`、`eval …` |
 
-普通重启（`reboot`）不硬拦，但不在白名单里——需显式解锁 + 弹窗确认；刷机这类操作请照旧在电脑上用官方工具手动做。
+简单说：**AI 用 root 只能看和测（只读 + 输入注入 + 截屏），不能改**。真正需要改系统、刷机、清数据时，请你自己在终端里执行。
 
 ## 使用示例
 
