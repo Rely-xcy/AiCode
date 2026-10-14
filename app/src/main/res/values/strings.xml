@@ -729,6 +729,7 @@
     <string name="chat_tool_failed">工具执行失败</string>
     <string name="chat_tool_calls_count">%1$d 次工具调用</string>
     <string name="chat_turn_running">执行中</string>
+    <string name="chat_turn_running_steps">执行中 · %1$d 步</string>
     <string name="chat_turn_completed">已完成 %1$s</string>
     <string name="chat_turn_completed_plain">已完成</string>
     <string name="chat_context_usage">上下文已用 %1$d%%（%2$s）</string>

@@ -182,12 +182,14 @@ class ToolGroupExpansionTest {
     // ---- 整轮任务折叠 ----
 
     @Test
-    fun activeTurn_expandsByDefault() {
-        // 末轮且 agent 忙：折叠头显示「执行中」并默认展开，过程项照常挂载
+    fun activeTurn_collapsesByDefault() {
+        // 末轮且 agent 忙：折叠头显示「执行中 · N 步」但**默认收起**——整轮过程（全部工具输出 +
+        // 思考）默认展开时高度巨大且随流式逐帧增长，是「滑动时被拉回底部 / 跳顶」的位移来源。
+        // 过程项仍照常挂载，用户点一下即可展开。
         val items = items(listOf(user("u0"), tool("t1"), tool("t2")), activeTurnKey = "turn:u0")
         val header = items.header().turnHeader!!
         assertTrue(header.running)
-        assertTrue(header.expanded)
+        assertFalse("运行中也默认收起", header.expanded)
         assertEquals(1, items.groupItems().size)
     }
 
