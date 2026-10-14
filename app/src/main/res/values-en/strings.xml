@@ -69,6 +69,17 @@
     <string name="settings_shizuku_hint_ready">Authorized — AI can run commands via adb shell</string>
     <string name="settings_shizuku_peer_title">Connected as</string>
     <string name="settings_shizuku_peer_adb">adb shell (uid 2000)</string>
+    <string name="permission_root_not_rememberable">This tool acts on the host Android system as device root (uid 0). High risk, so only one-time approval is allowed and it cannot be remembered</string>
+    <string name="root_channel_title">Device root channel</string>
+    <string name="root_channel_desc">The Root tool and the virtual display both require device root; tap to check</string>
+    <string name="root_channel_status_unknown">Not checked</string>
+    <string name="root_channel_status_probing">Checking…</string>
+    <string name="root_channel_status_available">Available</string>
+    <string name="root_channel_status_unavailable">Unavailable</string>
+    <string name="vscreen_a11y_title">Screen reader service</string>
+    <string name="vscreen_a11y_desc">When enabled, the virtual display can be inspected as a node tree (cheaper in tokens); otherwise use screenshots. Tap to enable</string>
+    <string name="vscreen_a11y_status_on">Enabled</string>
+    <string name="vscreen_a11y_status_off">Disabled</string>
     <string name="settings_shizuku_peer_root">root (uid 0)</string>
     <string name="settings_shizuku_peer_other">uid %1$d</string>
     <string name="settings_backup">Backup &amp; Restore</string>

@@ -193,6 +193,46 @@ internal fun AppPermissionsSection(
                     subtitle = shizukuPeerLabel(peer)
                 )
             }
+            // 虚拟屏与 Root 工具共用同一个设备 root 通道：一行同时反映两者（可用则 Root 工具
+            // 可跑、虚拟屏可建屏；不可用则两者都不可用）。无障碍服务决定观察能不能用控件树。
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Unlock,
+                title = stringResource(R.string.root_channel_title),
+                subtitle = stringResource(R.string.root_channel_desc),
+                onClick = onProbeRootChannel,
+                trailing = {
+                    Text(
+                        text = stringResource(rootChannelState.statusRes()),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Eye,
+                title = stringResource(R.string.vscreen_a11y_title),
+                subtitle = stringResource(R.string.vscreen_a11y_desc),
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                },
+                trailing = {
+                    Text(
+                        text = stringResource(
+                            if (accessibilityEnabled) R.string.vscreen_a11y_status_on
+                            else R.string.vscreen_a11y_status_off
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            )
         }
     }
 
@@ -319,6 +359,15 @@ internal fun BackgroundRunSection(
             onDismiss = { showNotificationDeniedDialog = false }
         )
     }
+}
+
+/** 设备 root 通道探测状态对应的右侧文字。 */
+@StringRes
+private fun VscreenRootChannelState.statusRes(): Int = when (this) {
+    VscreenRootChannelState.UNKNOWN -> R.string.root_channel_status_unknown
+    VscreenRootChannelState.PROBING -> R.string.root_channel_status_probing
+    VscreenRootChannelState.AVAILABLE -> R.string.root_channel_status_available
+    VscreenRootChannelState.UNAVAILABLE -> R.string.root_channel_status_unavailable
 }
 
 /** Shizuku 状态对应的右侧状态文字。 */
