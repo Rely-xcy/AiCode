@@ -7,19 +7,23 @@ package com.aicode.feature.agent.domain.tool.root
  * 刷坏 boot、或误删系统目录，损失不可逆（轻则开不了机、重则变砖）。因此本闸门**只认代码**，
  * 不依赖提示词劝说，也不受 AUTO 模式影响。
  *
- * 设计原则：
- * - **只拦「不可逆且后果严重」的动作**，不做白名单式封禁——否则 Root 工具没法用来调试系统；
- * - 规则基于「动词 + 目标路径」判定，宁可多拦（拦下后把原因回给模型，模型可换安全的等价做法）；
- * - 纯字符串逻辑、无 IO，便于单测与逐条 review。
+ * 设计原则（按优先级）：
+ * 1. **白名单**：AI 只能执行首 token 在 [ALLOWED_COMMANDS] 内的命令（只读调试 + 无害的界面操作）；
+ * 2. **黑名单**：即使白名单内，仍逐条检查不可逆动作（删系统/刷机/写块设备/进刷机模式/清数据）；
+ * 3. **拼接拦截**：命令替换、eval、管道进 shell 一律拒——它们能让上面的静态判定失效；
+ * 4. **无解锁口**：不存在 allowUnsafe 之类的参数；能改系统的操作不由 AI 决定，一律回给用户。
+ *
+ * 纯字符串逻辑、无 IO，便于单测与逐条 review。
  */
 object RootCommandGuard {
 
-    /** 设备上不允许被命令写入/删除的系统面（命中即拒）。 */
+    /** 设备上不允许被命令写入/删除的系统面（命中即拒）。含 /data 下的系统级存储（删除等同恢复出厂的一部分）。 */
     private val PROTECTED_PATHS = listOf(
         "/system", "/vendor", "/product", "/system_ext", "/odm",
         "/boot", "/recovery", "/init_boot", "/dtbo", "/vbmeta",
         "/persist", "/efs", "/firmware", "/modem", "/modemst1", "/modemst2",
-        "/dev/block", "/dev/mtd", "/proc", "/sys", "/metadata"
+        "/dev/block", "/dev/mtd", "/proc", "/sys", "/metadata",
+        "/data/system", "/data/property", "/data/adb"
     )
 
     /** 直接写块设备 / 分区表 / 刷机的工具：这些命令写错一个字节就是变砖。 */
@@ -38,15 +42,18 @@ object RootCommandGuard {
     /**
      * 默认放行的命令**首 token**（只读调试与无害的界面操作）。
      *
-     * 不在名单里的命令默认拒绝，需调用方显式传 `allowUnsafe=true`（弹窗会标注风险）——
-     * 这是「可控范围」的主要手段：模型默认只能做只读/调试类的事，能改系统的那一步必须由人显式解锁。
+     * 不在名单里的命令默认拒绝且**无解锁口**（不存在 allowUnsafe 之类参数）——这是「可控范围」的
+     * 主要手段：AI 默认只能做只读/调试类的事；能改系统的操作必须由用户自己在终端执行。
+     *
+     * 维护注意：新增条目必须是「只读或无害」的命令首 token；`settings` 只放只读子命令；
+     * 有写能力的（cp/mv/chmod/kill 等）一律不进名单——需求属正当也应回给用户。
      */
     private val ALLOWED_COMMANDS = setOf(
         // 只读系统信息
         "dumpsys", "getprop", "ls", "cat", "ps", "pidof", "top", "df", "du", "stat",
         "id", "date", "uptime", "uname", "whoami", "logcat", "service",
-        // 输入注入与取帧（虚拟屏自动化测试用）
-        "input", "screencap", "screenshot", "wm", "settings", "cmd",
+        // 输入注入与取帧（虚拟屏自动化测试用）；settings/cmd 另按只读子命令放行
+        "input", "screencap", "wm", "settings", "cmd",
         // 应用信息与控制（不改系统分区）
         "pm", "am", "monkey",
         // 其它只读工具
@@ -71,11 +78,16 @@ object RootCommandGuard {
     /**
      * 判定一条命令是否予以拒绝；null 表示放行。
      *
-     * 拦截面（每条都给可照做的原因，方便模型换做法）：
+     * 注意：这是**白名单内的命令**才走的深度检查（白名单外的在 [isAllowlisted] 就被拒了）；
+     * 它负责拦截「首 token 看起来无害、但参数/写法危险」的情况（如 `ls` 后接管道、
+     * `am` 带清数据广播等）。
+     *
+     * 拦截面：
      * 1. 递归删除根目录 / 受保护系统目录；
      * 2. 写块设备（`dd of=/dev/block/...`）、刷机/格式化工具；
      * 3. 重定向、`cp`/`mv`/`chmod`/`chown`/`rm` 触碰受保护路径；
-     * 4. 进 bootloader / EDL / recovery，或清数据（`MASTER_CLEAR` 等）。
+     * 4. 进 bootloader / EDL / recovery，或清数据（`MASTER_CLEAR` 等）；
+     * 5. 命令替换 / eval / 管道进 shell——静态判定失效，一律拒。
      */
     fun check(command: String): Rejection? {
         val normalized = command.replace(Regex("\\s+"), " ").trim()
@@ -130,6 +142,8 @@ object RootCommandGuard {
         if (lower.contains("fastboot") || DESTRUCTIVE_KEYWORDS.any { lower.contains(it.lowercase()) }) {
             return Rejection("拒绝执行：该命令涉及刷机模式或清除设备数据，风险不可逆，已拦截。")
         }
+        // `am`/`cmd` 等白名单首 token 也可能承载清数据广播（如 am broadcast -a MASTER_CLEAR）——
+        // 关键字已在上面的 DESTRUCTIVE_KEYWORDS 检查里兜住；这里不再单独列。
 
         // 5) 命令拼接/替换/管道进 shell：静态拦不了里面藏什么，一律拒绝
         //    （否则 `rm -rf $(echo /system)` 这类写法能绕过上面的路径判定）。
