@@ -79,6 +79,7 @@ import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionManager
+import com.aicode.feature.agent.domain.tool.vscreen.VSCREEN_TOOL_PREFIX
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
@@ -1787,7 +1788,7 @@ class AIAgentViewModel @Inject constructor(
                     val allowed = agentDefinition.filterToolNames(allTools.map { it.name }).toSet()
                     allTools.filter { it.name in allowed }
                 }
-                isSubAgent -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL }
+                isSubAgent -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL || it.name.startsWith(VSCREEN_TOOL_PREFIX) }
                 else -> allTools.filterNot { it.name == AgentDefinition.PARENT_MESSAGE_TOOL }
             }
 

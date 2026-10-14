@@ -69,6 +69,16 @@
     <string name="settings_shizuku_hint_ready">Authorized — AI can run commands via adb shell</string>
     <string name="settings_shizuku_peer_title">Connected as</string>
     <string name="settings_shizuku_peer_adb">adb shell (uid 2000)</string>
+    <string name="vscreen_root_channel_title">Virtual display root channel</string>
+    <string name="vscreen_root_channel_desc">Automated testing on the virtual display needs device root; tap to check</string>
+    <string name="vscreen_root_channel_status_unknown">Not checked</string>
+    <string name="vscreen_root_channel_status_probing">Checking…</string>
+    <string name="vscreen_root_channel_status_available">Available</string>
+    <string name="vscreen_root_channel_status_unavailable">Unavailable</string>
+    <string name="vscreen_a11y_title">Screen reader service</string>
+    <string name="vscreen_a11y_desc">When enabled, the virtual display can be inspected as a node tree (cheaper in tokens); otherwise use screenshots. Tap to enable</string>
+    <string name="vscreen_a11y_status_on">Enabled</string>
+    <string name="vscreen_a11y_status_off">Disabled</string>
     <string name="settings_shizuku_peer_root">root (uid 0)</string>
     <string name="settings_shizuku_peer_other">uid %1$d</string>
     <string name="settings_backup">Backup &amp; Restore</string>

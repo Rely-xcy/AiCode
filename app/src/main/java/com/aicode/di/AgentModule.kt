@@ -40,6 +40,11 @@ import com.aicode.feature.agent.domain.tool.container.TerminalSessionTool
 import com.aicode.feature.agent.domain.tool.explorer.ListFilesTool
 import com.aicode.feature.agent.domain.tool.explorer.SearchCodeTool
 import com.aicode.feature.agent.domain.tool.shizuku.ShizukuTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsInputTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsLogcatTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsObserveTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsStartTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsStopTool
 import com.aicode.feature.agent.domain.tool.skill.LoadSkillTool
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionTool
 import com.aicode.feature.agent.domain.tool.todo.TodoTool
@@ -377,7 +382,12 @@ object AgentModule {
         memoryTool: MemoryTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
-        browserTool: BrowserTool
+        browserTool: BrowserTool,
+        vsStartTool: VsStartTool,
+        vsStopTool: VsStopTool,
+        vsInputTool: VsInputTool,
+        vsObserveTool: VsObserveTool,
+        vsLogcatTool: VsLogcatTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -402,6 +412,11 @@ object AgentModule {
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)
+            register("vscreen_start", vsStartTool)
+            register("vscreen_stop", vsStopTool)
+            register("vscreen_input", vsInputTool)
+            register("vscreen_observe", vsObserveTool)
+            register("vscreen_logcat", vsLogcatTool)
         }
     }
 

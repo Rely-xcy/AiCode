@@ -4,12 +4,6 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
-import com.aicode.feature.agent.domain.tool.AgentTool
-import com.aicode.feature.agent.domain.tool.vscreen.VsInputTool
-import com.aicode.feature.agent.domain.tool.vscreen.VsLogcatTool
-import com.aicode.feature.agent.domain.tool.vscreen.VsObserveTool
-import com.aicode.feature.agent.domain.tool.vscreen.VsStartTool
-import com.aicode.feature.agent.domain.tool.vscreen.VsStopTool
 import dagger.Lazy
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,23 +11,16 @@ import javax.inject.Singleton
 /**
  * 虚拟屏模块：把「在不可见屏上自动化测试 app」接进引擎。
  *
- * 两个口子：
- * 1. [promptFragment]——主代理的虚拟屏使用纪律（什么时候开屏、怎么收尾、边界在哪），
- *    内容在 `prompts/agent/virtual-screen.md`，可用 `prompts.custom/agent/virtual-screen.md` 覆盖；
- * 2. [tools]——本轮额外提供 vscreen_start / vscreen_stop / vscreen_input / vscreen_observe 四个工具。
- *    工具经引擎聚合进主会话工具集（与 `team` 工具同一机制），不必注册进 ToolRegistry。
+ * 只留下一个口子：[promptFragment]——主代理的虚拟屏使用纪律（什么时候开屏、怎么收尾、边界在哪），
+ * 内容在 `prompts/agent/virtual-screen.md`，可用 `prompts.custom/agent/virtual-screen.md` 覆盖。
  *
- * 只给主代理：子代理不操控屏幕（授权与收尾都需要单一责任方）。
+ * 工具不走 `tools()` 口子：vscreen_* 已注册进 ToolRegistry（进统一权限策略/授权弹窗/「始终允许」规则）。
+ * 子代理不注入纪律，且 vscreen_* 工具会在子代理会话被过滤掉（授权与收尾需要单一责任方）。
  *
  * [temp] root 分支实验件，不进主线。
  */
 @Singleton
 class VirtualScreenModule @Inject constructor(
-    private val vsStartTool: VsStartTool,
-    private val vsStopTool: VsStopTool,
-    private val vsInputTool: VsInputTool,
-    private val vsObserveTool: VsObserveTool,
-    private val vsLogcatTool: VsLogcatTool,
     private val systemPromptProvider: Lazy<SystemPromptProvider>
 ) : EngineModule {
 
@@ -50,12 +37,9 @@ class VirtualScreenModule @Inject constructor(
         return strategy()
     }
 
-    override fun tools(ctx: EngineContext): List<AgentTool> =
-        if (ctx.isSubAgent) {
-            emptyList()
-        } else {
-            listOf(vsStartTool, vsStopTool, vsInputTool, vsObserveTool, vsLogcatTool)
-        }
+    // 工具不走本模块的 tools() 口子：它们已注册进 ToolRegistry（见 AgentModule.provideToolRegistry），
+    // 这样才进统一的权限策略体系、授权弹窗与「始终允许」规则（设置 → 工具授权）。
+    // 本模块只负责注入使用纪律。
 
     private fun strategy(): String? {
         strategyCache?.let { return it.ifEmpty { null } }

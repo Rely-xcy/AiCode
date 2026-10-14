@@ -244,6 +244,8 @@ fun SettingsScreen(
     val maxNetworkRetries by viewModel.maxNetworkRetries.collectAsStateWithLifecycle()
     val enterToSend by viewModel.enterToSend.collectAsStateWithLifecycle()
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
+    val vscreenRootChannel by viewModel.vscreenRootChannel.collectAsStateWithLifecycle()
+    val vscreenAccessibilityEnabled by viewModel.vscreenAccessibilityEnabled.collectAsStateWithLifecycle()
     val effectiveCompaction by viewModel.effectiveCompactionThresholds.collectAsStateWithLifecycle()
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
@@ -1199,7 +1201,11 @@ fun SettingsScreen(
                         shizukuPeer = shizukuPeer,
                         onRequestShizukuPermission = { shizukuViewModel.requestPermission() },
                         onOpenShizuku = { shizukuViewModel.openShizukuApp() },
-                        onRefreshShizuku = { shizukuViewModel.refresh() }
+                        onRefreshShizuku = { shizukuViewModel.refresh() },
+                        rootChannelState = vscreenRootChannel,
+                        onProbeRootChannel = { viewModel.probeVscreenRootChannel() },
+                        accessibilityEnabled = vscreenAccessibilityEnabled,
+                        onRefreshAccessibility = { viewModel.refreshVscreenAccessibility() }
                     )
                 }
                 SettingsSection.BackgroundRun -> BackgroundRunSection(

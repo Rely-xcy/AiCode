@@ -38,6 +38,7 @@ import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.shizuku.ShizukuPeerInfo
 import com.aicode.feature.agent.domain.shizuku.ShizukuState
+import com.aicode.feature.settings.presentation.VscreenRootChannelState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Bell
 import compose.icons.feathericons.Download
@@ -63,7 +64,13 @@ internal fun AppPermissionsSection(
     shizukuPeer: ShizukuPeerInfo?,
     onRequestShizukuPermission: () -> Unit,
     onOpenShizuku: () -> Unit,
-    onRefreshShizuku: () -> Unit
+    onRefreshShizuku: () -> Unit,
+    /** 虚拟屏 root 通道探测状态与触发；虚拟屏建屏依赖设备 root。 */
+    rootChannelState: VscreenRootChannelState,
+    onProbeRootChannel: () -> Unit,
+    /** 无障碍读屏服务是否已开启（虚拟屏的控件树观察依赖它）。 */
+    accessibilityEnabled: Boolean,
+    onRefreshAccessibility: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -78,6 +85,7 @@ internal fun AppPermissionsSection(
         apkInstallAllowed = context.packageManager.canRequestPackageInstalls()
         storageGranted = checkStorageGranted(context)
         batteryExempt = isIgnoringBatteryOptimizations(context)
+        onRefreshAccessibility()
         onRefreshShizuku()
         onPauseOrDispose { }
     }
@@ -193,6 +201,46 @@ internal fun AppPermissionsSection(
                     subtitle = shizukuPeerLabel(peer)
                 )
             }
+            // 虚拟屏的两项前置条件（与 Shizuku 无关，独立列出）：设备 root 决定能不能建屏，
+            // 无障碍服务决定观察能不能用控件树（不开只能靠截图）。
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Terminal,
+                title = stringResource(R.string.vscreen_root_channel_title),
+                subtitle = stringResource(R.string.vscreen_root_channel_desc),
+                onClick = onProbeRootChannel,
+                trailing = {
+                    Text(
+                        text = stringResource(rootChannelState.statusRes()),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Sun,
+                title = stringResource(R.string.vscreen_a11y_title),
+                subtitle = stringResource(R.string.vscreen_a11y_desc),
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                },
+                trailing = {
+                    Text(
+                        text = stringResource(
+                            if (accessibilityEnabled) R.string.vscreen_a11y_status_on
+                            else R.string.vscreen_a11y_status_off
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            )
         }
     }
 
@@ -319,6 +367,15 @@ internal fun BackgroundRunSection(
             onDismiss = { showNotificationDeniedDialog = false }
         )
     }
+}
+
+/** 虚拟屏 root 通道探测状态对应的右侧文字。 */
+@StringRes
+private fun VscreenRootChannelState.statusRes(): Int = when (this) {
+    VscreenRootChannelState.UNKNOWN -> R.string.vscreen_root_channel_status_unknown
+    VscreenRootChannelState.PROBING -> R.string.vscreen_root_channel_status_probing
+    VscreenRootChannelState.AVAILABLE -> R.string.vscreen_root_channel_status_available
+    VscreenRootChannelState.UNAVAILABLE -> R.string.vscreen_root_channel_status_unavailable
 }
 
 /** Shizuku 状态对应的右侧状态文字。 */

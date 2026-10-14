@@ -34,6 +34,8 @@ import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
+import com.aicode.feature.agent.domain.vscreen.RootShell
+import com.aicode.feature.agent.domain.vscreen.VscreenAccessibilityBridge
 import com.aicode.feature.agent.domain.skill.SkillForm
 import com.aicode.feature.agent.domain.skill.SkillImportError
 import com.aicode.feature.agent.domain.skill.SkillImportReport
@@ -276,6 +278,9 @@ private data class ModelStatsPaging(
 )
 
 /** 技能列表页的 UI 状态：技能 + 来源作用域 + 启停状态。 */
+/** 设置 → 工具授权：「虚拟屏 root 通道」的探测状态。 */
+enum class VscreenRootChannelState { UNKNOWN, PROBING, AVAILABLE, UNAVAILABLE }
+
 data class SkillUiEntry(
     val name: String,
     val description: String,
@@ -379,6 +384,8 @@ private data class CompactionThresholdInputs(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    /** 虚拟屏 root 通道探测（「工具授权」页用）：只读探一次 `su -c id`。 */
+    private val rootShell: RootShell,
     private val repository: AIProviderRepository,
     private val modelApiService: ModelApiService,
     private val modelMetadataService: ModelMetadataService,
@@ -676,6 +683,33 @@ class SettingsViewModel @Inject constructor(
 
     private val _skills = MutableStateFlow<List<SkillUiEntry>>(emptyList())
     val skills: StateFlow<List<SkillUiEntry>> = _skills.asStateFlow()
+
+    private val _vscreenRootChannel = MutableStateFlow(VscreenRootChannelState.UNKNOWN)
+
+    /** 虚拟屏 root 通道状态（设置 → 工具授权）：未检测 / 检测中 / 可用 / 不可用。 */
+    val vscreenRootChannel: StateFlow<VscreenRootChannelState> = _vscreenRootChannel.asStateFlow()
+
+    private val _vscreenAccessibilityEnabled =
+        MutableStateFlow(VscreenAccessibilityBridge.isReady)
+
+    /** 无障碍读屏服务是否已开启（设置 → 工具授权）：虚拟屏的控件树观察依赖它。 */
+    val vscreenAccessibilityEnabled: StateFlow<Boolean> = _vscreenAccessibilityEnabled.asStateFlow()
+
+    /** 探测设备 root 是否可用（虚拟屏创建需要）。探测在 IO 线程跑 `su -c id`，结果常驻到下次探测。 */
+    fun probeVscreenRootChannel() {
+        if (_vscreenRootChannel.value == VscreenRootChannelState.PROBING) return
+        _vscreenRootChannel.value = VscreenRootChannelState.PROBING
+        viewModelScope.launch {
+            val available = runCatching { rootShell.isAvailable() }.getOrDefault(false)
+            _vscreenRootChannel.value =
+                if (available) VscreenRootChannelState.AVAILABLE else VscreenRootChannelState.UNAVAILABLE
+        }
+    }
+
+    /** 刷新无障碍服务状态（从系统无障碍设置页返回时调用）。 */
+    fun refreshVscreenAccessibility() {
+        _vscreenAccessibilityEnabled.value = VscreenAccessibilityBridge.isReady
+    }
 
     private val _skillSaveState = MutableStateFlow<SkillSaveState>(SkillSaveState.Idle)
     val skillSaveState: StateFlow<SkillSaveState> = _skillSaveState.asStateFlow()
