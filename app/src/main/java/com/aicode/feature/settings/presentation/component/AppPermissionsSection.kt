@@ -203,13 +203,13 @@ internal fun AppPermissionsSection(
                     subtitle = shizukuPeerLabel(peer)
                 )
             }
-            // 虚拟屏的两项前置条件（与 Shizuku 无关，独立列出）：设备 root 决定能不能建屏，
-            // 无障碍服务决定观察能不能用控件树（不开只能靠截图）。
+            // 虚拟屏与 Root 工具共用同一个设备 root 通道：一行同时反映两者（可用则 Root 工具
+            // 可跑、虚拟屏可建屏；不可用则两者都不可用）。无障碍服务决定观察能不能用控件树。
             SettingsDivider()
             SettingsRow(
                 icon = FeatherIcons.Unlock,
-                title = stringResource(R.string.vscreen_root_channel_title),
-                subtitle = stringResource(R.string.vscreen_root_channel_desc),
+                title = stringResource(R.string.root_channel_title),
+                subtitle = stringResource(R.string.root_channel_desc),
                 onClick = onProbeRootChannel,
                 trailing = {
                     Text(
@@ -374,10 +374,10 @@ internal fun BackgroundRunSection(
 /** 虚拟屏 root 通道探测状态对应的右侧文字。 */
 @StringRes
 private fun VscreenRootChannelState.statusRes(): Int = when (this) {
-    VscreenRootChannelState.UNKNOWN -> R.string.vscreen_root_channel_status_unknown
-    VscreenRootChannelState.PROBING -> R.string.vscreen_root_channel_status_probing
-    VscreenRootChannelState.AVAILABLE -> R.string.vscreen_root_channel_status_available
-    VscreenRootChannelState.UNAVAILABLE -> R.string.vscreen_root_channel_status_unavailable
+    VscreenRootChannelState.UNKNOWN -> R.string.root_channel_status_unknown
+    VscreenRootChannelState.PROBING -> R.string.root_channel_status_probing
+    VscreenRootChannelState.AVAILABLE -> R.string.root_channel_status_available
+    VscreenRootChannelState.UNAVAILABLE -> R.string.root_channel_status_unavailable
 }
 
 /** Shizuku 状态对应的右侧状态文字。 */
