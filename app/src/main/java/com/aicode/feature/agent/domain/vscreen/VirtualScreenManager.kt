@@ -1,6 +1,11 @@
 package com.aicode.feature.agent.domain.vscreen
 
+import android.content.Context
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.view.Surface
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -9,15 +14,19 @@ import javax.inject.Singleton
  *
  * 同一时刻只允许一块屏（设计 §4.3）：单屏足够，多屏只会让焦点与资源管理复杂化。
  *
- * 命令模板走 root 通道（[RootShell]）。**这些模板是实验性的、未在真机验证过**——
- * 阶段 0 的三条闸门（能否创建非 0 displayId 交互屏、`input -d` 是否生效、帧能否取到）
- * 正是用来验证它们的；验证结论出来前，失败原因原样回给模型，不做掩盖。
+ * **建屏走本进程的 [DisplayManager.createVirtualDisplay] API**——真机验证结论（2026-10-14，
+ * MIUI 14 / Android 13）：shell 侧没有任何「创建虚拟屏」的命令（AOSP 的 `cmd display` 没有
+ * `create-virtual-display`，MIUI 也没加），原方案的 `cmd display create-virtual-display` 是
+ * 臆造命令、真机必失败。API 建屏不需要 root：App 作为屏的 owner 天然有权限，Surface 传 null
+ *（不渲染、零耗电，观察走无障碍树 / `screencap -d`）。
  *
- * [temp] root 分支实验件。
+ * root 通道仍保留，但只负责**屏上操作**：`am start --display`、`input -d`、`screencap -d`、
+ * `logcat`——这些命令真机已验证有效（见 [VirtualScreenController]）。
  */
 @Singleton
 class VirtualScreenManager @Inject constructor(
-    private val rootShell: RootShell
+    private val rootShell: RootShell,
+    @ApplicationContext private val appContext: Context
 ) {
 
     /** 一块存活的虚拟屏。 */
@@ -33,6 +42,8 @@ class VirtualScreenManager @Inject constructor(
     @Volatile
     var current: Screen? = null
         private set
+
+    private var virtualDisplay: VirtualDisplay? = null
 
     /** 是否存在存活中的屏（工具侧做会话授权与并发判定用）。 */
     val hasScreen: Boolean get() = current != null
@@ -58,24 +69,36 @@ class VirtualScreenManager @Inject constructor(
             return Result.failure(IllegalStateException("root 通道不可用：${rootShell.unavailableReason()}"))
         }
 
+        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            ?: return Result.failure(IllegalStateException("取不到 DisplayManager，无法创建虚拟屏。"))
         val name = "aicode-vscreen-${System.currentTimeMillis()}"
-        val create = rootShell.run(
-            CREATE_TEMPLATE.format(name, width, height, density),
-            CREATE_TIMEOUT_MS
-        )
-        val displayId = parseDisplayId(create.output)
-        if (!create.ok || displayId == null) {
-            return Result.failure(
-                IllegalStateException(
-                    "创建虚拟屏失败（exit=${create.exitCode}）。原始输出：${create.output.trim().take(400)}"
-                )
+        val display: VirtualDisplay? = try {
+            // 不带 TRUSTED（需系统权限 ADD_TRUSTED_DISPLAY，普通 app 拿不到，会被 CTS 确认的
+            // SecurityException 拒）：PUBLIC + OWN_CONTENT_ONLY 即可让第三方 Activity 落屏。
+            // Surface 传 null：不渲染、零耗电；观察走无障碍树 / screencap -d。
+            dm.createVirtualDisplay(
+                name,
+                width,
+                height,
+                density,
+                null as Surface?,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
             )
+        } catch (e: Exception) {
+            return Result.failure(IllegalStateException("创建虚拟屏失败：${e.message}", e))
         }
+        // displayId 从 display 对象拿；createVirtualDisplay 返回 null 仅在极端异常时。
+        val displayId = display?.display?.displayId
+            ?: run {
+                display?.release()
+                return Result.failure(IllegalStateException("创建虚拟屏返回空 display。"))
+            }
 
         val launch = rootShell.run(launchCommand(displayId, packageName, activity), LAUNCH_TIMEOUT_MS)
         if (!launch.ok) {
             // 启动失败就把刚建的屏收拾掉，不留半成品。
-            rootShell.run(REMOVE_TEMPLATE.format(displayId), REMOVE_TIMEOUT_MS)
+            display.release()
             return Result.failure(
                 IllegalStateException(
                     "在虚拟屏上启动 $packageName 失败（exit=${launch.exitCode}）。原始输出：${launch.output.trim().take(400)}"
@@ -89,6 +112,7 @@ class VirtualScreenManager @Inject constructor(
             packageName = packageName,
             expiresAtMs = System.currentTimeMillis() + lifetimeMs.coerceAtLeast(MIN_LIFETIME_MS)
         )
+        virtualDisplay = display
         current = screen
         FileLogger.i(TAG, "虚拟屏已就绪：displayId=$displayId，目标=$packageName")
         return Result.success(screen)
@@ -97,15 +121,9 @@ class VirtualScreenManager @Inject constructor(
     /** 销毁当前屏。没有屏时返回失败（调用方据此提示「本来就没开」）。 */
     suspend fun stop(): Result<Unit> {
         val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
-        val remove = rootShell.run(REMOVE_TEMPLATE.format(screen.displayId), REMOVE_TIMEOUT_MS)
+        virtualDisplay?.release()
+        virtualDisplay = null
         current = null
-        if (!remove.ok) {
-            return Result.failure(
-                IllegalStateException(
-                    "销毁虚拟屏失败（exit=${remove.exitCode}）。原始输出：${remove.output.trim().take(400)}"
-                )
-            )
-        }
         FileLogger.i(TAG, "虚拟屏已销毁：displayId=${screen.displayId}")
         return Result.success(Unit)
     }
@@ -125,6 +143,12 @@ class VirtualScreenManager @Inject constructor(
                 IllegalStateException("虚拟屏已超过存活上限（${minutes}分钟）被自动销毁，需要时重新 vscreen_start。")
             )
         }
+        // 屏可能被系统回收（内存紧张）：display 对象还活着但 displayId 已无效时，视为不存在。
+        val display = virtualDisplay?.display
+        if (display == null || !display.isValid) {
+            stop()
+            return Result.failure(IllegalStateException("虚拟屏已被系统回收（display 不再有效），需要时重新 vscreen_start。"))
+        }
         return Result.success(screen)
     }
 
@@ -140,27 +164,13 @@ class VirtualScreenManager @Inject constructor(
             "am start --display $displayId -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $packageName"
         }
 
-    /** 从命令输出里抠 displayId：不同 ROM 输出格式不一，按「display + 数字」宽松匹配。 */
-    private fun parseDisplayId(output: String): Int? =
-        DISPLAY_ID_REGEX.find(output)?.groupValues?.get(1)?.toIntOrNull()
-
     private companion object {
         const val TAG = "VirtualScreenManager"
 
-        const val CREATE_TIMEOUT_MS = 20_000L
         const val LAUNCH_TIMEOUT_MS = 20_000L
-        const val REMOVE_TIMEOUT_MS = 10_000L
 
         /** 单屏默认存活上限（30 分钟）：忘 stop 的兜底，可由任务参数放宽。 */
         const val DEFAULT_LIFETIME_MS = 30 * 60 * 1000L
         const val MIN_LIFETIME_MS = 60 * 1000L
-
-        /** [temp] 未验证：`cmd display create-virtual-display` 并非所有 ROM 都提供同名子命令。 */
-        const val CREATE_TEMPLATE = "cmd display create-virtual-display --name %s --width %d --height %d --density %d"
-
-        /** [temp] 未验证：与 CREATE_TEMPLATE 对称的销毁命令。 */
-        const val REMOVE_TEMPLATE = "cmd display remove-virtual-display --display %d"
-
-        val DISPLAY_ID_REGEX = Regex("(?i)display[\\s:=#]+(\\d+)")
     }
 }
