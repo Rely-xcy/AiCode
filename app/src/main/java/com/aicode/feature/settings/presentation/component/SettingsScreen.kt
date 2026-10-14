@@ -99,6 +99,7 @@ import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Database
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Globe
@@ -1775,7 +1776,8 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.FileText,
+                // 记忆用 Database：日志已经占了 FileText，两者不能同一图标（与 AI 工具里 memory 的图标也一致）。
+                icon = FeatherIcons.Database,
                 title = stringResource(SettingsSection.Memory.titleRes),
                 onClick = { onOpen(SettingsSection.Memory) }
             )

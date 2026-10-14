@@ -42,11 +42,13 @@ import com.aicode.feature.settings.presentation.VscreenRootChannelState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Bell
 import compose.icons.feathericons.Download
+import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Power
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Sun
 import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.Unlock
 import compose.icons.feathericons.User
 import compose.icons.feathericons.Zap
 
@@ -205,7 +207,7 @@ internal fun AppPermissionsSection(
             // 无障碍服务决定观察能不能用控件树（不开只能靠截图）。
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Terminal,
+                icon = FeatherIcons.Unlock,
                 title = stringResource(R.string.vscreen_root_channel_title),
                 subtitle = stringResource(R.string.vscreen_root_channel_desc),
                 onClick = onProbeRootChannel,
@@ -219,7 +221,7 @@ internal fun AppPermissionsSection(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Sun,
+                icon = FeatherIcons.Eye,
                 title = stringResource(R.string.vscreen_a11y_title),
                 subtitle = stringResource(R.string.vscreen_a11y_desc),
                 onClick = {
