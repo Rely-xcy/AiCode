@@ -52,10 +52,13 @@ class ToolPermissionPolicyEngine @Inject constructor(
         const val TAG = "ToolPermission"
 
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
-        val SHELL_TOOLS = setOf("Bash", SHIZUKU_TOOL)
+        val SHELL_TOOLS = setOf("Bash", SHIZUKU_TOOL, ROOT_TOOL)
 
         /** Shizuku 工具：以 adb shell 身份直接操作宿主 Android 系统，按高危处理（一律弹窗、不可记忆）。 */
         const val SHIZUKU_TOOL = "Shizuku"
+
+        /** Root 工具：以设备 root（uid 0）直接操作宿主 Android 系统，与 Shizuku 同等对待（一律弹窗、不可记忆）。 */
+        const val ROOT_TOOL = "Root"
 
         const val REASON_SHIZUKU =
             "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
@@ -209,9 +212,10 @@ class ToolPermissionPolicyEngine @Inject constructor(
         val rules = effective.rules.filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
             evaluateShell(
+                toolName = toolName,
                 rules = rules,
                 args = args,
-                forceAsk = toolName == SHIZUKU_TOOL,
+                forceAsk = toolName == SHIZUKU_TOOL || toolName == ROOT_TOOL,
                 unconfirmedLayer = unconfirmedLayer
             )
         } else {
@@ -455,6 +459,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
      *   只有「全部段命中内置只读白名单」才自动放行，其余一律降级为一次性授权。
      */
     private fun evaluateShell(
+        toolName: String,
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
         forceAsk: Boolean = false,
@@ -479,9 +484,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.DENY, emptyList(), denyReason = "该命令被项目权限规则策略禁止执行")
         }
 
-        // 2) Shizuku 高危工具：无论内置白名单或已记忆规则，一律弹窗且不可记忆。
+        // 2) Shizuku / Root 高危工具：无论内置白名单或已记忆规则，一律弹窗且不可记忆。
         if (forceAsk) {
-            return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = REASON_SHIZUKU)
+            val reason = if (toolName == ROOT_TOOL) {
+                context.getString(R.string.permission_root_not_rememberable)
+            } else {
+                REASON_SHIZUKU
+            }
+            return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = reason)
         }
 
         // 3) 不可静态判定 → 必须弹窗、不可记忆（内置白名单也不适用）。

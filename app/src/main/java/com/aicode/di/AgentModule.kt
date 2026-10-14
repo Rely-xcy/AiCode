@@ -47,6 +47,7 @@ import com.aicode.feature.agent.domain.tool.vscreen.VsStartTool
 import com.aicode.feature.agent.domain.tool.vscreen.VsStopTool
 import com.aicode.feature.agent.domain.tool.skill.LoadSkillTool
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionTool
+import com.aicode.feature.agent.domain.tool.root.RootTool
 import com.aicode.feature.agent.domain.tool.todo.TodoTool
 import com.aicode.feature.agent.domain.tool.subagent.TaskTool
 import com.aicode.feature.agent.domain.tool.subagent.MessageParentTool
@@ -383,6 +384,7 @@ object AgentModule {
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool,
+        rootTool: RootTool,
         vsStartTool: VsStartTool,
         vsStopTool: VsStopTool,
         vsInputTool: VsInputTool,
@@ -398,6 +400,7 @@ object AgentModule {
             register("generateImage", generateImageTool)
             register("Bash", executeCommandTool)
             register("Shizuku", shizukuTool)
+            register("Root", rootTool)
             register("terminal", terminalSessionTool)
             register("list", listFilesTool)
             register("search", searchCodeTool)
