@@ -48,7 +48,7 @@
       "name": "Alpine Linux",
       "version": "3.21.8",
       "eol": "2026-11-01",
-      "description": "极简 Linux 发行版，rootfs 仅数 MB；与内置 Alpine 同为 3.21 分支，补丁版本更高",
+      "description": "极简 Linux 发行版，rootfs 仅数 MB；与内置 Alpine 同为 3.21 分支",
       "sizeBytes": 3831912,
       "distro": "alpine",
       "path": "alpine/v3.21/releases/{abi}/alpine-minirootfs-3.21.8-{abi}.tar.gz",
