@@ -72,4 +72,10 @@ interface SlashCommandContext {
 
     /** 技能触发：把 [skill] 正文作为本轮指令执行，[args] 为附加参数。 */
     fun runSkill(skill: Skill, args: String)
+
+    /**
+     * /goal —— 管理当前会话的持续目标。[rawArgs] 为命令名之后的原始文本：
+     * 非空则设定/覆盖目标；空则查看当前目标；`pause`/`resume`/`clear` 为对应子命令。
+     */
+    fun setSessionGoal(rawArgs: String)
 }

@@ -98,6 +98,7 @@ import com.aicode.feature.agent.domain.tool.mcp.ManageMcpTool
 import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
+import com.aicode.feature.agent.domain.tool.goal.GoalStatusTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
@@ -386,6 +387,7 @@ object AgentModule {
         webSearchTool: WebSearchTool,
         webFetchTool: WebFetchTool,
         planModeTool: PlanModeTool,
+        goalStatusTool: GoalStatusTool,
         todoTool: TodoTool,
         memoryTool: MemoryTool,
         taskTool: TaskTool,
@@ -417,6 +419,7 @@ object AgentModule {
             register("websearch", webSearchTool)
             register("webfetch", webFetchTool)
             register("planMode", planModeTool)
+            register("goalStatus", goalStatusTool)
             register("todo", todoTool)
             register("memory", memoryTool)
             register("task", taskTool)

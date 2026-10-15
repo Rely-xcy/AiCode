@@ -2,6 +2,7 @@ package com.aicode.feature.agent.presentation
 
 import androidx.compose.runtime.Immutable
 import com.aicode.feature.agent.domain.model.AgentImage
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.provider.RetryErrorInfo
 import com.aicode.feature.workspace.domain.FileEntry
 import kotlinx.serialization.Serializable
@@ -292,5 +293,16 @@ data class QueuedRequest(
      * 与「直接执行」得到同一个行 id——UI 的乐观气泡才有唯一稳定的认领判据（文本 + 时间戳认不了：
      * 同文本连发两条会互相顶掉，见 PendingUserMessage）。
      */
-    val clientMessageId: String? = null
+    val clientMessageId: String? = null,
+
+    /** 是否把本轮用户消息落库；goal 续跑等内部轮次置 false，避免污染会话历史。 */
+    val persistUserMessage: Boolean = true
+)
+
+/** 会话级持续目标（goal）的 UI 快照：文本、状态与已续跑轮数。 */
+@Immutable
+data class SessionGoalUi(
+    val text: String,
+    val status: GoalStatus,
+    val turnCount: Int
 )

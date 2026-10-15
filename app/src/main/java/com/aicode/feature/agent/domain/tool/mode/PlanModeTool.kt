@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.tool.mode
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
@@ -72,6 +73,14 @@ class PlanModeTool @Inject constructor(
 
         val sessionEntity = chatSessionDao.getById(sessionId)
             ?: return ToolResult.Error("找不到会话记录", "SESSION_NOT_FOUND")
+
+        // goal 自主循环进行中禁用 PLAN：该模式的退出需人工审查（[PlanApprovalManager]），与自主循环冲突。
+        if (sessionEntity.goalStatus == GoalStatus.ACTIVE.name) {
+            return ToolResult.Error(
+                "goal 自主循环进行中，不可进入或退出 PLAN 模式。请在循环内部控制规划并直接推进目标。",
+                "GOAL_ACTIVE"
+            )
+        }
 
         // 进入 PLAN 时记下当时的模式，退出时恢复到它：从 AUTO 进入 PLAN 的规划往返结束后应回到 AUTO，
         // 而不是一律落回 BUILD。该字段只在处于 PLAN 时被读取，每次进入 PLAN 都会覆写，因此无需在退出时清理。

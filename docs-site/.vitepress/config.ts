@@ -113,6 +113,7 @@ export default defineConfig({
           items: [
             { text: '聊天界面导览', link: '/guide/chat' },
             { text: '三种模式（Build / Plan / Auto）', link: '/guide/modes' },
+            { text: '会话目标（Goal）', link: '/guide/goal' },
             { text: '检查点与撤销', link: '/guide/checkpoint' },
             { text: '终端', link: '/guide/terminal' },
             { text: '内置浏览器', link: '/guide/browser' },

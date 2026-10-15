@@ -928,7 +928,8 @@ class StatefulAgentWorkflow @Inject constructor(
                             callId = effect.toolCall.id,
                             arguments = effect.toolCall.arguments,
                             argsPreview = argsPreview,
-                            mode = currentContext.mode,
+                            // 用 goal 感知的有效模式：goal 激活期间按 AUTO 放行（保留灾难性安全防护）
+                            mode = currentContext.permissionMode,
                             sessionId = currentContext.sessionId,
                             onEvent = { send(it) }
                         )

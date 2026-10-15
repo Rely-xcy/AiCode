@@ -95,6 +95,16 @@ interface ChatSessionDao {
     )
     suspend fun updateMode(id: String, newMode: String)
 
+    /** 设定/覆盖 goal：同时重置轮次计数与 token 快照。goal 为 null 表示清除。 */
+    @Query("UPDATE chat_sessions SET goal = :goal, goalStatus = :status, goalTurnCount = 0, goalStartInputTokens = :startInput, goalStartOutputTokens = :startOutput WHERE id = :id")
+    suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Int, startOutput: Int)
+
+    @Query("UPDATE chat_sessions SET goalStatus = :status WHERE id = :id")
+    suspend fun updateGoalStatus(id: String, status: String?)
+
+    @Query("UPDATE chat_sessions SET goalTurnCount = goalTurnCount + 1 WHERE id = :id")
+    suspend fun incrementGoalTurn(id: String)
+
     @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens WHERE id = :id")
     suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int)
 

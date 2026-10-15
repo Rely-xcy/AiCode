@@ -10,6 +10,18 @@ enum class AgentMode {
 }
 
 /**
+ * 会话级持续目标（goal）的生命周期状态；[goal] 为 null 时无意义。
+ * ACTIVE 表示自主循环进行中；其余为停止态。
+ */
+enum class GoalStatus {
+    ACTIVE,    // 自主循环进行中
+    PAUSED,    // 用户暂停
+    COMPLETED, // AI 判定目标已达成
+    BLOCKED,   // 受阻，需用户介入
+    EXHAUSTED  // 轮次或 token 预算耗尽
+}
+
+/**
  * 一次独立的聊天会话。消息通过 sessionId 归属到会话，切换会话即切换聊天历史。
  */
 data class ChatSession(
@@ -21,6 +33,16 @@ data class ChatSession(
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）；退出 PLAN 时恢复，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,
+    /** 会话级持续目标文本；null 表示未设定目标。 */
+    val goal: String? = null,
+    /** goal 生命周期状态；[goal] 为 null 时无意义。 */
+    val goalStatus: GoalStatus? = null,
+    /** goal 自主循环已执行的续跑轮数（用于轮次上限）。 */
+    val goalTurnCount: Int = 0,
+    /** 设定 goal 时本会话累计输入 token 快照，用于计算 goal 期间的 token 消耗。 */
+    val goalStartInputTokens: Int = 0,
+    /** 设定 goal 时本会话累计输出 token 快照。 */
+    val goalStartOutputTokens: Int = 0,
     val reasoningEffort: ReasoningEffort = ReasoningEffort.MEDIUM,
     val providerId: String? = null,
     val model: String? = null,

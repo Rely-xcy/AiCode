@@ -8,6 +8,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.MessageRole
 import dagger.Lazy
@@ -214,6 +215,27 @@ class SessionUseCase @Inject constructor(
 
     suspend fun updateReasoningEffort(sessionId: String, effort: String) {
         chatSessionDao.updateReasoningEffort(sessionId, effort)
+    }
+
+    /**
+     * 设定/覆盖会话 goal：重置轮次计数，并记录当前累计 token 作为消耗基线，状态置 ACTIVE。
+     * [goal] 为 null/空白则清除目标。
+     */
+    suspend fun setGoal(sessionId: String, goal: String?, startInputTokens: Int, startOutputTokens: Int) {
+        val trimmed = goal?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) {
+            chatSessionDao.updateGoal(sessionId, null, null, 0, 0)
+        } else {
+            chatSessionDao.updateGoal(sessionId, trimmed, GoalStatus.ACTIVE.name, startInputTokens, startOutputTokens)
+        }
+    }
+
+    suspend fun updateGoalStatus(sessionId: String, status: GoalStatus?) {
+        chatSessionDao.updateGoalStatus(sessionId, status?.name)
+    }
+
+    suspend fun incrementGoalTurn(sessionId: String) {
+        chatSessionDao.incrementGoalTurn(sessionId)
     }
 
     suspend fun isSessionEmpty(sessionId: String): Boolean {

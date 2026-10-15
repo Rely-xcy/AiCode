@@ -47,6 +47,7 @@ import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
@@ -202,6 +203,13 @@ class AIAgentViewModel @Inject constructor(
      */
     private val pendingAssistantTextStop = mutableMapOf<String, Boolean>()
     private val sessionJobs = mutableMapOf<String, Job>()
+
+    /**
+     * goal 自主循环的「连续空回合」计数：自动续跑回合若既无工具调用也无可见正文，
+     * 连续达到阈值即置 BLOCKED，避免无限空转烧 token（借鉴 Codex 的空响应熔断）。
+     */
+    private val goalEmptyTurnCounts = mutableMapOf<String, Int>()
+
     /**
      * agent 执行期间持有的 CPU 唤醒锁：熄屏后系统会挂起进程，使流式响应中断、工具调用卡死。
      * 不计数（setReferenceCounted(false)），多会话共用一把锁，最后一个任务结束时统一释放。
@@ -845,6 +853,15 @@ class AIAgentViewModel @Inject constructor(
     val currentSessionMode: StateFlow<AgentMode> = currentSessionState.map { it?.mode ?: AgentMode.BUILD }
         .stateIn(viewModelScope, SharingStarted.Eagerly, AgentMode.BUILD)
 
+    /** 当前会话的持续目标（goal）快照；null 表示未设定目标。 */
+    val currentSessionGoal: StateFlow<SessionGoalUi?> = currentSessionState
+        .map { s ->
+            s?.goal?.takeIf { it.isNotBlank() }?.let {
+                SessionGoalUi(it, s.goalStatus ?: GoalStatus.ACTIVE, s.goalTurnCount)
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     /** 当前会话的思考强度（默认 MEDIUM）。 */
     val currentSessionReasoningEffort: StateFlow<ReasoningEffort> =
         currentSessionState.map { it?.reasoningEffort ?: ReasoningEffort.MEDIUM }
@@ -1249,6 +1266,12 @@ class AIAgentViewModel @Inject constructor(
 
         /** 当前容器在容器内的根路径，对应宿主上的 rootfs 目录（随当前 profile 变化）。 */
         const val CONTAINER_FS_ROOT = "/"
+
+        /** 会话目标文本长度上限，避免 system 提示词过长。 */
+        const val MAX_GOAL_CHARS = 2000
+
+        /** goal 自主循环连续空回合阈值：达到即置 BLOCKED（借鉴 Codex 的空响应熔断）。 */
+        const val MAX_GOAL_EMPTY_TURNS = 3
     }
 
     init {
@@ -1633,6 +1656,7 @@ class AIAgentViewModel @Inject constructor(
         inputImages: List<AgentImage> = emptyList(),
         inputAttachments: List<AgentAttachment> = emptyList(),
         isAutoTrigger: Boolean = false,
+        persistUserMessage: Boolean = true,
         targetSessionId: String? = null,
         /** 调用方（UI）预生成的用户消息行 id：无论本条走直发还是先入队，落库行的主键都用它。 */
         clientMessageId: String? = null
@@ -1651,7 +1675,8 @@ class AIAgentViewModel @Inject constructor(
                 inputImages = inputImages,
                 inputAttachments = inputAttachments,
                 isAutoTrigger = isAutoTrigger,
-                clientMessageId = clientMessageId
+                clientMessageId = clientMessageId,
+                persistUserMessage = persistUserMessage
             )
             val currentList = _queuedRequests.value[sid] ?: emptyList()
             _queuedRequests.value = _queuedRequests.value + (sid to (currentList + req))
@@ -1667,7 +1692,8 @@ class AIAgentViewModel @Inject constructor(
                 inputAttachments = inputAttachments,
                 targetSessionId = sid,
                 isAutoTrigger = isAutoTrigger,
-                clientMessageId = clientMessageId
+                clientMessageId = clientMessageId,
+                persistUserMessage = persistUserMessage
             )
         }
     }
@@ -1760,7 +1786,8 @@ class AIAgentViewModel @Inject constructor(
             inputAttachments = next.inputAttachments,
             targetSessionId = sessionId,
             isAutoTrigger = next.isAutoTrigger,
-            clientMessageId = next.clientMessageId
+            clientMessageId = next.clientMessageId,
+            persistUserMessage = next.persistUserMessage
         )
     }
 
@@ -1811,6 +1838,7 @@ class AIAgentViewModel @Inject constructor(
         inputAttachments: List<AgentAttachment> = emptyList(),
         targetSessionId: String? = null,
         isAutoTrigger: Boolean = false,
+        persistUserMessage: Boolean = true,
         /** 子代理等场景：已预设会话标题，跳过首条消息的标题推导/生成，保留预设标题。 */
         skipTitleUpdate: Boolean = false,
         /**
@@ -1884,6 +1912,12 @@ class AIAgentViewModel @Inject constructor(
         // 有没有可交接的目标行（见 [_settledWithoutTargetGenerations]）。只在本轮作用域内有效。
         var registeredPendingRowThisTurn = false
 
+        // 声明在 try 外：finally 需要据此判断本轮是否正常完成，决定是否续跑 goal。
+        var turnSucceeded = false
+        // 本轮是否处于 goal 自主循环（用于「打断即暂停」）与本轮是否有活动（用于空回合熔断）。
+        var goalActiveAtTurn = false
+        var turnHadActivity = false
+        val isGoalTurn = !persistUserMessage
         try {
             var failed = false
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
@@ -1910,7 +1944,9 @@ class AIAgentViewModel @Inject constructor(
             // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
             // 调用方带了预生成 id（UI 乐观气泡）就用它，让「气泡」与「落库行」是同一条的判据落在 id 上。
             val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
-            if (userMsgId != null) {
+            if (!persistUserMessage) {
+                // 目标续跑等内部轮次：不落库、不建检查点，仅把指令作为本轮用户消息发给模型。
+            } else if (userMsgId != null) {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
                 // 本轮自动触发的技能名 → 气泡下方 chip（内存态，不落库：正文已注入本轮请求，重开后无需再展示）。
                 if (triggeredHits.isNotEmpty()) {
@@ -1965,6 +2001,8 @@ class AIAgentViewModel @Inject constructor(
                 userMessageId = userMsgId,
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
+                goal = sessionDomain?.goal,
+                goalStatus = sessionDomain?.goalStatus,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,
                 isSubAgent = isSubAgent,
                 agentDefinition = agentDefinition
@@ -1979,6 +2017,8 @@ class AIAgentViewModel @Inject constructor(
                     isSubAgent = isSubAgent
                 )
             )).distinctBy { it.name }
+            val goalActive = sessionDomain?.goalStatus == GoalStatus.ACTIVE
+            goalActiveAtTurn = goalActive
             val tools = when {
                 agentDefinition != null -> {
                     val allowed = agentDefinition.filterToolNames(allTools.map { it.name }).toSet()
@@ -1986,6 +2026,10 @@ class AIAgentViewModel @Inject constructor(
                 }
                 isSubAgent -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL || it.name.startsWith(VSCREEN_TOOL_PREFIX) }
                 else -> allTools.filterNot { it.name == AgentDefinition.PARENT_MESSAGE_TOOL }
+            }.let { list ->
+                // goal 自主循环期间禁用 PLAN（其退出门禁需人工审查）；非 goal 期间不暴露 goalStatus 工具。
+                if (goalActive) list.filterNot { it.name == "planMode" }
+                else list.filterNot { it.name == "goalStatus" }
             }
 
             var currentReasoningStart: Long? = null
@@ -2005,7 +2049,10 @@ class AIAgentViewModel @Inject constructor(
             ).collect { event ->
                 when (event) {
                     is AgentEvent.AssistantDelta -> {
-                        if (event.accumulated.hasVisibleContent()) finishReasoning()
+                        if (event.accumulated.hasVisibleContent()) {
+                            finishReasoning()
+                            turnHadActivity = true
+                        }
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setStreamingText(sessionId, event.accumulated)
@@ -2133,6 +2180,7 @@ class AIAgentViewModel @Inject constructor(
                         }
                     }
                     is AgentEvent.ToolCallStarted -> {
+                        turnHadActivity = true
                         val msgId = "tool_${event.id}"
                         setStreamingText(sessionId, null)
                         setPreparingTool(sessionId, null)
@@ -2245,6 +2293,7 @@ class AIAgentViewModel @Inject constructor(
                     }
                 }
             }
+            turnSucceeded = true
 
             sessionUseCase.touch(sessionId, messagePersistenceUseCase.nextTimestamp())
             // 仅当本 job 仍持有忙状态时才置完成态：并发场景下队列/通知可能已启动新的 job
@@ -2284,6 +2333,12 @@ class AIAgentViewModel @Inject constructor(
             FileLogger.d(TAG, "stream cancelled: sid=$sessionId isOwnJob=$isOwnJob state=$cancelledState")
             if (isOwnJob && cancelledState is AgentUIState.Streaming) {
                 setAgentState(sessionId, AgentUIState.Idle)
+            }
+            // goal 自主循环期间用户打断：暂停目标，避免下条消息后自动续跑（对齐 Codex「打断即暂停」）。
+            if (goalActiveAtTurn) {
+                viewModelScope.launch {
+                    runCatching { sessionUseCase.updateGoalStatus(sessionId, GoalStatus.PAUSED) }
+                }
             }
             throw e
         } catch (e: Exception) {
@@ -2325,6 +2380,8 @@ class AIAgentViewModel @Inject constructor(
                 setAgentState(sessionId, AgentUIState.Idle)
             }
             if (currentState !is AgentUIState.Streaming) {
+                // goal 自主循环：本轮正常完成后，若目标仍激活且预算未耗尽，追加下一轮续跑。
+                if (turnSucceeded) runCatching { maybeQueueGoalContinuation(sessionId, isGoalTurn, turnHadActivity) }
                 processNextInQueue(sessionId)
             }
             // 放在队列处理之后：flushPendingNotifications / processNextInQueue 会同步注册接替的 job，
@@ -2367,6 +2424,7 @@ class AIAgentViewModel @Inject constructor(
         agentNotificationCenter.clearAll()
         markClientMessagesDiscarded(_queuedRequests.value.values.flatten())
         _queuedRequests.value = emptyMap()
+        goalEmptyTurnCounts.clear()
         _runningCommandSessions.value = emptySet()
         _agentStates.value = _agentStates.value.mapValues { AgentUIState.Idle }
         _streamingTexts.value = emptyMap()
@@ -2695,6 +2753,161 @@ class AIAgentViewModel @Inject constructor(
                 isContextExcluded = true
             )
         }
+    }
+
+    /** /goal —— 管理当前会话的持续目标。 */
+    override fun setSessionGoal(rawArgs: String) {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch {
+            val session = sessionUseCase.getSessionById(sid) ?: return@launch
+            val arg = rawArgs.trim()
+            when {
+                arg.isEmpty() -> persistGoalNotice(sid, goalSummary(session))
+                arg.equals("clear", ignoreCase = true) || arg.equals("off", ignoreCase = true) -> clearGoal(sid)
+                arg.equals("pause", ignoreCase = true) -> pauseGoal(sid)
+                arg.equals("resume", ignoreCase = true) -> resumeGoal(sid)
+                else -> setGoalText(sid, session, arg)
+            }
+        }
+    }
+
+    /** UI：暂停/恢复当前会话的 goal 自主循环。 */
+    fun setGoalPaused(paused: Boolean) {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch { if (paused) pauseGoal(sid) else resumeGoal(sid) }
+    }
+
+    /** UI：清除当前会话的 goal。 */
+    fun clearGoal() {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch { clearGoal(sid) }
+    }
+
+    private fun goalSummary(session: ChatSessionEntity): String {
+        val goal = session.goal?.takeIf { it.isNotBlank() }
+            ?: return "当前会话未设定目标。用 `/goal <目标>` 设定后，AI 会自主循环推进直到达成、受阻或预算耗尽。"
+        val status = session.goalStatus
+            ?.let { runCatching { GoalStatus.valueOf(it) }.getOrNull() }
+            ?: GoalStatus.ACTIVE
+        val statusLabel = when (status) {
+            GoalStatus.ACTIVE -> "进行中"
+            GoalStatus.PAUSED -> "已暂停"
+            GoalStatus.COMPLETED -> "已完成"
+            GoalStatus.BLOCKED -> "受阻"
+            GoalStatus.EXHAUSTED -> "预算耗尽"
+        }
+        return "当前目标（$statusLabel，已续跑 ${session.goalTurnCount} 轮）：\n$goal"
+    }
+
+    private suspend fun setGoalText(sid: String, session: ChatSessionEntity, text: String) {
+        val goalText = text.trim().take(MAX_GOAL_CHARS)
+        if (goalText.isEmpty()) return
+        goalEmptyTurnCounts.remove(sid)
+        sessionUseCase.setGoal(sid, goalText, session.totalInputTokens, session.totalOutputTokens)
+        // goal 与 PLAN 互斥：自主循环期间 PLAN 退出门禁需人工审查，故设定 goal 时若处于 PLAN 则强制退出。
+        if (runCatching { AgentMode.valueOf(session.mode) }.getOrNull() == AgentMode.PLAN) {
+            sessionUseCase.updateMode(sid, AgentMode.BUILD.name)
+        }
+        persistGoalNotice(
+            sid,
+            "已设定目标：$goalText\nAI 将自主循环推进（工具自动放行、PLAN 停用），直到达成、受阻或预算耗尽。" +
+                "可随时 `/goal pause` / `/goal resume` / `/goal clear`。"
+        )
+        enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goalText, 1))
+    }
+
+    private suspend fun clearGoal(sid: String) {
+        goalEmptyTurnCounts.remove(sid)
+        sessionUseCase.setGoal(sid, null, 0, 0)
+        persistGoalNotice(sid, "已清除当前目标。")
+    }
+
+    private suspend fun pauseGoal(sid: String) {
+        val session = sessionUseCase.getSessionById(sid) ?: return
+        if (session.goal.isNullOrBlank()) {
+            persistGoalNotice(sid, "当前会话未设定目标。")
+            return
+        }
+        sessionUseCase.updateGoalStatus(sid, GoalStatus.PAUSED)
+        persistGoalNotice(sid, "目标已暂停。用 `/goal resume` 继续。")
+    }
+
+    private suspend fun resumeGoal(sid: String) {
+        val session = sessionUseCase.getSessionById(sid) ?: return
+        val goal = session.goal?.takeIf { it.isNotBlank() }
+        if (goal == null) {
+            persistGoalNotice(sid, "当前会话未设定目标。")
+            return
+        }
+        sessionUseCase.updateGoalStatus(sid, GoalStatus.ACTIVE)
+        persistGoalNotice(sid, "目标已恢复，继续自主循环。")
+        enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goal, session.goalTurnCount + 1))
+    }
+
+    /**
+     * goal 自主循环续跑：本轮正常完成后调用。目标仍激活、预算未耗尽且无待跑用户消息时，
+     * 追加下一轮续跑；预算触顶则置 EXHAUSTED 并提示。
+     */
+    private suspend fun maybeQueueGoalContinuation(sessionId: String, isGoalTurn: Boolean, hadActivity: Boolean) {
+        val session = sessionUseCase.getSessionById(sessionId) ?: return
+        val goal = session.goal?.takeIf { it.isNotBlank() } ?: return
+        if (session.goalStatus != GoalStatus.ACTIVE.name) return
+        // 用户消息优先：队列里已有待跑项时不追加续跑，等用户消息跑完再续。
+        if (!_queuedRequests.value[sessionId].isNullOrEmpty()) return
+        // 空回合熔断：自动续跑回合连续无进展（既无工具调用也无可见正文）达到阈值即置 BLOCKED。
+        if (isGoalTurn) {
+            if (hadActivity) {
+                goalEmptyTurnCounts.remove(sessionId)
+            } else {
+                val n = (goalEmptyTurnCounts[sessionId] ?: 0) + 1
+                if (n >= MAX_GOAL_EMPTY_TURNS) {
+                    goalEmptyTurnCounts.remove(sessionId)
+                    sessionUseCase.updateGoalStatus(sessionId, GoalStatus.BLOCKED)
+                    persistGoalNotice(
+                        sessionId,
+                        "目标自主循环连续 $MAX_GOAL_EMPTY_TURNS 轮无进展，已置为「受阻」并停止。可 `/goal resume` 继续或 `/goal clear` 清除。"
+                    )
+                    return
+                }
+                goalEmptyTurnCounts[sessionId] = n
+            }
+        }
+        val maxTurns = generalSettingsRepository.goalMaxTurns()
+        val maxTokens = generalSettingsRepository.goalMaxTokens()
+        val usedTokens = (session.totalInputTokens - session.goalStartInputTokens).coerceAtLeast(0) +
+            (session.totalOutputTokens - session.goalStartOutputTokens).coerceAtLeast(0)
+        if (session.goalTurnCount >= maxTurns || usedTokens >= maxTokens) {
+            sessionUseCase.updateGoalStatus(sessionId, GoalStatus.EXHAUSTED)
+            persistGoalNotice(
+                sessionId,
+                "目标自主循环已达预算上限（轮次上限 $maxTurns 轮 / token 预算 $maxTokens），已停止。" +
+                    "可 `/goal resume` 继续或 `/goal clear` 清除。"
+            )
+            return
+        }
+        sessionUseCase.incrementGoalTurn(sessionId)
+        enqueueGoalTurn(sessionId, session.workspacePath, buildGoalPrompt(goal, session.goalTurnCount + 1))
+    }
+
+    /** 把一轮 goal 续跑/启动请求交给会话：空闲则立即执行，忙则入队（用户消息优先）。不落库。 */
+    private fun enqueueGoalTurn(sessionId: String, workspacePath: String, prompt: String) {
+        enqueueAgentRequest(
+            request = prompt,
+            modelRequest = prompt,
+            projectRoot = workspacePath,
+            isAutoTrigger = true,
+            persistUserMessage = false,
+            targetSessionId = sessionId
+        )
+    }
+
+    private fun buildGoalPrompt(goal: String, turn: Int): String =
+        "【目标自主循环 · 第 $turn 轮】继续推进目标：$goal\n" +
+            "按系统提示中的完成审计与受阻审计规则决定是否调用 goalStatus；未达成则直接继续下一步。"
+
+    private suspend fun persistGoalNotice(sid: String, text: String) {
+        sessionUseCase.touch(sid, messagePersistenceUseCase.nextTimestamp())
+        messagePersistenceUseCase.persist(sid, MessageRole.ASSISTANT, text, isContextExcluded = true)
     }
 
     private data class UsageSummary(

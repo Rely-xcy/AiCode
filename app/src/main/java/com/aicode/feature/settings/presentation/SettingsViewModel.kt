@@ -665,6 +665,12 @@ class SettingsViewModel @Inject constructor(
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
 
+    private val _goalMaxTurns = MutableStateFlow(50)
+    val goalMaxTurns: StateFlow<Int> = _goalMaxTurns.asStateFlow()
+
+    private val _goalMaxTokens = MutableStateFlow(500_000)
+    val goalMaxTokens: StateFlow<Int> = _goalMaxTokens.asStateFlow()
+
     private val _deleteExternalWorkspaceSessions = MutableStateFlow(false)
     val deleteExternalWorkspaceSessions: StateFlow<Boolean> = _deleteExternalWorkspaceSessions.asStateFlow()
 
@@ -1193,6 +1199,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.sendFileMaxSizeMbFlow.collectLatest {
                     _sendFileMaxSizeMb.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTurnsFlow.collectLatest {
+                    _goalMaxTurns.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTokensFlow.collectLatest {
+                    _goalMaxTokens.value = it
                 }
             }
 
@@ -2273,6 +2291,20 @@ class SettingsViewModel @Inject constructor(
     fun setSendFileMaxSizeMb(mb: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setSendFileMaxSizeMb(mb)
+        }
+    }
+
+    /** goal 自主循环最大续跑轮数（不小于 1）。 */
+    fun setGoalMaxTurns(turns: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTurns(turns)
+        }
+    }
+
+    /** goal 自主循环 token 预算（不小于 1000）。 */
+    fun setGoalMaxTokens(tokens: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTokens(tokens)
         }
     }
 

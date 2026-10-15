@@ -95,6 +95,10 @@ data class AgentContext(
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）：退出 PLAN 时恢复到它，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,
+    /** 当前会话的持续目标文本；null 表示未设定目标。 */
+    val goal: String? = null,
+    /** 当前会话的 goal 生命周期状态；ACTIVE 表示自主循环进行中。 */
+    val goalStatus: GoalStatus? = null,
     /** 思考强度（"low"/"medium"/"high"），随每次 LLM 请求传给支持的 provider。 */
     val reasoningEffort: String? = null,
     /**
@@ -110,4 +114,11 @@ data class AgentContext(
      * 与「是不是子代理会话」无关（见 [isSubAgent]）。
      */
     val agentDefinition: AgentDefinition? = null
-)
+) {
+    /**
+     * 工具授权判定用的有效模式：goal 自主循环激活期间按 AUTO 放行（保留灾难性安全防护），
+     * 与用户可见的 [mode] 解耦——goal 不改变会话显示的模式，只改变授权强度。
+     */
+    val permissionMode: AgentMode
+        get() = if (goalStatus == GoalStatus.ACTIVE) AgentMode.AUTO else mode
+}

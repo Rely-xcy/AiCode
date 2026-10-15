@@ -93,6 +93,8 @@ import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
 import com.aicode.feature.agent.domain.command.SlashCommandKind
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
+import com.aicode.feature.agent.presentation.SessionGoalUi
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.domain.permission.PermissionChoice
@@ -116,6 +118,10 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Pause
+import compose.icons.feathericons.Play
+import compose.icons.feathericons.Target
+import compose.icons.feathericons.X
 import compose.icons.feathericons.Maximize
 import compose.icons.feathericons.Minimize
 import compose.icons.feathericons.Plus
@@ -154,6 +160,9 @@ internal fun ChatInputBar(
     onSelectModel: (String, String) -> Unit,
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
+    currentGoal: SessionGoalUi? = null,
+    onSetGoalPaused: (Boolean) -> Unit = {},
+    onClearGoal: () -> Unit = {},
     reasoningEffort: ReasoningEffort,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
     pendingAttachments: List<PendingUploadAttachment>,
@@ -456,6 +465,14 @@ internal fun ChatInputBar(
                     onExpandedChange = onDashboardExpandedChange,
                     maxExpandedBodyHeight = dashboardBodyMaxHeight,
                     forceCollapse = forceCollapseDashboard
+                )
+            }
+
+            currentGoal?.let { goal ->
+                GoalBannerRow(
+                    goal = goal,
+                    onSetPaused = onSetGoalPaused,
+                    onClear = onClearGoal
                 )
             }
 
@@ -1277,6 +1294,100 @@ internal fun PlanApprovalPanel(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 会话持续目标（goal）的常驻卡片：置于输入框上方，显示目标文本、状态与暂停/恢复、清除操作。
+ * 样式与输入框卡片一致（圆角 + 描边）。
+ */
+@Composable
+private fun GoalBannerRow(
+    goal: SessionGoalUi,
+    onSetPaused: (Boolean) -> Unit,
+    onClear: () -> Unit
+) {
+    val statusLabel = when (goal.status) {
+        GoalStatus.ACTIVE -> stringResource(R.string.chat_goal_status_active)
+        GoalStatus.PAUSED -> stringResource(R.string.chat_goal_status_paused)
+        GoalStatus.COMPLETED -> stringResource(R.string.chat_goal_status_completed)
+        GoalStatus.BLOCKED -> stringResource(R.string.chat_goal_status_blocked)
+        GoalStatus.EXHAUSTED -> stringResource(R.string.chat_goal_status_exhausted)
+    }
+    val accent = when (goal.status) {
+        GoalStatus.ACTIVE -> MaterialTheme.colorScheme.primary
+        GoalStatus.COMPLETED -> MaterialTheme.semanticColors.success
+        GoalStatus.BLOCKED, GoalStatus.EXHAUSTED -> MaterialTheme.colorScheme.error
+        GoalStatus.PAUSED -> MaterialTheme.semanticColors.subtleText
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = Spacing.sm),
+        shape = RoundedCornerShape(Radius.lg),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Target,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.chat_goal_label, statusLabel),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    maxLines = 1
+                )
+                Text(
+                    text = goal.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (goal.status == GoalStatus.ACTIVE || goal.status == GoalStatus.PAUSED) {
+                IconButton(
+                    onClick = { onSetPaused(goal.status == GoalStatus.ACTIVE) },
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        imageVector = if (goal.status == GoalStatus.ACTIVE) FeatherIcons.Pause else FeatherIcons.Play,
+                        contentDescription = stringResource(
+                            if (goal.status == GoalStatus.ACTIVE) R.string.chat_goal_pause else R.string.chat_goal_resume
+                        ),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            IconButton(onClick = onClear, modifier = Modifier.size(30.dp)) {
+                Icon(
+                    imageVector = FeatherIcons.X,
+                    contentDescription = stringResource(R.string.chat_goal_clear),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }
