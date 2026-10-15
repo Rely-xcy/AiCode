@@ -175,7 +175,9 @@ class VirtualScreenManager @Inject constructor(
         val frame = image
             ?: return Result.failure(IllegalStateException("等待 ${maxWaitMs}ms 仍未取到帧（屏可能没有内容）。"))
         try {
-            val bitmap = Bitmap.wrapHardwareBuffer(frame.hardwareBuffer, null)
+            val bitmap = Bitmap.wrapHardwareBuffer(frame.hardwareBuffer ?: return Result.failure(
+                IllegalStateException("帧缺少 hardwareBuffer。")
+            ), null)
                 ?: return Result.failure(IllegalStateException("帧缓冲转 Bitmap 失败。"))
             val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
                 ?: return Result.failure(IllegalStateException("Bitmap 拷贝失败。"))
