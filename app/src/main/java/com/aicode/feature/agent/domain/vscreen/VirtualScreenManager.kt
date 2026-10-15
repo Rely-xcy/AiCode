@@ -1,11 +1,17 @@
 package com.aicode.feature.agent.domain.vscreen
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.os.SystemClock
 import android.view.Surface
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.io.FileOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,12 +22,16 @@ import javax.inject.Singleton
  *
  * **建屏走本进程的 [DisplayManager.createVirtualDisplay] API**——真机验证结论（2026-10-14，
  * MIUI 14 / Android 13）：shell 侧没有任何「创建虚拟屏」的命令（AOSP 的 `cmd display` 没有
- * `create-virtual-display`，MIUI 也没加），原方案的 `cmd display create-virtual-display` 是
- * 臆造命令、真机必失败。API 建屏不需要 root：App 作为屏的 owner 天然有权限，Surface 传 null
- *（不渲染、零耗电，观察走无障碍树 / `screencap -d`）。
+ * `create-virtual-display`），原方案的 `cmd display create-virtual-display` 是臆造命令、
+ * 真机必失败。API 建屏不需要 root：App 作为屏的 owner 天然有权限。
  *
- * root 通道仍保留，但只负责**屏上操作**：`am start --display`、`input -d`、`screencap -d`、
- * `logcat`——这些命令真机已验证有效（见 [VirtualScreenController]）。
+ * **取帧走屏自带的 [ImageReader] Surface**——真机验证结论（2026-10-15）：`screencap -d` 只认
+ * SurfaceFlinger/HWC 注册的 display（App 自建的 PUBLIC 屏不在其列，命令成功但写出 0 字节）；
+ * 帧从自己的 Surface 读则完全绕开系统限制，且无障碍树在 MIUI 上看不到虚拟屏窗口，取帧
+ * 是唯一可用的观察通道。
+ *
+ * root 通道仍保留，但只负责**屏上操作**：`am start --display`、`input -d`、`logcat`——
+ * 这些命令真机已验证有效（见 [VirtualScreenController]）。
  */
 @Singleton
 class VirtualScreenManager @Inject constructor(
@@ -44,6 +54,7 @@ class VirtualScreenManager @Inject constructor(
         private set
 
     private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
 
     /** 是否存在存活中的屏（工具侧做会话授权与并发判定用）。 */
     val hasScreen: Boolean get() = current != null
@@ -69,29 +80,41 @@ class VirtualScreenManager @Inject constructor(
             return Result.failure(IllegalStateException("root 通道不可用：${rootShell.unavailableReason()}"))
         }
 
+        // 取帧用 ImageReader：maxImages 给足（取一帧只需 2：acquireLatestImage 内部会丢弃旧帧），
+        // 格式 RGBA_8888 可直接转 Bitmap 存 PNG。
+        val reader = try {
+            ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, IMAGE_READER_MAX_IMAGES)
+        } catch (e: Exception) {
+            return Result.failure(IllegalStateException("创建取帧器失败：${e.message}", e))
+        }
+
         val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
-            ?: return Result.failure(IllegalStateException("取不到 DisplayManager，无法创建虚拟屏。"))
+            ?: run {
+                reader.close()
+                return Result.failure(IllegalStateException("取不到 DisplayManager，无法创建虚拟屏。"))
+            }
         val name = "aicode-vscreen-${System.currentTimeMillis()}"
         val display: VirtualDisplay? = try {
             // 不带 TRUSTED（需系统权限 ADD_TRUSTED_DISPLAY，普通 app 拿不到，会被 CTS 确认的
             // SecurityException 拒）：PUBLIC + OWN_CONTENT_ONLY 即可让第三方 Activity 落屏。
-            // Surface 传 null：不渲染、零耗电；观察走无障碍树 / screencap -d。
             dm.createVirtualDisplay(
                 name,
                 width,
                 height,
                 density,
-                null as Surface?,
+                reader.surface,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
             )
         } catch (e: Exception) {
+            reader.close()
             return Result.failure(IllegalStateException("创建虚拟屏失败：${e.message}", e))
         }
         // displayId 从 display 对象拿；createVirtualDisplay 返回 null 仅在极端异常时。
         val displayId = display?.display?.displayId
             ?: run {
                 display?.release()
+                reader.close()
                 return Result.failure(IllegalStateException("创建虚拟屏返回空 display。"))
             }
 
@@ -99,6 +122,7 @@ class VirtualScreenManager @Inject constructor(
         if (!launch.ok) {
             // 启动失败就把刚建的屏收拾掉，不留半成品。
             display.release()
+            reader.close()
             return Result.failure(
                 IllegalStateException(
                     "在虚拟屏上启动 $packageName 失败（exit=${launch.exitCode}）。原始输出：${launch.output.trim().take(400)}"
@@ -113,6 +137,7 @@ class VirtualScreenManager @Inject constructor(
             expiresAtMs = System.currentTimeMillis() + lifetimeMs.coerceAtLeast(MIN_LIFETIME_MS)
         )
         virtualDisplay = display
+        imageReader = reader
         current = screen
         FileLogger.i(TAG, "虚拟屏已就绪：displayId=$displayId，目标=$packageName")
         return Result.success(screen)
@@ -123,9 +148,48 @@ class VirtualScreenManager @Inject constructor(
         val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
         virtualDisplay?.release()
         virtualDisplay = null
+        imageReader?.close()
+        imageReader = null
         current = null
         FileLogger.i(TAG, "虚拟屏已销毁：displayId=${screen.displayId}")
         return Result.success(Unit)
+    }
+
+    /**
+     * 从屏的 Surface 取一帧，编码成 PNG 落到 [target]。
+     *
+     * `acquireLatestImage` 会自动丢弃积压的旧帧拿最新一帧；拿不到（屏还没画出第一帧）
+     * 短暂重试几轮——建屏到 app 首帧有几百毫秒的间隙。
+     */
+    fun captureFrame(target: File, maxWaitMs: Long = CAPTURE_WAIT_MS): Result<Unit> {
+        val reader = imageReader
+            ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏，先调用 vscreen_start 创建。"))
+        val deadline = System.nanoTime() + maxWaitMs * 1_000_000L
+        var image: android.media.Image? = null
+        while (image == null && System.nanoTime() < deadline) {
+            image = reader.acquireLatestImage()
+            if (image == null) {
+                SystemClock.sleep(CAPTURE_RETRY_INTERVAL_MS)
+            }
+        }
+        val frame = image
+            ?: return Result.failure(IllegalStateException("等待 ${maxWaitMs}ms 仍未取到帧（屏可能没有内容）。"))
+        try {
+            val bitmap = Bitmap.wrapHardwareBuffer(frame.hardwareBuffer, null)
+                ?: return Result.failure(IllegalStateException("帧缓冲转 Bitmap 失败。"))
+            val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                ?: return Result.failure(IllegalStateException("Bitmap 拷贝失败。"))
+            FileOutputStream(target).use { out ->
+                if (!software.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                    return Result.failure(IllegalStateException("PNG 编码失败：${target.absolutePath}"))
+                }
+            }
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            return Result.failure(IllegalStateException("取帧失败：${e.message}", e))
+        } finally {
+            frame.close()
+        }
     }
 
     /**
@@ -168,6 +232,9 @@ class VirtualScreenManager @Inject constructor(
         const val TAG = "VirtualScreenManager"
 
         const val LAUNCH_TIMEOUT_MS = 20_000L
+        const val IMAGE_READER_MAX_IMAGES = 3
+        const val CAPTURE_WAIT_MS = 3_000L
+        const val CAPTURE_RETRY_INTERVAL_MS = 50L
 
         /** 单屏默认存活上限（30 分钟）：忘 stop 的兜底，可由任务参数放宽。 */
         const val DEFAULT_LIFETIME_MS = 30 * 60 * 1000L

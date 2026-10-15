@@ -11,8 +11,8 @@ import javax.inject.Singleton
  * 所有注入命令都带 `-d <displayId>`，事件只进虚拟屏，碰不到真机前台。
  * 会话授权与限速由 [VirtualScreenGuard] 把关，本类只负责执行。
  *
- * [temp] root 分支实验件：`input -d` / `screencap -d` 的参数形态各 ROM 略有差异，
- * 阶段 0 会用真机结论校正。
+ * 截帧走屏自带的 ImageReader（见 [VirtualScreenManager]）；观察的无障碍树通道在 MIUI 上
+ * 看不到虚拟屏窗口（设备限制），取不到时如实报错并提示改截图。
  */
 @Singleton
 class VirtualScreenController @Inject constructor(
@@ -53,20 +53,11 @@ class VirtualScreenController @Inject constructor(
         val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
         val dir = File(outputDir).apply { mkdirs() }
         val target = File(dir, "vscreen-${screen.displayId}-${System.currentTimeMillis()}.png")
-        val capture = rootShell.run(
-            "screencap -d ${screen.displayId} -p ${target.absolutePath}",
-            CAPTURE_TIMEOUT_MS
-        )
-        if (!capture.ok) {
-            return Result.failure(
-                IllegalStateException(
-                    "截帧失败（exit=${capture.exitCode}）。原始输出：${capture.output.trim().take(400)}"
-                )
-            )
-        }
-        // 命令退出码为 0 也可能没写出文件（个别 ROM 的 screencap -d 行为异常），显式确认。
+        // 帧从屏自己的 Surface（ImageReader）读：screencap -d 只认 HWC 注册的 display，
+        // 对 App 自建的屏会「命令成功但写出 0 字节」（真机验证结论 2026-10-15）。
+        manager.captureFrame(target).getOrElse { return Result.failure(it) }
         if (!target.exists() || target.length() == 0L) {
-            return Result.failure(IllegalStateException("截帧命令成功但未落盘：${target.absolutePath}"))
+            return Result.failure(IllegalStateException("取帧成功但未落盘：${target.absolutePath}"))
         }
         screenshotStore.warnIfOversized(target)
         screenshotStore.prune(dir)
@@ -160,7 +151,6 @@ class VirtualScreenController @Inject constructor(
     private companion object {
         const val TAG = "VirtualScreenController"
         const val INJECT_TIMEOUT_MS = 10_000L
-        const val CAPTURE_TIMEOUT_MS = 15_000L
         const val SHORT_TIMEOUT_MS = 5_000L
         const val LOGCAT_TIMEOUT_MS = 15_000L
         const val MAX_RETURN_CHARS = 4_000
