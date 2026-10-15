@@ -223,14 +223,29 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
-         * 与 assets 里 alpine-rootfs 版本对应的 apk 分支，用于拼镜像源地址。
-         * 固定 v3.21：与 [INSTALL_VERSION]（alpine-3.21.3）一致；该版本 apk-tools 2.14 在 proot 下可靠。
-         */
-        /**
-         * 安装版本。换 rootfs / proot 或改安装逻辑时 +1，触发重新解压。
-         * 与 assets 里实际放的 Alpine 版本保持一致以便排查。
+         * **重装触发器**——它的值是「已安装」标记（`.installed`）的唯一判据，**刻意与 assets 里放的
+         * Alpine 版本解耦**。
+         *
+         * 值一变，所有已装用户下次进容器就会被整体清空重装：容器里 `apk add` 装的包、初始化菜单装的
+         * Android SDK / Flutter SDK / JDK 全都没了（几百 MB 重新下载），而且清理前没有任何预警。
+         * 所以：
+         * - **只有安装逻辑本身变化才递增**：换 proot、改解压流程、换 apk 源分支；
+         * - **assets 里换成新的 Alpine 补丁版时不要动它**。新装用户自然解压到新基线，已装用户保持
+         *   原样不受影响，想换新基线由用户主动「重置容器」触发（重置确认框已写明会删除容器内已装工具）。
+         *
+         * 与 assets 实际版本的对应关系见 [ROOTFS_ASSET_VERSION]；容器内真实版本以 `/etc/alpine-release`
+         * 为准，不要靠本标记推断。
+         *
+         * 内置 rootfs 固定在 3.21 分支：该分支的 apk-tools 2.14 在 proot 下可靠，apk 源分支也据此固定
+         * （见 assets/aicode/lib/env-common.sh 的兜底 v3.21）。
          */
         private const val INSTALL_VERSION = "alpine-3.21.3-v6"
+
+        /**
+         * assets 里实际打包的 Alpine 版本，**仅用于日志与排查**，不参与是否需要重装的判定。
+         * 换 assets 时同步更新这里，让「装了哪一版」在日志里有据可查。
+         */
+        private const val ROOTFS_ASSET_VERSION = "3.21.3"
 
         /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
         private const val DELETE_PROGRESS_STEP = 2000
@@ -338,7 +353,8 @@ class ContainerInstaller @Inject constructor(
         val startedAt = System.currentTimeMillis()
         FileLogger.i(
             TAG,
-            "开始安装容器 rootfs（版本 $INSTALL_VERSION，asset=$ASSET_ROOTFS，目标=${rootfsDir.absolutePath}，" +
+            "开始安装容器 rootfs（标记版本 $INSTALL_VERSION，asset 内 Alpine $ROOTFS_ASSET_VERSION，" +
+                "asset=$ASSET_ROOTFS，目标=${rootfsDir.absolutePath}，" +
                 "父目录可用空间=${usableSpaceMb(rootfsDir.parentFile)}MB）"
         )
         try {
