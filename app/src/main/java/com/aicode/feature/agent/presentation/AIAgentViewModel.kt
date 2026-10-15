@@ -28,12 +28,15 @@ import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.container.ContainerInitState
+import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
@@ -83,6 +86,7 @@ import com.aicode.feature.agent.domain.tool.vscreen.VSCREEN_TOOL_PREFIX
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -157,6 +161,8 @@ class AIAgentViewModel @Inject constructor(
     private val backupManager: BackupManager,
     private val mcpManager: McpManager,
     private val agentSoundSettings: AgentSoundSettingsRepository,
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val containerOsDetector: ContainerOsDetector,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val keepaliveSettings: KeepaliveSettingsRepository,
     private val subAgentEventBus: SubAgentEventBus,
@@ -516,12 +522,26 @@ class AIAgentViewModel @Inject constructor(
     private val _browseRefresh = MutableStateFlow(0)
 
     /**
+     * 当前容器根节点的显示名与图标来源：名称取当前 profile，系统类型取已检测缓存，[FileTreeRoot.Container.remote] 看其执行模式。
+     */
+    private val containerRootNode: Flow<FileTreeRoot.Container> = combine(
+        containerSettingsRepository.activeProfileFlow,
+        containerOsDetector.osMap
+    ) { profile, osMap ->
+        FileTreeRoot.Container(
+            label = profile.name,
+            osId = osMap[profile.id],
+            remote = profile.mode == ExecutionMode.REMOTE_SSH
+        )
+    }
+
+    /**
      * 扁平化的可见文件树。listFiles 在本地是阻塞 IO、远程是网络调用，必须跑 IO 调度器。
      * 监听工作区根与所有已展开目录：任一发生变动（不限 AI，终端与其它 App 同样算）或手动刷新都会重建树。
      * 只监听展开中的目录、不递归整棵树，避免大仓库开出大量 inotify 句柄。
      */
-    val browseState: StateFlow<FileBrowseState> = _expandedPaths
-        .flatMapLatest { expanded ->
+    val browseState: StateFlow<FileBrowseState> = combine(_expandedPaths, containerRootNode) { expanded, root -> expanded to root }
+        .flatMapLatest { (expanded, root) ->
             val watched = expanded + WorkspacePathMapper.CONTAINER_ROOT
             val triggers = merge(
                 watched.map { fileChangeHub.watchWorkspace(it).asDirtySignal() }.merge().debounce(BROWSE_DEBOUNCE_MS).map { false },
@@ -533,7 +553,7 @@ class AIAgentViewModel @Inject constructor(
             flow {
                 // 首次产出前由 stateIn 初值 Loading 占位；后续展开/折叠/刷新不再回到 Loading，
                 // StateFlow 保留上一份 Success 直到新树就绪，避免闪加载动画与滚动位置丢失。
-                var previous: FileBrowseState = buildBrowseTree(expanded)
+                var previous: FileBrowseState = buildBrowseTree(expanded, root)
                 emit(previous)
                 triggers.collect { manualRefresh ->
                     val last = previous
@@ -542,7 +562,7 @@ class AIAgentViewModel @Inject constructor(
                     if (manualRefresh && last is FileBrowseState.Success) {
                         emit(last.copy(refreshing = true))
                     }
-                    previous = buildBrowseTree(expanded)
+                    previous = buildBrowseTree(expanded, root)
                     emit(previous)
                 }
             }.flowOn(Dispatchers.IO)
@@ -551,28 +571,47 @@ class AIAgentViewModel @Inject constructor(
         .onEach { _expandingPath.value = null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FileBrowseState.Loading)
 
-    /** 读取工作区根并按 [expanded] 递归展开，产出扁平的可见节点列表；根读取失败则整体报错。 */
-    private fun buildBrowseTree(expanded: Set<String>): FileBrowseState {
-        val root = WorkspacePathMapper.CONTAINER_ROOT
-        val rootEntries = runCatching { fileAccess.listFiles(root) }.getOrElse { e ->
-            FileLogger.w(TAG, "列目录失败: $root", e)
+    /** 读取工作区根与当前容器根，按 [expanded] 递归展开，产出扁平的可见节点列表；工作区根读取失败则整体报错。 */
+    private fun buildBrowseTree(expanded: Set<String>, containerRoot: FileTreeRoot.Container): FileBrowseState {
+        val workspaceRoot = WorkspacePathMapper.CONTAINER_ROOT
+        val workspaceEntries = runCatching { fileAccess.listFiles(workspaceRoot) }.getOrElse { e ->
+            FileLogger.w(TAG, "列目录失败: $workspaceRoot", e)
             return FileBrowseState.Error(e.message)
         }
-        val ignorePatterns = loadRootGitignore(root)
-        val rootExpanded = root in expanded
         val nodes = mutableListOf<FileTreeNode>()
-        nodes += FileTreeNode(
-            entry = FileEntry(name = "workspace", isDirectory = true, size = 0, lastModified = 0),
-            path = root,
-            depth = 0,
-            isRoot = true,
-            isExpanded = rootExpanded
-        )
-        if (rootExpanded) {
-            appendBrowseChildren(root, rootEntries, depth = 1, expanded = expanded, ignorePatterns = ignorePatterns, relParts = emptyList(), out = nodes)
+        nodes += rootNode(FileTreeRoot.Workspace, workspaceRoot, expanded)
+        if (workspaceRoot in expanded) {
+            appendBrowseChildren(
+                workspaceRoot, workspaceEntries, depth = 1, expanded = expanded,
+                ignorePatterns = loadRootGitignore(workspaceRoot), relParts = emptyList(), out = nodes
+            )
+        }
+        // 当前容器根：读不到（容器未安装、远程未连接）时只把该行标红，不影响工作区那棵。
+        val containerExpanded = CONTAINER_FS_ROOT in expanded
+        val containerEntries = if (containerExpanded) {
+            runCatching { fileAccess.listFiles(CONTAINER_FS_ROOT) }.getOrNull()
+        } else {
+            null
+        }
+        nodes += rootNode(containerRoot, CONTAINER_FS_ROOT, expanded, hasError = containerExpanded && containerEntries == null)
+        if (containerEntries != null) {
+            appendBrowseChildren(
+                CONTAINER_FS_ROOT, containerEntries, depth = 1, expanded = expanded,
+                ignorePatterns = emptyList(), relParts = emptyList(), out = nodes
+            )
         }
         return FileBrowseState.Success(nodes)
     }
+
+    /** 文件树的一个根节点行；[FileTreeNode.entry] 的 name 同时用作显示名（见 [FileTreeRoot.label]）。 */
+    private fun rootNode(root: FileTreeRoot, path: String, expanded: Set<String>, hasError: Boolean = false) = FileTreeNode(
+        entry = FileEntry(name = root.label, isDirectory = true, size = 0, lastModified = 0),
+        path = path,
+        depth = 0,
+        root = root,
+        isExpanded = path in expanded,
+        hasError = hasError
+    )
 
     /** 读工作区根 .gitignore（本地/远程均可）；去空行/注释/否定行，读不到则空。仅根 .gitignore，不处理嵌套。 */
     private fun loadRootGitignore(root: String): List<String> = runCatching {
@@ -597,17 +636,17 @@ class AIAgentViewModel @Inject constructor(
         // 按名字去重：文件系统的 readdir 在 FUSE 存储（外部工作区/模拟存储）上可能重复返回同一条目，
         // AOSP 的 ReaddirHelper 亦做同样处理。同名条目会产生重复的节点 path，撞坏 LazyColumn 的 key。
         for (entry in entries.distinctBy { it.name }.sortedWith(BROWSE_ORDER)) {
-            val path = "$parent/${entry.name}"
+            val path = childPathPrefix(parent) + entry.name
             val parts = relParts + entry.name
             val ignored = ignorePatterns.isNotEmpty() &&
                 GitIgnoreMatcher.isIgnored(ignorePatterns, parts)
             val open = entry.isDirectory && path in expanded
             if (!open) {
-                out += FileTreeNode(entry, path, depth, isRoot = false, isExpanded = false, ignored = ignored)
+                out += FileTreeNode(entry, path, depth, isExpanded = false, ignored = ignored)
                 continue
             }
             val children = runCatching { fileAccess.listFiles(path) }.getOrNull()
-            out += FileTreeNode(entry, path, depth, isRoot = false, isExpanded = true, hasError = children == null, ignored = ignored)
+            out += FileTreeNode(entry, path, depth, isExpanded = true, hasError = children == null, ignored = ignored)
             if (children != null) appendBrowseChildren(path, children, depth + 1, expanded, ignorePatterns, parts, out)
         }
     }
@@ -622,7 +661,7 @@ class AIAgentViewModel @Inject constructor(
         if (path == _expandingPath.value) return
         val current = _expandedPaths.value
         val updated = if (path in current) {
-            current.filterNot { it == path || it.startsWith("$path/") }.toSet()
+            current.filterNot { it == path || it.startsWith(childPathPrefix(path)) }.toSet()
         } else {
             _expandingPath.value = path
             current + path
@@ -660,7 +699,10 @@ class AIAgentViewModel @Inject constructor(
 
     /** [parent] 目录下的子路径；名称非法时返回 null。 */
     private fun browseChildPath(parent: String, name: String): String? =
-        if (isValidFileEntryName(name)) "$parent/${name.trim()}" else null
+        if (isValidFileEntryName(name)) childPathPrefix(parent) + name.trim() else null
+
+    /** 容器路径下的子路径前缀：容器根 `/` 下为 `/`，其余为 `<path>/`。拼接子路径与折叠时连带删后代都用它，避免出现 `//name`。 */
+    private fun childPathPrefix(path: String): String = if (path.endsWith("/")) path else "$path/"
 
     /** 在 [parent] 目录新建空文件。 */
     fun createBrowseFile(parent: String, name: String, onResult: (Boolean, String?) -> Unit) {
@@ -1181,6 +1223,9 @@ class AIAgentViewModel @Inject constructor(
 
         /** 写文件会连珠触发多个 inotify 事件，合并后再重读目录。 */
         const val BROWSE_DEBOUNCE_MS = 300L
+
+        /** 当前容器在容器内的根路径，对应宿主上的 rootfs 目录（随当前 profile 变化）。 */
+        const val CONTAINER_FS_ROOT = "/"
     }
 
     init {

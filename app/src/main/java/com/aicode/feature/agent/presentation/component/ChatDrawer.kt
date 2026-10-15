@@ -102,9 +102,11 @@ import com.aicode.feature.agent.presentation.ChatSearchState
 import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
+import com.aicode.feature.agent.presentation.FileTreeRoot
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.core.ui.containerOsLogo
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -117,7 +119,9 @@ import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Server
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
@@ -915,11 +919,9 @@ private fun FileBrowserTab(
                 val maxContentPx = remember(state.nodes, textStyle) {
                     with(density) {
                         val widest = state.nodes.maxByOrNull { node ->
-                            val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
-                            node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
+                            node.depth * 4 + node.displayName.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
                         } ?: return@with 0
-                        val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
-                        val textW = textMeasurer.measure(label, textStyle).size.width
+                        val textW = textMeasurer.measure(widest.displayName, textStyle).size.width
                         (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
                     }
                 }
@@ -1020,12 +1022,12 @@ private fun FileBrowserTab(
             clipboard = clipboard,
             onNewFile = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FILE)
             },
             onNewFolder = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FOLDER)
             },
             onRename = {
@@ -1186,7 +1188,7 @@ private fun FileTreeActionSheet(
                 .padding(bottom = Spacing.xl)
         ) {
             Text(
-                text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+                text = node.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1218,7 +1220,7 @@ private fun FileTreeActionSheet(
                     onClick = onNewFolder
                 )
             }
-            if (!node.isRoot) {
+            if (node.root == null) {
                 SheetActionRow(
                     icon = FeatherIcons.Copy,
                     label = stringResource(R.string.common_copy),
@@ -1272,7 +1274,7 @@ private fun FileTreeRow(
             showExpanding = false
         }
     }
-    val isDotfile = !node.isRoot && node.entry.name.startsWith(".")
+    val isDotfile = node.root == null && node.entry.name.startsWith(".")
     val decorationColor: Color? = when {
         node.hasError -> MaterialTheme.colorScheme.error
         node.ignored -> FileTreeIgnoredColor
@@ -1322,7 +1324,7 @@ private fun FileTreeRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+            text = node.displayName,
             style = MaterialTheme.typography.bodyMedium,
             color = decorationColor ?: MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
@@ -1331,9 +1333,31 @@ private fun FileTreeRow(
     }
 }
 
-/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。[decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
+/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。容器根用「容器与镜像」列表同款图标。
+ * [decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
 @Composable
 private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
+    val containerRoot = node.root as? FileTreeRoot.Container
+    if (containerRoot != null) {
+        val tint = decorationColor ?: MaterialTheme.colorScheme.primary
+        val logo = containerOsLogo(containerRoot.osId)
+        if (logo != null) {
+            Icon(
+                painter = logo,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        } else {
+            Icon(
+                imageVector = if (containerRoot.remote) FeatherIcons.Server else FeatherIcons.HardDrive,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        }
+        return
+    }
     val vector = if (node.entry.isDirectory) {
         FeatherIcons.Folder
     } else {
@@ -1352,8 +1376,8 @@ private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
 /** .gitignore 命中条目的弱化色（橙，类 VSCode）。 */
 private val FileTreeIgnoredColor = Color(0xFFCC8844)
 
-/** 文件树根节点显示名，对应容器路径 `~/workspace`。 */
-private const val WORKSPACE_LABEL = "workspace"
+/** 文件树一行的显示名：根节点用根标签（工作区根 `workspace` / 当前容器名），其余用条目名。 */
+private val FileTreeNode.displayName: String get() = root?.label ?: entry.name
 
 /** 文件树一行除缩进与文本外的固定宽度开销（start 8 + 箭头 16 + 4 + 图标 20 + 8 + end 12），供预算整树统一行宽。 */
 private val FILE_TREE_ROW_OVERHEAD = 68.dp

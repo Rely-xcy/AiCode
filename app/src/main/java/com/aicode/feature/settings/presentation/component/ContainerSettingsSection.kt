@@ -63,11 +63,9 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Radius
+import com.aicode.core.ui.containerOsLogo
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -322,16 +321,6 @@ private fun deleteHint(context: Context, profile: ContainerProfile): String = wh
     else -> context.getString(R.string.container_rootfs_will_be_cleared)
 }
 
-/** 系统 logo 映射：已识别的系统返回对应单色图标，未知/未识别返回 null（调用方回退通用图标）。 */
-@Composable
-private fun osLogo(osId: String?): Painter? = when (osId) {
-    "alpine" -> painterResource(R.drawable.logo_alpine)
-    "centos" -> painterResource(R.drawable.logo_centos)
-    "ubuntu" -> painterResource(R.drawable.logo_ubuntu)
-    "debian" -> painterResource(R.drawable.logo_debian)
-    else -> null
-}
-
 /**
  * 单个容器行：分组内白底行，左侧图标方块 + 名称（内置带徽章）/副标题，右侧选中勾选 + 编辑/重置按钮，左滑删除。
  * 行主体点击切换镜像（未选中时弹确认）。
@@ -370,7 +359,7 @@ private fun ContainerRow(
                         shape = RoundedCornerShape(8.dp)
                     )
             ) {
-                val osIcon = osLogo(osId)
+                val osIcon = containerOsLogo(osId)
                 if (osIcon != null) {
                     Icon(
                         painter = osIcon,
