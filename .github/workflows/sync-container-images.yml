@@ -75,5 +75,14 @@ jobs:
           mkdir -p data
           cp "$RUNNER_TEMP/container-images.json" data/container-images.json
           git add -f data/container-images.json
+
+          # 让 Vercel 在这条孤立分支上也能读到 docs-site/vercel.json（其中 git.deploymentEnabled=false）。
+          # Vercel 的 Root Directory 是 docs-site，配置只从**被推送的那条分支**上读；isolated 的 data 分支
+          # 原本没有任何 vercel.json，于是退回默认「启用自动部署」，每次定时同步就产生一次秒失败的
+          # Preview 部署与失败通知（见 vercel/vercel#11176：vercel.json 必须存在于该分支才生效）。
+          if [ -f docs-site/vercel.json ]; then
+            git add -f docs-site/vercel.json
+          fi
+
           git commit -q -m "chore(data): 同步容器镜像目录"
           git push -f origin HEAD:data
