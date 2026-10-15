@@ -120,6 +120,13 @@ class ShizukuManager @Inject constructor(
         const val SHIZUKU_PROVIDER_SUFFIX = ".shizuku"
         const val STELLAR_PROVIDER_SUFFIX = ".stellar"
 
+        /**
+         * Shizuku 客户端库依赖的权限名（见 provider aar 的 `<uses-permission>`）。
+         * 实现方（官方或第三方分叉）必须定义该权限，客户端才能取得授权，故可据此反查实现包，
+         * 不受实现包名与 authority 命名约定的影响。
+         */
+        const val SHIZUKU_PERMISSION = "moe.shizuku.manager.permission.API_V23"
+
         /** adb shell 身份对应的 Linux uid。 */
         const val UID_SHELL = 2000
 
@@ -239,10 +246,16 @@ class ShizukuManager @Inject constructor(
      * 不以管理器包名判「装没装」：官方契约里 binder 由服务端推来（客户端 provider 只收不拉），
      * 与管理器叫什么包名无关，而 Sui 与 Stellar 也都不使用官方包名。
      * 任一 binder 调用抛异常（服务恰好在探测途中断开）都按未运行处理，状态机不崩。
+     *
+     * binder 不通时再区分「装了没跑」与「没装」：这份区分只用于提示文案，不参与可用性判定。
      */
     private fun computeState(): ShizukuState = runCatching {
         when {
-            !Shizuku.pingBinder() -> ShizukuState.NOT_RUNNING
+            !Shizuku.pingBinder() -> if (isShizukuInstalled()) {
+                ShizukuState.NOT_RUNNING
+            } else {
+                ShizukuState.NOT_INSTALLED
+            }
             // pre-v11 无 UserService，等同不可用。
             Shizuku.isPreV11() -> ShizukuState.NOT_RUNNING
             // READY 只由服务端按 uid 校验的授权结果决定，本地判断不参与。
@@ -272,6 +285,26 @@ class ShizukuManager @Inject constructor(
             .getOrNull()
     }
 
+    /**
+     * 是否已安装任一 Shizuku 实现。先查官方包名（快路径），未命中再按权限定义反查，
+     * 以覆盖改了包名的第三方分叉。
+     */
+    private fun isShizukuInstalled(): Boolean = findShizukuPackage() != null
+
+    @Suppress("DEPRECATION")
+    private fun findShizukuPackage(): String? {
+        runCatching { context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0) }
+            .onSuccess { return SHIZUKU_PACKAGE }
+        return runCatching {
+            context.packageManager.getInstalledPackages(PackageManager.GET_PERMISSIONS)
+                .firstOrNull { pkg ->
+                    pkg.permissions?.any { it.name == SHIZUKU_PERMISSION } == true
+                }
+                ?.packageName
+        }.getOrNull()
+    }
+    }
+
     /** 申请 Shizuku 授权。需在主线程调用（Shizuku 内部要求）。 */
     fun requestPermission() {
         if (computeState() != ShizukuState.PERMISSION_DENIED) return
@@ -279,9 +312,15 @@ class ShizukuManager @Inject constructor(
             .onFailure { FileLogger.w(TAG, "申请 Shizuku 授权失败: ${it.message}") }
     }
 
-    /** 打开管理器应用；一个都找不到时跳转官方下载页。 */
+    /**
+     * 打开管理器应用；一个都找不到时跳转官方下载页。
+     *
+     * 已知包名与 authority 约定都没命中时，再退回「按客户端依赖的权限名反查」——
+     * 改了包名又没用约定 authority 的分叉只能靠这一步找出来。
+     */
     fun openShizukuApp() {
         val launch = findManagerLaunchIntent()
+            ?: findShizukuPackage()?.let { launchIntentFor(it) }
         runCatching {
             if (launch != null) {
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
