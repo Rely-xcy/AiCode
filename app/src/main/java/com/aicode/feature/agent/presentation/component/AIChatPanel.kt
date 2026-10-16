@@ -801,6 +801,7 @@ fun AIChatPanel(
     val projectRoot = currentWorkspace?.path ?: ""
     val currentMode by viewModel.currentSessionMode.collectAsStateWithLifecycle()
     val slashCommands by viewModel.slashCommands.collectAsStateWithLifecycle()
+    val fileMentionState by viewModel.fileMentionState.collectAsStateWithLifecycle()
 
     val inputText by viewModel.inputDraft.collectAsStateWithLifecycle()
     // 输入 "/" 打开命令菜单时重扫技能，反映磁盘上技能的增删改。
@@ -2011,6 +2012,10 @@ fun AIChatPanel(
                 },
                 onTakePhoto = ::takePhoto,
                 slashCommands = slashCommands,
+                fileMentionState = fileMentionState,
+                onFileMentionOpen = viewModel::requestFileMention,
+                onFileMentionDismiss = viewModel::dismissFileMention,
+                matchFileMentions = viewModel::matchFileMentions,
                 queuedRequests = queuedRequests,
                 onRemoveQueued = { viewModel.removeQueuedRequest(it) },
                 onMoveQueued = { from, to -> viewModel.moveQueuedRequest(from, to) },
