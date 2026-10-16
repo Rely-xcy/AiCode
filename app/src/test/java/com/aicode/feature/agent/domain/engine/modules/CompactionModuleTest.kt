@@ -300,7 +300,7 @@ class CompactionModuleTest {
      * 阶段 4：合并失败不影响主折叠——合并返回 null 后，折叠照常触发并成功。
      */
     @Test
-    fun `链合并失败不影响主折叠`() = runBlocking {
+    fun `链合并失败不影响主折叠`(): Unit = runBlocking {
         val dao = mockk<AgentMessageDao>(relaxed = true)
         val rows = buildList {
             repeat(13) { i ->
