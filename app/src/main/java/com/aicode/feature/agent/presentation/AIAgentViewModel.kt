@@ -266,6 +266,12 @@ class AIAgentViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 输入框 `@` 文件引用菜单状态。 */
+    private val _fileMentionState = MutableStateFlow<FileMentionState>(FileMentionState.Idle)
+    val fileMentionState: StateFlow<FileMentionState> = _fileMentionState.asStateFlow()
+
+    private var fileMentionJob: Job? = null
+
     fun updateInputDraft(text: String) {
         val id = _currentSessionId.value ?: return
         val editor = draftPrefs.edit()
@@ -2430,12 +2436,6 @@ class AIAgentViewModel @Inject constructor(
     fun refreshSlashCommands() {
         viewModelScope.launch { slashCommandRegistry.refresh() }
     }
-
-    /** 输入框 `@` 文件引用菜单状态。 */
-    private val _fileMentionState = MutableStateFlow<FileMentionState>(FileMentionState.Idle)
-    val fileMentionState: StateFlow<FileMentionState> = _fileMentionState.asStateFlow()
-
-    private var fileMentionJob: Job? = null
 
     /**
      * 打开 `@` 菜单：当前无清单时拉取一次；一次 `@` 会话内（[dismissFileMention] 前）不重复拉取。
