@@ -6,7 +6,7 @@ import com.aicode.feature.agent.domain.container.RootfsSource
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -140,7 +140,7 @@ class ContainerSettingsRepositoryTest {
     // ── 真实 DataStore：写路径不清其它条目 ───────────────────────────────────
 
     @Test
-    fun upsertCustomProfile_keepsOtherProfiles() = runTest {
+    fun upsertCustomProfile_keepsOtherProfiles() = runBlocking {
         val repo = createRepository()
         repo.upsertCustomProfile(profile("it-upsert-a"))
         repo.upsertCustomProfile(profile("it-upsert-b"))
@@ -150,7 +150,7 @@ class ContainerSettingsRepositoryTest {
     }
 
     @Test
-    fun deleteCustomProfile_removesOnlyTarget() = runTest {
+    fun deleteCustomProfile_removesOnlyTarget() = runBlocking {
         val repo = createRepository()
         repo.upsertCustomProfile(profile("it-del-a"))
         repo.upsertCustomProfile(profile("it-del-b"))
@@ -161,7 +161,7 @@ class ContainerSettingsRepositoryTest {
     }
 
     @Test
-    fun ensureBuiltinDefault_prependsBuiltin_withoutDroppingExisting() = runTest {
+    fun ensureBuiltinDefault_prependsBuiltin_withoutDroppingExisting() = runBlocking {
         val repo = createRepository()
         repo.upsertCustomProfile(profile("it-ens-a"))
         repo.ensureBuiltinDefault()
