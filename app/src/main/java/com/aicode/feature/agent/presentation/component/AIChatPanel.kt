@@ -365,10 +365,12 @@ internal fun buildChatItems(
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
-        // 默认收起（含运行中的那一轮）：整轮过程（全部工具输出 + 思考）默认展开时高度巨大且
-        // 随流式逐帧增长，是「滑动时被拉回底部 / 跳顶」的位移来源；运行中改由折叠行显示
-        // 「执行中 · N 步」，想逐条看过程手动点开（展开态仍被持久化）。
-        val expanded = turnOverrides[turn.key] ?: false
+        // 运行中的那一轮默认展开（过程实时演示可见）；已完成轮默认收起只留最终回答。
+        // 注意不能在运行中就改成收起：展开态一旦从「几十个过程项」缩成一个折叠头，
+        // LazyColumn 的 item 数骤减、锚定位置失真，视口会直接跳到上面去（反向 bug）。
+        // 「滑动时跳顶」的真正原因是贴底校准抢滚动（内层手势未停跟随 + 尾窗盲跑），
+        // 已在 nestedScroll.onPostScroll 与校准尾窗处修掉，与本行无关。
+        val expanded = turnOverrides[turn.key] ?: running
         // 轮内按消息顺序产出：连续的过程项聚成一段轮头，遇到常显项或结果消息就在该处切断。
         // 常显项与结果正文因此在时间线原位独立成 item，不再被推到该轮最末（旧实现把它们固定排在轮末，
         // 晚于通知的助手消息又被折进轮头，结果常显项总沉在列表底部）。同一段内连续工具仍分组。
