@@ -158,7 +158,7 @@ class AIAgentViewModelBrowseRefreshTest {
         todoItemDao = mockk(relaxed = true),
         fileAccess = fileAccess,
         fileChangeHub = mockk(relaxed = true),
-        workspaceWriteSignal = mockk(relaxed = true),
+        workspaceWriteSignal = mockk(relaxed = true) { every { writes } returns MutableSharedFlow() },
         contextUsageHolder = mockk(relaxed = true),
         context = mockk(relaxed = true)
     )
