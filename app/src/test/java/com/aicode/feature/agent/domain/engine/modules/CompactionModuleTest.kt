@@ -23,9 +23,9 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -119,7 +119,7 @@ class CompactionModuleTest {
     )
 
     @Test
-    fun `硬折叠失败后仍跑兜底，且不再重复尝试折叠`() = runTest {
+    fun `硬折叠失败后仍跑兜底，且不再重复尝试折叠`() = runBlocking {
         val h = harness()
         val messages = oversizedHistory()
         val events = mutableListOf<AgentEvent>()
@@ -161,7 +161,7 @@ class CompactionModuleTest {
      * 软精简已移除，请求链路不再做任何历史改写（参数瘦身由 ArgumentProjectionModule 负责）。
      */
     @Test
-    fun `软线以上硬线以下不触发任何改写，消息原样返回`() = runTest {
+    fun `软线以上硬线以下不触发任何改写，消息原样返回`() = runBlocking {
         val compactor = mockk<ContextCompactor>(relaxed = true)
         every { compactor.enforceWindowLimit(any(), any()) } answers { firstArg() }
         val h = harness(compactor = compactor)
@@ -203,7 +203,7 @@ class CompactionModuleTest {
      * 这里显式传入生产默认值（Dispatchers.Default），测的就是实际生效的那个调度器。
      */
     @Test
-    fun `压缩体跑到调用者线程之外且事件回到调用者线程`() = runTest {
+    fun `压缩体跑到调用者线程之外且事件回到调用者线程`() = runBlocking {
         val callerThread = Thread.currentThread().name
         val eventThreads = mutableListOf<String>()
         val h = harness(workDispatcher = Dispatchers.Default)
@@ -228,7 +228,7 @@ class CompactionModuleTest {
      * 硬折叠判定之前先合并：合并后回到硬线以下就不再折叠（省一次摘要调用）。
      */
     @Test
-    fun `链超限时硬折叠前先合并且合并后不折叠`() = runTest {
+    fun `链超限时硬折叠前先合并且合并后不折叠`() = runBlocking {
         // 真 Compactor：链状态从库行计；DAO 返回 13 个未淘汰块 + tail。
         val dao = mockk<AgentMessageDao>(relaxed = true)
         val rows = buildList {
@@ -300,7 +300,7 @@ class CompactionModuleTest {
      * 阶段 4：合并失败不影响主折叠——合并返回 null 后，折叠照常触发并成功。
      */
     @Test
-    fun `链合并失败不影响主折叠`() = runTest {
+    fun `链合并失败不影响主折叠`() = runBlocking {
         val dao = mockk<AgentMessageDao>(relaxed = true)
         val rows = buildList {
             repeat(13) { i ->

@@ -1,7 +1,6 @@
 package com.aicode.feature.agent.domain.tool.root
 
 import com.aicode.feature.agent.domain.vscreen.RootShell
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -37,7 +36,7 @@ class RootToolTest {
     }
 
     @Test
-    fun `缺少 command 时直接报参数错误`() = runTest {
+    fun `缺少 command 时直接报参数错误`() = runBlocking {
         val result = tool.execute(emptyMap())
         assertTrue(result is com.aicode.feature.agent.domain.tool.ToolResult.Error)
     }

@@ -7,7 +7,6 @@ import dagger.Lazy
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -67,14 +66,14 @@ class SubAgentModuleTest {
     }
 
     @Test
-    fun onSessionDeleted_releasesWriteLease() = runTest {
+    fun onSessionDeleted_releasesWriteLease() = runBlocking {
         val leases = mockk<WriteLeaseRegistry>(relaxed = true)
         module(leases = leases).onSessionDeleted(EngineContext(sessionId = "sub-1"))
         verify { leases.release("sub-1") }
     }
 
     @Test
-    fun onSessionDeleted_withoutSessionIdDoesNothing() = runTest {
+    fun onSessionDeleted_withoutSessionIdDoesNothing() = runBlocking {
         val leases = mockk<WriteLeaseRegistry>(relaxed = true)
         module(leases = leases).onSessionDeleted(EngineContext(sessionId = null))
         verify(exactly = 0) { leases.release(any()) }

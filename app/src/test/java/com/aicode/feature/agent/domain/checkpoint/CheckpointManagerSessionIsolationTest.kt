@@ -9,7 +9,6 @@ import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
 import com.aicode.feature.workspace.domain.sha256Fingerprint
-import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,7 +48,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOtherSession_doesNotRevertModifiedFile() = runTest {
+    fun restoringOtherSession_doesNotRevertModifiedFile() = runBlocking {
         val path = File(workspace, "a.txt").apply { writeText("original") }.absolutePath
 
         manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -66,7 +65,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOtherSession_doesNotDeleteCreatedFile() = runTest {
+    fun restoringOtherSession_doesNotDeleteCreatedFile() = runBlocking {
         val path = File(workspace, "new.txt").absolutePath
 
         manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -82,7 +81,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOwnSession_revertsAndDeletes() = runTest {
+    fun restoringOwnSession_revertsAndDeletes() = runBlocking {
         val modified = File(workspace, "m.txt").apply { writeText("original") }.absolutePath
         val created = File(workspace, "c.txt").absolutePath
 
@@ -102,7 +101,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreSkipsFileChangedAfterSnapshot() = runTest {
+    fun restoreSkipsFileChangedAfterSnapshot() = runBlocking {
         // 核心场景：本会话「见过」某版本之后，文件又被别的会话改过；此时回滚不能覆盖对方。
         // 守卫依据的是「本会话最后看到的版本」，所以这里要先让本会话登记一个版本
         // （真实流程里由 readFile / 上一次写入完成登记）。
@@ -127,7 +126,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreRevertsOwnChangesEvenWhenTheyDiffer() = runTest {
+    fun restoreRevertsOwnChangesEvenWhenTheyDiffer() = runBlocking {
         // 反向保证：本会话自己改过、且这是本会话见过的版本 → 必须照常回滚（这正是回滚的用途）。
         val path = File(workspace, "mine.txt").apply { writeText("v1") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -152,7 +151,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreRecreatesFileDeletedAfterSnapshot() = runTest {
+    fun restoreRecreatesFileDeletedAfterSnapshot() = runBlocking {
         // MODIFY 快照 + 文件在快照后被删除 → 恢复到快照内容。
         // 这是"本会话自己改/删、用户要撤销"的常规场景，必须能回滚回去。
         val path = File(workspace, "vanished.txt").apply { writeText("v1") }.absolutePath
@@ -169,7 +168,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreIsIdempotent() = runTest {
+    fun restoreIsIdempotent() = runBlocking {
         // 连续回滚两次结果一致：第一次已把文件写回快照内容，第二次不应再改出别的东西。
         val path = File(workspace, "same.txt").apply { writeText("v1") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -186,7 +185,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreDeletesCreatedFileEvenIfLaterModified() = runTest {
+    fun restoreDeletesCreatedFileEvenIfLaterModified() = runBlocking {
         // 已知局限的显式记录：CREATE 快照拍摄时文件还不存在，因此没记下内容指纹，
         // 无法判断快照之后是否有人往里写过东西——当前实现一律删除。
         // 这个用例把现状钉住：将来若补上「首次写入后记指纹」，本用例应当改成断言 skipped。
@@ -204,7 +203,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun snapshotsAreScopedToOwningSession() = runTest {
+    fun snapshotsAreScopedToOwningSession() = runBlocking {
         val pathA = File(workspace, "a.txt").apply { writeText("a") }.absolutePath
         val pathB = File(workspace, "b.txt").apply { writeText("b") }.absolutePath
 
@@ -219,7 +218,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun clearingSessionDropsItsActiveCheckpoint() = runTest {
+    fun clearingSessionDropsItsActiveCheckpoint() = runBlocking {
         val path = File(workspace, "a.txt").apply { writeText("original") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
 

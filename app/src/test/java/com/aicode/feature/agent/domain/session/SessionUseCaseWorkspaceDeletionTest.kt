@@ -8,10 +8,10 @@ import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -35,7 +35,7 @@ class SessionUseCaseWorkspaceDeletionTest {
     )
 
     @Test
-    fun deleteSessionsByWorkspace_deletesMessagesThenSessions() = runTest {
+    fun deleteSessionsByWorkspace_deletesMessagesThenSessions() = runBlocking {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/a") } returns listOf(
@@ -53,7 +53,7 @@ class SessionUseCaseWorkspaceDeletionTest {
     }
 
     @Test
-    fun deleteSessionsByWorkspace_noSessions_skipsDeletion() = runTest {
+    fun deleteSessionsByWorkspace_noSessions_skipsDeletion() = runBlocking {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/empty") } returns emptyList()

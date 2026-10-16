@@ -15,7 +15,6 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -195,7 +194,7 @@ class ContextCompactorWindowLimitTest {
     }
 
     @Test
-    fun `摘要请求的输入是 head 加一条指令且不带工具`() = runTest {
+    fun `摘要请求的输入是 head 加一条指令且不带工具`() = runBlocking {
         val template = "你是一个上下文压缩引擎。{{INSTRUCTION}}"
         every { prompts.resolvePrompt(any()) } returns template
         every { provider.providerId } returns "provider"

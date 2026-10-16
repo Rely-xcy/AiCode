@@ -18,8 +18,8 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.ResponseBody
@@ -82,7 +82,7 @@ class OpenAIAdapterTest {
     // ── Chat Completions 非流式：请求构造 ──────────────────────────────
 
     @Test
-    fun complete_buildsRequestWithSystemPromptToolsAndDefaults() = runTest {
+    fun complete_buildsRequestWithSystemPromptToolsAndDefaults() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -120,7 +120,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_systemRole_usesDeveloperForReasoningModels() = runTest {
+    fun complete_systemRole_usesDeveloperForReasoningModels() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -139,7 +139,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_reasoningEffort_normalizesNoneAndMax() = runTest {
+    fun complete_reasoningEffort_normalizesNoneAndMax() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -158,7 +158,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_temperature_passedThroughWhenSet() = runTest {
+    fun complete_temperature_passedThroughWhenSet() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -168,7 +168,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_chatCacheKey_sentWhenEnabled() = runTest {
+    fun complete_chatCacheKey_sentWhenEnabled() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -187,7 +187,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_useFullUrl_usesBaseUrlDirectly() = runTest {
+    fun complete_useFullUrl_usesBaseUrlDirectly() = runBlocking {
         val api = api()
         val urlSlot = slot<String>()
         coEvery { api.createChatCompletion(capture(urlSlot), any(), any(), any()) } returns response()
@@ -202,7 +202,7 @@ class OpenAIAdapterTest {
     // ── Chat Completions：响应映射 ─────────────────────────────────────
 
     @Test
-    fun complete_mapsToolCallsAndReasoning() = runTest {
+    fun complete_mapsToolCallsAndReasoning() = runBlocking {
         val api = api()
         coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
             content = null,
@@ -222,7 +222,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_invalidToolArguments_fallsBackToEmptyObject() = runTest {
+    fun complete_invalidToolArguments_fallsBackToEmptyObject() = runBlocking {
         val api = api()
         coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
             content = null,
@@ -236,7 +236,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_listContent_extractsTextAndOmitsInlineBase64() = runTest {
+    fun complete_listContent_extractsTextAndOmitsInlineBase64() = runBlocking {
         val api = api()
         coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
             content = listOf(
@@ -253,7 +253,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_mapsImagesFromMessage() = runTest {
+    fun complete_mapsImagesFromMessage() = runBlocking {
         val api = api()
         coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
             content = null,
@@ -275,7 +275,7 @@ class OpenAIAdapterTest {
     // ── Chat Completions：历史消息清洗 ─────────────────────────────────
 
     @Test
-    fun complete_replaysAssistantToolCallsWithReasoning() = runTest {
+    fun complete_replaysAssistantToolCallsWithReasoning() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -303,7 +303,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_orphanToolMessage_dropped() = runTest {
+    fun complete_orphanToolMessage_dropped() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -321,7 +321,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_unresolvedToolCall_droppedWithItsResponse() = runTest {
+    fun complete_unresolvedToolCall_droppedWithItsResponse() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -347,7 +347,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_outOfOrderToolResult_reattachedToCaller() = runTest {
+    fun complete_outOfOrderToolResult_reattachedToCaller() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -372,7 +372,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_modeReminder_goesIntoRequestBodyOnly() = runTest {
+    fun complete_modeReminder_goesIntoRequestBodyOnly() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -392,7 +392,7 @@ class OpenAIAdapterTest {
     // ── Responses API ─────────────────────────────────────────────────
 
     @Test
-    fun responsesComplete_buildsInputAndMapsOutput() = runTest {
+    fun responsesComplete_buildsInputAndMapsOutput() = runBlocking {
         val api = api()
         val reqSlot = slot<Map<String, Any?>>()
         coEvery { api.createResponses(any(), any(), any(), capture(reqSlot)) } returns com.google.gson.JsonObject().apply {
@@ -446,7 +446,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun responsesComplete_truncated_mapsToLength() = runTest {
+    fun responsesComplete_truncated_mapsToLength() = runBlocking {
         val api = api()
         coEvery { api.createResponses(any(), any(), any(), any()) } returns com.google.gson.JsonObject().apply {
             addProperty("status", "incomplete")
@@ -476,7 +476,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun streamChat_collectsTextAndFinal() = runTest {
+    fun streamChat_collectsTextAndFinal() = runBlocking {
         val api = api()
         every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"content\":\"你\"},\"finish_reason\":null}]}",
@@ -499,7 +499,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun streamChat_assemblesStreamedToolCallFragments() = runTest {
+    fun streamChat_assemblesStreamedToolCallFragments() = runBlocking {
         val api = api()
         every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"readFile\",\"arguments\":\"{\\\"pat\"}}]},\"finish_reason\":null}]}",
@@ -521,7 +521,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun streamChat_accumulatesImagesFromDelta() = runTest {
+    fun streamChat_accumulatesImagesFromDelta() = runBlocking {
         val api = api()
         every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"images\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgo=\"},\"index\":0}],\"role\":\"assistant\"},\"finish_reason\":null}]}",
@@ -537,7 +537,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun streamChat_budgetExceeded_abortsWithoutFinal() = runTest {
+    fun streamChat_budgetExceeded_abortsWithoutFinal() = runBlocking {
         val api = api()
         val content = "x".repeat(MAX_STREAM_CHARS / 2 + 1)
         every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
@@ -557,7 +557,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun streamChat_midStreamError_doesNotAbortWholeStream() = runTest {
+    fun streamChat_midStreamError_doesNotAbortWholeStream() = runBlocking {
         val api = api()
         every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
             "data: {\"choices\":[{\"delta\":{\"content\":\"前\"},\"finish_reason\":null}]}",

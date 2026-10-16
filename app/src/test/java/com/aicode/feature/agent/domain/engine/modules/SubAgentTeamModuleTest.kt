@@ -12,7 +12,6 @@ import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -99,7 +98,7 @@ class SubAgentTeamModuleTest {
     // ------------------------------------------------------------ 收尾守卫
 
     @Test
-    fun guard_warnsOncePerSessionWhileSubAgentRunning() = runTest {
+    fun guard_warnsOncePerSessionWhileSubAgentRunning() = runBlocking {
         val bus = SubAgentEventBus()
         val dao = mockk<ChatSessionDao>()
         coEvery { dao.getSubSessionsByParentOnce("s1") } returns listOf(subSession("sub-1", "s1", "调研 A"))
@@ -112,7 +111,7 @@ class SubAgentTeamModuleTest {
     }
 
     @Test
-    fun guard_silentWithoutActiveSubAgent() = runTest {
+    fun guard_silentWithoutActiveSubAgent() = runBlocking {
         val dao = mockk<ChatSessionDao>()
         coEvery { dao.getSubSessionsByParentOnce(any()) } returns listOf(subSession("sub-1", "s1"))
         // 活跃集合为空：子代理都已结束
@@ -121,7 +120,7 @@ class SubAgentTeamModuleTest {
     }
 
     @Test
-    fun guard_ignoresOtherSessionsRunningSubAgents() = runTest {
+    fun guard_ignoresOtherSessionsRunningSubAgents() = runBlocking {
         val bus = SubAgentEventBus()
         val dao = mockk<ChatSessionDao>()
         // 本会话没有子会话；活跃的是另一个会话的子代理
@@ -133,7 +132,7 @@ class SubAgentTeamModuleTest {
     }
 
     @Test
-    fun guard_silentForSubAgentSession() = runTest {
+    fun guard_silentForSubAgentSession() = runBlocking {
         val bus = SubAgentEventBus()
         bus.emit(SubAgentEvent("sub-1", "s1", SubAgentEventType.SPAWNED))
         val module = module(bus = bus)
@@ -141,7 +140,7 @@ class SubAgentTeamModuleTest {
     }
 
     @Test
-    fun onSessionDeleted_clearsReminderLatch() = runTest {
+    fun onSessionDeleted_clearsReminderLatch() = runBlocking {
         val bus = SubAgentEventBus()
         val dao = mockk<ChatSessionDao>()
         coEvery { dao.getSubSessionsByParentOnce("s1") } returns listOf(subSession("sub-1", "s1"))

@@ -2,7 +2,6 @@ package com.aicode.feature.agent.domain.container
 
 import android.content.ContextWrapper
 import com.aicode.feature.settings.data.repository.ExecutionMode
-import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,7 +32,7 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun resetRootfs_内置容器_返回时目录已彻底删除() = runTest {
+    fun resetRootfs_内置容器_返回时目录已彻底删除() = runBlocking {
         val rootfs = fakeRootfs(File(filesDir, "rootfs"), ".installed")
 
         installer.resetRootfs(ContainerProfile.BUILTIN_ALPINE)
@@ -43,7 +42,7 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun resetRootfs_回报已删条目数() = runTest {
+    fun resetRootfs_回报已删条目数() = runBlocking {
         fakeRootfs(File(filesDir, "rootfs"), ".installed")
         val reported = mutableListOf<Int>()
 
@@ -54,7 +53,7 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun resetRootfs_自定义容器_只删自己的目录并清系统缓存() = runTest {
+    fun resetRootfs_自定义容器_只删自己的目录并清系统缓存() = runBlocking {
         val custom = localProfile("custom-1")
         val customRootfs = fakeRootfs(File(filesDir, "rootfs_custom-1"), ".installed_custom")
         val builtinRootfs = fakeRootfs(File(filesDir, "rootfs"), ".installed")
@@ -68,7 +67,7 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun resetRootfs_远程SSH容器_不碰同名本地目录() = runTest {
+    fun resetRootfs_远程SSH容器_不碰同名本地目录() = runBlocking {
         val remote = ContainerProfile(
             id = "custom-2",
             name = "远程",
@@ -85,14 +84,14 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun resetRootfs_目录不存在时静默返回() = runTest {
+    fun resetRootfs_目录不存在时静默返回() = runBlocking {
         installer.resetRootfs(localProfile("custom-3"))
 
         assertFalse(File(filesDir, "rootfs_custom-3").exists())
     }
 
     @Test
-    fun resetRootfs_不跟随符号链接删到链接目标() = runTest {
+    fun resetRootfs_不跟随符号链接删到链接目标() = runBlocking {
         val outside = File(root, "outside").apply { mkdirs() }
         val keep = File(outside, "important.txt").apply { writeText("keep me") }
         val rootfs = fakeRootfs(File(filesDir, "rootfs"), ".installed")
@@ -106,7 +105,7 @@ class ContainerInstallerResetTest {
     }
 
     @Test
-    fun prootTmpDirFor_按容器隔离_重置内置不影响自定义容器的临时目录() = runTest {
+    fun prootTmpDirFor_按容器隔离_重置内置不影响自定义容器的临时目录() = runBlocking {
         val custom = localProfile("custom-4")
         fakeRootfs(File(filesDir, "rootfs_custom-4"), ".installed_custom")
         File(filesDir, "rootfs_custom-4/tmp").mkdirs()

@@ -17,7 +17,6 @@ import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import io.mockk.coEvery
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -55,7 +54,7 @@ class SubAgentTeamToolTest {
     // ------------------------------------------------------------ status
 
     @Test
-    fun status_reportsStatePhaseAndTokens() = runTest {
+    fun status_reportsStatePhaseAndTokens() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(
             sub("sub-1", "调研 A", input = 100, output = 20),
             sub("sub-2", "实现 B", input = 300, output = 50)
@@ -102,7 +101,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun status_runningWithoutPendingToolIsGenerating() = runTest {
+    fun status_runningWithoutPendingToolIsGenerating() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(sub("sub-1", "调研 A"))
         coEvery { messageDao.getMessagesBySessionOnce("sub-1") } returns listOf(userMsg("sub-1", "去调研"))
         bus.emit(SubAgentEvent("sub-1", SESSION, SubAgentEventType.SPAWNED))
@@ -112,7 +111,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun status_finishedWithoutOutput() = runTest {
+    fun status_finishedWithoutOutput() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(sub("sub-1", "调研 A"))
         coEvery { messageDao.getMessagesBySessionOnce("sub-1") } returns listOf(userMsg("sub-1", "去调研"))
 
@@ -124,7 +123,7 @@ class SubAgentTeamToolTest {
     // ------------------------------------------------------------ collect
 
     @Test
-    fun collect_defaultsToCompletedSubAgentsOnly() = runTest {
+    fun collect_defaultsToCompletedSubAgentsOnly() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(
             sub("sub-1", "调研 A"),
             sub("sub-2", "实现 B")
@@ -147,7 +146,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun collect_withIdsTakesExactlyThoseSubAgents() = runTest {
+    fun collect_withIdsTakesExactlyThoseSubAgents() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(
             sub("sub-1", "调研 A"),
             sub("sub-2", "实现 B")
@@ -172,7 +171,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun collect_unknownIdsReturnsError() = runTest {
+    fun collect_unknownIdsReturnsError() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(sub("sub-1", "调研 A"))
 
         val result = tool.executeWithContext(
@@ -184,7 +183,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun collect_withoutOutputFallsBackToRequest() = runTest {
+    fun collect_withoutOutputFallsBackToRequest() = runBlocking {
         coEvery { chatDao.getSubSessionsByParentOnce(SESSION) } returns listOf(sub("sub-1", "调研 A"))
         coEvery { messageDao.getMessagesBySessionOnce("sub-1") } returns listOf(userMsg("sub-1", "去调研"))
 
@@ -197,7 +196,7 @@ class SubAgentTeamToolTest {
     // ------------------------------------------------------------ 参数与声明
 
     @Test
-    fun withoutSessionReturnsError() = runTest {
+    fun withoutSessionReturnsError() = runBlocking {
         val result = tool.executeWithContext(
             args("action" to str("status")),
             context.copy(sessionId = null)
@@ -206,7 +205,7 @@ class SubAgentTeamToolTest {
     }
 
     @Test
-    fun unknownActionReturnsError() = runTest {
+    fun unknownActionReturnsError() = runBlocking {
         val result = tool.executeWithContext(args("action" to str("delete")), context)
         assertEquals("INVALID_ARGS", (result as ToolResult.Error).code)
     }

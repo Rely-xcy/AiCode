@@ -102,5 +102,5 @@ class ArgumentProjectionModuleTest {
         assertEquals(projected.toolCalls[0].arguments.size, message.toolCalls[0].arguments.size)
     }
 
-    private fun runBlockingTest(block: suspend () -> Unit) = kotlinx.coroutines.test.runTest { block() }
+    private fun runBlockingTest(block: suspend () -> Unit) = kotlinx.coroutines.runBlocking { block() }
 }

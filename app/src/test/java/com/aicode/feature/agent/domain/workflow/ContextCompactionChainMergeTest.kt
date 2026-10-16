@@ -14,7 +14,6 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -84,7 +83,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `summaryChainStatus 只数未淘汰的新语义块并给出最大边界`() = runTest {
+    fun `summaryChainStatus 只数未淘汰的新语义块并给出最大边界`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns
             chainRows(3) + listOf(
                 // 已淘汰块：不计入
@@ -111,7 +110,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `合并后块数减合并批加一 且被合并块标 isCompacted`() = runTest {
+    fun `合并后块数减合并批加一 且被合并块标 isCompacted`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(4)
         stubMerge("合并后的摘要")
         coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
@@ -142,7 +141,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `摘要响应不可用时不落库也不标行`() = runTest {
+    fun `摘要响应不可用时不落库也不标行`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         stubMerge("")
         coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
@@ -161,7 +160,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `合并不省空间时放弃且不标行`() = runTest {
+    fun `合并不省空间时放弃且不标行`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         // 合并「摘要」比原摘要还长（把每份都复述一遍）→ 不省空间 → 不提交
         stubMerge("合并后的摘要（归档路径 /root/.aicode/compacted-history/arch-0.md）".repeat(6))
@@ -179,7 +178,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `标记旧块失败时回滚新块`() = runTest {
+    fun `标记旧块失败时回滚新块`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         stubMerge("合并后的摘要")
         coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 0 // 未命中 → 回滚
@@ -196,7 +195,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `合并成功后视图不再包含被合并块且回放边界取剩余块最大边界`() = runTest {
+    fun `合并成功后视图不再包含被合并块且回放边界取剩余块最大边界`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(4)
         stubMerge("合并后的摘要")
         coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
@@ -218,7 +217,7 @@ class ContextCompactionChainMergeTest {
     }
 
     @Test
-    fun `块数不足时无法合并`() = runTest {
+    fun `块数不足时无法合并`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(1)
         stubMerge("合并后的摘要")
 

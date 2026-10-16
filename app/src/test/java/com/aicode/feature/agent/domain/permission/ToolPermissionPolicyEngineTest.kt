@@ -11,7 +11,6 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -67,7 +66,7 @@ class ToolPermissionPolicyEngineTest {
     // ── PLAN 模式：写/执行类工具一律拒绝 ─────────────────────────────
 
     @Test
-    fun planMode_deniesWorkspaceWriteTool() = runTest {
+    fun planMode_deniesWorkspaceWriteTool() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -75,28 +74,28 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun planMode_deniesBash() = runTest {
+    fun planMode_deniesBash() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
     @Test
-    fun planMode_deniesTerminalStart() = runTest {
+    fun planMode_deniesTerminalStart() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "terminal", terminal("start"), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
     @Test
-    fun planMode_allowsReadOnlyExplorerTool() = runTest {
+    fun planMode_allowsReadOnlyExplorerTool() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.READ_WORKSPACE), "list", emptyMap(), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
     }
 
     @Test
-    fun planMode_allowsTerminalRead() = runTest {
+    fun planMode_allowsTerminalRead() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.READ_WORKSPACE), "terminal", terminal("read"), AgentMode.PLAN)
         // 无任何规则时按整工具 ASK（可记忆），而非 DENY
@@ -106,21 +105,21 @@ class ToolPermissionPolicyEngineTest {
     // ── AUTO 模式：放行但保留灾难性 rm 防护 ──────────────────────────
 
     @Test
-    fun autoMode_allowsAnyTool() = runTest {
+    fun autoMode_allowsAnyTool() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun autoMode_allowsBash() = runTest {
+    fun autoMode_allowsBash() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun autoMode_stillBlocksCatastrophicRm() = runTest {
+    fun autoMode_stillBlocksCatastrophicRm() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -128,21 +127,21 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun autoMode_stillBlocksWorkspaceRm() = runTest {
+    fun autoMode_stillBlocksWorkspaceRm() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf ~/workspace/*"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
     @Test
-    fun autoMode_disabledSafety_allowsCatastrophicRm() = runTest {
+    fun autoMode_disabledSafety_allowsCatastrophicRm() = runBlocking {
         val e = engine(safetyDisabled = true)
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun disabledSafety_buildMode_stillBlocksCatastrophicRm() = runTest {
+    fun disabledSafety_buildMode_stillBlocksCatastrophicRm() = runBlocking {
         val e = engine(safetyDisabled = true)
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -151,7 +150,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 只读 Agent 配置自动放行 ─────────────────────────────────────
 
     @Test
-    fun readAgentConfig_capabilityAutoAllow() = runTest {
+    fun readAgentConfig_capabilityAutoAllow() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.READ_AGENT_CONFIG), "customTool", emptyMap(), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
@@ -160,14 +159,14 @@ class ToolPermissionPolicyEngineTest {
     // ── task 只读动作放行，whole DENY 仍生效 ─────────────────────────
 
     @Test
-    fun taskReadAction_allowsWithoutRules() = runTest {
+    fun taskReadAction_allowsWithoutRules() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXTERNAL_TOOL), "task", terminal("read"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun taskReadAction_deniedWhenWholeRuleDenies() = runTest {
+    fun taskReadAction_deniedWhenWholeRuleDenies() = runBlocking {
         val e = engine(
             PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY)
         )
@@ -178,7 +177,7 @@ class ToolPermissionPolicyEngineTest {
     // ── DENY 优先于内置白名单 ───────────────────────────────────────
 
     @Test
-    fun denyRule_overridesSafeWhitelist() = runTest {
+    fun denyRule_overridesSafeWhitelist() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "ls", PermissionDecision.DENY)
         )
@@ -189,7 +188,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 不可静态判定：必弹窗、不可记忆 ───────────────────────────────
 
     @Test
-    fun unanalyzableCommand_asksWithoutRememberable() = runTest {
+    fun unanalyzableCommand_asksWithoutRememberable() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("echo $(whoami)"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -199,14 +198,14 @@ class ToolPermissionPolicyEngineTest {
     // ── 内置安全白名单自动放行 ───────────────────────────────────────
 
     @Test
-    fun safeCommand_autoAllowed() = runTest {
+    fun safeCommand_autoAllowed() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun mixOfSafeAndUnsafe_asks() = runTest {
+    fun mixOfSafeAndUnsafe_asks() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la && rm x"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -215,7 +214,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 已记忆 ALLOW 规则 ───────────────────────────────────────────
 
     @Test
-    fun rememberedPrefix_allows() = runTest {
+    fun rememberedPrefix_allows() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "git pull", PermissionDecision.ALLOW)
         )
@@ -224,7 +223,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun rememberedPrefix_doesNotMatchOtherSubcommand() = runTest {
+    fun rememberedPrefix_doesNotMatchOtherSubcommand() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "git pull", PermissionDecision.ALLOW)
         )
@@ -238,7 +237,7 @@ class ToolPermissionPolicyEngineTest {
     // 但也不能把可证的只读调用一并挡住（否则远程没连上就什么都干不了）。
 
     @Test
-    fun unconfirmedProjectRules_rememberedAllowRule_asksOnce() = runTest {
+    fun unconfirmedProjectRules_rememberedAllowRule_asksOnce() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "git pull", PermissionDecision.ALLOW),
             projectRulesConfirmed = false
@@ -252,7 +251,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_genericWholeAllowRule_asksOnce() = runTest {
+    fun unconfirmedProjectRules_genericWholeAllowRule_asksOnce() = runBlocking {
         val e = engine(
             PermissionRule("writeFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
             projectRulesConfirmed = false
@@ -265,7 +264,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_safeShellCommands_stillAutoAllowed() = runTest {
+    fun unconfirmedProjectRules_safeShellCommands_stillAutoAllowed() = runBlocking {
         val e = engine(projectRulesConfirmed = false)
         // 内置只读白名单是代码内置、不可篡改的，不因项目级规则读不到而弹窗（避免「远程没连上就啥都干不了」）
         assertEquals(
@@ -279,7 +278,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_readOnlyGenericTool_stillAllowed() = runTest {
+    fun unconfirmedProjectRules_readOnlyGenericTool_stillAllowed() = runBlocking {
         val e = engine(
             PermissionRule("readFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
             projectRulesConfirmed = false
@@ -290,7 +289,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_taskReadActions_stillAutoAllowed() = runTest {
+    fun unconfirmedProjectRules_taskReadActions_stillAutoAllowed() = runBlocking {
         val e = engine(projectRulesConfirmed = false)
         // task read/list/send 的 effectiveCapabilities 为空集（见 TaskTool），不算有副作用的调用
         for (action in listOf("read", "list", "send")) {
@@ -303,7 +302,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_globalDenyStillDenies() = runTest {
+    fun unconfirmedProjectRules_globalDenyStillDenies() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "ls", PermissionDecision.DENY),
             projectRulesConfirmed = false
@@ -314,7 +313,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_catastrophicRmStillDenied() = runTest {
+    fun unconfirmedProjectRules_catastrophicRmStillDenied() = runBlocking {
         val e = engine(projectRulesConfirmed = false)
         assertEquals(
             ToolPermissionPolicyEngine.Verdict.DENY,
@@ -323,7 +322,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedProjectRules_taskWholeDenyRule_stillDenies() = runTest {
+    fun unconfirmedProjectRules_taskWholeDenyRule_stillDenies() = runBlocking {
         val e = engine(
             PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY),
             projectRulesConfirmed = false
@@ -337,7 +336,7 @@ class ToolPermissionPolicyEngineTest {
     // 不能凭别层规则放行可能有副作用的调用，而可证的只读调用不许误伤。
 
     @Test
-    fun unconfirmedGlobalRules_rememberedAllowRule_asksOnce() = runTest {
+    fun unconfirmedGlobalRules_rememberedAllowRule_asksOnce() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "git pull", PermissionDecision.ALLOW),
             globalRulesConfirmed = false
@@ -351,7 +350,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun unconfirmedGlobalRules_readOnlyCalls_stillAllowed() = runTest {
+    fun unconfirmedGlobalRules_readOnlyCalls_stillAllowed() = runBlocking {
         val e = engine(
             PermissionRule("readFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
             globalRulesConfirmed = false
@@ -370,7 +369,7 @@ class ToolPermissionPolicyEngineTest {
     // ── rm 精细校验：无目标 / 递归 / 通配的规则不得放行 ───────────────
 
     @Test
-    fun bareRmRule_doesNotAllowRmWithTarget() = runTest {
+    fun bareRmRule_doesNotAllowRmWithTarget() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "rm", PermissionDecision.ALLOW)
         )
@@ -381,7 +380,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun nonRecursiveRmRule_doesNotAllowRecursiveRm() = runTest {
+    fun nonRecursiveRmRule_doesNotAllowRecursiveRm() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "rm file.txt", PermissionDecision.ALLOW)
         )
@@ -392,7 +391,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun recursiveRmRule_allowsRecursiveRm() = runTest {
+    fun recursiveRmRule_allowsRecursiveRm() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "rm -rf /tmp/build", PermissionDecision.ALLOW)
         )
@@ -403,7 +402,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 灾难性 rm 防护在 BUILD 模式同样生效 ─────────────────────────
 
     @Test
-    fun catastrophicRm_deniedEvenWithAllowRule() = runTest {
+    fun catastrophicRm_deniedEvenWithAllowRule() = runBlocking {
         val e = engine(
             PermissionRule("Bash", "rm -rf", PermissionDecision.ALLOW)
         )
@@ -412,7 +411,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun systemDirRm_denied() = runTest {
+    fun systemDirRm_denied() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /etc"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -421,7 +420,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 提权：非 AUTO 模式下携带 elevate 将硬拒绝降级为一次性授权 ──────
 
     @Test
-    fun catastrophicRm_elevate_asksUser() = runTest {
+    fun catastrophicRm_elevate_asksUser() = runBlocking {
         val e = engine()
         val r = e.evaluate(
             tool(ToolCapability.EXECUTE_COMMANDS),
@@ -435,7 +434,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun catastrophicRm_denyReasonHintsElevate() = runTest {
+    fun catastrophicRm_denyReasonHintsElevate() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -443,7 +442,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun catastrophicRm_autoMode_elevate_asksUser() = runTest {
+    fun catastrophicRm_autoMode_elevate_asksUser() = runBlocking {
         val e = engine()
         val r = e.evaluate(
             tool(ToolCapability.EXECUTE_COMMANDS),
@@ -461,7 +460,7 @@ class ToolPermissionPolicyEngineTest {
             ToolPermissionPolicyEngine.Verdict.DENY
 
     @Test
-    fun abnormalPathSpellings_denied() = runTest {
+    fun abnormalPathSpellings_denied() = runBlocking {
         assertTrue(denied("rm -rf //etc"))
         assertTrue(denied("rm -rf /./etc"))
         assertTrue(denied("rm -rf /etc/../etc"))
@@ -476,14 +475,14 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun workspaceSubdir_allowed() = runTest {
+    fun workspaceSubdir_allowed() = runBlocking {
         assertTrue(!denied("rm -rf ~/workspace/build"))
         assertTrue(!denied("rm -rf ~/workspace/app/src"))
         assertTrue(!denied("rm -rf /tmp/build"))
     }
 
     @Test
-    fun workspaceRoot_stillDenied() = runTest {
+    fun workspaceRoot_stillDenied() = runBlocking {
         assertTrue(denied("rm -rf ~/workspace"))
         assertTrue(denied("rm -rf ~/workspace/*"))
         assertTrue(denied("rm -rf ~/workspace/.."))
@@ -492,7 +491,7 @@ class ToolPermissionPolicyEngineTest {
     // ── AUTO：无法静态判定的疑似破坏性命令保守拦截 ─────────────────
 
     @Test
-    fun autoMode_unanalyzableDestructive_denied() = runTest {
+    fun autoMode_unanalyzableDestructive_denied() = runBlocking {
         val e = engine()
         assertEquals(
             ToolPermissionPolicyEngine.Verdict.DENY,
@@ -505,7 +504,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun autoMode_unanalyzableBenign_allowed() = runTest {
+    fun autoMode_unanalyzableBenign_allowed() = runBlocking {
         val e = engine()
         assertEquals(
             ToolPermissionPolicyEngine.Verdict.ALLOW,
@@ -514,7 +513,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun autoMode_safetyDisabled_unanalyzable_allowed() = runTest {
+    fun autoMode_safetyDisabled_unanalyzable_allowed() = runBlocking {
         val e = engine(safetyDisabled = true)
         assertEquals(
             ToolPermissionPolicyEngine.Verdict.ALLOW,
@@ -527,7 +526,7 @@ class ToolPermissionPolicyEngineTest {
     private fun shizuku(command: String) = mapOf("command" to JsonPrimitive(command))
 
     @Test
-    fun shizuku_buildMode_asksWithoutRememberable() = runTest {
+    fun shizuku_buildMode_asksWithoutRememberable() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -536,7 +535,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun shizuku_safeCommandStillAsks() = runTest {
+    fun shizuku_safeCommandStillAsks() = runBlocking {
         val e = engine()
         // 内置安全白名单（ls）对 Shizuku 不适用，仍需弹窗
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("ls -la /sdcard"), AgentMode.BUILD)
@@ -545,7 +544,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun shizuku_rememberedAllowRuleIgnored() = runTest {
+    fun shizuku_rememberedAllowRuleIgnored() = runBlocking {
         val e = engine(PermissionRule("Shizuku", "pm", PermissionDecision.ALLOW))
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -553,14 +552,14 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun shizuku_denyRuleStillDenies() = runTest {
+    fun shizuku_denyRuleStillDenies() = runBlocking {
         val e = engine(PermissionRule("Shizuku", "pm", PermissionDecision.DENY))
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
     @Test
-    fun shizuku_autoMode_asks() = runTest {
+    fun shizuku_autoMode_asks() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -569,14 +568,14 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun shizuku_autoMode_safetyDisabled_allows() = runTest {
+    fun shizuku_autoMode_safetyDisabled_allows() = runBlocking {
         val e = engine(safetyDisabled = true)
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.AUTO)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 
     @Test
-    fun shizuku_buildMode_safetyDisabled_stillAsksWithoutRememberable() = runTest {
+    fun shizuku_buildMode_safetyDisabled_stillAsksWithoutRememberable() = runBlocking {
         val e = engine(safetyDisabled = true)
         // 开关仅解除 AUTO 豁免，不可记忆在 BUILD 下始终生效
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.BUILD)
@@ -585,7 +584,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun shizuku_planMode_denied() = runTest {
+    fun shizuku_planMode_denied() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", shizuku("pm list packages"), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
@@ -594,7 +593,7 @@ class ToolPermissionPolicyEngineTest {
     // ── 非 shell 工具 ───────────────────────────────────────────────
 
     @Test
-    fun genericTool_wholeRuleAllows() = runTest {
+    fun genericTool_wholeRuleAllows() = runBlocking {
         val e = engine(
             PermissionRule("writeFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW)
         )
@@ -603,7 +602,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun genericTool_unrememberableCapability_asksOnce() = runTest {
+    fun genericTool_unrememberableCapability_asksOnce() = runBlocking {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.MODIFY_AGENT_CONFIG), "editFile", emptyMap(), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
@@ -612,7 +611,7 @@ class ToolPermissionPolicyEngineTest {
     }
 
     @Test
-    fun genericTool_wholeRuleDenies() = runTest {
+    fun genericTool_wholeRuleDenies() = runBlocking {
         val e = engine(
             PermissionRule("writeFile", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY)
         )
@@ -623,7 +622,7 @@ class ToolPermissionPolicyEngineTest {
     // ── remember：去重后逐条落库 ────────────────────────────────────
 
     @Test
-    fun remember_dedupesAndAddsEach() = runTest {
+    fun remember_dedupesAndAddsEach() = runBlocking {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         // add 现在返回 Boolean（写没写进去），默认 stub 要与返回类型一致；relaxed 不顶用在这类显式 stub 上：
         // 旧的 `just runs` 只适用于 Unit 返回的函数。

@@ -5,7 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
-import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
@@ -58,7 +57,7 @@ class ChatSessionDaoLastInputTokensTest {
     }
 
     @Test
-    fun updateProviderModel_换绑模型时清零上次输入用量() = runTest {
+    fun updateProviderModel_换绑模型时清零上次输入用量() = runBlocking {
         dao.upsert(
             ChatSessionEntity(
                 id = SESSION,

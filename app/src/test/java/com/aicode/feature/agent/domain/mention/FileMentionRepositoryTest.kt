@@ -4,7 +4,6 @@ import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.agent.domain.container.CommandResult
 import io.mockk.coEvery
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,7 +48,7 @@ class FileMentionRepositoryTest {
     }
 
     @Test
-    fun loadFiles_success_parsesAndDeduplicatesLines() = runTest {
+    fun loadFiles_success_parsesAndDeduplicatesLines() = runBlocking {
         coEvery { engine.runCommandSyncIfReady(any(), any(), any()) } returns CommandResult(
             "a.kt\nsub/b.kt\n\na.kt\n",
             0
@@ -59,7 +58,7 @@ class FileMentionRepositoryTest {
     }
 
     @Test
-    fun loadFiles_containerNotReady_returnsUnavailable() = runTest {
+    fun loadFiles_containerNotReady_returnsUnavailable() = runBlocking {
         coEvery { engine.runCommandSyncIfReady(any(), any(), any()) } returns null
         assertTrue(
             repository.loadFiles("/root/workspace") is FileMentionRepository.LoadResult.Unavailable
@@ -67,7 +66,7 @@ class FileMentionRepositoryTest {
     }
 
     @Test
-    fun loadFiles_blankPath_returnsUnavailable() = runTest {
+    fun loadFiles_blankPath_returnsUnavailable() = runBlocking {
         assertTrue(repository.loadFiles("") is FileMentionRepository.LoadResult.Unavailable)
     }
 }

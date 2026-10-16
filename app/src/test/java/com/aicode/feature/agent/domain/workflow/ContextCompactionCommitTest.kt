@@ -16,7 +16,6 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -75,7 +74,7 @@ class ContextCompactionCommitTest {
     )
 
     @Test
-    fun `二次折叠时旧块保留且链成两块`() = runTest {
+    fun `二次折叠时旧块保留且链成两块`() = runBlocking {
         prepare()
         stubSummary(AIResponse("Second handoff", stopReason = "stop"))
         // 库里已有上一次折叠的旧块（未淘汰）
@@ -134,7 +133,7 @@ class ContextCompactionCommitTest {
     // ---------- 闸门一：响应完整性 ----------
 
     @Test
-    fun `摘要为空时不落库也不标记 head`() = runTest {
+    fun `摘要为空时不落库也不标记 head`() = runBlocking {
         prepare()
         stubSummary(AIResponse(""))
 
@@ -145,7 +144,7 @@ class ContextCompactionCommitTest {
     }
 
     @Test
-    fun `摘要被输出上限截断时不落库`() = runTest {
+    fun `摘要被输出上限截断时不落库`() = runBlocking {
         prepare()
         stubSummary(AIResponse("半份摘要", stopReason = "max_tokens"))
 
@@ -155,7 +154,7 @@ class ContextCompactionCommitTest {
     }
 
     @Test
-    fun `摘要被服务端中止时不落库`() = runTest {
+    fun `摘要被服务端中止时不落库`() = runBlocking {
         prepare()
         stubSummary(AIResponse("残缺", stopReason = "model_context_window_exceeded"))
 
@@ -165,7 +164,7 @@ class ContextCompactionCommitTest {
     }
 
     @Test
-    fun `摘要响应里带工具调用时不落库`() = runTest {
+    fun `摘要响应里带工具调用时不落库`() = runBlocking {
         prepare()
         stubSummary(
             AIResponse(
@@ -182,7 +181,7 @@ class ContextCompactionCommitTest {
     // ---------- 闸门二：必须真的更小 ----------
 
     @Test
-    fun `摘要比被折叠的历史还长时不提交`() = runTest {
+    fun `摘要比被折叠的历史还长时不提交`() = runBlocking {
         prepare()
         coEvery { dao.getMessagesBySessionOnce("s") } returns rows("a", "goal")
         stubSummary(AIResponse("汉".repeat(5_000)))
@@ -199,7 +198,7 @@ class ContextCompactionCommitTest {
     // ---------- 闸门三：提交时写覆盖边界 ----------
 
     @Test
-    fun `提交时追加摘要块并写入覆盖边界`() = runTest {
+    fun `提交时追加摘要块并写入覆盖边界`() = runBlocking {
         prepare()
         stubSummary(AIResponse("Concise handoff", stopReason = "stop"))
 

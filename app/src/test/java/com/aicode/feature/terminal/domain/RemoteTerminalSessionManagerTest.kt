@@ -11,7 +11,7 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,7 +35,7 @@ class RemoteTerminalSessionManagerTest {
     }
 
     @Test
-    fun createInteractiveTab_workspaceNotReady_throwsAndStartsNoShell() = runTest {
+    fun createInteractiveTab_workspaceNotReady_throwsAndStartsNoShell() = runBlocking {
         val connection = mockk<RemoteSshConnection>()
         val modeHolder = mockk<ExecutionModeHolder>()
         val workspace = mockk<WorkspaceRepository>()

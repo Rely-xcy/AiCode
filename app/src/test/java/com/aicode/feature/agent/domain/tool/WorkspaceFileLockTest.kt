@@ -1,10 +1,10 @@
 package com.aicode.feature.agent.domain.tool
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +19,7 @@ class WorkspaceFileLockTest {
     private val lock = WorkspaceFileLock()
 
     @Test
-    fun sameKey_serializes() = runTest {
+    fun sameKey_serializes() = runBlocking {
         val concurrent = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
         val order = Collections.synchronizedList(mutableListOf<String>())
@@ -42,7 +42,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun differentKeys_runConcurrently() = runTest {
+    fun differentKeys_runConcurrently() = runBlocking {
         val concurrent = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
 
@@ -62,7 +62,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun entriesAreReclaimedAfterUse() = runTest {
+    fun entriesAreReclaimedAfterUse() = runBlocking {
         lock.withLock("~/workspace/a.kt") { /* 什么都不做 */ }
         assertEquals("无持有者也无等待者时条目应被回收", 0, lock.trackedKeyCount())
 
@@ -71,7 +71,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun entriesSurviveWhileWaiterIsQueued() = runTest {
+    fun entriesSurviveWhileWaiterIsQueued() = runBlocking {
         val started = AtomicInteger(0)
         val first = async {
             lock.withLock("k") {
@@ -95,7 +95,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun exceptionInBlock_stillReleasesLock() = runTest {
+    fun exceptionInBlock_stillReleasesLock() = runBlocking {
         runCatching {
             lock.withLock("k") { throw IllegalStateException("boom") }
         }
@@ -107,7 +107,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun multipleKeys_doNotDeadlock() = runTest {
+    fun multipleKeys_doNotDeadlock() = runBlocking {
         // 两个协程以相反顺序请求同一组键：排序获取保证不会互相等死。
         val a = async {
             lock.withLock(listOf("x", "y")) { delay(20) }
@@ -121,7 +121,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun blankKeys_areIgnored() = runTest {
+    fun blankKeys_areIgnored() = runBlocking {
         var ran = false
         lock.withLock(listOf(null, "", "  ")) { ran = true }
         assertTrue("全空键等价于不加锁，仍应执行", ran)

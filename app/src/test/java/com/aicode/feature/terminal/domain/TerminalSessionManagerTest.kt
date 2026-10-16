@@ -8,7 +8,7 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,7 +26,7 @@ class TerminalSessionManagerTest {
     private val notReadyMessage = "工作区未就绪：本地尚未初始化完成（测试文案）"
 
     @Test
-    fun createInteractiveTab_workspaceNotReady_throwsAndBuildsNoSession() = runTest {
+    fun createInteractiveTab_workspaceNotReady_throwsAndBuildsNoSession() = runBlocking {
         val engine = mockk<LinuxContainerEngine>()
         val workspace = mockk<WorkspaceRepository>()
         // 走到取工作区路径这一步之前会经过容器就绪检查与 shell 命令拼装

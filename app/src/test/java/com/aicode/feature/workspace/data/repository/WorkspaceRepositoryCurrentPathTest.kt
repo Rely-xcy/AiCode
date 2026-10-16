@@ -11,8 +11,8 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.PathHomeResolver
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -121,7 +121,7 @@ class WorkspaceRepositoryCurrentPathTest {
     // ── awaitCurrentPathOrNull()：等到上限仍是 null，不无限等待 ──────────
 
     @Test
-    fun awaitCurrentPathOrNull_notSettled_returnsNullInsteadOfHanging() = runTest {
+    fun awaitCurrentPathOrNull_notSettled_returnsNullInsteadOfHanging() = runBlocking {
         val repo = createRepository()
         assertNull(repo.awaitCurrentPathOrNull())
     }
@@ -129,7 +129,7 @@ class WorkspaceRepositoryCurrentPathTest {
     // ── 落定后：currentPath() == currentPathOrNull()，且不是工作区父目录 ──
 
     @Test
-    fun initialize_localSettles_currentPathIsWorkspaceNotParentDir() = runTest {
+    fun initialize_localSettles_currentPathIsWorkspaceNotParentDir() = runBlocking {
         val repo = createRepository()
         repo.initialize()
 
