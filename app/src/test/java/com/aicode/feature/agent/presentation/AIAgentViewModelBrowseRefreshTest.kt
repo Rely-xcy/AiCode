@@ -134,6 +134,7 @@ class AIAgentViewModelBrowseRefreshTest {
         planApprovalManager = mockk(relaxed = true),
         terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
         slashCommandRegistry = mockk(relaxed = true),
+        fileMentionRepository = mockk(relaxed = true),
         checkpointManager = mockk(relaxed = true),
         checkpointDao = mockk(relaxed = true),
         backupManager = mockk(relaxed = true),
