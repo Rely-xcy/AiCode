@@ -673,6 +673,7 @@
     <string name="chat_queue_remove">移除排队消息</string>
     <string name="chat_queue_edit">编辑排队消息</string>
     <string name="chat_queue_interject">立即插入给 AI</string>
+    <string name="chat_interjected_ack">已插话：%1$s</string>
     <string name="chat_queue_drag">拖拽排序</string>
     <string name="chat_upload_file">上传文件</string>
     <string name="chat_upload_image">上传图片</string>

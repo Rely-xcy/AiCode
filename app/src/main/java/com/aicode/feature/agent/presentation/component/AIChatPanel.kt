@@ -10,9 +10,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateFloatAsState
@@ -20,9 +20,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,16 +32,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
+import com.aicode.core.theme.Radius
+import com.aicode.core.theme.semanticColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -101,6 +110,7 @@ import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import com.aicode.feature.workspace.presentation.remote.HostKeyConfirmDialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
+import compose.icons.feathericons.Zap
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -141,6 +151,9 @@ private const val MESSAGE_ENTRY_MAX_STAGGER_MS = 360L
 
 /** 消息未就绪时延迟多久才显示加载提示（ms）：本地读库很快，立即显示反而闪。 */
 private const val MESSAGES_LOADING_HINT_DELAY_MS = 220L
+
+/** 「插话」即时确认条的存留时长（ms）：够看清是哪一条，又不长期占据输入框上方。 */
+private const val INTERJECTION_ACK_MS = 2_600L
 
 /**
  * 长消息拆块渲染：
@@ -766,6 +779,14 @@ fun AIChatPanel(
     val pendingQuestion by viewModel.pendingUserQuestion.collectAsStateWithLifecycle()
     val currentTodoItems by viewModel.currentSessionTodoItems.collectAsStateWithLifecycle()
     val queuedRequests by viewModel.queuedRequests.collectAsStateWithLifecycle()
+    // 「插话」即时确认：点击后短暂在输入框上方显示该条内容（约 2.6s 自动隐去）。
+    // 不用 Toast：输入框区域就是用户此刻看的地方，且不会遮挡聊天内容。
+    var interjectionAck by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(interjectionAck) {
+        val ack = interjectionAck ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(INTERJECTION_ACK_MS)
+        if (interjectionAck == ack) interjectionAck = null
+    }
     // 正在运行的那一轮的轮首用户行 id（运行时真值，见 AIAgentViewModel.currentSessionRunningTurnAnchorId）：
     // 「哪一轮还在跑」只认它。
     val runningTurnAnchorId by viewModel.currentSessionRunningTurnAnchorId.collectAsStateWithLifecycle()
@@ -1990,6 +2011,43 @@ fun AIChatPanel(
                 }
             }
 
+            // 对话中插话的即时确认：紧贴输入框上方一行，短暂显示插的是哪一条。
+            // 没有这一行时，点「插话」只是队列行消失，用户要等到模型真用上这条内容
+            // 才知道自己插进去了（真实反馈过他因此以为没生效）。
+            AnimatedVisibility(
+                visible = interjectionAck != null,
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                enter = fadeIn(tween(140)) + expandVertically(tween(180)),
+                exit = fadeOut(tween(160)) + shrinkVertically(tween(180))
+            ) {
+                interjectionAck?.let { text ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.lg)
+                            .clip(RoundedCornerShape(Radius.md))
+                            .background(MaterialTheme.semanticColors.mutedSurface)
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            FeatherIcons.Zap,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = stringResource(R.string.chat_interjected_ack, text),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
             ChatInputBar(
                 value = inputText,
                 onValueChange = viewModel::updateInputDraft,
@@ -2030,7 +2088,14 @@ fun AIChatPanel(
                 onRemoveQueued = { viewModel.removeQueuedRequest(it) },
                 onMoveQueued = { from, to -> viewModel.moveQueuedRequest(from, to) },
                 onEditQueued = { queuedEditing = it },
-                onInterjectQueued = { viewModel.interjectQueuedRequest(it) },
+                onInterjectQueued = { id ->
+                    // 点「插话」后队列行会立刻消失，但用户看不出「插进去没有」——直到模型真用上
+                    // 这条内容才有回应。这里给一条即时确认：输入框上方短暂显示插话内容（见
+                    // interjectionAck 渲染处），让「已送达」在点击那一瞬就可见。
+                    val text = queuedRequests.firstOrNull { it.id == id }?.request
+                    viewModel.interjectQueuedRequest(id)
+                    if (text != null) interjectionAck = text
+                },
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
                 sessionId = currentSessionId.orEmpty(),

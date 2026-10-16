@@ -673,6 +673,7 @@
     <string name="chat_queue_remove">Remove from queue</string>
     <string name="chat_queue_edit">Edit queued message</string>
     <string name="chat_queue_interject">Insert to AI now</string>
+    <string name="chat_interjected_ack">Interjected: %1$s</string>
     <string name="chat_queue_drag">Drag to reorder</string>
     <string name="chat_upload_file">Upload File</string>
     <string name="chat_upload_image">Upload Image</string>
