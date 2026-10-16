@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.container
 
 import android.content.ContextWrapper
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import org.junit.After
 import org.junit.Assert.assertEquals

@@ -1,6 +1,7 @@
 package com.aicode.core.test
 
 import io.mockk.coEvery
+import kotlinx.coroutines.runBlocking
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Test

@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.provider
 
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.google.gson.JsonObject

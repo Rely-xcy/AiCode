@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider

@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.explorer
 
 import com.aicode.feature.agent.domain.tool.ToolResult
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
 import kotlinx.serialization.json.JsonObject

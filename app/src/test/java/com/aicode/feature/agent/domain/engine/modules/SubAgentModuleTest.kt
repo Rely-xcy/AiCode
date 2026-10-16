@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.feature.agent.domain.engine.EngineContext
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import dagger.Lazy

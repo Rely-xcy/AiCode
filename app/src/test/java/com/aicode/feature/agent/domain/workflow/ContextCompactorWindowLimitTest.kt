@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage

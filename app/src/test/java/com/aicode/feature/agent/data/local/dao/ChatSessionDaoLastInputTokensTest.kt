@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.data.local.dao
 
 import androidx.room.Room
+import kotlinx.coroutines.runBlocking
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.aicode.feature.agent.data.local.database.AgentDatabase

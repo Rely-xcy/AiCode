@@ -1,6 +1,7 @@
 package com.aicode.feature.workspace.domain.remote
 
 import com.aicode.feature.workspace.domain.model.RemoteConnection
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import org.junit.After

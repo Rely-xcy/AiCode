@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.checkpoint
 
 import android.content.ContextWrapper
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity

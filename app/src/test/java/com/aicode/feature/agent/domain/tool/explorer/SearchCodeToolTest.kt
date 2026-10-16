@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.explorer
 
 import com.aicode.feature.agent.domain.container.CommandEngine
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.container.CommandResult
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository

@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.mention
 
 import com.aicode.feature.agent.domain.container.CommandEngine
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.container.CommandResult
 import io.mockk.coEvery
 import io.mockk.mockk

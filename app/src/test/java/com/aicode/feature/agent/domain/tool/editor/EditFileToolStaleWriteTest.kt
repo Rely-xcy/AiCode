@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.editor
 
 import com.aicode.feature.agent.domain.model.AgentContext
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolResult

@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.root
 
 import com.aicode.feature.agent.domain.vscreen.RootShell
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
