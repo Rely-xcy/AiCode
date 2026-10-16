@@ -266,6 +266,8 @@
     <string name="settings_agent_sound_subtitle">退到后台时 Agent 完成弹出通知</string>
     <string name="settings_live_notification_title">实时通知</string>
     <string name="settings_live_notification_subtitle">AI 在后台工作时展示实时进度通知</string>
+    <string name="settings_approval_notification_title">授权审批通知</string>
+    <string name="settings_approval_notification_subtitle">AI 请求授权、提问或等待计划审批时弹出通知</string>
     <string name="agent_complete_notification_title">任务完成</string>
     <string name="agent_complete_notification_body">点击返回查看</string>
     <string name="agent_complete_notification_background_body">后台任务「%1$s」已完成</string>
@@ -280,6 +282,14 @@
     <string name="notification_channel_agent_live">AI 实时进度</string>
     <string name="notification_channel_agent_live_desc">AI 在后台工作时展示当前进度的通知</string>
     <string name="notification_agent_live_title_multi">%1$d 个任务进行中</string>
+    <string name="notification_channel_agent_approval">授权审批通知</string>
+    <string name="notification_channel_agent_approval_desc">AI 在后台请求授权、提问或等待计划审批时弹出的通知</string>
+    <string name="notification_approval_title">AI 等待你的确认</string>
+    <string name="notification_approval_multi_title">%1$d 个任务等待确认</string>
+    <string name="notification_approval_needed">需要审批</string>
+    <string name="notification_approval_label_permission">需要授权</string>
+    <string name="notification_approval_label_question">需要回答</string>
+    <string name="notification_approval_label_plan">等待计划审批</string>
     <string name="settings_app_permissions">软件权限</string>
     <string name="settings_permission_apk_install">安装未知应用</string>
     <string name="settings_permission_apk_install_desc">允许安装 APK 安装包</string>

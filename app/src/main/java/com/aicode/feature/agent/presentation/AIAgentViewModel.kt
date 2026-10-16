@@ -40,6 +40,7 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
 import com.aicode.feature.settings.data.repository.StartupSessionMode
 import com.aicode.feature.agent.domain.model.AgentContext
@@ -101,6 +102,7 @@ import com.aicode.feature.agent.domain.mention.FileMentionState
 import com.aicode.feature.agent.domain.skill.Skill
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.notification.AgentLiveNotificationManager
+import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager
 import com.aicode.feature.agent.presentation.component.RewindOption
 import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
 import com.aicode.feature.agent.presentation.component.formatTokenCount
@@ -170,6 +172,8 @@ class AIAgentViewModel @Inject constructor(
     private val keepaliveSettings: KeepaliveSettingsRepository,
     private val liveNotificationSettings: LiveNotificationSettingsRepository,
     private val agentLiveNotificationManager: AgentLiveNotificationManager,
+    private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
+    private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -1129,6 +1133,19 @@ class AIAgentViewModel @Inject constructor(
 
     val pendingPlanApproval: StateFlow<PlanApprovalRequest?> = planApprovalManager.pendingApproval
 
+    /** 当前正阻塞等待用户审批的会话 id 集合（工具授权 / 提问 / 退出计划审批）。 */
+    val approvalSessionIds: StateFlow<Set<String>> = combine(
+        awaitingPermissionSessionIds,
+        askUserQuestionManager.pendingQuestion,
+        planApprovalManager.pendingApproval
+    ) { awaiting, question, plan ->
+        buildSet {
+            addAll(awaiting)
+            question?.sessionId?.takeIf { it.isNotBlank() }?.let { add(it) }
+            plan?.sessionId?.takeIf { it.isNotBlank() }?.let { add(it) }
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
     // 工具调用传入参数（argsPreview）按落库消息 id 暂存：ToolCallStarted 落库后，
     // ToolCallFinished / 用户停止会用同 id REPLACE 整行，需在此把参数带到后续落库。
     private val toolArgsByMsgId = mutableMapOf<String, String>()
@@ -1292,20 +1309,60 @@ class AIAgentViewModel @Inject constructor(
             }
         }
 
+        // 授权审批通知开关关闭时立即撤销。
+        viewModelScope.launch {
+            approvalNotificationSettings.enabledFlow.collectLatest { enabled ->
+                if (!enabled) agentApprovalNotificationManager.dismiss()
+            }
+        }
+
+        // 授权审批通知：阻塞等待用户确认（授权/提问/计划审批）时聚合会话，仅 App 在后台时由管理器展示。
+        // 包含子代理会话——子代理也会提交授权，漏掉它们会让等待埋没。
+        viewModelScope.launch {
+            combine(
+                awaitingPermissionSessionIds,
+                askUserQuestionManager.pendingQuestion,
+                planApprovalManager.pendingApproval
+            ) { awaiting, question, plan ->
+                val labels = LinkedHashMap<String, Int>()
+                awaiting.forEach { labels[it] = R.string.notification_approval_label_permission }
+                question?.sessionId?.takeIf { it.isNotBlank() }?.let {
+                    labels.putIfAbsent(it, R.string.notification_approval_label_question)
+                }
+                plan?.sessionId?.takeIf { it.isNotBlank() }?.let {
+                    labels.putIfAbsent(it, R.string.notification_approval_label_plan)
+                }
+                labels
+            }.collect { labels ->
+                val pending = labels.mapNotNull { (sid, labelRes) ->
+                    val session = sessionUseCase.getSessionById(sid) ?: return@mapNotNull null
+                    AgentApprovalNotificationManager.PendingApproval(
+                        sessionId = sid,
+                        sessionTitle = session.title.ifBlank { context.getString(R.string.chat_new_session_btn) },
+                        label = context.getString(labelRes)
+                    )
+                }
+                agentApprovalNotificationManager.update(pending)
+            }
+        }
+
         // 实时通知：聚合各会话的「正在…」状态（多会话合并为一条），仅 App 在后台时由管理器展示。
+        // 等待用户审批的会话标签覆写为「需要审批」，优先于正在执行的具体工具。
         viewModelScope.launch {
             combine(
                 _agentStates,
                 _runningTools,
                 _preparingTools,
-                _compactingSessions
-            ) { states, tools, preparing, compacting ->
+                _compactingSessions,
+                approvalSessionIds
+            ) { states, tools, preparing, compacting, approvals ->
                 states.filterValues { it is AgentUIState.Loading || it is AgentUIState.Streaming }
                     .keys
                     .associateWith { sid ->
                         val toolName = tools[sid]?.values?.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
                             ?: preparing[sid]
                         when {
+                            sid in approvals -> context.getString(R.string.notification_approval_needed)
                             toolName != null -> context.getString(toolRunningLabelRes(toolName))
                             compacting[sid] == true -> context.getString(R.string.chat_compressing_context)
                             else -> context.getString(R.string.chat_status_thinking)

@@ -765,6 +765,17 @@ class AIEditorApp : Application(), Configuration.Provider {
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(liveChannel)
+
+            // 授权审批通知：AI 在后台阻塞等待授权/提问/计划审批时弹出，需要弹窗+声音。
+            val approvalChannel = NotificationChannel(
+                "agent_approval",
+                getString(R.string.notification_channel_agent_approval),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.notification_channel_agent_approval_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(approvalChannel)
         }
     }
 }

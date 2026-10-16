@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.question
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.ToolParameter
@@ -94,7 +95,12 @@ class AskUserQuestionTool @Inject constructor(
         )
     )
 
-    override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
+    override suspend fun execute(args: Map<String, JsonElement>): ToolResult = run(args, sessionId = null)
+
+    override suspend fun executeWithContext(args: Map<String, JsonElement>, context: AgentContext): ToolResult =
+        run(args, context.sessionId)
+
+    private suspend fun run(args: Map<String, JsonElement>, sessionId: String?): ToolResult {
         val questionsJson = args["questions"]?.jsonArray
         if (questionsJson == null || questionsJson.isEmpty()) {
             return ToolResult.Error("缺少必需参数：questions（至少包含一个问题）", "MISSING_QUESTIONS")
@@ -163,7 +169,7 @@ class AskUserQuestionTool @Inject constructor(
         }
 
         val requestId = UUID.randomUUID().toString()
-        val pending = PendingUserQuestion(id = requestId, questions = questions)
+        val pending = PendingUserQuestion(id = requestId, questions = questions, sessionId = sessionId.orEmpty())
 
         FileLogger.d(TAG, "ask_user_question 发起: ${questions.size} 个问题，等待用户回答...")
 

@@ -57,7 +57,7 @@
 | --- | --- |
 | 工具授权 | AI 调用工具的授权规则 → [文档](/guide/permissions) |
 | 软件权限 | 安装未知应用、存储、电池优化、自启动、Shizuku 等系统权限 → [文档](/guide/app-permissions) |
-| 后台运行 | 后台保活、屏幕常亮、AI 完成通知、实时通知 → [文档](/guide/background-run) |
+| 后台运行 | 后台保活、屏幕常亮、AI 完成通知、实时通知、授权审批通知 → [文档](/guide/background-run) |
 
 ### 数据与诊断
 

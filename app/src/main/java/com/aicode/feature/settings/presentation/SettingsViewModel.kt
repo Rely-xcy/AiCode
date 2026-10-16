@@ -77,6 +77,7 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.repository.ProxyConfig
@@ -397,6 +398,7 @@ class SettingsViewModel @Inject constructor(
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
     private val liveNotificationSettingsRepository: LiveNotificationSettingsRepository,
+    private val approvalNotificationSettingsRepository: ApprovalNotificationSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val languageSettingsRepository: LanguageSettingsRepository,
     private val mcpConfigRepository: McpConfigRepository,
@@ -592,6 +594,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _liveNotificationEnabled = MutableStateFlow(false)
     val liveNotificationEnabled: StateFlow<Boolean> = _liveNotificationEnabled.asStateFlow()
+
+    private val _approvalNotificationEnabled = MutableStateFlow(false)
+    val approvalNotificationEnabled: StateFlow<Boolean> = _approvalNotificationEnabled.asStateFlow()
 
     private val _autoRemoveStaleModels = MutableStateFlow(true)
     val autoRemoveStaleModels: StateFlow<Boolean> = _autoRemoveStaleModels.asStateFlow()
@@ -1096,6 +1101,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 liveNotificationSettingsRepository.enabledFlow.collectLatest {
                     _liveNotificationEnabled.value = it
+                }
+            }
+
+            launch {
+                approvalNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _approvalNotificationEnabled.value = it
                 }
             }
 
@@ -2165,6 +2176,12 @@ class SettingsViewModel @Inject constructor(
     fun setLiveNotificationEnabled(enabled: Boolean) {
         viewModelScope.launch {
             liveNotificationSettingsRepository.setEnabled(enabled)
+        }
+    }
+
+    fun setApprovalNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            approvalNotificationSettingsRepository.setEnabled(enabled)
         }
     }
 

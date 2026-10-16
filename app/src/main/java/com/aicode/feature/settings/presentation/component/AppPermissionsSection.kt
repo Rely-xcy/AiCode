@@ -47,6 +47,7 @@ import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Power
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sun
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Unlock
@@ -271,7 +272,9 @@ internal fun BackgroundRunSection(
     agentSoundEnabled: Boolean,
     onToggleAgentSound: (Boolean) -> Unit,
     liveNotificationEnabled: Boolean,
-    onToggleLiveNotification: (Boolean) -> Unit
+    onToggleLiveNotification: (Boolean) -> Unit,
+    approvalNotificationEnabled: Boolean,
+    onToggleApprovalNotification: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     var showNotificationDeniedDialog by remember { mutableStateOf(false) }
@@ -360,6 +363,20 @@ internal fun BackgroundRunSection(
                         checked = liveNotificationEnabled,
                         onCheckedChange = { enabled ->
                             toggleWithNotificationPermission(onToggleLiveNotification, enabled)
+                        }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Shield,
+                title = stringResource(R.string.settings_approval_notification_title),
+                subtitle = stringResource(R.string.settings_approval_notification_subtitle),
+                trailing = {
+                    AppSwitch(
+                        checked = approvalNotificationEnabled,
+                        onCheckedChange = { enabled ->
+                            toggleWithNotificationPermission(onToggleApprovalNotification, enabled)
                         }
                     )
                 }

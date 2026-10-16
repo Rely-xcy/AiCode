@@ -5,10 +5,12 @@ package com.aicode.feature.agent.domain.tool.question
  *
  * @param id 本次调用的唯一标识（对应 ToolCall.id），用于 resolve 时配对。
  * @param questions 本次要问用户的 1-4 个问题。
+ * @param sessionId 发起该问题的会话 id；多会话并行时用于在通知/实时状态中标注归属。
  */
 data class PendingUserQuestion(
     val id: String,
-    val questions: List<QuestionItem>
+    val questions: List<QuestionItem>,
+    val sessionId: String = ""
 )
 
 /**
