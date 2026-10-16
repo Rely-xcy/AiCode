@@ -907,7 +907,11 @@ fun AIChatPanel(
             val anchorMessage = anchor ?: messages.lastOrNull {
                 it.role == MessageRole.USER && !it.isBackgroundNotification && !it.isCompactionMarker
             }
+            // 锚点行不在已加载窗口内（分页把它翻出去了）时仍要认出「正在跑的那轮」：
+            // 直接按锚点 id 构造轮 key。否则 activeTurnKey 为 null，该轮被当成普通已完成轮，
+            // 折叠头 running=false，用户看到的是一个永不变化的「执行中」死行。
             anchorMessage?.let { turnKeyOf(it.id) }
+                ?: runningTurnAnchorId?.takeIf { id -> messagesState.sessionId != null }?.let { turnKeyOf(it) }
         }
     }
     val chatItems = remember(messages, toolGroupOverrideSnapshot, turnOverrideSnapshot, activeTurnKey) {
@@ -1654,11 +1658,15 @@ fun AIChatPanel(
         val group = item.toolGroup
         when {
             header != null -> {
+                // 运行中且无过程项（如轮首用户行还没落库/被翻出窗口）：纯状态行不可点——
+                // 点开是空的 AnimatedVisibility，用户会以为「卡住了、点不开」。
+                val clickable = !header.running || header.processCount > 0
                 TurnCollapseHeader(
                     running = header.running,
                     durationMs = header.endMessageId?.let { taskDurations[it] },
                     expanded = header.expanded,
                     processCount = header.processCount,
+                    enabled = clickable,
                     onToggle = {
                         viewModel.setTurnExpanded(header.key, !header.expanded)
                         onToolItemToggled()

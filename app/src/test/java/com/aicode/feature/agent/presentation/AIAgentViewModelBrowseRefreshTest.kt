@@ -3,7 +3,10 @@ package com.aicode.feature.agent.presentation
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
+import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.just
+import io.mockk.runs
 import io.mockk.mockk
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -133,7 +136,14 @@ class AIAgentViewModelBrowseRefreshTest {
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
         terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
-        slashCommandRegistry = mockk(relaxed = true),
+        slashCommandRegistry = mockk {
+            // init 里 _currentWorkspace.collect 会立刻触发 refresh()：真实实现会走 IO 调度器
+            // 真扫技能目录（GlobalDirectorySkillSource → File.walkTopDown）并在 FileLogger 的
+            // 真后台线程上落盘——异常一旦逃逸就会挂在同 JVM 随后开跑的 runTest 上（CI 上
+            // GitRepositoryTest 的 UncaughtExceptionsBeforeTest 即此因）。stub 掉，让 init 的
+            // collect 只验证“收到工作区变化”这件事本身。
+            coEvery { refresh() } just runs
+        },
         fileMentionRepository = mockk(relaxed = true),
         checkpointManager = mockk(relaxed = true),
         checkpointDao = mockk(relaxed = true),

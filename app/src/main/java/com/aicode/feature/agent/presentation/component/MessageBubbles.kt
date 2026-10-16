@@ -554,7 +554,8 @@ internal fun TurnCollapseHeader(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
-    processCount: Int = 0
+    processCount: Int = 0,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = modifier
@@ -562,6 +563,7 @@ internal fun TurnCollapseHeader(
             .heightIn(min = ChatStyle.toolRowMinHeight)
             .clip(RoundedCornerShape(ChatStyle.panelCorner))
             .clickable(
+                enabled = enabled,
                 onClickLabel = stringResource(
                     if (expanded) R.string.common_collapse_action else R.string.common_expand
                 ),
