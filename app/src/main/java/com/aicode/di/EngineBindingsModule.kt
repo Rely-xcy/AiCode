@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentTeamModule
 import com.aicode.feature.agent.domain.engine.modules.TaskModule
 import com.aicode.feature.agent.domain.engine.modules.VirtualScreenModule
+import com.aicode.feature.agent.domain.engine.modules.WorkingStateModule
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -44,6 +45,10 @@ abstract class EngineBindingsModule {
     @Binds
     @IntoSet
     abstract fun bindTaskModule(module: TaskModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindWorkingStateModule(module: WorkingStateModule): EngineModule
 
     @Binds
     @IntoSet

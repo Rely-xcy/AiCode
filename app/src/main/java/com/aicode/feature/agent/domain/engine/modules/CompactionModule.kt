@@ -5,6 +5,7 @@ import com.aicode.di.CompactionWork
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.LlmCall
+import com.aicode.feature.agent.domain.brief.SessionBriefExtractor
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
@@ -51,6 +52,8 @@ class CompactionModule @Inject constructor(
      */
     private val compactor: Lazy<ContextCompactor>,
     private val memoryExtractor: MemoryExtractor,
+    /** 折叠历史前更新「会话工作状态」：任务理解不能随原文一起被压掉。 */
+    private val sessionBriefExtractor: SessionBriefExtractor,
     /** 同样用 [Lazy]：解析抽取提示词要经 SystemPromptProvider，它又依赖引擎。 */
     private val systemPromptProvider: Lazy<SystemPromptProvider>,
     private val modelMetadataService: ModelMetadataService,
@@ -286,6 +289,28 @@ class CompactionModule @Inject constructor(
                         )
                         if (written > 0) {
                             FileLogger.i(TAG, "折叠前从被压缩历史里捞出 $written 条长期记忆")
+                        }
+                        // 同步更新会话工作状态：长期记忆只存「用户是谁」，任务理解（目标/决策/进展）
+                        // 是另一类信息——它不随压缩丢失，才能治住「越聊越傻」。
+                        // 与记忆抽取各自吞自己的失败，任何一个挂了都不影响压缩本身。
+                        ctx.sessionId?.let { sid ->
+                            runCatching {
+                                sessionBriefExtractor.extract(
+                                    sessionId = sid,
+                                    history = folded,
+                                    complete = { userPrompt ->
+                                        summaryProvider.complete(
+                                            systemPrompt = systemPromptProvider.get()
+                                                .resolvePrompt(SessionBriefExtractor.PROMPT_FILE),
+                                            messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
+                                            tools = emptyList(),
+                                            cacheTail = false
+                                        ).content
+                                    }
+                                )
+                            }.onFailure {
+                                FileLogger.w(TAG, "折叠前更新会话工作状态失败，继续压缩", it)
+                            }
                         }
                     },
                     onEvent = call.onEvent
