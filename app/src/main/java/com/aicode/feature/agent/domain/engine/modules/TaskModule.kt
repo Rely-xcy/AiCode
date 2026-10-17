@@ -123,7 +123,7 @@ class TaskModule @Inject constructor(
 
     private fun watch(sessionId: String) {
         synchronized(watchers) {
-            if (sessionId in watchers) return
+            if (watchers.containsKey(sessionId)) return
             if (watchers.size >= MAX_WATCHED_SESSIONS) {
                 watchers.keys.firstOrNull()?.let { oldest ->
                     watchers.remove(oldest)?.cancel()

@@ -104,7 +104,7 @@ class WorkingStateModule @Inject constructor(
 
     private fun watch(sessionId: String) {
         synchronized(watchers) {
-            if (sessionId in watchers) return
+            if (watchers.containsKey(sessionId)) return
             // 逐出单个最旧会话，而不是整表清空：整表清空会把其它线程刚挂上的 watcher
             // 一起取消，且「检查大小 → 清空 → 挂载」本身不是原子操作。
             if (watchers.size >= MAX_WATCHED_SESSIONS) {
