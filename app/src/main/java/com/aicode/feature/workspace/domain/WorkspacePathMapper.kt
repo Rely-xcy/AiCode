@@ -96,14 +96,28 @@ class WorkspacePathMapper @Inject constructor(
         val p = pathHomeResolver.expandHome(path.trim())
         val file = when {
             p == wsRoot || p == "$wsRoot/" || p == CONTAINER_ROOT || p == "$CONTAINER_ROOT/" -> requireWorkspaceRoot(root)
-            p.startsWith("$wsRoot/") -> File(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
+            p.startsWith("$wsRoot/") -> workspaceFile(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
             p == AICODE_ROOT || p == "$AICODE_ROOT/" -> aicodeRoot()
             p.startsWith("$AICODE_ROOT/") -> File(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"))
             else -> mountedHostFile(p)
                 ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/"))
-                else File(requireWorkspaceRoot(root), p)
+                else workspaceFile(requireWorkspaceRoot(root), p)
         }
         return file
+    }
+
+    /**
+     * 相对路径挂到工作区下之前做 canonical 包含校验：`../../data/...` 这类逃逸必须拒绝，
+     * 否则 readFile/listFiles 可以读出工作区之外的文件（备份导入侧已有同款校验）。
+     */
+    private fun workspaceFile(root: File, relative: String): File {
+        val candidate = File(root, relative)
+        val canonicalRoot = root.canonicalFile
+        val canonical = candidate.canonicalFile
+        if (canonical != canonicalRoot && !canonical.path.startsWith(canonicalRoot.path + File.separator)) {
+            throw IllegalArgumentException("路径越出工作区：$relative")
+        }
+        return candidate
     }
 
     /** 需要工作区根的路径在未落定时直接报错，而不是落到工作区父目录。 */
