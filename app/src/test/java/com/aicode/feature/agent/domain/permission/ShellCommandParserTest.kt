@@ -43,6 +43,15 @@ class ShellCommandParserTest {
     }
 
     @Test
+    fun redirectTargetOutsideWorkspace_isNotAnalyzable() {
+        // 回归：重定向目标只拦绝对路径时，`echo x > ~/.bashrc`、`> ../f` 会被白名单当只读放行。
+        assertFalse(ShellCommandParser.analyze("echo x > ~/.bashrc").analyzable)
+        assertFalse(ShellCommandParser.analyze("echo x > ../f").analyzable)
+        assertFalse(ShellCommandParser.analyze("echo x > /etc/passwd").analyzable)
+        assertTrue(ShellCommandParser.analyze("echo x > out.txt").analyzable)
+    }
+
+    @Test
     fun absoluteOutputRedirect_isNotAnalyzable_butRelativeIs() {
         assertFalse(ShellCommandParser.analyze("echo hi > /etc/passwd").analyzable)
         assertFalse(ShellCommandParser.analyze("echo hi >>/sdcard/x").analyzable)

@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.file.Paths
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -111,13 +112,14 @@ class WorkspacePathMapper @Inject constructor(
      * 否则 readFile/listFiles 可以读出工作区之外的文件（备份导入侧已有同款校验）。
      */
     private fun workspaceFile(root: File, relative: String): File {
-        val candidate = File(root, relative)
-        val canonicalRoot = root.canonicalFile
-        val canonical = candidate.canonicalFile
-        if (canonical != canonicalRoot && !canonical.path.startsWith(canonicalRoot.path + File.separator)) {
+        // 用纯字符串路径归一化（Path.normalize 不访问文件系统）：容器里工作区目录可能尚未创建，
+        // canonicalFile 在那种场景下会走系统查询，不可靠。
+        val rootPath = Paths.get(root.path).toAbsolutePath().normalize()
+        val candidatePath = Paths.get(root.path, relative).toAbsolutePath().normalize()
+        if (candidatePath != rootPath && !candidatePath.startsWith(rootPath)) {
             throw IllegalArgumentException("路径越出工作区：$relative")
         }
-        return candidate
+        return candidatePath.toFile()
     }
 
     /** 需要工作区根的路径在未落定时直接报错，而不是落到工作区父目录。 */

@@ -17,6 +17,17 @@ class GitIgnoreMatcherTest {
     }
 
     @Test
+    fun star_ext_requires_dot_before_extension() {
+        // 回归：`*.log` 曾用 endsWith("log") 判断，catalog / cats / logs 目录全被误判为忽略，
+        // 进而静默不同步、备份漏备。
+        assertFalse(GitIgnoreMatcher.matches("*.log", listOf("catalog")))
+        assertFalse(GitIgnoreMatcher.matches("*.ts", listOf("cats")))
+        assertFalse(GitIgnoreMatcher.matches("*.log", listOf("logs")))
+        assertTrue(GitIgnoreMatcher.matches("*.tar.gz", listOf("pkg.tar.gz")))
+        assertFalse(GitIgnoreMatcher.matches("*.tar.gz", listOf("pkg.gz")))
+    }
+
+    @Test
     fun exact_segment_matches_dir_at_any_level_when_not_anchored() {
         assertTrue(GitIgnoreMatcher.matches("build", listOf("build")))
         assertTrue(GitIgnoreMatcher.matches("build", listOf("src", "build")))

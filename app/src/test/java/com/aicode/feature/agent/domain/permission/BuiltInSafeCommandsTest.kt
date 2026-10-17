@@ -44,6 +44,20 @@ class BuiltInSafeCommandsTest {
     }
 
     @Test
+    fun writeCapableFlags_areNotSafe() {
+        // 回归：sort -o / tree -o / git --output / uniq IN OUT 都能把内容写进任意文件，
+        // 不能因为命中了内置只读白名单就自动放行。
+        assertFalse(safe("sort -o /tmp/x file"))
+        assertFalse(safe("sort --output=/tmp/x file"))
+        assertFalse(safe("tree -o /tmp/x"))
+        assertFalse(safe("git log --output=/tmp/x"))
+        assertFalse(safe("uniq in.txt out.txt"))
+        assertTrue(safe("sort file"))
+        assertTrue(safe("sort -r file"))
+        assertTrue(safe("uniq -c in.txt"))
+    }
+
+    @Test
     fun gitWriteSubcommands_areNotSafe() {
         // 写操作子命令不在白名单，必须弹窗——与「git pull/clone 单独授权」一致。
         assertFalse(safe("git pull"))
