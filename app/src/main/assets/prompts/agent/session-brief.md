@@ -11,8 +11,10 @@ Read the transcript and the existing working state. Produce the updated working 
 Keep information a competent engineer would need to continue the job tomorrow:
 - the goal: what the user actually wants, and why
 - hard constraints: project rules, user requirements, environment limits, accepted trade-offs
+- negative requirements and exceptions: what must not be done, and conditions like "only when ..." / "unless ..."
 - decisions already made, each with its reason (so it is not re-litigated)
-- current progress: what is done, what is in flight, what is blocked
+- current progress: what is done, what is implemented but not verified, what is in flight, what is blocked
+- prior corrections: mistakes the user has already corrected; they must not recur
 - acceptance criteria: how completion will be judged
 - next step, if it is already determined
 
@@ -31,14 +33,21 @@ One or two sentences.
 ## 硬约束
 - constraint (keep the user's wording verbatim; never paraphrase or drop one)
 
+## 禁止项与例外
+- what must not be done; conditions like "only when ..." / "unless ..."
+
 ## 已定决策
 - decision — reason
 
 ## 当前进展
 - done / in progress / blocked
+- implemented but not verified
 
 ## 验收标准
 - how the result will be judged
+
+## 历史纠错
+- corrections the user has made; these must not recur
 
 ## 下一步
 - the immediate next action, if determined
