@@ -19,6 +19,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import android.os.SystemClock
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.sync.Mutex
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -42,6 +44,9 @@ class ContextCompactor @Inject constructor(
 
     private companion object {
         const val TAG = "ContextCompactor"
+
+        /** 会话级压缩互斥：同一会话同一时刻只允许一个压缩流程。 */
+        private val sessionLocks = ConcurrentHashMap<String, Mutex>()
 
         /** 送进摘要请求前对单条工具输出的保留上限（只在摘要请求内生效，不改历史）。 */
         const val TRIM_FOR_SUMMARY_CHARS = 3_000
@@ -131,6 +136,11 @@ class ContextCompactor @Inject constructor(
         onBeforeFold: (suspend (List<AgentMessage>) -> Unit)? = null,
         onEvent: suspend (AgentEvent) -> Unit = {}
     ): List<AgentMessage>? {
+        // 会话级互斥：同一会话并发触发压缩时，后到者等前一个结束，避免两轮折叠同一段历史、
+        // 或后写覆盖前写的摘要块（V2 3.6）。
+        val sessionLock = sessionId?.let { sessionLocks.computeIfAbsent(it) { Mutex() } }
+        sessionLock?.lock()
+        try {
         // 折叠前的上下文量：提交前要拿它跟折叠后的结果比（不省空间的折叠不提交）。
         val estimatedTokens = TokenEstimator.estimateMessages(messages)
         var splitIndex = selectTailStartIndex(messages, preserveRecentTokens)
@@ -422,6 +432,9 @@ class ContextCompactor @Inject constructor(
         }
 
         return compactedResult
+        } finally {
+            sessionLock?.unlock()
+        }
     }
 
     /**
