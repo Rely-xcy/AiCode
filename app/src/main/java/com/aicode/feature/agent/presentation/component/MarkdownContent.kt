@@ -53,6 +53,11 @@ import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.compose.elements.material.MarkdownBasicText
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.ImageTransformer
+import com.mikepenz.markdown.model.MarkdownColors
+import com.mikepenz.markdown.model.MarkdownDimens
+import com.mikepenz.markdown.model.MarkdownPadding
+import com.mikepenz.markdown.model.MarkdownTypography
 import com.mikepenz.markdown.model.markdownAnimations
 import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
@@ -132,7 +137,9 @@ internal fun MarkdownContent(
     loading: (@Composable () -> Unit)? = null,
     /** 长文本虚拟化渲染：正文改用 LazyColumn 逐块渲染（调用方需配合 heightIn 等有限高度约束
      *  才能触发懒加载），避免超大 md 一次性全量组合/测量造成的卡顿。 */
-    lazyScroll: Boolean = false
+    lazyScroll: Boolean = false,
+    /** 文本是否仍在流式增长：流式内容每帧都变，不能走缓存直出，也不写缓存以免挤爆 LRU。 */
+    streaming: Boolean = false
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val semantic = MaterialTheme.semanticColors
@@ -208,143 +215,38 @@ internal fun MarkdownContent(
     androidx.compose.runtime.CompositionLocalProvider(
         androidx.compose.material3.LocalContentColor provides color
     ) {
-        // rememberMarkdownState 必须无条件参与组合：若缓存命中就走 if 分支跳过它，其内部
-        // remember 状态会被 dispose；下一帧文本变化（流式增长/停顿后恢复）缓存 miss 重建时
-        // 初始状态是 Loading，会闪现原始 md 文本（解析/未解析反复横跳的根因）。
-        // 缓存只作为渲染加速：解析结果与当前文本一致时直接用；不一致但缓存命中当前文本时
-        // 用缓存；否则进入 Loading。注意：本库 rememberMarkdownState 在文本变化时会把
-        // state 无条件置为 Loading（retainState 参数在此版本不生效），Loading 分支若回退
-        // 显示原文纯文本，流式场景下每次文本变化都会闪现「最新文本的裸文本」（底部字在闪）。
-        // 因此 Loading 期间优先渲染最近一次成功解析的结果（旧文本的完整 md 排版），解析
-        // 完成后再平滑切到新文本，内容只增不跳。
-        val mdState = rememberMarkdownState(content = processed, retainState = true)
-        val parseState by mdState.state.collectAsState()
-        val cachedState = cache?.get(processed)
-        val prefixFallback = cache?.getBestPrefix(processed)
-        // 委托属性不能智能转换，先取局部快照再判断
-        val currentState = parseState
-        val parsedState: MarkdownParseState = when {
-            currentState is MarkdownParseState.Success && currentState.content == processed -> currentState
-            cachedState != null -> cachedState
-            else -> currentState
-        }
-
-        // 最近一次成功解析的结果：Loading 期间的渲染兜底（初始首帧即用前缀缓存，杜绝纯文本裸奔）
-        var lastSuccessState by remember { mutableStateOf<MarkdownParseState.Success?>(prefixFallback) }
-        if (parsedState is MarkdownParseState.Success) {
-            lastSuccessState = parsedState
-            // 同步写入缓存：让同轮次接力的落库消息首帧即可命中，避免 LaunchedEffect 异步延迟导致的裸纯文本闪烁
-            cache?.put(parsedState)
-        }
-
-        // Success 渲染当前结果；Loading 优先渲染本组件或前缀缓存的成功结果（杜绝裸纯文本闪现）；Error 回退原文
-        val renderState: MarkdownParseState.Success? = when (parsedState) {
-            is MarkdownParseState.Success -> parsedState
-            is MarkdownParseState.Loading -> lastSuccessState ?: prefixFallback
-            is MarkdownParseState.Error -> null
-        }
-
-        if (renderState != null) {
-            // 长文本用 LazyColumn 逐块渲染时，animations（文本尺寸动画等）不适用，属预期。
-            // 下面三个对象（successRenderer / mdComponents / mdAnimations）均 remember：不缓存的话
-            // 每次重组都新建 lambda 实例，令下游 Markdown 无法 skip。
-            val successRenderer: @Composable (
-                state: MarkdownParseState.Success,
-                components: MarkdownComponents,
-                modifier: Modifier
-            ) -> Unit = remember(lazyScroll) {
-                if (lazyScroll) {
-                    { state, components, m ->
-                        LazyColumn(modifier = m) {
-                            items(
-                                items = state.node.children,
-                                key = { node -> node.startOffset },
-                                contentType = { node -> node.type }
-                            ) { node ->
-                                // 列表位置按偏移保留，节点内部状态与当前 AST 绑定。
-                                key(node) {
-                                    MarkdownElement(node, components, state.content)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    { state, components, m ->
-                        MarkdownSuccess(state = state, components = components, modifier = m)
-                    }
-                }
-            }
-
-            // markdownComponents 是 @Composable（内部自带记忆化），不能套 remember，直接调用。
-            val mdComponents = markdownComponents(
-                // 外层 SelectionContainer（MessageBubbles）统一负责选区；超长助手消息已由
-                // AIChatPanel 拆成多条有界 item，不存在超长单 item 的选区树/交互失效问题。
-                codeFence = {
-                    MarkdownCodeFence(
-                        content = it.content,
-                        node = it.node,
-                    ) { code, language, style ->
-                        SafeMarkdownHighlightedCode(code, language, style, highlightsBuilder, showHeader = true)
-                    }
-                },
-                codeBlock = {
-                    MarkdownCodeBlock(
-                        content = it.content,
-                        node = it.node,
-                    ) { code, language, style ->
-                        SafeMarkdownHighlightedCode(code, language, style, highlightsBuilder, showHeader = true)
-                    }
-                },
-                // 库默认 maxLines=1 + Ellipsis，单元格长文会被截断；这里放开为完整多行显示。
-                table = {
-                    MarkdownTable(
-                        content = it.content,
-                        node = it.node,
-                        style = it.typography.table,
-                        headerBlock = { content, header, tableWidth, style ->
-                            MarkdownTableHeader(
-                                content = content,
-                                header = header,
-                                tableWidth = tableWidth,
-                                style = style,
-                                maxLines = Int.MAX_VALUE,
-                                overflow = TextOverflow.Clip,
-                            )
-                        },
-                        rowBlock = { content, header, tableWidth, style ->
-                            MarkdownTableRow(
-                                content = content,
-                                header = header,
-                                tableWidth = tableWidth,
-                                style = style,
-                                maxLines = Int.MAX_VALUE,
-                                overflow = TextOverflow.Clip,
-                            )
-                        },
-                    )
-                },
-            )
-
-            Markdown(
-                state = renderState,
+        // 定稿消息命中缓存时直接渲染：不创建解析状态机，滑入视口零解析成本。
+        // 缓存分支与解析分支是两个独立 composable，各自持有 remember 槽位——切换时旧子树
+        // 被 dispose、新子树初始化，不会出现「条件调用 remember 导致槽位错位」。
+        val cachedState = if (!streaming) cache?.get(processed) else null
+        if (cachedState != null) {
+            MarkdownSuccessBlock(
+                state = cachedState,
                 modifier = modifier,
-                colors = mdColors,
-                typography = mdTypography,
-                padding = mdPadding,
-                dimens = mdDimens,
-                // 关闭段落文本的 animateContentSize：快速流式更新下它会持续追赶目标高度，反而弹性抖动。
-                animations = markdownAnimations(animateTextSize = { this }),
-                imageTransformer = mathTransformer,
-                components = mdComponents,
-                success = successRenderer,
+                lazyScroll = lazyScroll,
+                mdColors = mdColors,
+                mdTypography = mdTypography,
+                mdPadding = mdPadding,
+                mdDimens = mdDimens,
+                highlightsBuilder = highlightsBuilder,
+                mathTransformer = mathTransformer,
             )
-        } else if (loading != null) {
-            loading()
         } else {
-            PlainMarkdownText(
+            MarkdownLiveBlock(
                 text = text,
+                processed = processed,
                 color = color,
-                modifier = modifier
+                modifier = modifier,
+                cache = cache,
+                loading = loading,
+                lazyScroll = lazyScroll,
+                streaming = streaming,
+                mdColors = mdColors,
+                mdTypography = mdTypography,
+                mdPadding = mdPadding,
+                mdDimens = mdDimens,
+                highlightsBuilder = highlightsBuilder,
+                mathTransformer = mathTransformer,
             )
         }
     }
@@ -460,4 +362,163 @@ private fun PlainMarkdownText(
         modifier = modifier,
         style = MaterialTheme.typography.bodyMedium.copy(color = color, lineHeight = 20.sp)
     )
+}
+
+/** 把一份已解析的 Markdown AST 渲染出来；缓存命中与解析完成共用同一条渲染路径。 */
+@Composable
+private fun MarkdownSuccessBlock(
+    state: MarkdownParseState.Success,
+    modifier: Modifier,
+    lazyScroll: Boolean,
+    mdColors: MarkdownColors,
+    mdTypography: MarkdownTypography,
+    mdPadding: MarkdownPadding,
+    mdDimens: MarkdownDimens,
+    highlightsBuilder: Highlights.Builder,
+    mathTransformer: ImageTransformer,
+) {
+    val successRenderer: @Composable (
+        state: MarkdownParseState.Success,
+        components: MarkdownComponents,
+        modifier: Modifier
+    ) -> Unit = remember(lazyScroll) {
+        if (lazyScroll) {
+            { s, components, m ->
+                LazyColumn(modifier = m) {
+                    items(
+                        items = s.node.children,
+                        key = { node -> node.startOffset },
+                        contentType = { node -> node.type }
+                    ) { node ->
+                        key(node) {
+                            MarkdownElement(node, components, s.content)
+                        }
+                    }
+                }
+            }
+        } else {
+            { s, components, m ->
+                MarkdownSuccess(state = s, components = components, modifier = m)
+            }
+        }
+    }
+
+    val mdComponents = markdownComponents(
+        codeFence = {
+            MarkdownCodeFence(
+                content = it.content,
+                node = it.node,
+            ) { code, language, style ->
+                SafeMarkdownHighlightedCode(code, language, style, highlightsBuilder, showHeader = true)
+            }
+        },
+        codeBlock = {
+            MarkdownCodeBlock(
+                content = it.content,
+                node = it.node,
+            ) { code, language, style ->
+                SafeMarkdownHighlightedCode(code, language, style, highlightsBuilder, showHeader = true)
+            }
+        },
+        table = {
+            MarkdownTable(
+                content = it.content,
+                node = it.node,
+                style = it.typography.table,
+                headerBlock = { content, header, tableWidth, style ->
+                    MarkdownTableHeader(
+                        content = content,
+                        header = header,
+                        tableWidth = tableWidth,
+                        style = style,
+                        maxLines = Int.MAX_VALUE,
+                        overflow = TextOverflow.Clip,
+                    )
+                },
+                rowBlock = { content, header, tableWidth, style ->
+                    MarkdownTableRow(
+                        content = content,
+                        header = header,
+                        tableWidth = tableWidth,
+                        style = style,
+                        maxLines = Int.MAX_VALUE,
+                        overflow = TextOverflow.Clip,
+                    )
+                },
+            )
+        },
+    )
+
+    Markdown(
+        state = state,
+        modifier = modifier,
+        colors = mdColors,
+        typography = mdTypography,
+        padding = mdPadding,
+        dimens = mdDimens,
+        animations = markdownAnimations(animateTextSize = { this }),
+        imageTransformer = mathTransformer,
+        components = mdComponents,
+        success = successRenderer,
+    )
+}
+
+/** 解析路径：流式增长或缓存未命中时走 Markdown 状态机，解析成功后写缓存。 */
+@Composable
+private fun MarkdownLiveBlock(
+    text: String,
+    processed: String,
+    color: Color,
+    modifier: Modifier,
+    cache: MarkdownRenderCache?,
+    loading: (@Composable () -> Unit)?,
+    lazyScroll: Boolean,
+    streaming: Boolean,
+    mdColors: MarkdownColors,
+    mdTypography: MarkdownTypography,
+    mdPadding: MarkdownPadding,
+    mdDimens: MarkdownDimens,
+    highlightsBuilder: Highlights.Builder,
+    mathTransformer: ImageTransformer,
+) {
+    val mdState = rememberMarkdownState(content = processed, retainState = true)
+    val parseState by mdState.state.collectAsState()
+    val currentState = parseState
+    val parsedState: MarkdownParseState = when {
+        currentState is MarkdownParseState.Success && currentState.content == processed -> currentState
+        else -> currentState
+    }
+
+    // Loading 期间的渲染兜底：优先用上一次成功解析的结果，杜绝裸纯文本闪现。
+    val prefixFallback = cache?.getBestPrefix(processed)
+    var lastSuccessState by remember { mutableStateOf<MarkdownParseState.Success?>(prefixFallback) }
+    if (parsedState is MarkdownParseState.Success) {
+        lastSuccessState = parsedState
+        // 流式不写缓存：逐字增量会把 LRU 挤爆，反而把定稿消息的缓存全淘掉。
+        if (!streaming) cache?.put(parsedState)
+    }
+
+    val renderState: MarkdownParseState.Success? = when (parsedState) {
+        is MarkdownParseState.Success -> parsedState
+        is MarkdownParseState.Loading -> lastSuccessState ?: prefixFallback
+        is MarkdownParseState.Error -> null
+    }
+
+    if (renderState != null) {
+        MarkdownSuccessBlock(
+            state = renderState,
+            modifier = modifier,
+            lazyScroll = lazyScroll,
+            mdColors = mdColors,
+            mdTypography = mdTypography,
+            mdPadding = mdPadding,
+            mdDimens = mdDimens,
+            highlightsBuilder = highlightsBuilder,
+            mathTransformer = mathTransformer,
+        )
+    } else if (loading != null) {
+        loading()
+    } else {
+        PlainMarkdownText(text = text, color = color, modifier = modifier)
+    }
 }
