@@ -242,7 +242,6 @@ class AIAgentViewModel @Inject constructor(
 
     private val _messageLimit = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val defaultLimit = 30
-    private val loadedMessageLimits = mutableMapOf<String, Int>()
 
     /** 聊天记录搜索：命中条数上限、输入防抖、片段上下文宽度、定位时预留的分页余量。 */
     private val chatSearchLimit = 50
@@ -340,7 +339,9 @@ class AIAgentViewModel @Inject constructor(
         val state = messagesState.value
         if (state.sessionId != sid || !state.loaded || !state.hasMore) return
         val currentLimit = _messageLimit.value[sid] ?: defaultLimit
-        if (loadedMessageLimits[sid] != currentLimit) return
+        // 幂等：同一 limit 重复请求直接放行（重入只是多一次等价的 DB 查询）。
+        // 原先的「loadedMessageLimits[sid] != currentLimit 则拒」是幽灵死锁：台账在流产出后才更新，
+        // 切页重订阅等场景下内存台账与流不同步，上滑加载就会被它永远吞掉（用户实测：上滑无反应）。
         _messageLimit.value = _messageLimit.value + (sid to (currentLimit + 30))
     }
 
@@ -820,7 +821,6 @@ class AIAgentViewModel @Inject constructor(
                     isLoadingMore = false
                 )
             }.flowOn(Dispatchers.Default)
-                .onEach { loadedMessageLimits[id] = limit }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ChatMessagesState(null, emptyList(), loaded = false))
 

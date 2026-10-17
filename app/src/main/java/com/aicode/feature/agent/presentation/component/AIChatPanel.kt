@@ -458,7 +458,37 @@ internal fun buildChatItems(
             )
         }
     }
-    return items
+    return items.withUniqueKeys()
+}
+
+/**
+ * 保证 LazyColumn item key 全局唯一：库里出现重复消息 id（导入备份后出现过）时，
+ * 同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
+ *
+ * 不静默丢弃重复项：保留全部内容，只给后来者补一个后缀（同 key 的后续项用 `#dupN`），
+ * 这样用户至少能看到内容、崩溃也不再发生；真正的数据问题留给导入侧修。
+ */
+private fun List<ChatRenderItem>.withUniqueKeys(): List<ChatRenderItem> {
+    val seen = HashSet<String>(size)
+    var hadDup = false
+    val out = map { item ->
+        if (seen.add(item.key)) {
+            item
+        } else {
+            hadDup = true
+            var i = 2
+            var candidate = "${item.key}#dup$i"
+            while (!seen.add(candidate)) {
+                i++
+                candidate = "${item.key}#dup$i"
+            }
+            item.copy(key = candidate)
+        }
+    }
+    if (hadDup) {
+        FileLogger.w("AIChatPanel", "聊天列表出现重复 item key（消息 id 重复），已加后缀兜住：共 ${out.size} 项")
+    }
+    return out
 }
 
 /** 一轮任务：轮首用户消息 + 其后的全部消息（助手 / 工具 / 压缩卡片等）。 */
