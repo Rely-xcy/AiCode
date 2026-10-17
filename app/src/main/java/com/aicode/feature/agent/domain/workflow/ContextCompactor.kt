@@ -55,6 +55,14 @@ class ContextCompactor @Inject constructor(
         /** 链合并（阶段 4）专用提示词：对多份旧摘要再归纳。 */
         const val MERGE_PROMPT_FILE = "agent/compact-chain-merge.md"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
+
+        /**
+         * 摘要窗口预算比例：剩余 30% 留给摘要提示词与旧摘要。
+         *
+         * 两处共用同一常量，不能各自硬编码——[compact] 用它前移拆分点（保证 head 完整装得下）、
+         * [List.truncateForSummaryWindow] 用它做最后一道裁切，口径漂移就会重新出现「悄悄丢弃原文」。
+         */
+        const val SUMMARY_BUDGET_RATIO = 0.7f
     }
 
     /**
@@ -130,6 +138,21 @@ class ContextCompactor @Inject constructor(
         // tail 不能以孤立的 ToolResultMessage 开头：压缩后其前面是摘要（不含 toolCalls），
         // 该 tool 消息会变成孤儿，API 直接 400。向前回溯到配对的 assistant。
         splitIndex = adjustSplitIndex(messages, splitIndex)
+        if (splitIndex <= 0) return null
+
+        // 口径修正：摘要窗口装不下的 head 不能悄悄丢掉最旧原文（truncateForSummaryWindow 是
+        // 「从新到旧」保留，超预算就把最旧的丢掉）。被丢掉的那批既没进摘要、又会被回放侧的覆盖
+        // 边界裁掉，等于永久从模型上下文消失——多轮累积就是「越聊越傻」。这里前移 splitIndex
+        // （多留原文在 tail 保留区），直到 head 能完整装进摘要预算：宁可这轮少压，也不丢信息。
+        // preserveRecentTokens 是软预算，摘要窗口是硬约束，冲突时以硬约束为准。
+        val summaryBudgetTokens = (summaryWindowTokens * SUMMARY_BUDGET_RATIO).toInt()
+        while (splitIndex > 0) {
+            val headTokens = TokenEstimator.estimateMessages(
+                removeCompactionPairs(messages.subList(0, splitIndex))
+            )
+            if (headTokens <= summaryBudgetTokens) break
+            splitIndex = adjustSplitIndex(messages, splitIndex - 1)
+        }
         if (splitIndex <= 0) return null
 
         val head = messages.subList(0, splitIndex)
@@ -958,7 +981,7 @@ class ContextCompactor @Inject constructor(
      */
     private fun List<AgentMessage>.truncateForSummaryWindow(contextTokens: Int): List<AgentMessage> {
         if (isEmpty()) return this
-        val budgetTokens = (contextTokens * 0.7f).toInt()
+        val budgetTokens = (contextTokens * SUMMARY_BUDGET_RATIO).toInt()
         var totalTokens = 0
         val kept = mutableListOf<AgentMessage>()
         for (msg in asReversed()) {
