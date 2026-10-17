@@ -233,7 +233,11 @@ internal fun MarkdownContent(
         } else {
             null
         }
-        val parseState: MarkdownParseState? = mdState?.state?.collectAsState()?.value
+        val parseState: MarkdownParseState? = if (mdState != null) {
+            mdState.state.collectAsState().value
+        } else {
+            null
+        }
         val cachedState = finalizedCached ?: cache?.get(processed)
         val prefixFallback = cache?.getBestPrefix(processed)
         // 委托属性不能智能转换，先取局部快照再判断
@@ -242,7 +246,7 @@ internal fun MarkdownContent(
             currentState is MarkdownParseState.Success && currentState.content == processed -> currentState
             cachedState != null -> cachedState
             currentState != null -> currentState
-            else -> MarkdownParseState.Loading
+            else -> MarkdownParseState.Loading()
         }
 
         // 最近一次成功解析的结果：Loading 期间的渲染兜底（初始首帧即用前缀缓存，杜绝纯文本裸奔）
