@@ -462,6 +462,16 @@ internal fun buildChatItems(
 }
 
 /**
+ * 某条渲染项的触发词 chip 数据：只有用户气泡才可能带，其它类型一律空表。
+ * 抽出来是为了调用点不用每 item 都做「Map 查找 + orEmpty()」，也方便快照替换。
+ */
+private fun triggeredSkillsForItem(
+    snapshot: Map<String, List<String>>,
+    message: AgentUIMessage
+): List<String> =
+    if (message.role == MessageRole.USER) snapshot[message.id].orEmpty() else emptyList()
+
+/**
  * 保证 LazyColumn item key 全局唯一：库里出现重复消息 id（导入备份后出现过）时，
  * 同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
  *
@@ -780,6 +790,10 @@ fun AIChatPanel(
     val contextUsages by viewModel.contextUsage.collectAsStateWithLifecycle()
     // 本轮自然语言触发的技能（按用户消息 id）：仅用于气泡下方 chip。
     val triggeredSkills by viewModel.triggeredSkills.collectAsStateWithLifecycle()
+    // 触发词 chip 查询收敛：不是每帧逐 item 直读 Map（每次读取都走 StateFlow 委托与 Map 查找），
+    // 而是派生成不可变快照。滑动中每个 item 组合都调 triggeredSkillsForItem，直读的成本是
+    // 逐帧 × 列表长度次，快照后只在数据真变时重建一份。
+    val triggeredSkillsSnapshot by remember(triggeredSkills) { derivedStateOf { triggeredSkills } }
     val sessionContextUsage = contextUsages[currentSessionId]
     // 取不到快照时（表现为「没有环」）必须能自证原因：是本会话还没判定过，还是判定发的是别的会话。
     // 后者曾是「已触发压缩、环却只显示一小截」的根因，只在会话或快照归属变化时记一条。
@@ -1815,7 +1829,7 @@ fun AIChatPanel(
                     taskDurationMs = taskDurations[message.id],
                     turnUsage = turnUsages[message.id],
                     entryDelayMs = messageEntryDelays[message.id],
-                    triggeredSkills = triggeredSkills[message.id].orEmpty()
+                    triggeredSkills = triggeredSkillsForItem(triggeredSkillsSnapshot, item.message)
                 )
             }
         }
