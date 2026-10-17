@@ -11,5 +11,7 @@ data class TodoItem(
     val priority: Int = 0,
     val order: Int = 0,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** 父任务 id；顶层任务为 null。 */
+    val parentId: String? = null
 )

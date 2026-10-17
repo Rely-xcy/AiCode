@@ -50,13 +50,15 @@ class TodoTool @Inject constructor(
         "remove=删一项；replace=用 items 整表替换（兜底）；clear=清空；list=查看当前清单。" +
         "【先调用、再写回复——不要只在回复里说「已完成」】" +
         "① 开始多步任务（3 步以上或需要多次工具调用）时先 add 建清单，再动手；" +
-        "② 每完成一项立刻 update 成 completed，不要攒到最后一次性补；" +
+        "② 每完成一项立刻 update：实现完先标 implemented，验证通过才标 completed；失败标 failed，受阻标 blocked；" +
         "③ 开始下一项时 update 成 in_progress；" +
         "④ 计划或需求变了（用户改主意、发现新问题、放弃某项）当场同步清单；" +
         "⑤ 一轮收尾前对照清单：回复里说「已完成 / 下一步」的每一项，清单里必须已经对上；" +
         "⑥ 完成一项就把它留在清单里（update 成 completed，不要逐项删）；**清单里的任务全部完成后**，" +
         "用 clear 把整张清单一次清空、不留残余条目。清单要能看出整体进度。" +
-        "status 取值 pending / in_progress / completed。清单每轮都会重新注入系统提示词，压缩上下文不会丢。"
+        "status 取值 pending / in_progress / implemented（实现完待验证）/ verifying / completed / blocked / failed / cancelled。" +
+        "子任务用 parent_id 指向父任务的 subject；父任务在子任务全部完成前不能标 completed。" +
+        "清单每轮都会重新注入系统提示词，压缩上下文不会丢。"
 
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.MODIFY_TODO_STATE)
@@ -75,8 +77,15 @@ class TodoTool @Inject constructor(
             ),
             "status" to mapOf(
                 "type" to "string",
-                "enum" to listOf("pending", "in_progress", "completed"),
+                "enum" to listOf(
+                    "pending", "in_progress", "implemented", "verifying",
+                    "completed", "blocked", "failed", "cancelled"
+                ),
                 "description" to "状态，默认 pending"
+            ),
+            "parent_id" to mapOf(
+                "type" to "string",
+                "description" to "父任务的 subject（可选）：本项是它的子任务"
             ),
             "priority" to mapOf(
                 "type" to "integer",
@@ -104,9 +113,19 @@ class TodoTool @Inject constructor(
         "status" to ToolParameter(
             name = "status",
             type = ParameterType.STRING,
-            description = "状态：pending（未开始）/ in_progress（进行中）/ completed（已完成）",
+            description = "状态：pending / in_progress / implemented（实现完待验证）/ verifying / " +
+                "completed / blocked / failed / cancelled",
             required = false,
-            enum = listOf("pending", "in_progress", "completed")
+            enum = listOf(
+                "pending", "in_progress", "implemented", "verifying",
+                "completed", "blocked", "failed", "cancelled"
+            )
+        ),
+        "parent_id" to ToolParameter(
+            name = "parent_id",
+            type = ParameterType.STRING,
+            description = "父任务的 subject（可选）：本项是它的子任务；父任务在子任务全部完成前不能标 completed。",
+            required = false
         ),
         "description" to ToolParameter(
             name = "description",
@@ -202,7 +221,8 @@ class TodoTool @Inject constructor(
                 priority = draft.priority ?: 0,
                 order = idx,
                 createdAt = previous?.createdAt ?: now,
-                updatedAt = now
+                updatedAt = now,
+                parentId = draft.parentId ?: previous?.parentId
             )
         }
 
@@ -237,7 +257,8 @@ class TodoTool @Inject constructor(
                     description = draft.description ?: hit.description,
                     status = (draft.status ?: parseStatus(hit.status) ?: TodoStatus.PENDING).name,
                     priority = draft.priority ?: hit.priority,
-                    updatedAt = now
+                    updatedAt = now,
+                    parentId = draft.parentId ?: hit.parentId
                 )
                 rows[hitIndex] = updated
                 touched += updated
@@ -256,7 +277,8 @@ class TodoTool @Inject constructor(
                 priority = draft.priority ?: 0,
                 order = nextOrder++,
                 createdAt = now,
-                updatedAt = now
+                updatedAt = now,
+                parentId = draft.parentId
             )
             rows += entity
             touched += entity
@@ -299,6 +321,19 @@ class TodoTool @Inject constructor(
         val target = when (val located = locate(existing, subject)) {
             is Locate.Hit -> located.entity
             else -> return locateError(located, subject, existing)
+        }
+        // 父任务完成前必须所有子任务已完成：一个子任务完成不代表父任务完成（V2 8.6）。
+        if (status == TodoStatus.COMPLETED) {
+            val unfinished = existing.filter {
+                it.parentId == target.id && it.status != TodoStatus.COMPLETED.name
+            }
+            if (unfinished.isNotEmpty()) {
+                return ToolResult.Error(
+                    "「${target.subject}」还有 ${unfinished.size} 个未完成子任务：" +
+                        unfinished.joinToString("、") { it.subject },
+                    "PARENT_HAS_UNFINISHED_CHILDREN"
+                )
+            }
         }
         val updated = target.copy(
             status = (status ?: parseStatus(target.status) ?: TodoStatus.PENDING).name,
@@ -440,7 +475,9 @@ class TodoTool @Inject constructor(
             subject = subject,
             description = obj["description"]?.jsonPrimitive?.contentOrNull?.trim(),
             status = status,
-            priority = obj["priority"]?.jsonPrimitive?.intOrNull
+            priority = obj["priority"]?.jsonPrimitive?.intOrNull,
+            parentId = (obj["parent_id"] ?: obj["parentId"])?.jsonPrimitive?.contentOrNull
+                ?.trim()?.takeIf { it.isNotEmpty() }
         )
     }
 
@@ -530,5 +567,6 @@ private data class Draft(
     val subject: String,
     val description: String? = null,
     val status: TodoStatus? = null,
-    val priority: Int? = null
+    val priority: Int? = null,
+    val parentId: String? = null
 )

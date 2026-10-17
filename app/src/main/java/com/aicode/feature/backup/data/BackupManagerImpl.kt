@@ -1019,8 +1019,8 @@ class BackupManagerImpl @Inject constructor(
         isInterjection = isInterjection, foldsUpToTimestamp = foldsUpToTimestamp
     )
 
-    private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
-    private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
+    private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt, parentId)
+    private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt, parentId)
 
     private companion object {
         const val TAG = "BackupManager"

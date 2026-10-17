@@ -289,5 +289,7 @@ data class TodoItemDto(
     val priority: Int = 0,
     val order: Int = 0,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** 父任务 id；旧备份缺该字段时为 null。 */
+    val parentId: String? = null
 )
