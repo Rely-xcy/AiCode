@@ -146,14 +146,20 @@ class ContextCompactor @Inject constructor(
         // （多留原文在 tail 保留区），直到 head 能完整装进摘要预算：宁可这轮少压，也不丢信息。
         // preserveRecentTokens 是软预算，摘要窗口是硬约束，冲突时以硬约束为准。
         val summaryBudgetTokens = (summaryWindowTokens * SUMMARY_BUDGET_RATIO).toInt()
-        while (splitIndex > 0) {
-            val headTokens = TokenEstimator.estimateMessages(
-                removeCompactionPairs(messages.subList(0, splitIndex))
-            )
-            if (headTokens <= summaryBudgetTokens) break
-            splitIndex = adjustSplitIndex(messages, splitIndex - 1)
+        // 下限保留 1 条 head：单条消息本身就超摘要窗口时，前移到 0 会让整轮压缩直接放弃
+        //（连摘要失败事件都不发，UI 与单测都看不到）。单条超长内容的截断由
+        // truncateForSummaryWindow 兜（它总保留最新的第一条）。
+        if (summaryBudgetTokens > 0) {
+            while (splitIndex > 1) {
+                val headTokens = TokenEstimator.estimateMessages(
+                    removeCompactionPairs(messages.subList(0, splitIndex))
+                )
+                if (headTokens <= summaryBudgetTokens) break
+                val next = adjustSplitIndex(messages, splitIndex - 1)
+                if (next >= splitIndex) break
+                splitIndex = next
+            }
         }
-        if (splitIndex <= 0) return null
 
         val head = messages.subList(0, splitIndex)
         val tail = messages.subList(splitIndex, messages.size)
