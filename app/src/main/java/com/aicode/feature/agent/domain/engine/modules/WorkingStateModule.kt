@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.SessionBriefDao
+import com.aicode.feature.agent.domain.brief.SessionBriefExtractor
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +26,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class WorkingStateModule @Inject constructor(
-    private val sessionBriefDao: SessionBriefDao
+    private val sessionBriefDao: SessionBriefDao,
+    private val sessionBriefExtractor: SessionBriefExtractor
 ) : EngineModule {
 
     override val id = MODULE_ID
@@ -38,6 +40,9 @@ class WorkingStateModule @Inject constructor(
 
     /** 会话 → 状态变更监听；同一会话只挂一次。 */
     private val watchers = ConcurrentHashMap<String, Job>()
+
+    /** 距上次收尾更新的轮数（只在达到阈值时刷新一次，避免每轮多一次模型调用）。 */
+    private val turnsSinceUpdate = ConcurrentHashMap<String, Int>()
 
     // 声明在 init 之前：Kotlin 按声明顺序初始化
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,15 +66,37 @@ class WorkingStateModule @Inject constructor(
         if (content.isBlank()) return null
         return buildString {
             append("会话工作状态（每轮重新注入，压缩上下文不会丢；这是本会话已确定的任务理解）：\n")
+            append("硬约束优先于本会话其它一切安排，任何一条都不得违反。\n\n")
             append(content)
             append("\n\n若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守过时结论。")
         }
+    }
+
+    override suspend fun onTurnCompleted(ctx: EngineContext) {
+        // 阶段 0：只在有实质工作的轮次里定期刷新；一次性对话不值得多花一次模型调用。
+        if (ctx.isSubAgent) return
+        val sessionId = ctx.sessionId ?: return
+        val oneShot = ctx.oneShot ?: return
+        val count = (turnsSinceUpdate[sessionId] ?: 0) + 1
+        if (count < UPDATE_EVERY_TURNS) {
+            turnsSinceUpdate[sessionId] = count
+            return
+        }
+        turnsSinceUpdate[sessionId] = 0
+        runCatching {
+            sessionBriefExtractor.extract(
+                sessionId = sessionId,
+                history = ctx.history,
+                complete = { prompt -> oneShot(SessionBriefExtractor.PROMPT_FILE, prompt) }
+            )
+        }.onFailure { FileLogger.w(TAG, "收尾更新会话工作状态失败，不影响主流程", it) }
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
         val sessionId = ctx.sessionId ?: return
         watchers.remove(sessionId)?.cancel()
         snapshotBySession.remove(sessionId)
+        turnsSinceUpdate.remove(sessionId)
     }
 
     private fun watch(sessionId: String) {
@@ -93,5 +120,8 @@ class WorkingStateModule @Inject constructor(
 
         /** 同时跟踪的会话数上限：只防长期累积。 */
         const val MAX_WATCHED_SESSIONS = 64
+
+        /** 每多少轮收尾刷新一次工作状态：太频繁等于给每轮加一次模型调用。 */
+        const val UPDATE_EVERY_TURNS = 5
     }
 }
