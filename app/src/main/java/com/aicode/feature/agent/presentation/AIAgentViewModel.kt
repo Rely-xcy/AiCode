@@ -103,6 +103,7 @@ import com.aicode.feature.agent.domain.skill.Skill
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.notification.AgentLiveNotificationManager
 import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager
+import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager.ApprovalKind
 import com.aicode.feature.agent.presentation.component.RewindOption
 import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
 import com.aicode.feature.agent.presentation.component.formatTokenCount
@@ -1324,22 +1325,23 @@ class AIAgentViewModel @Inject constructor(
                 askUserQuestionManager.pendingQuestion,
                 planApprovalManager.pendingApproval
             ) { awaiting, question, plan ->
-                val labels = LinkedHashMap<String, Int>()
-                awaiting.forEach { labels[it] = R.string.notification_approval_label_permission }
+                val labels = LinkedHashMap<String, Pair<Int, ApprovalKind>>()
+                awaiting.forEach { labels[it] = R.string.notification_approval_label_permission to ApprovalKind.PERMISSION }
                 question?.sessionId?.takeIf { it.isNotBlank() }?.let {
-                    labels.putIfAbsent(it, R.string.notification_approval_label_question)
+                    labels.putIfAbsent(it, R.string.notification_approval_label_question to ApprovalKind.QUESTION)
                 }
                 plan?.sessionId?.takeIf { it.isNotBlank() }?.let {
-                    labels.putIfAbsent(it, R.string.notification_approval_label_plan)
+                    labels.putIfAbsent(it, R.string.notification_approval_label_plan to ApprovalKind.PLAN)
                 }
                 labels
             }.collect { labels ->
-                val pending = labels.mapNotNull { (sid, labelRes) ->
+                val pending = labels.mapNotNull { (sid, info) ->
                     val session = sessionUseCase.getSessionById(sid) ?: return@mapNotNull null
                     AgentApprovalNotificationManager.PendingApproval(
                         sessionId = sid,
                         sessionTitle = session.title.ifBlank { context.getString(R.string.chat_new_session_btn) },
-                        label = context.getString(labelRes)
+                        label = context.getString(info.first),
+                        kind = info.second
                     )
                 }
                 agentApprovalNotificationManager.update(pending)

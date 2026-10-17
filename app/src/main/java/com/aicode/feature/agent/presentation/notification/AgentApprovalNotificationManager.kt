@@ -11,6 +11,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.aicode.MainActivity
 import com.aicode.R
+import com.aicode.feature.agent.domain.permission.PermissionChoice
+import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -33,11 +35,15 @@ class AgentApprovalNotificationManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val settings: ApprovalNotificationSettingsRepository
 ) {
+    /** 待审批项的类型，决定通知上挂哪组按钮。 */
+    enum class ApprovalKind { PERMISSION, QUESTION, PLAN }
+
     /** 一个等待用户审批的会话在通知里的展示信息。 */
     data class PendingApproval(
         val sessionId: String,
         val sessionTitle: String,
-        val label: String
+        val label: String,
+        val kind: ApprovalKind
     )
 
     private companion object {
@@ -95,7 +101,7 @@ class AgentApprovalNotificationManager @Inject constructor(
             context.getString(R.string.notification_approval_multi_title, pending.size)
         }
         val body = pending.joinToString("\n") { "${it.sessionTitle} · ${it.label}" }
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setContentTitle(title)
             .setContentText(body)
@@ -104,8 +110,40 @@ class AgentApprovalNotificationManager @Inject constructor(
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
-        runCatching { manager.notify(NOTIFICATION_ID, notification) }
+        // 仅在唯一可批准项时出按钮：多项聚合时固定按钮无法表达作用于哪一个。
+        pending.singleOrNull()?.let { single ->
+            when (single.kind) {
+                ApprovalKind.PERMISSION -> {
+                    builder.addAction(0, context.getString(R.string.notification_approval_action_reject), actionIntent(ApprovalKind.PERMISSION, PermissionChoice.REJECT.name, 11))
+                    builder.addAction(0, context.getString(R.string.notification_approval_action_allow), actionIntent(ApprovalKind.PERMISSION, PermissionChoice.ONCE.name, 12))
+                }
+                ApprovalKind.PLAN -> {
+                    builder.addAction(0, context.getString(R.string.notification_approval_action_approve_plan), actionIntent(ApprovalKind.PLAN, PlanApprovalChoice.APPROVE.name, 13))
+                    builder.addAction(0, context.getString(R.string.notification_approval_action_reject), actionIntent(ApprovalKind.PLAN, PlanApprovalChoice.REFINE.name, 14))
+                }
+                ApprovalKind.QUESTION -> Unit
+            }
+        }
+        runCatching { manager.notify(NOTIFICATION_ID, builder.build()) }
+    }
+
+    /**
+     * 构造通知按钮的广播 PendingIntent。每个按钮必须用不同的 requestCode：
+     * PendingIntent 的等价判断忽略 extras，requestCode 相同时后建的会复用前者、
+     * extras 被丢弃，导致点哪个按钮结果都一样。
+     */
+    private fun actionIntent(kind: ApprovalKind, choice: String, requestCode: Int): PendingIntent {
+        val intent = Intent(context, AgentApprovalActionReceiver::class.java).apply {
+            action = AgentApprovalActionReceiver.ACTION
+            putExtra(AgentApprovalActionReceiver.EXTRA_KIND, kind.name)
+            putExtra(AgentApprovalActionReceiver.EXTRA_CHOICE, choice)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
 
     private fun inForeground(): Boolean =

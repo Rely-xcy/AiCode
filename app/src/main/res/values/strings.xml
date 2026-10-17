@@ -290,6 +290,9 @@
     <string name="notification_approval_label_permission">需要授权</string>
     <string name="notification_approval_label_question">需要回答</string>
     <string name="notification_approval_label_plan">等待计划审批</string>
+    <string name="notification_approval_action_allow">允许</string>
+    <string name="notification_approval_action_reject">拒绝</string>
+    <string name="notification_approval_action_approve_plan">批准</string>
     <string name="settings_app_permissions">软件权限</string>
     <string name="settings_permission_apk_install">安装未知应用</string>
     <string name="settings_permission_apk_install_desc">允许安装 APK 安装包</string>

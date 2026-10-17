@@ -98,6 +98,11 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- 审批通知上「允许/拒绝」按钮的回传接收器，仅接收本 App 显式 Intent 发的广播。 -->
+        <receiver
+            android:name=".feature.agent.presentation.notification.AgentApprovalActionReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

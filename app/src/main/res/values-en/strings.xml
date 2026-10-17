@@ -290,6 +290,9 @@
     <string name="notification_approval_label_permission">Permission required</string>
     <string name="notification_approval_label_question">Answer required</string>
     <string name="notification_approval_label_plan">Plan approval</string>
+    <string name="notification_approval_action_allow">Allow</string>
+    <string name="notification_approval_action_reject">Reject</string>
+    <string name="notification_approval_action_approve_plan">Approve</string>
     <string name="settings_app_permissions">App Permissions</string>
     <string name="settings_permission_apk_install">Install unknown apps</string>
     <string name="settings_permission_apk_install_desc">Allow installing APK packages</string>
