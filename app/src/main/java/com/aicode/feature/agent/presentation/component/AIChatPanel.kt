@@ -1657,10 +1657,12 @@ fun AIChatPanel(
     val latestMessagesState = rememberUpdatedState(messagesState)
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .distinctUntilChanged()
-            .collect { index ->
-                val ms = latestMessagesState.value
+        // 同时观察 index 与消息状态：折叠头把 30 条压成几个 item 后，列表可能一开局就停在
+        // index ≤ 3 且手指「没得滑」——只看 index 的话它永远不再变化，加载触发器就此死锁
+        //（用户实测：长对话上滑没反应，切页刷新才出来）。带上消息状态后，上限增长会产生
+        // 新的发射，只要还在顶部且 hasMore 就继续加载，直到屏幕填满或没有更多。
+        snapshotFlow { listState.firstVisibleItemIndex to latestMessagesState.value }
+            .collect { (index, ms) ->
                 if (index <= 3 && ms.hasMore && !ms.isLoadingMore) {
                     viewModel.loadMoreMessages()
                 }
