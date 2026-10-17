@@ -308,8 +308,9 @@ class CompactionModule @Inject constructor(
                                         ).content
                                     }
                                 )
-                            }.onFailure {
-                                FileLogger.w(TAG, "折叠前更新会话工作状态失败，继续压缩", it)
+                            }.onFailure { e ->
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                FileLogger.w(TAG, "折叠前更新会话工作状态失败，继续压缩", e)
                             }
                         }
                     },

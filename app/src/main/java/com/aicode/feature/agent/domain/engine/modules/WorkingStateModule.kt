@@ -89,7 +89,10 @@ class WorkingStateModule @Inject constructor(
                 history = ctx.history,
                 complete = { prompt -> oneShot(SessionBriefExtractor.PROMPT_FILE, prompt) }
             )
-        }.onFailure { FileLogger.w(TAG, "收尾更新会话工作状态失败，不影响主流程", it) }
+        }.onFailure { e ->
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            FileLogger.w(TAG, "收尾更新会话工作状态失败，不影响主流程", e)
+        }
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {

@@ -84,6 +84,8 @@ class AgentEngine @Inject constructor(
         sortedModules().forEach { module ->
             val next = try {
                 module.beforeLlmCall(ctx, current)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 FileLogger.w(TAG, "模块 ${module.id} 的 beforeLlmCall 失败，已跳过", e)
                 null
@@ -104,6 +106,8 @@ class AgentEngine @Inject constructor(
         sortedModules().forEach { module ->
             val reminder = try {
                 module.finalResponseGuard(ctx, finalText)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 FileLogger.w(TAG, "模块 ${module.id} 的 finalResponseGuard 失败，已跳过", e)
                 null
@@ -135,6 +139,8 @@ class AgentEngine @Inject constructor(
         block: (EngineModule) -> T
     ): T? = try {
         block(module)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         FileLogger.w(TAG, "模块 ${module.id} 的 $action 失败，已跳过", e)
         null
@@ -147,6 +153,8 @@ class AgentEngine @Inject constructor(
     ) {
         try {
             block(module)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             FileLogger.w(TAG, "模块 ${module.id} 的 $action 失败，已跳过", e)
         }

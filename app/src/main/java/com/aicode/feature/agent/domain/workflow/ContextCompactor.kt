@@ -165,8 +165,13 @@ class ContextCompactor @Inject constructor(
         val tail = messages.subList(splitIndex, messages.size)
         // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
         if (onBeforeFold != null) {
-            runCatching { onBeforeFold(head) }
-                .onFailure { FileLogger.w(TAG, "折叠前回调失败，继续压缩", it) }
+            try {
+                onBeforeFold(head)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "折叠前回调失败，继续压缩", e)
+            }
         }
         val previousSummary: String? = null
         // 新语义：旧摘要块是冻结的独立块，新块只覆盖本次折掉的原文，不再合并旧摘要

@@ -1621,6 +1621,7 @@ class StatefulAgentWorkflow @Inject constructor(
         }
         response.content.trim().take(TITLE_MAX_CHARS).ifBlank { null }
     }.onFailure { e ->
+        if (e is kotlinx.coroutines.CancellationException) throw e
         FileLogger.w(TAG, "生成会话标题失败", e)
     }.getOrNull()
 
@@ -1644,6 +1645,7 @@ class StatefulAgentWorkflow @Inject constructor(
             ?.trim()
         line?.take(100)?.ifBlank { null }
     }.onFailure { e ->
+        if (e is kotlinx.coroutines.CancellationException) throw e
         FileLogger.w(TAG, "生成提交信息失败", e)
     }.getOrNull()
 
@@ -1708,6 +1710,7 @@ class StatefulAgentWorkflow @Inject constructor(
         }
         response.content.trim().ifBlank { null }
     }.onFailure { e ->
+        if (e is kotlinx.coroutines.CancellationException) throw e
         FileLogger.w(TAG, "一次性模型调用失败: $promptFile", e)
     }.getOrNull()
 
