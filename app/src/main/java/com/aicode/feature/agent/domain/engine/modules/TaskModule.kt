@@ -199,7 +199,7 @@ class TaskModule @Inject constructor(
         val DISCIPLINE_RULE = """
             任务清单（`todo` 工具，每轮随提示词注入，压缩上下文不会丢）：
             ① 开始多步任务（3 步以上或要多次工具调用）时先 todo(action="add") 建清单，再动手；一次性小任务不要建。
-            ② 每完成一项立刻 todo(action="update", subject="…", status="completed")，不要攒到最后一次性补。
+            ② 每完成一项立刻 todo(action="update", subject="…", status="…")：实现完先标 implemented，验证通过才标 completed；失败标 failed，受阻标 blocked，不要攒到最后一次性补。
             ③ 开始下一项时把它置为 in_progress。
             ④ 计划或需求变了（用户改主意、发现新问题、放弃某项）当场同步清单。
             ⑤ 一轮收尾前对照清单：回复里说「已完成 / 下一步」的每一项，清单里必须已经对上。

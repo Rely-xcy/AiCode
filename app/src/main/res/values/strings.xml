@@ -1657,6 +1657,11 @@
 
     <!-- Todo Card -->
     <string name="todo_completed">已完成</string>
+    <string name="todo_implemented">已实施</string>
+    <string name="todo_verifying">验证中</string>
+    <string name="todo_blocked">受阻</string>
+    <string name="todo_failed">失败</string>
+    <string name="todo_cancelled">已取消</string>
     <string name="todo_in_progress">进行中</string>
     <string name="todo_dashboard_title">任务待办</string>
     <string name="todo_dashboard_progress">%1$d/%2$d 完成</string>

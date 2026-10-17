@@ -126,6 +126,18 @@ internal fun TodoCard(items: List<ParsedTodoItem>) {
 internal fun TodoItemRow(item: ParsedTodoItem) {
     val isCompleted = item.status == "completed"
     val isInProgress = item.status == "in_progress"
+    val isVerifying = item.status == "implemented" || item.status == "verifying"
+    val isFailed = item.status == "failed" || item.status == "blocked"
+    val isCancelled = item.status == "cancelled"
+    val statusLabel = when (item.status) {
+        "in_progress" -> R.string.todo_in_progress
+        "implemented" -> R.string.todo_implemented
+        "verifying" -> R.string.todo_verifying
+        "blocked" -> R.string.todo_blocked
+        "failed" -> R.string.todo_failed
+        "cancelled" -> R.string.todo_cancelled
+        else -> null
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -141,7 +153,7 @@ internal fun TodoItemRow(item: ParsedTodoItem) {
                     modifier = Modifier.size(16.dp)
                 )
             }
-            isInProgress -> {
+            isInProgress || isVerifying -> {
                 val transition = rememberInfiniteTransition(label = "todo-progress-dot")
                 val alpha by transition.animateFloat(
                     initialValue = 1f,
@@ -160,6 +172,22 @@ internal fun TodoItemRow(item: ParsedTodoItem) {
                         .background(MaterialTheme.colorScheme.primary)
                 )
             }
+            isFailed -> {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error)
+                )
+            }
+            isCancelled -> {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+                )
+            }
             else -> {
                 Box(
                     modifier = Modifier
@@ -172,7 +200,7 @@ internal fun TodoItemRow(item: ParsedTodoItem) {
         Spacer(Modifier.width(Spacing.sm))
         Text(
             text = item.subject,
-            color = if (isCompleted) {
+            color = if (isCompleted || isCancelled) {
                 MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             } else {
                 MaterialTheme.colorScheme.onSurface
@@ -180,25 +208,27 @@ internal fun TodoItemRow(item: ParsedTodoItem) {
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            textDecoration = if (isCompleted) TextDecoration.LineThrough else null,
+            textDecoration = if (isCompleted || isCancelled) TextDecoration.LineThrough else null,
             modifier = Modifier.weight(1f)
         )
-        if (isInProgress) {
+        if (statusLabel != null) {
             Spacer(Modifier.width(Spacing.xs))
             Surface(
                 shape = RoundedCornerShape(4.dp),
-                color = MaterialTheme.colorScheme.primaryContainer
+                color = if (isFailed) MaterialTheme.colorScheme.errorContainer
+                else MaterialTheme.colorScheme.primaryContainer
             ) {
                 Text(
-                    text = stringResource(R.string.todo_in_progress),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    text = stringResource(statusLabel),
+                    color = if (isFailed) MaterialTheme.colorScheme.onErrorContainer
+                    else MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                 )
             }
         }
     }
-    if (item.description.isNotBlank() && !isCompleted) {
+    if (item.description.isNotBlank() && !isCompleted && !isCancelled) {
         Spacer(Modifier.height(2.dp))
         Row {
             Spacer(Modifier.width(24.dp))

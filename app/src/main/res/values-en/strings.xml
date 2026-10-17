@@ -1658,6 +1658,11 @@
 
     <!-- Todo Card -->
     <string name="todo_completed">Completed</string>
+    <string name="todo_implemented">Implemented</string>
+    <string name="todo_verifying">Verifying</string>
+    <string name="todo_blocked">Blocked</string>
+    <string name="todo_failed">Failed</string>
+    <string name="todo_cancelled">Cancelled</string>
     <string name="todo_in_progress">In Progress</string>
     <string name="todo_dashboard_title">Tasks</string>
     <string name="todo_dashboard_progress">%1$d/%2$d done</string>

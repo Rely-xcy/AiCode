@@ -458,7 +458,12 @@ class TodoTool @Inject constructor(
         return when (normalized) {
             "PENDING", "TODO", "OPEN", "NOT_STARTED" -> TodoStatus.PENDING
             "IN_PROGRESS", "INPROGRESS", "DOING", "ACTIVE", "STARTED" -> TodoStatus.IN_PROGRESS
+            "IMPLEMENTED", "IMPLEMENT", "WRITTEN" -> TodoStatus.IMPLEMENTED
+            "VERIFYING", "VERIFY", "TESTING" -> TodoStatus.VERIFYING
             "COMPLETED", "COMPLETE", "DONE", "FINISHED", "CLOSED" -> TodoStatus.COMPLETED
+            "BLOCKED", "BLOCK", "STUCK" -> TodoStatus.BLOCKED
+            "FAILED", "FAIL", "ERROR" -> TodoStatus.FAILED
+            "CANCELLED", "CANCELED", "CANCEL" -> TodoStatus.CANCELLED
             else -> null
         }
     }
@@ -508,7 +513,12 @@ class TodoTool @Inject constructor(
 
     private fun statusLabel(status: TodoStatus): String = when (status) {
         TodoStatus.COMPLETED -> "completed（已完成）"
+        TodoStatus.VERIFYING -> "verifying（验证中）"
+        TodoStatus.IMPLEMENTED -> "implemented（已实施，待验证）"
         TodoStatus.IN_PROGRESS -> "in_progress（进行中）"
+        TodoStatus.BLOCKED -> "blocked（受阻）"
+        TodoStatus.FAILED -> "failed（失败）"
+        TodoStatus.CANCELLED -> "cancelled（已取消）"
         TodoStatus.PENDING -> "pending（未开始）"
     }
 
