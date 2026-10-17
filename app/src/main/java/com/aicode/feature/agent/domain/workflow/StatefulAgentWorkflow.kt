@@ -1213,13 +1213,22 @@ class StatefulAgentWorkflow @Inject constructor(
                                     currentContext.copy(mode = newMode, modeBeforePlan = null)
                                 }
                             }
-                            val last = batchResults.last()
-                            var injected = eventInjector.inject(last.result, systemEvents)
-                            if (newMode != null) {
-                                // 模式约束提示随工具结果落库，留在历史里供后续轮沿用。
-                                injected += buildExternalModeSwitchNotice(newMode)
+                            val last = batchResults.lastOrNull()
+                            if (last != null) {
+                                var injected = eventInjector.inject(last.result, systemEvents)
+                                if (newMode != null) {
+                                    // 模式约束提示随工具结果落库，留在历史里供后续轮沿用。
+                                    injected += buildExternalModeSwitchNotice(newMode)
+                                }
+                                batchResults[batchResults.lastIndex] = last.copy(result = injected)
+                            } else {
+                                // 整批工具调用都被策略拒绝：没有工具结果可搭车。系统事件不在这里 ack，
+                                // 留到下一轮重新投递；否则一次空批就把模式切换/后台通知静默吞掉。
+                                FileLogger.w(
+                                    TAG,
+                                    "工具批全部被拒绝，系统事件暂不注入（下一轮重投）：${systemEvents.size} 条"
+                                )
                             }
-                            batchResults[batchResults.lastIndex] = last.copy(result = injected)
                         }
 
                         // 逐个推送完成事件（保持与 batchToolCalls 一致顺序），并进入收尾。
@@ -1239,7 +1248,15 @@ class StatefulAgentWorkflow @Inject constructor(
                             )
                         }
                         if (notifySessionId != null && notifications.isNotEmpty()) {
-                            agentNotificationCenter.ack(notifySessionId, notifications.map { it.seq })
+                            // 空批只 ack 用户插话；系统事件留到下一轮重新投递，避免静默丢失。
+                            val ackable = if (batchResults.isNotEmpty()) {
+                                notifications
+                            } else {
+                                notifications.filter { it.kind == AgentNotificationKind.USER_MESSAGE }
+                            }
+                            if (ackable.isNotEmpty()) {
+                                agentNotificationCenter.ack(notifySessionId, ackable.map { it.seq })
+                            }
                         }
                         actionQueue.addLast(AgentAction.ToolBatchFinished(batchResults, interjections))
                     }

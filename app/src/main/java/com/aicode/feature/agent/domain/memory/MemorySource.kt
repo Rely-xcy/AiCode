@@ -97,7 +97,20 @@ interface MemorySource {
             // （saveMemory 一直有这一步，editMemory 原来没有）
             withFileLock(file) {
                 archiveBeforeOverwrite(root, file)
-                writeAtomically(file, MemoryParser.format(memory.name, memory.description, content, memory.kind, memory.source, memory.createdAt, pinned = memory.pinned))
+                writeAtomically(
+                    file,
+                    MemoryParser.format(
+                        memory.name,
+                        memory.description,
+                        content,
+                        memory.kind,
+                        memory.source,
+                        memory.createdAt,
+                        hitCount = memory.hitCount,
+                        lastHitAt = memory.lastHitAt,
+                        pinned = memory.pinned
+                    )
+                )
             }
             MemoryEditResult.Success
         } catch (e: Exception) {

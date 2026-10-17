@@ -520,7 +520,13 @@ class ToolPermissionPolicyEngine @Inject constructor(
                         false
                     } else if (rmInfo.isRm) {
                         val ruleRmInfo = ShellCommandParser.parseRmInfo(rule.pattern.split(Regex("\\s+")))
-                        ruleRmInfo.targetPaths.isNotEmpty() && (!rmInfo.isRecursive || ruleRmInfo.isRecursive)
+                        ruleRmInfo.targetPaths.isNotEmpty() &&
+                            (!rmInfo.isRecursive || ruleRmInfo.isRecursive) &&
+                            // 目标必须落在规则授权范围内：`rm -rf app/tmp/../../x` 不能靠前缀命中
+                            // 已记忆的 `rm -rf app/tmp`。路径先折叠 `..` 再按段比较。
+                            rmInfo.targetPaths.all { target ->
+                                ruleRmInfo.targetPaths.any { allowed -> isPathWithin(target, allowed) }
+                            }
                     } else {
                         true
                     }
@@ -543,5 +549,30 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         val rememberable = analysis.segments.mapNotNull { ShellCommandParser.rememberablePrefix(it) }.distinct()
         return EvalResult(Verdict.ASK, rememberable)
+    }
+
+    /** 折叠 `.`/`..` 并保留绝对路径标记，用于比较删除目标是否落在规则授权范围内。 */
+    private fun normalizePath(path: String): String {
+        val absolute = path.startsWith("/")
+        val parts = mutableListOf<String>()
+        for (part in path.split('/')) {
+            when (part) {
+                "", "." -> Unit
+                ".." -> if (parts.isNotEmpty() && parts.last() != "..") {
+                    parts.removeAt(parts.lastIndex)
+                } else {
+                    parts.add("..")
+                }
+                else -> parts.add(part)
+            }
+        }
+        return (if (absolute) "/" else "") + parts.joinToString("/")
+    }
+
+    private fun isPathWithin(target: String, allowed: String): Boolean {
+        val t = normalizePath(target)
+        val a = normalizePath(allowed)
+        if (a.isEmpty()) return false
+        return t == a || t.startsWith("$a/")
     }
 }

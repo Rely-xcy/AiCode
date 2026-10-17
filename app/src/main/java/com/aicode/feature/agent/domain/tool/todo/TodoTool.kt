@@ -206,8 +206,7 @@ class TodoTool @Inject constructor(
             )
         }
 
-        todoItemDao.deleteBySession(sessionId)
-        if (entities.isNotEmpty()) todoItemDao.upsertAll(entities)
+        todoItemDao.replaceAll(sessionId, entities)
         FileLogger.d(TAG, "todo replace: 替换为 ${entities.size} 项")
         return buildSuccess("已用 ${entities.size} 项替换清单", entities.map { it.toDomain() })
     }

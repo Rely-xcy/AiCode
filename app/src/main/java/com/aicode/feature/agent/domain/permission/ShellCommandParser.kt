@@ -33,6 +33,18 @@ object ShellCommandParser {
     private const val SINGLE = 1
     private const val DOUBLE = 2
 
+    /**
+     * 重定向目标是否可能写到工作区之外：绝对路径、以 `~` 开头（家目录）、含 `..` 段。
+     *
+     * `~` 与 `..` 不会被 shell 视为「相对 cwd 的安全路径」：前者展开到家目录，后者可逐级
+     * 走出工作区。这类目标一律降级为不可静态判定，避免 `echo x > ~/.bashrc` 被白名单放行。
+     */
+    private fun isEscapingRedirectTarget(target: String): Boolean {
+        val t = target.trim()
+        if (t.startsWith("/") || t.startsWith("~")) return true
+        return t.split("/").any { it == ".." }
+    }
+
     /** 段首环境赋值形如 `NAME=value`。 */
     private val ENV_ASSIGN = Regex("^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
@@ -52,7 +64,7 @@ object ShellCommandParser {
             if (tokenStarted) {
                 val t = token.toString()
                 if (expectRedirectTarget) {
-                    if (t.startsWith("/")) analyzable = false
+                    if (isEscapingRedirectTarget(t)) analyzable = false
                     expectRedirectTarget = false
                 }
                 current.add(t)

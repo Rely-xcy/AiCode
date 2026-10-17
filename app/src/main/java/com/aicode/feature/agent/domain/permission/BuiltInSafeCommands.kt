@@ -49,6 +49,21 @@ object BuiltInSafeCommands {
     ) + GIT_READ_ONLY_PREFIXES
 
     /** 该段是否命中任一内置安全前缀。 */
-    fun isSafe(segmentTokens: List<String>): Boolean =
-        SAFE_PREFIXES.any { ShellCommandParser.matches(it, segmentTokens) }
+    fun isSafe(segmentTokens: List<String>): Boolean {
+        if (segmentTokens.isEmpty()) return false
+        if (SAFE_PREFIXES.none { ShellCommandParser.matches(it, segmentTokens) }) return false
+        // 白名单里有几个命令「带特定参数就能写文件」：sort -o / tree -o / git --output /
+        // uniq IN OUT。命中这些形式时不再自动放行，交给授权层弹窗。
+        val program = segmentTokens.firstOrNull { !it.contains("=") } ?: return false
+        val args = segmentTokens.dropWhile { it != program }.drop(1)
+        return when (program) {
+            "sort", "tree" -> args.none {
+                it == "-o" || it == "--output" || it.startsWith("--output=") ||
+                    (it.startsWith("-o") && it.length > 2)
+            }
+            "uniq" -> args.count { !it.startsWith("-") } < 2
+            "git" -> args.none { it == "--output" || it.startsWith("--output=") }
+            else -> true
+        }
+    }
 }
