@@ -462,16 +462,6 @@ internal fun buildChatItems(
 }
 
 /**
- * 某条渲染项的触发词 chip 数据：只有用户气泡才可能带，其它类型一律空表。
- * 抽出来是为了调用点不用每 item 都做「Map 查找 + orEmpty()」，也方便快照替换。
- */
-private fun triggeredSkillsForItem(
-    snapshot: Map<String, List<String>>,
-    message: AgentUIMessage
-): List<String> =
-    if (message.role == MessageRole.USER) snapshot[message.id].orEmpty() else emptyList()
-
-/**
  * 保证 LazyColumn item key 全局唯一：库里出现重复消息 id（导入备份后出现过）时，
  * 同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
  *
@@ -790,10 +780,6 @@ fun AIChatPanel(
     val contextUsages by viewModel.contextUsage.collectAsStateWithLifecycle()
     // 本轮自然语言触发的技能（按用户消息 id）：仅用于气泡下方 chip。
     val triggeredSkills by viewModel.triggeredSkills.collectAsStateWithLifecycle()
-    // 触发词 chip 查询收敛：不是每帧逐 item 直读 Map（每次读取都走 StateFlow 委托与 Map 查找），
-    // 而是派生成不可变快照。滑动中每个 item 组合都调 triggeredSkillsForItem，直读的成本是
-    // 逐帧 × 列表长度次，快照后只在数据真变时重建一份。
-    val triggeredSkillsSnapshot by remember(triggeredSkills) { derivedStateOf { triggeredSkills } }
     val sessionContextUsage = contextUsages[currentSessionId]
     // 取不到快照时（表现为「没有环」）必须能自证原因：是本会话还没判定过，还是判定发的是别的会话。
     // 后者曾是「已触发压缩、环却只显示一小截」的根因，只在会话或快照归属变化时记一条。
@@ -1669,8 +1655,8 @@ fun AIChatPanel(
     // item 重组，是快速滚动掉帧（进而 fling 补偿跳变、抽搐）的主要放大器。改为在协程内用
     // snapshotFlow 观察 index，组合体完全不读它。
     val latestMessagesState = rememberUpdatedState(messagesState)
-    // 1) 滑动到顶触发：只观察 index，lambda 每帧只做一个 Int 读取（不能把消息状态也塞进来——
-    //    那会让滑动每一帧都多一次 StateFlow.value 快照读取 + Pair 分配，是滑动卡顿的直接来源）。
+    // 滑动到顶触发：lambda 每帧执行，不能把消息状态也塞进来——那会让滑动每一帧多一次
+    // StateFlow 快照读取 + Pair 分配（用户实测：滑动中卡、加载完静止不卡）。
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
         snapshotFlow { listState.firstVisibleItemIndex }
@@ -1681,15 +1667,17 @@ fun AIChatPanel(
                 }
             }
     }
-    // 2) 折叠头死锁兜底：长对话列表被折叠头压短后可能一开局就停在 index ≤ 3 且手指「没得滑」
-    //    （index 永不再变化，上面的触发器就此沉默）。这里只在「已加载条数变化」时检查一次——
-    //    消息状态不每帧读，滑动零开销；上限增长后若仍在顶部且 hasMore，就连续自动加载到填满。
-    LaunchedEffect(messagesReady) {
-        snapshotFlow { latestMessagesState.value.messages.size to latestMessagesState.value.hasMore }
-            .collect { (loaded, hasMore) ->
-                if (!hasMore) return@collect
-                val index = listState.firstVisibleItemIndex
-                if (index <= 3) viewModel.loadMoreMessages()
+    // 折叠头死锁兜底：长对话列表被折叠头压成少数 item 后可能一开局就停在 index ≤ 3 且
+    // 手指「没得滑」，index 永不再变化，上面的触发器就此沉默。这里只在已加载条数 / hasMore /
+    // isLoadingMore 变化时检查一次，滑动路径不读消息状态。
+    LaunchedEffect(listState, messagesReady) {
+        snapshotFlow {
+            val ms = latestMessagesState.value
+            Triple(ms.messages.size, ms.hasMore, ms.isLoadingMore)
+        }
+            .collect { (_, hasMore, isLoadingMore) ->
+                if (!hasMore || isLoadingMore) return@collect
+                if (listState.firstVisibleItemIndex <= 3) viewModel.loadMoreMessages()
             }
     }
 
@@ -1829,7 +1817,7 @@ fun AIChatPanel(
                     taskDurationMs = taskDurations[message.id],
                     turnUsage = turnUsages[message.id],
                     entryDelayMs = messageEntryDelays[message.id],
-                    triggeredSkills = triggeredSkillsForItem(triggeredSkillsSnapshot, item.message)
+                    triggeredSkills = triggeredSkills[message.id].orEmpty()
                 )
             }
         }

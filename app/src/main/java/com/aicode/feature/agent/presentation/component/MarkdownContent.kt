@@ -71,9 +71,7 @@ import kotlinx.coroutines.withContext
 private val CodeFontFamily = FontFamily(Font(R.font.jetbrains_mono_nl))
 
 internal class MarkdownRenderCache(
-    // 200 条：一屏可见通常 < 20 条，200 足以覆盖多屏上下滑动的历史定稿消息，
-    // 容量太小会让滑动时集体 miss → 集体重新解析（滑卡主因之一）。
-    private val maxEntries: Int = 200
+    private val maxEntries: Int = 80
 ) {
     private val parsedStates = object : LinkedHashMap<String, MarkdownParseState.Success>(
         maxEntries,
@@ -134,13 +132,7 @@ internal fun MarkdownContent(
     loading: (@Composable () -> Unit)? = null,
     /** 长文本虚拟化渲染：正文改用 LazyColumn 逐块渲染（调用方需配合 heightIn 等有限高度约束
      *  才能触发懒加载），避免超大 md 一次性全量组合/测量造成的卡顿。 */
-    lazyScroll: Boolean = false,
-    /**
-     * 文本是否还在流式增长。定稿消息走「缓存直出」：命中解析缓存时**完全跳过 Markdown 解析**
-     * ——消息滑入视口不再重解析，这是滑动卡顿的主因（以前缓存只做渲染兑底，
-     * rememberMarkdownState 仍会无条件跑一遍 parse）。流式气泡必须传 true：文本每帧都变。
-     */
-    streaming: Boolean = false
+    lazyScroll: Boolean = false
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val semantic = MaterialTheme.semanticColors
@@ -225,37 +217,24 @@ internal fun MarkdownContent(
         // 显示原文纯文本，流式场景下每次文本变化都会闪现「最新文本的裸文本」（底部字在闪）。
         // 因此 Loading 期间优先渲染最近一次成功解析的结果（旧文本的完整 md 排版），解析
         // 完成后再平滑切到新文本，内容只增不跳。
-        // 定稿且命中解析缓存：完全不碰 Markdown 状态机——消息滑入视口零解析成本。
-        // 定稿消息的文本不会变，所以「跳过 rememberMarkdownState 会丢状态」的旧顾虑不存在。
-        val finalizedCached = if (!streaming) cache?.get(processed) else null
-        val mdState = if (finalizedCached == null) {
-            rememberMarkdownState(content = processed, retainState = true)
-        } else {
-            null
-        }
-        val parseState: MarkdownParseState? = if (mdState != null) {
-            mdState.state.collectAsState().value
-        } else {
-            null
-        }
-        val cachedState = finalizedCached ?: cache?.get(processed)
+        val mdState = rememberMarkdownState(content = processed, retainState = true)
+        val parseState by mdState.state.collectAsState()
+        val cachedState = cache?.get(processed)
         val prefixFallback = cache?.getBestPrefix(processed)
         // 委托属性不能智能转换，先取局部快照再判断
         val currentState = parseState
         val parsedState: MarkdownParseState = when {
             currentState is MarkdownParseState.Success && currentState.content == processed -> currentState
             cachedState != null -> cachedState
-            currentState != null -> currentState
-            else -> MarkdownParseState.Loading()
+            else -> currentState
         }
 
         // 最近一次成功解析的结果：Loading 期间的渲染兜底（初始首帧即用前缀缓存，杜绝纯文本裸奔）
         var lastSuccessState by remember { mutableStateOf<MarkdownParseState.Success?>(prefixFallback) }
         if (parsedState is MarkdownParseState.Success) {
             lastSuccessState = parsedState
-            // 同步写缓存：让后续滑入/落库接力直接命中。**流式不写**——逐字增量会把 LRU 挤爆，
-            // 反而把定稿消息的缓存全部淘掉（滑动时集体 miss = 集体重解析）。
-            if (!streaming) cache?.put(parsedState)
+            // 同步写入缓存：让同轮次接力的落库消息首帧即可命中，避免 LaunchedEffect 异步延迟导致的裸纯文本闪烁
+            cache?.put(parsedState)
         }
 
         // Success 渲染当前结果；Loading 优先渲染本组件或前缀缓存的成功结果（杜绝裸纯文本闪现）；Error 回退原文

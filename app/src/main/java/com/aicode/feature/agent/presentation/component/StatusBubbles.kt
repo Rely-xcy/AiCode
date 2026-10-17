@@ -612,8 +612,7 @@ internal fun StreamingBubble(
             text = renderText,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth(),
-            cache = cache,
-            streaming = true
+            cache = cache
         )
         Spacer(Modifier.height(Spacing.xs))
         TypingDots(color = MaterialTheme.colorScheme.primary, dotSize = 5.dp)
@@ -763,8 +762,6 @@ internal fun ReasoningBubble(
                     cache = cache,
                     compact = true,
                     lazyScroll = true,
-                    // 思考窗口里的内容也随流式增长，缓存直出会闪。
-                    streaming = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = ReasoningWindowMaxHeight)
