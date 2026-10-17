@@ -163,8 +163,6 @@ class ContextCompactor @Inject constructor(
 
         val head = messages.subList(0, splitIndex)
         val tail = messages.subList(splitIndex, messages.size)
-        // 折叠前先把原文存档：摘要没覆盖到的细节不至于永久丢失，模型需要时可读回来
-        val archivePath = compactedHistoryArchive.archive(sessionId, head)
         // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
         if (onBeforeFold != null) {
             runCatching { onBeforeFold(head) }
@@ -257,6 +255,10 @@ class ContextCompactor @Inject constructor(
         }
 
         FileLogger.i(TAG, "上下文压缩完成，摘要长度：${summaryResponse.length}")
+
+        // 摘要确认可用之后才归档：摘要失败/不可用时历史并没有离开上下文，提前归档只会
+        // 留下无人引用的孤儿文件，白占存储配额。归档失败时 archivePath 为 null，摘要照常落库。
+        val archivePath = compactedHistoryArchive.archive(sessionId, head)
 
         // 摘要里附上归档路径：这是摘要之外唯一的退路（模型用文件工具就能读）
         val summaryContent = if (archivePath != null) {
