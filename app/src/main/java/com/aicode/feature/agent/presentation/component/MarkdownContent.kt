@@ -88,13 +88,15 @@ internal class MarkdownRenderCache(
         }
     }
 
-    fun get(text: String): MarkdownParseState.Success? =
-        parsedStates[text] ?: parsedStates[text.trim()]
+    fun get(text: String): MarkdownParseState.Success? = parsedStates[text]
 
     /**
      * 在缓存中寻找是 [text] 前缀的最长解析态。
      * 流式转落库交接瞬间，全文可能比上一帧打字机内容多出尾部字符，直接拿最长前缀 AST 兜底，
      * 确保首帧以排版好的 Markdown 呈现，彻底消灭裸纯文本（- **xxx**）闪现。
+     *
+     * 前缀不足 [MIN_PREFIX_CHARS] 时不用：缓存是全局 LRU，短前缀很容易是另一条消息的开头
+     * （如「好的」与「好的，我来…」），会把别人的内容当成本条的历史渲染出来。
      */
     fun getBestPrefix(text: String): MarkdownParseState.Success? {
         val exact = get(text)
@@ -102,6 +104,7 @@ internal class MarkdownRenderCache(
         var bestMatch: MarkdownParseState.Success? = null
         var bestLength = 0
         for ((key, value) in parsedStates) {
+            if (key.length < MIN_PREFIX_CHARS) continue
             if (key.length in (bestLength + 1)..text.length && text.startsWith(key)) {
                 bestMatch = value
                 bestLength = key.length
@@ -112,10 +115,10 @@ internal class MarkdownRenderCache(
 
     fun put(state: MarkdownParseState.Success) {
         parsedStates[state.content] = state
-        val trimmed = state.content.trim()
-        if (trimmed != state.content) {
-            parsedStates[trimmed] = state
-        }
+    }
+
+    private companion object {
+        const val MIN_PREFIX_CHARS = 24
     }
 }
 
@@ -218,7 +221,7 @@ internal fun MarkdownContent(
         // 定稿消息命中缓存时直接渲染：不创建解析状态机，滑入视口零解析成本。
         // 缓存分支与解析分支是两个独立 composable，各自持有 remember 槽位——切换时旧子树
         // 被 dispose、新子树初始化，不会出现「条件调用 remember 导致槽位错位」。
-        val cachedState = if (!streaming) cache?.get(processed) else null
+        val cachedState = if (!streaming) cache?.get(processed)?.takeIf { it.content == processed } else null
         if (cachedState != null) {
             MarkdownSuccessBlock(
                 state = cachedState,

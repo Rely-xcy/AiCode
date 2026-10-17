@@ -129,12 +129,17 @@ class McpManager @Inject constructor(
 
     private suspend fun connectOne(cfg: McpServerConfig): McpServerStatus {
         val t0 = System.currentTimeMillis()
+        // 失败路径必须关掉已创建的 transport/client：stdio 子进程与 readLoop/stderr 协程
+        // 不关就会在重连反复失败时持续泄漏（V2 审计 P2）。
+        var transport: McpTransport? = null
+        var client: McpClient? = null
+        var connected = false
         return try {
             FileLogger.i(TAG, "[${cfg.name}] 开始连接（${if (cfg.isStdio) "stdio" else "HTTP"}）")
             if (!cfg.isStdio && cfg.auth != null) {
                 oauthManager.prepare(cfg)
             }
-            val transport = if (cfg.isStdio) {
+            transport = if (cfg.isStdio) {
                 // stdio server 跑在「运行时容器」上：本地模式用当前容器，远程 SSH 模式用默认容器。
                 // 容器未就绪不自动初始化，直接失败并引导去终端页完成初始化。
                 val runtimeProfile = resolveMcpRuntimeProfile()
@@ -162,18 +167,20 @@ class McpManager @Inject constructor(
                     authorizationProvider = { oauthManager.cachedToken(cfg.name) }
                 )
             }
-            val client = McpClient(serverName = cfg.name, transport = transport)
-            client.connect()
+            client = McpClient(serverName = cfg.name, transport = transport!!)
+            val connectedClient = client!!
+            connectedClient.connect()
 
-            val tools = client.tools.map { McpTool(client, it) }
+            val tools = connectedClient.tools.map { McpTool(connectedClient, it) }
             val enabledTools = tools.filter { it.remoteName !in cfg.disabledTools }
             synchronized(activeClients) {
-                activeClients[cfg.name] = client
+                activeClients[cfg.name] = connectedClient
                 enabledTools.forEach { tool ->
                     toolRegistry.register(tool.name, tool)
                     registeredToolNames.add(tool.name)
                 }
             }
+            connected = true
             FileLogger.i(TAG, "[${cfg.name}] 连接成功，注册 ${enabledTools.size}/${tools.size} 个工具（${System.currentTimeMillis() - t0}ms）")
             McpServerStatus(cfg.name, McpServerStatus.State.CONNECTED, toolCount = enabledTools.size)
         } catch (e: McpAuthRequiredException) {
@@ -185,6 +192,11 @@ class McpManager @Inject constructor(
         } catch (e: Exception) {
             FileLogger.e(TAG, "[${cfg.name}] 连接失败（${System.currentTimeMillis() - t0}ms）", e)
             McpServerStatus(cfg.name, McpServerStatus.State.FAILED, error = e.message)
+        } finally {
+            if (!connected) {
+                runCatching { client?.close() }
+                runCatching { transport?.close() }
+            }
         }
     }
 

@@ -271,17 +271,6 @@ class ContextCompactor @Inject constructor(
 
         FileLogger.i(TAG, "上下文压缩完成，摘要长度：${summaryResponse.length}")
 
-        // 摘要确认可用之后才归档：摘要失败/不可用时历史并没有离开上下文，提前归档只会
-        // 留下无人引用的孤儿文件，白占存储配额。归档失败时 archivePath 为 null，摘要照常落库。
-        val archivePath = compactedHistoryArchive.archive(sessionId, head)
-
-        // 摘要里附上归档路径：这是摘要之外唯一的退路（模型用文件工具就能读）
-        val summaryContent = if (archivePath != null) {
-            "$summaryResponse\n\n（被折叠的历史原文已存档：$archivePath ，需要核对更早的细节时可读取该文件。）"
-        } else {
-            summaryResponse
-        }
-
         val markerId = UUID.randomUUID().toString()
         val compactedId = UUID.randomUUID().toString()
         val markerMessage = AgentMessage.UserMessage(
@@ -290,7 +279,7 @@ class ContextCompactor @Inject constructor(
         )
         val compactedMessage = AgentMessage.AssistantMessage(
             id = compactedId,
-            content = summaryContent,
+            content = summaryResponse,
             toolCalls = emptyList()
         )
 
@@ -314,6 +303,17 @@ class ContextCompactor @Inject constructor(
             )
             return null
         }
+
+        // 省空间校验通过后才归档：压缩没换来空间时历史并未离开上下文，提前归档只会留下
+        // 无人引用的孤儿文件。归档失败时 archivePath 为 null，摘要照常落库。
+        val archivePath = compactedHistoryArchive.archive(sessionId, head)
+        val summaryContent = if (archivePath != null) {
+            "$summaryResponse\n\n（被折叠的历史原文已存档：$archivePath ，需要核对更早的细节时可读取该文件。）"
+        } else {
+            summaryResponse
+        }
+        val finalMessage = compactedMessage.copy(content = summaryContent)
+        val finalResult = preservedBlocks + listOf(markerMessage, finalMessage) + tail
 
         // 折叠后的摘要链状态（记账用，见下文日志）：声明在函数体顶层——
         // 落库块在 if(sessionId) 里，而记账日志在它之后的外层，声明在块内会作用域不可见（CI 已踩过）。
@@ -365,7 +365,7 @@ class ContextCompactor @Inject constructor(
                         id = compactedId,
                         sessionId = sessionId,
                         role = MessageRole.ASSISTANT.name,
-                        content = compactedMessage.content,
+                        content = finalMessage.content,
                         timestamp = summaryTs,
                         isContextSummary = true,
                         foldsUpToTimestamp = headEndTs
@@ -431,7 +431,7 @@ class ContextCompactor @Inject constructor(
             )
         }
 
-        return compactedResult
+        return finalResult
         } finally {
             sessionLock?.unlock()
         }
