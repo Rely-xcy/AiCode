@@ -551,28 +551,10 @@ class ToolPermissionPolicyEngine @Inject constructor(
         return EvalResult(Verdict.ASK, rememberable)
     }
 
-    /** 折叠 `.`/`..` 并保留绝对路径标记，用于比较删除目标是否落在规则授权范围内。 */
-    private fun normalizePath(path: String): String {
-        val absolute = path.startsWith("/")
-        val parts = mutableListOf<String>()
-        for (part in path.split('/')) {
-            when (part) {
-                "", "." -> Unit
-                ".." -> if (parts.isNotEmpty() && parts.last() != "..") {
-                    parts.removeAt(parts.lastIndex)
-                } else {
-                    parts.add("..")
-                }
-                else -> parts.add(part)
-            }
-        }
-        return (if (absolute) "/" else "") + parts.joinToString("/")
-    }
-
     private fun isPathWithin(target: String, allowed: String): Boolean {
         val t = normalizePath(target)
         val a = normalizePath(allowed)
-        if (a.isEmpty()) return false
+        if (a.isEmpty() || a == ".") return false
         return t == a || t.startsWith("$a/")
     }
 }
