@@ -77,6 +77,24 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET reasoningEffort = :effort WHERE id = :id")
     suspend fun updateReasoningEffort(id: String, effort: String)
 
+    /**
+     * 模式切换的单条原子更新：`modeBeforePlan` 在 SQL 里根据当前值计算，
+     * 不再「读整行 → 改两个字段 → 整行 upsert」——那样会覆盖并发写入的 updatedAt/token。
+     */
+    @Query(
+        """
+        UPDATE chat_sessions SET
+            modeBeforePlan = CASE
+                WHEN :newMode = 'PLAN' AND mode != 'PLAN' THEN mode
+                WHEN :newMode = 'PLAN' THEN modeBeforePlan
+                ELSE NULL
+            END,
+            mode = :newMode
+        WHERE id = :id
+        """
+    )
+    suspend fun updateMode(id: String, newMode: String)
+
     @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens WHERE id = :id")
     suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int)
 

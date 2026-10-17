@@ -108,6 +108,11 @@ class SessionUseCase @Inject constructor(
         chatSessionDao.deleteByWorkspace(workspacePath)
         // 与 deleteSession 同一条清理：批量删同样会让这些 sessionId 的历史缓存永久留在内存里。
         sessions.forEach { session -> messagePersistenceUseCase.evictHistory(session.id) }
+        // 模块自持的会话级状态（记忆注入缓存、任务清单快照、工作状态 watcher）同样要释放，
+        // 否则批量删/切工作区后这些 sessionId 一直挂在内存里。
+        sessions.forEach { session ->
+            agentEngine.get().onSessionDeleted(EngineContext(sessionId = session.id))
+        }
         return sessions.size
     }
 
@@ -198,16 +203,9 @@ class SessionUseCase @Inject constructor(
     }
 
     suspend fun updateMode(sessionId: String, mode: String) {
-        val s = chatSessionDao.getById(sessionId) ?: return
         val newMode = runCatching { AgentMode.valueOf(mode) }.getOrNull() ?: return
-        val currentMode = runCatching { AgentMode.valueOf(s.mode) }.getOrNull()
-        // 用户手动进入 PLAN 时同样记下进入前的模式，退出 PLAN 时恢复（与 AI 自切保持同一套语义）。
-        val modeBeforePlan = when {
-            newMode == AgentMode.PLAN && currentMode != AgentMode.PLAN -> currentMode?.name
-            newMode == AgentMode.PLAN -> s.modeBeforePlan
-            else -> null
-        }
-        chatSessionDao.upsert(s.copy(mode = newMode.name, modeBeforePlan = modeBeforePlan))
+        // 单条 UPDATE 原子完成：modeBeforePlan 由 SQL 根据当前 mode 计算，不覆盖其它列。
+        chatSessionDao.updateMode(sessionId, newMode.name)
     }
 
     suspend fun updateProviderModel(sessionId: String, providerId: String?, model: String?) {

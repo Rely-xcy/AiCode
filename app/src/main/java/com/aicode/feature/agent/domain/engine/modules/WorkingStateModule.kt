@@ -103,15 +103,20 @@ class WorkingStateModule @Inject constructor(
     }
 
     private fun watch(sessionId: String) {
-        if (watchers.size >= MAX_WATCHED_SESSIONS) {
-            // 只防长期累积；被清掉的会话下一轮 promptFragment 会重新挂上。
-            watchers.values.forEach { it.cancel() }
-            watchers.clear()
-        }
-        watchers.computeIfAbsent(sessionId) { id ->
-            scope.launch {
-                sessionBriefDao.getBySession(id).collect { row ->
-                    if (row == null) snapshotBySession.remove(id) else snapshotBySession[id] = row.content
+        synchronized(watchers) {
+            if (sessionId in watchers) return
+            // 逐出单个最旧会话，而不是整表清空：整表清空会把其它线程刚挂上的 watcher
+            // 一起取消，且「检查大小 → 清空 → 挂载」本身不是原子操作。
+            if (watchers.size >= MAX_WATCHED_SESSIONS) {
+                watchers.keys.firstOrNull()?.let { oldest ->
+                    watchers.remove(oldest)?.cancel()
+                    snapshotBySession.remove(oldest)
+                }
+            }
+            watchers[sessionId] = scope.launch {
+                sessionBriefDao.getBySession(sessionId).collect { row ->
+                    if (row == null) snapshotBySession.remove(sessionId)
+                    else snapshotBySession[sessionId] = row.content
                 }
             }
         }

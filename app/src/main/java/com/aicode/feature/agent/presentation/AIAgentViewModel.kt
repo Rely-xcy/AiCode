@@ -243,6 +243,12 @@ class AIAgentViewModel @Inject constructor(
     private val _messageLimit = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val defaultLimit = 30
 
+    /**
+     * 「正在加载更多」的会话集合：`loadMoreMessages` 置位、消息流产出后清位。
+     * 没有它时一次上滑会被 index 与兜底两路触发器同时命中，分页上限一帧叠加两次（+60）。
+     */
+    private val _loadingMoreSessions = MutableStateFlow<Set<String>>(emptySet())
+
     /** 聊天记录搜索：命中条数上限、输入防抖、片段上下文宽度、定位时预留的分页余量。 */
     private val chatSearchLimit = 50
     private val chatSearchDebounceMs = 300L
@@ -338,6 +344,9 @@ class AIAgentViewModel @Inject constructor(
         val sid = _currentSessionId.value ?: return
         val state = messagesState.value
         if (state.sessionId != sid || !state.loaded || !state.hasMore) return
+        // 在途去重：两路触发器同一帧先后命中时，第二次直接返回，不再叠加 +30。
+        if (sid in _loadingMoreSessions.value) return
+        _loadingMoreSessions.value = _loadingMoreSessions.value + sid
         val currentLimit = _messageLimit.value[sid] ?: defaultLimit
         // 幂等：同一 limit 重复请求直接放行（重入只是多一次等价的 DB 查询）。
         // 原先的「loadedMessageLimits[sid] != currentLimit 则拒」是幽灵死锁：台账在流产出后才更新，
@@ -810,6 +819,8 @@ class AIAgentViewModel @Inject constructor(
                 agentMessageDao.getContextSummaryRows(id)
             ) { paged, summaries -> paged to summaries }
                 .map { (paged, summaries) ->
+                    // 本轮查询已产出：清掉在途标记，允许下一次上滑继续加载。
+                    _loadingMoreSessions.value = _loadingMoreSessions.value - id
                     // 摘要行不参与分页窗口：长会话压缩后摘要落在保留区之前，仅按最近 N 条查会把它裁掉，
                     // 压缩完成却看不到卡片。这里并入存活的锚点行（按 id 去重、按时间排序）。
                     val list = if (summaries.isEmpty()) paged

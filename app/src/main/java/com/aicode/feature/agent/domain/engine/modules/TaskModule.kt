@@ -122,15 +122,17 @@ class TaskModule @Inject constructor(
     }
 
     private fun watch(sessionId: String) {
-        if (watchers.size >= MAX_WATCHED_SESSIONS) {
-            // 只防长期累积；被清掉的会话下一轮 promptFragment 会重新挂上
-            watchers.values.forEach { it.cancel() }
-            watchers.clear()
-        }
-        watchers.computeIfAbsent(sessionId) { id ->
-            scope.launch {
-                todoItemDao.getBySession(id).collect { rows ->
-                    snapshotBySession[id] = rows.map { it.toDomain() }
+        synchronized(watchers) {
+            if (sessionId in watchers) return
+            if (watchers.size >= MAX_WATCHED_SESSIONS) {
+                watchers.keys.firstOrNull()?.let { oldest ->
+                    watchers.remove(oldest)?.cancel()
+                    snapshotBySession.remove(oldest)
+                }
+            }
+            watchers[sessionId] = scope.launch {
+                todoItemDao.getBySession(sessionId).collect { rows ->
+                    snapshotBySession[sessionId] = rows.map { it.toDomain() }
                 }
             }
         }
