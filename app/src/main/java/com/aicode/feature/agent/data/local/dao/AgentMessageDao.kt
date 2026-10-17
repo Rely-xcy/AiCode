@@ -15,28 +15,22 @@ interface AgentMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(messages: List<AgentMessageEntity>)
 
+    @Query("SELECT * FROM (SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC")
+    fun getMessagesBySessionPaged(sessionId: String, limit: Int): Flow<List<AgentMessageEntity>>
+
     /**
-     * 聊天页消息流：取该会话最近 [limit] 条（按 timestamp 正序返回），并**额外钉住**最近 20 条
-     * 未淘汰的压缩锚点（marker + summary）。
+     * 会话内仍在上下文里的压缩锚点（marker + summary），供聊天页消息流额外合并。
      *
-     * 为什么要钉住：压缩摘要行的 timestamp 落在「保留区 tail 之前」的历史中间，压缩完成后
-     * 用户继续在同一会话里聊，新消息会把摘要行挤出「最近 limit 条」的窗口——压缩摘要卡片就此
-     * 从消息流里消失（用户实测「压缩完成看不到摘要」，要上滑翻很久才可能看到）。UNION 会去重，
-     * 摘要行本来就在窗口内时不会重复。钉住的数量固定 20 行（约 10 对 marker+summary），
-     * 只覆盖「用户能感知的最近几次压缩」，不随 limit 无限增长，也不影响历史浏览。
+     * 压缩摘要行的 timestamp 落在「保留区 tail 之前」的历史中间，用户继续在同一会话里聊时，
+     * 新消息会把它挤出「最近 limit 条」的窗口，摘要卡片就此消失。调用方把这个查询与
+     * [getMessagesBySessionPaged] 按 id 去重合并，保证摘要始终在消息流里。
      */
     @Query(
-        """
-        SELECT * FROM (
-            SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT :limit
-            UNION
-            SELECT * FROM agent_messages WHERE sessionId = :sessionId
-                AND (isContextSummary = 1 OR isCompactionMarker = 1) AND isCompacted = 0
-                ORDER BY timestamp DESC LIMIT 20
-        ) ORDER BY timestamp ASC
-        """
+        "SELECT * FROM agent_messages WHERE sessionId = :sessionId " +
+            "AND (isContextSummary = 1 OR isCompactionMarker = 1) AND isCompacted = 0 " +
+            "ORDER BY timestamp ASC"
     )
-    fun getMessagesBySessionPaged(sessionId: String, limit: Int): Flow<List<AgentMessageEntity>>
+    fun getContextSummaryRows(sessionId: String): Flow<List<AgentMessageEntity>>
 
     /** 一次性读取（非 Flow），用于跨请求重建上下文历史。 */
     @Query("SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")

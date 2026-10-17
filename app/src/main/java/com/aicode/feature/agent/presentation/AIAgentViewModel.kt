@@ -805,22 +805,30 @@ class AIAgentViewModel @Inject constructor(
     ) { id, limitMap -> id to (limitMap[id] ?: defaultLimit) }
         .flatMapLatest { (id, limit) ->
             if (id == null) flowOf(ChatMessagesState(null, emptyList(), loaded = false))
-            else agentMessageDao.getMessagesBySessionPaged(id, limit).map { list ->
-                ChatMessagesState(
-                    sessionId = id,
-                    messages = list.asSequence()
-                        .filterNot {
-                            it.role == MessageRole.ASSISTANT.name &&
-                                !it.content.hasVisibleContent() &&
-                                it.reasoning.isNullOrEmpty()
-                        }
-                        .map { entity -> entity.toUIMessage() }
-                        .toList(),
-                    loaded = true,
-                    hasMore = list.size >= limit,
-                    isLoadingMore = false
-                )
-            }.flowOn(Dispatchers.Default)
+            else combine(
+                agentMessageDao.getMessagesBySessionPaged(id, limit),
+                agentMessageDao.getContextSummaryRows(id)
+            ) { paged, summaries -> paged to summaries }
+                .map { (paged, summaries) ->
+                    // 摘要行不参与分页窗口：长会话压缩后摘要落在保留区之前，仅按最近 N 条查会把它裁掉，
+                    // 压缩完成却看不到卡片。这里并入存活的锚点行（按 id 去重、按时间排序）。
+                    val list = if (summaries.isEmpty()) paged
+                    else (paged + summaries).distinctBy { it.id }.sortedBy { it.timestamp }
+                    ChatMessagesState(
+                        sessionId = id,
+                        messages = list.asSequence()
+                            .filterNot {
+                                it.role == MessageRole.ASSISTANT.name &&
+                                    !it.content.hasVisibleContent() &&
+                                    it.reasoning.isNullOrEmpty()
+                            }
+                            .map { entity -> entity.toUIMessage() }
+                            .toList(),
+                        loaded = true,
+                        hasMore = paged.size >= limit,
+                        isLoadingMore = false
+                    )
+                }.flowOn(Dispatchers.Default)
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ChatMessagesState(null, emptyList(), loaded = false))
 
