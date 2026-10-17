@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.engine.modules
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
+import com.aicode.feature.agent.domain.brief.SessionBriefExtractor
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.LlmCall
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
@@ -97,6 +98,7 @@ class CompactionModuleTest {
         val module = CompactionModule(
             compactor = fixedLazy(compactor),
             memoryExtractor = MemoryExtractor(mockk(relaxed = true)),
+            sessionBriefExtractor = SessionBriefExtractor(mockk(relaxed = true)),
             systemPromptProvider = fixedLazy(mockk<SystemPromptProvider>(relaxed = true)),
             modelMetadataService = metadata,
             generalSettingsRepository = settings,
