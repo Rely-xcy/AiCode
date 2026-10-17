@@ -19,8 +19,8 @@
 - 项目根目录: {{AICODE_WORKSPACE}}
 - 运行环境: {{AICODE_ENVIRONMENT}}
 
-[System] 当前本地时间: {{AICODE_DATE}}
-
 ## 记忆
 记忆记录跨项目个人偏好与当前项目的专属约定；处理相关任务时应参考对应记忆。
 {{AICODE_MEMORY}}
+
+[System] 当前本地时间: {{AICODE_DATE}}
