@@ -284,7 +284,22 @@ class MessagePersistenceUseCase @Inject constructor(
         // 残留对共享边界时把新折进去的原文误裁掉，所以旧块一律不参与边界计算。
         val allSummaryPairs = collectSummaryPairs(allEntities)
         val modernSummaryPairs = allSummaryPairs.filter { it.summary.foldsUpToTimestamp > 0L }
-        val boundary = modernSummaryPairs.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L
+        var boundary = modernSummaryPairs.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L
+        // 边界异常钳制：备份导入等场景下 timestamp 可能重复/乱序，摘要块的覆盖边界若反而晚于
+        // 窗口内普通行的最新时间戳，上面的 `timestamp > boundary` 会把边界之后的原文也全滤掉
+        // ——模型上下文只剩摘要、UI 整轮不显示（用户实测「压缩后啥也不显示，直接继续任务」）。
+        // 钳到普通行的最新时间戳之前：宁可多回放一次重复，也不丢原文。
+        val latestNormalTs = allEntities
+            .filter { !it.isCompactionMarker && !it.isContextSummary }
+            .maxOfOrNull { it.timestamp } ?: 0L
+        if (latestNormalTs in 1..boundary) {
+            FileLogger.w(
+                "MessagePersistenceUseCase",
+                "摘要覆盖边界异常（boundary=$boundary ≥ 最新普通行 ts=$latestNormalTs），已钳制到 latestNormalTs-1：" +
+                    "可能是备份导入导致时间戳乱序"
+            )
+            boundary = latestNormalTs - 1
+        }
 
         // 保留原文：边界之后的普通行（非摘要/marker）。悬挂 tool 配对过滤在下面第二遍完成。
         val entities = orderHistoryEntities(
