@@ -1655,17 +1655,27 @@ fun AIChatPanel(
     // item 重组，是快速滚动掉帧（进而 fling 补偿跳变、抽搐）的主要放大器。改为在协程内用
     // snapshotFlow 观察 index，组合体完全不读它。
     val latestMessagesState = rememberUpdatedState(messagesState)
+    // 1) 滑动到顶触发：只观察 index，lambda 每帧只做一个 Int 读取（不能把消息状态也塞进来——
+    //    那会让滑动每一帧都多一次 StateFlow.value 快照读取 + Pair 分配，是滑动卡顿的直接来源）。
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
-        // 同时观察 index 与消息状态：折叠头把 30 条压成几个 item 后，列表可能一开局就停在
-        // index ≤ 3 且手指「没得滑」——只看 index 的话它永远不再变化，加载触发器就此死锁
-        //（用户实测：长对话上滑没反应，切页刷新才出来）。带上消息状态后，上限增长会产生
-        // 新的发射，只要还在顶部且 hasMore 就继续加载，直到屏幕填满或没有更多。
-        snapshotFlow { listState.firstVisibleItemIndex to latestMessagesState.value }
-            .collect { (index, ms) ->
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { index ->
+                val ms = latestMessagesState.value
                 if (index <= 3 && ms.hasMore && !ms.isLoadingMore) {
                     viewModel.loadMoreMessages()
                 }
+            }
+    }
+    // 2) 折叠头死锁兜底：长对话列表被折叠头压短后可能一开局就停在 index ≤ 3 且手指「没得滑」
+    //    （index 永不再变化，上面的触发器就此沉默）。这里只在「已加载条数变化」时检查一次——
+    //    消息状态不每帧读，滑动零开销；上限增长后若仍在顶部且 hasMore，就连续自动加载到填满。
+    LaunchedEffect(messagesReady) {
+        snapshotFlow { latestMessagesState.value.messages.size to latestMessagesState.value.hasMore }
+            .collect { (loaded, hasMore) ->
+                if (!hasMore) return@collect
+                val index = listState.firstVisibleItemIndex
+                if (index <= 3) viewModel.loadMoreMessages()
             }
     }
 
