@@ -83,6 +83,7 @@ import java.util.Locale
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
+    loading: Boolean,
     shortTerm: SessionShortTermState?,
     activeMemoryEnabled: Boolean,
     onToggleActiveMemory: (Boolean) -> Unit,
@@ -109,7 +110,8 @@ internal fun MemorySection(
         // 空态也包进分组卡片，否则一行灰字悬在卡片体系之外，看着像漏渲染的占位。
         if (memories.isEmpty()) {
             SettingsGroup {
-                EmptyState()
+                // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
+                if (loading) MemoryLoadingPlaceholder() else EmptyState()
             }
         } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
@@ -333,6 +335,20 @@ private fun MemoryGroup(
             }
         }
     }
+}
+
+/** 首次读盘时的占位：不是「没有记忆」，所以不套空态图标与引导文案。 */
+@Composable
+private fun MemoryLoadingPlaceholder() {
+    Text(
+        text = stringResource(R.string.memory_loading),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.semanticColors.subtleText,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp)
+    )
 }
 
 @Composable

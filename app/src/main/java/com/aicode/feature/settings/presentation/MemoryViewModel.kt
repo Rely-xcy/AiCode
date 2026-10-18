@@ -57,6 +57,16 @@ class MemoryViewModel @Inject constructor(
     private val _memories = MutableStateFlow<List<Memory>>(emptyList())
     val memories: StateFlow<List<Memory>> = _memories.asStateFlow()
 
+    /**
+     * 首次读盘尚未完成：列表此时必然为空，界面据此渲染「正在读取」而不是「没有记忆」。
+     * 不这样做时，进页面会先闪一下空态、过一会才变成列表，看起来像加载失败。
+     */
+    private val _loading = MutableStateFlow(true)
+    val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    /** 重入护栏：init 与「每次进分区」都会调 [refresh]，不挡的话首次进入会连扫两遍。 */
+    private var inFlight = false
+
     private val _shortTermSession = MutableStateFlow<SessionShortTermState?>(null)
 
     /** 顶部「本次会话（短期）」卡片的数据；null 表示取不到（还没有会话等），界面整块不渲染。 */
@@ -101,16 +111,23 @@ class MemoryViewModel @Inject constructor(
     }
 
     fun refresh() {
+        if (inFlight) return
+        inFlight = true
         viewModelScope.launch {
-            // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
-            val projectRoot = workspaceRepository.currentPathOrNull()
-            _memories.value = withContext(Dispatchers.IO) {
-                memoryRepository.listMemories(projectRoot)
-            }
-            _shortTermSession.value = if (projectRoot == null) {
-                null
-            } else {
-                withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+            try {
+                // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
+                val projectRoot = workspaceRepository.currentPathOrNull()
+                _memories.value = withContext(Dispatchers.IO) {
+                    memoryRepository.listMemories(projectRoot)
+                }
+                _shortTermSession.value = if (projectRoot == null) {
+                    null
+                } else {
+                    withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+                }
+            } finally {
+                inFlight = false
+                _loading.value = false
             }
         }
     }
