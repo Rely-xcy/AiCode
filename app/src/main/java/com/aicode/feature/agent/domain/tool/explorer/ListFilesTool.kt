@@ -39,6 +39,12 @@ class ListFilesTool @Inject constructor(
     override val description = "按 ls 风格列出文件和目录。例：args=\"-la ~/workspace/app\"。支持追加 `| head [-n N]` 截断输出。"
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
+    override val useWhen =
+        "确认目录里有什么、文件是否存在、大小与修改时间（ls 语义），断言某个路径存在之前先用它核实"
+    override val avoidWhen =
+        "要看文件内容用 readFile、搜内容用 search，-R 递归列整个项目根目录容易输出爆量，先用 search -g 缩小范围或限定子路径"
+    override val successCriteria =
+        "返回里 content 是清单文本、entries 是条目数，truncated=true 说明被 | head 或条数上限截断，收窄路径或去掉 -R 重列"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "args" to ToolParameter(

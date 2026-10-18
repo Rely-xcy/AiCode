@@ -62,6 +62,12 @@ class TodoTool @Inject constructor(
 
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.MODIFY_TODO_STATE)
+    override val useWhen =
+        "多步任务（3 步以上或要多次工具调用）动手前先建清单，之后每完成一项立刻 update，计划或需求变了当场同步"
+    override val avoidWhen =
+        "一两步就完的小改动不要建清单，也不要只在回复里说「已完成」而不调它标记"
+    override val successCriteria =
+        "返回里 text 是更新后的整张清单、total/completed 是条数与已完成数、next 是下一个未完成项，next 为空说明已无未完成项，此时用 clear 一次清空"
 
     /** items 数组中单个待办项的 JSON Schema */
     private val todoItemSchema: Map<String, Any> = mapOf(

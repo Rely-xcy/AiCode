@@ -79,6 +79,13 @@ class TaskTool @Inject constructor(
         }
     }
 
+    override val useWhen =
+        "子任务可独立完成、不依赖当前对话细节时（代码库探索、大范围调研、批量定位、跑验证、查资料），或要并行推进多个互不依赖的方向时"
+    override val avoidWhen =
+        "子任务要用到刚说的话、刚读到的文件内容时自己动手，两个子代理要改同一批文件就别拆（写入会撞 writeScope 租约），也不要在子代理里再派子代理"
+    override val successCriteria =
+        "create 返回 id 与 state=running 即已启动，之后等系统通知（不要轮询），用 action=read 取回的结论要能看出改动清单与依据或验证结果才算可用"
+
     override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。" +
         "会写文件的子代理必须在 create 时用 writeScope 声明它要改哪些文件/目录：多个子代理共享同一工作区，不声明就无法在启动前发现两个子代理改同一个文件，后到者只能在写入时被拒。"
 

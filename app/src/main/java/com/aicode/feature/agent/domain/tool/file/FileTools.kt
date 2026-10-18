@@ -44,6 +44,12 @@ class ReadFileTool @Inject constructor(
     override val name = "readFile"
     override val description = "读取文件内容（工作区文件或容器绝对路径的系统文件）。单次读取有行数与字节上限，超出可用 start_line 分段续读。"
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
+    override val useWhen =
+        "改文件前先读原内容、核实代码与配置的现状、按 output_path 回读被截断的工具输出时用它"
+    override val avoidWhen =
+        "只想找「某段文本出现在哪些文件」用 search，不要逐个 readFile 翻找，只看目录里有什么用 list"
+    override val successCriteria =
+        "返回里带 content 与 read_lines，truncated=true 说明还有内容没读到，用 start_line 续读直到 truncated=false，不要把截断内容当全文"
     override val parameters = mapOf(
         "path" to ToolParameter("path", ParameterType.STRING, "文件路径：~/workspace/... 为项目文件；其它绝对路径（如 /etc/...、/root/...）为容器系统文件。", required = true),
         "start_line" to ToolParameter("start_line", ParameterType.INTEGER, "开始行号（从 1 计）。", required = false),
@@ -184,6 +190,12 @@ class WriteFileTool @Inject constructor(
     override val description = "写入完整文件内容，文件不存在时自动创建（含父目录）。局部修改请用 editFile。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.WRITE_WORKSPACE)
+    override val useWhen =
+        "新建文件、整文件重写，或改动幅度大到逐处匹配不如整篇重写时用它，新建会自动创建父目录"
+    override val avoidWhen =
+        "已存在的文件只改局部几处时用 editFile：整篇重写会把没读到的其它改动一并覆盖，也更容易撞上 STALE_FILE"
+    override val successCriteria =
+        "返回里带 path、bytes_written、lines_written 与 added_lines/removed_lines，随后 readFile 该路径能读到写进去的内容"
     override val parameters = mapOf(
         "path" to ToolParameter("path", ParameterType.STRING, "文件路径：~/workspace/... 为项目文件；其它绝对路径（如 /etc/...、/root/...）为容器系统文件。", required = true),
         "content" to ToolParameter("content", ParameterType.STRING, "文件内容", required = true),

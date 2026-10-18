@@ -98,6 +98,21 @@ abstract class AgentTool {
     open val permissionPolicy: ToolPermissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     open val capabilities: Set<ToolCapability> = emptySet()
 
+    /**
+     * 适用任务：什么情况下该选这个工具。
+     *
+     * 这三项只进提示词（经 [renderToolGuide] 渲染成工具清单），不参与权限或执行判定——
+     * 「是否需要用户确认」由 [permissionPolicy] 与 [capabilities] 决定。空串 = 未声明，
+     * 渲染时该行整条不出现，因此新工具不填也不会在提示词里留空壳。
+     */
+    open val useWhen: String = ""
+
+    /** 不适用场景：什么时候不该用它、该换哪个工具。空串 = 未声明。 */
+    open val avoidWhen: String = ""
+
+    /** 成功判定：返回里看到什么才算这次调用成功。空串 = 未声明。 */
+    open val successCriteria: String = ""
+
     open fun effectiveCapabilities(args: Map<String, JsonElement>): Set<ToolCapability> {
         return capabilities
     }

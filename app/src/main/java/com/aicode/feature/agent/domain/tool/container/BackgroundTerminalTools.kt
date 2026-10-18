@@ -90,6 +90,13 @@ class TerminalSessionTool @Inject constructor(
         }
     }
 
+    override val useWhen =
+        "常驻或交互式会话：起服务、跑长任务、要等结果的命令用 start + notify=true（结束后系统主动唤醒并回传退出码与末尾输出，不要轮询或 sleep 等待），交互式程序（编辑器、问答、REPL、ssh）用 start 后停在提示处再用 send 逐行输入、key 发控制键，启动新会话前先 read 查看并复用已有标签"
+    override val avoidWhen =
+        "一次就结束的短命令用 Bash 更省事，要中断前台进程用 key=ctrl+c，不要另开标签重跑同一个服务"
+    override val successCriteria =
+        "start 返回 tab_id、running 与初始输出，notify=true 的任务等系统推回退出码与末尾输出，read 能看到新增输出、close 后该 tab_id 不再可用，命令本身报 command not found 或刚跑就退出说明是命令的问题、不是会话没起"
+
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
             name = "action",

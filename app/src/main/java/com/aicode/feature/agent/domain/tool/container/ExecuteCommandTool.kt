@@ -51,6 +51,12 @@ class ExecuteCommandTool @Inject constructor(
     override val description = "在当前执行环境（本地容器或远程 SSH）中执行一次性 Shell 命令，同步返回输出。耗时或常驻任务（安装依赖、启动服务等）请改用 `terminal`，不要用 `&` 挂后台。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
+    override val useWhen =
+        "一次性、会自己结束的命令：构建/测试/lint、git 读写、装依赖、看环境（容器内已内置 git / rg / py / python / node，不要先问是否安装），默认超时 120 秒，更久的用 timeout 调大或改用 terminal"
+    override val avoidWhen =
+        "常驻服务、需要逐行输入或要保持会话的交互式程序用 terminal——Bash 是同步一次性执行，不要用 `&` 挂后台，读文件、搜内容、列目录有专用工具时不要用 cat/sed/rg/ls 代替"
+    override val successCriteria =
+        "返回的 output 是 stdout 与 stderr 合并后的文本，不含退出码，要判成败就在命令里显式打印（如 `cmd; echo exit=$?`），并以输出里没有 command not found / permission denied / 报错行 为准"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "command" to ToolParameter(

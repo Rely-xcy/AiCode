@@ -68,6 +68,12 @@ class EditFileTool @Inject constructor(
         "按精确字符串匹配局部修改已有文件，是修改文件的首选。edits 可一次提交多处修改，整批原子生效（任一处失败则全部回滚）。整文件重写用 writeFile。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.WRITE_WORKSPACE)
+    override val useWhen =
+        "对已有文件做局部修改（替换、删除、插入），多处编辑可一次提交，整批原子生效"
+    override val avoidWhen =
+        "新建文件或整文件重写用 writeFile，没读过该文件就先 readFile——写前版本校验靠的是本会话读到的内容做基线"
+    override val successCriteria =
+        "返回里 status=edited，added_lines/removed_lines 是本次改动行数、hunks 是各处 diff，随后 readFile 能读到新内容"
 
     /** edits 数组单个元素的结构，供 function-calling 的 items schema。 */
     private val editItemSchema: Map<String, Any> = mapOf(

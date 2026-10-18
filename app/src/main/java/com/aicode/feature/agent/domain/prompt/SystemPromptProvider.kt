@@ -11,6 +11,8 @@ import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.InjectPart
+import com.aicode.feature.agent.domain.tool.ToolRegistry
+import com.aicode.feature.agent.domain.tool.renderToolGuide
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -38,6 +40,7 @@ class SystemPromptProvider @Inject constructor(
     private val promptFragmentCatalog: PromptFragmentCatalog,
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val toolRegistry: ToolRegistry,
     private val executionModeHolder: ExecutionModeHolder
 ) {
     // 抽象独立的 Source
@@ -118,6 +121,37 @@ class SystemPromptProvider @Inject constructor(
             cachedByKey[key] = content
             trimIfNeeded()
             return content
+        }
+
+        private fun trimIfNeeded() {
+            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+        }
+    }
+
+    /**
+     * 可用工具清单（适用任务 / 不适用场景 / 成功判定，见 [renderToolGuide]）。
+     *
+     * 元数据来自工具自身，取代了基线片段里手写的「工具选择」映射——那几行每加一个参数就得人工同步，
+     * 结果是人只改工具、不改提示词。同样做会话级缓存：工具集在一轮会话内不变，每轮重排会让 system
+     * prompt 抖动、打断 KV 缓存；MCP 工具可能在会话中途注册，缓存按会话隔离，新会话自然重建。
+     */
+    private inner class ToolListSource : PromptSource {
+        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
+
+        override fun build(ctx: AgentContext): String? {
+            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
+            val cached = cachedByKey[key]
+            if (cached != null) return cached.ifEmpty { null }
+            val content = try {
+                renderToolGuide(toolRegistry.getAvailableTools())
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "渲染工具清单失败: ${e.message}", e)
+                return null
+            }
+            // 空串同样入缓存：没有任何工具声明元数据是「本会话的既定事实」，不必每轮重算。
+            cachedByKey[key] = content
+            trimIfNeeded()
+            return content.ifEmpty { null }
         }
 
         private fun trimIfNeeded() {
@@ -226,6 +260,7 @@ class SystemPromptProvider @Inject constructor(
     private val staticRuleSource = StaticRuleSource()
     private val subAgentBaseSource = SubAgentBaseSource()
     private val subAgentListSource = SubAgentListSource()
+    private val toolListSource = ToolListSource()
     private val engineFragmentSource = EngineFragmentSource()
     private val subAgentRulesSource = SubAgentRulesSource()
 
@@ -262,6 +297,7 @@ class SystemPromptProvider @Inject constructor(
         val projectRules = projectRuleSource.build(agentContext)
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
+        val toolsContent = toolListSource.build(agentContext)
 
         // 2. 变量就地展开：`{{AICODE_*}}` 替换为纯数据；未写变量的片段原样保留。
         val staticContent = renderVariables(
@@ -276,7 +312,8 @@ class SystemPromptProvider @Inject constructor(
             workspaceContent,
             environmentContent,
             currentDate(),
-            goal = renderGoalBlock(agentContext)
+            goal = renderGoalBlock(agentContext),
+            tools = toolsContent
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -308,6 +345,7 @@ class SystemPromptProvider @Inject constructor(
         }
         val memories = agentEngine.memoryListGroups(engineContextOf(ctx))
         val projectRules = projectRuleSource.build(ctx)
+        val toolsContent = toolListSource.build(ctx)
         return renderVariables(
             content,
             activeSkillsSource.build(ctx),
@@ -320,7 +358,8 @@ class SystemPromptProvider @Inject constructor(
             workspaceSource.build(ctx),
             environmentSource.build(ctx),
             currentDate(),
-            goal = renderGoalBlock(ctx)
+            goal = renderGoalBlock(ctx),
+            tools = toolsContent
         )
     }
 
@@ -355,6 +394,7 @@ class SystemPromptProvider @Inject constructor(
         val rawPrompt = definition.prompt
         val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
         val projectRules = projectRuleSource.build(agentContext)
+        val toolsContent = toolListSource.build(agentContext)
         append(
             renderVariables(
                 rawPrompt,
@@ -367,7 +407,8 @@ class SystemPromptProvider @Inject constructor(
                 projectRules?.project,
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
-                currentDate()
+                currentDate(),
+                tools = toolsContent
             )
         )
 
@@ -413,10 +454,12 @@ class SystemPromptProvider @Inject constructor(
                 null,
                 null,
                 null,
+                null,
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
                 currentDate(),
-                definition.name
+                definition.name,
+                tools = toolsContent
             )
         )
     }
@@ -440,7 +483,8 @@ class SystemPromptProvider @Inject constructor(
         environment: String,
         date: String,
         subAgentName: String = "",
-        goal: String? = null
+        goal: String? = null,
+        tools: String?
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -448,6 +492,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(MEMORY_GLOBAL_VAR, memoryGlobal.orEmpty())
         out = out.replace(MEMORY_PROJECT_VAR, memoryProject.orEmpty())
         out = out.replace(SUBAGENTS_VAR, subAgents.orEmpty())
+        out = out.replace(TOOLS_VAR, tools.orEmpty())
         out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
         out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
         out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
@@ -517,6 +562,7 @@ class SystemPromptProvider @Inject constructor(
         const val MEMORY_GLOBAL_VAR = "{{AICODE_MEMORY_GLOBAL}}"
         const val MEMORY_PROJECT_VAR = "{{AICODE_MEMORY_PROJECT}}"
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
+        const val TOOLS_VAR = "{{AICODE_TOOLS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
         const val PROJECT_RULES_GLOBAL_VAR = "{{AICODE_PROJECT_RULES_GLOBAL}}"
         const val PROJECT_RULES_PROJECT_VAR = "{{AICODE_PROJECT_RULES_PROJECT}}"
