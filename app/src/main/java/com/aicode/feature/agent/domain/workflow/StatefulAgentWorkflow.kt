@@ -40,7 +40,6 @@ import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
-import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.domain.tool.ToolOutputStore
 import com.aicode.feature.agent.domain.tool.ToolStreamEvent
@@ -94,7 +93,6 @@ import javax.inject.Inject
  * 采用 Reducer 来进行状态扭转，将纯函数的业务逻辑与带有副作用的外部环境操作完全解耦。
  */
 class StatefulAgentWorkflow @Inject constructor(
-    private val toolRegistry: ToolRegistry,
     private val aiProviderRepository: AIProviderRepository,
     private val openAIApi: OpenAIApi,
     private val anthropicApi: AnthropicApi,
@@ -921,10 +919,13 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 权限弹窗可能挂起任意久：先把等在队列里的插话送出去（UI/落库+ack，
                         // 模型侧记进 state，仍由本批 ToolBatchFinished 拼在工具结果后）。
                         state = state.copy(pendingInterjections = state.pendingInterjections + deliverInterjectionsToState(currentContext.sessionId) { send(it) })
-                        val tool = toolRegistry.getTool(effect.toolCall.name)
+                        // 按**本轮**工具表解析（registry 里没有引擎模块提供的工具，如 team）：
+                        // 本轮没给模型的工具就不能被调，不做 registry 兼容回退。
+                        val tool = currentTools.firstOrNull { it.name == effect.toolCall.name }
                         val argsPreview = JsonObject(effect.toolCall.arguments).toString().take(500)
                         val checkResult = requestPermissionIfNeeded(
                             tool = tool,
+                            toolName = effect.toolCall.name,
                             callId = effect.toolCall.id,
                             arguments = effect.toolCall.arguments,
                             argsPreview = argsPreview,
@@ -1015,7 +1016,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                             )
 
                                             else -> {
-                                                val tool = toolRegistry.getTool(toolCall.name)
+                                                val tool = currentTools.firstOrNull { it.name == toolCall.name }
                                                 val run = if (tool is StreamingAgentTool) {
                                                     runToolStream(tool, toolCall, currentContext) { send(it) }
                                                 } else {
@@ -1932,6 +1933,7 @@ class StatefulAgentWorkflow @Inject constructor(
 
     private suspend fun requestPermissionIfNeeded(
         tool: AgentTool?,
+        toolName: String,
         callId: String,
         arguments: Map<String, JsonElement>,
         argsPreview: String,
@@ -1940,7 +1942,13 @@ class StatefulAgentWorkflow @Inject constructor(
         onEvent: suspend (AgentEvent) -> Unit
     ): PermissionCheckResult {
         if (tool == null) {
-            return PermissionCheckResult(true)
+            // fail-closed：解析不到工具就拒绝，不再无条件放行——否则任何未注册的工具都会
+            // 绕过 DENY 规则、PLAN 门禁与灾难性删除防护（历史上 team 就是这样被静默放行的）。
+            return PermissionCheckResult(
+                approved = false,
+                denyReason = "工具 $toolName 本轮不可用（未注册或已被裁剪），已拒绝执行",
+                errorCode = "TOOL_NOT_FOUND"
+            )
         }
 
         // planMode 退出 PLAN 时，后续会有计划审查面板兜底用户决策，
