@@ -723,6 +723,20 @@ internal fun ReasoningBubble(
         formattedDuration != null -> stringResource(R.string.chat_thinking_done_time, formattedDuration)
         else -> stringResource(R.string.chat_thinking_done)
     }
+    // 推理进行中且未展开时给 3 行预览（只看尾部）：否则长推理期间屏幕上只有一行
+    // 「思考中 12.3 秒」，看起来像卡死。推理结束照旧收起，只留耗时。
+    val livePreview = remember(text, live) {
+        if (!live) {
+            ""
+        } else {
+            text.takeLast(600).lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toList()
+                .takeLast(3)
+                .joinToString("\n")
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -746,6 +760,19 @@ internal fun ReasoningBubble(
                 contentDescription = if (expanded) stringResource(R.string.common_collapse) else stringResource(R.string.common_expand),
                 tint = Brand.IconGray,
                 size = 18.dp
+            )
+        }
+        if (!expanded && livePreview.isNotEmpty()) {
+            Text(
+                text = livePreview,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, top = 2.dp, bottom = 4.dp)
+                    .clickable { toggleExpanded(true) }
             )
         }
         AnimatedVisibility(
