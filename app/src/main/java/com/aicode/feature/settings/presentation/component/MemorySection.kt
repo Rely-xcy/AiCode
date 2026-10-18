@@ -551,7 +551,7 @@ internal fun MemoryDetailSheet(
                 text = memory.name,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = Spacing.lg, top = Spacing.sm)
+                modifier = Modifier.padding(start = Spacing.lg, end = Spacing.lg, top = Spacing.sm)
             )
             // 徽章行：与列表行同一套 pill，不另造视觉
             Row(
