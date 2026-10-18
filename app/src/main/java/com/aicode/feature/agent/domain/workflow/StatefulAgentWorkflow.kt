@@ -941,6 +941,9 @@ class StatefulAgentWorkflow @Inject constructor(
                         val checkResult = requestPermissionIfNeeded(
                             tool = tool,
                             toolName = effect.toolCall.name,
+                            caseHint = currentTools
+                                .firstOrNull { it.name.equals(effect.toolCall.name, ignoreCase = true) }
+                                ?.name,
                             callId = effect.toolCall.id,
                             arguments = effect.toolCall.arguments,
                             argsPreview = argsPreview,
@@ -1953,6 +1956,7 @@ class StatefulAgentWorkflow @Inject constructor(
     private suspend fun requestPermissionIfNeeded(
         tool: AgentTool?,
         toolName: String,
+        caseHint: String?,
         callId: String,
         arguments: Map<String, JsonElement>,
         argsPreview: String,
@@ -1965,7 +1969,12 @@ class StatefulAgentWorkflow @Inject constructor(
             // 绕过 DENY 规则、PLAN 门禁与灾难性删除防护（历史上 team 就是这样被静默放行的）。
             return PermissionCheckResult(
                 approved = false,
-                denyReason = "工具 $toolName 本轮不可用（未注册或已被裁剪），已拒绝执行",
+                // 大小写写错是模型最常见的失误（`bash` / `Bash`）：只提示正确写法，**不做兜底解析**。
+                denyReason = if (caseHint != null) {
+                    "工具 $toolName 本轮不可用（未注册或已被裁剪），已拒绝执行。工具名区分大小写，正确写法是 `$caseHint`。"
+                } else {
+                    "工具 $toolName 本轮不可用（未注册或已被裁剪），已拒绝执行"
+                },
                 errorCode = "TOOL_NOT_FOUND"
             )
         }
