@@ -240,22 +240,9 @@ class ShizukuManager @Inject constructor(
         _state.value = computeState()
     }
 
-    /**
-     * 按 binder 存活与授权结果推导状态。
-     *
-     * 不以管理器包名判「装没装」：官方契约里 binder 由服务端推来（客户端 provider 只收不拉），
-     * 与管理器叫什么包名无关，而 Sui 与 Stellar 也都不使用官方包名。
-     * 任一 binder 调用抛异常（服务恰好在探测途中断开）都按未运行处理，状态机不崩。
-     *
-     * binder 不通时再区分「装了没跑」与「没装」：这份区分只用于提示文案，不参与可用性判定。
-     */
     private fun computeState(): ShizukuState = runCatching {
         when {
-            !Shizuku.pingBinder() -> if (isShizukuInstalled()) {
-                ShizukuState.NOT_RUNNING
-            } else {
-                ShizukuState.NOT_INSTALLED
-            }
+            !Shizuku.pingBinder() -> ShizukuState.NOT_RUNNING
             // pre-v11 无 UserService，等同不可用。
             Shizuku.isPreV11() -> ShizukuState.NOT_RUNNING
             // READY 只由服务端按 uid 校验的授权结果决定，本地判断不参与。
@@ -286,11 +273,9 @@ class ShizukuManager @Inject constructor(
     }
 
     /**
-     * 是否已安装任一 Shizuku 实现。先查官方包名（快路径），未命中再按权限定义反查，
-     * 以覆盖改了包名的第三方分叉。
+     * 找出任一 Shizuku 实现的包名，供「打开管理器」兜底：先查官方包名（快路径），
+     * 未命中再按客户端库依赖的权限名反查，不受实现包名与 authority 命名约定的影响。
      */
-    private fun isShizukuInstalled(): Boolean = findShizukuPackage() != null
-
     @Suppress("DEPRECATION")
     private fun findShizukuPackage(): String? {
         runCatching { context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0) }

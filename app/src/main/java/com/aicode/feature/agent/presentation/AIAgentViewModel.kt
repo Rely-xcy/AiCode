@@ -1358,7 +1358,7 @@ class AIAgentViewModel @Inject constructor(
                 _compactingSessions,
                 approvalSessionIds
             ) { states, tools, preparing, compacting, approvals ->
-                states.filterValues { it is AgentUIState.Loading || it is AgentUIState.Streaming }
+                states.filterValues { it is AgentUIState.Streaming }
                     .keys
                     .associateWith { sid ->
                         val toolName = tools[sid]?.values?.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
