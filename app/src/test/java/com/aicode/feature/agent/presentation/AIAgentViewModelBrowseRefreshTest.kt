@@ -1,6 +1,8 @@
 package com.aicode.feature.agent.presentation
 
 import androidx.lifecycle.viewModelScope
+import com.aicode.feature.agent.domain.container.ContainerProfile
+import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
 import io.mockk.coEvery
@@ -16,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -94,8 +97,8 @@ class AIAgentViewModelBrowseRefreshTest {
         assertSame("进行中帧必须原样复用上一份树，不能替换 nodes", first.nodes, refreshing.nodes)
 
         releaseRefresh.countDown()
-        val updated = awaitSuccess(frames) { !it.refreshing && it.nodes.size == secondTree.size + 1 }
-        assertEquals(secondTree.size + 1, updated.nodes.size)
+        val updated = awaitSuccess(frames) { !it.refreshing && it.nodes.size == secondTree.size + 2 }
+        assertEquals(secondTree.size + 2, updated.nodes.size)
         assertTrue("新树与旧树不是同一份", updated.nodes !== first.nodes)
         collectJob.cancel()
     }
@@ -160,6 +163,23 @@ class AIAgentViewModelBrowseRefreshTest {
         fileChangeHub = mockk(relaxed = true),
         workspaceWriteSignal = mockk(relaxed = true) { every { writes } returns MutableSharedFlow() },
         contextUsageHolder = mockk(relaxed = true),
+        // 容器根行依赖这两个流：桩成会发值，否则 containerRootNode 永不产出、browseState 也就永不发帧。
+        containerSettingsRepository = mockk(relaxed = true) {
+            every { activeProfileFlow } returns MutableStateFlow(
+                ContainerProfile(
+                    id = "builtin",
+                    name = "Alpine",
+                    rootfsSource = RootfsSource.Asset("alpine-rootfs.bin"),
+                    shellPath = null,
+                    isBuiltin = true
+                )
+            )
+        },
+        containerOsDetector = mockk(relaxed = true) { every { osMap } returns MutableStateFlow(emptyMap()) },
+        liveNotificationSettings = mockk(relaxed = true) { every { enabledFlow } returns MutableStateFlow(false) },
+        agentLiveNotificationManager = mockk(relaxed = true),
+        approvalNotificationSettings = mockk(relaxed = true) { every { enabledFlow } returns MutableStateFlow(false) },
+        agentApprovalNotificationManager = mockk(relaxed = true),
         context = mockk(relaxed = true)
     )
 }
