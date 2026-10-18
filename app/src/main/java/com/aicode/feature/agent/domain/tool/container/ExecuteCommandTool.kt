@@ -115,7 +115,7 @@ class ExecuteCommandTool @Inject constructor(
             FileLogger.d(TAG, "execute_command (timeout=${timeoutMs}ms): $command")
             val output = commandEngine.runCommandSync(command, workdir, timeoutMs)
             FileLogger.v(TAG, "execute_command 完成，输出 ${output.length} 字符")
-            ToolResult.Success(JsonPrimitive(output))
+            ToolResult.Success(JsonPrimitive(ShellToolRoutingHint.appendTo(command, output)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -161,7 +161,7 @@ class ExecuteCommandTool @Inject constructor(
                 }
             }
             FileLogger.v(TAG, "execute_command(流式) 完成，输出 ${accumulated.totalChars} 字符")
-            emit(ToolStreamEvent.Completed(ToolResult.Success(JsonPrimitive(accumulated.build()))))
+            emit(ToolStreamEvent.Completed(ToolResult.Success(JsonPrimitive(ShellToolRoutingHint.appendTo(command, accumulated.build())))))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -170,7 +170,7 @@ class ExecuteCommandTool @Inject constructor(
             FileLogger.e(TAG, "execute_command(流式) 异常(已保留此前输出 ${accumulated.totalChars} 字符): $command", e)
             val saved = accumulated.build()
             val result = if (saved.isNotEmpty()) {
-                ToolResult.Success(JsonPrimitive(saved))
+                ToolResult.Success(JsonPrimitive(ShellToolRoutingHint.appendTo(command, saved)))
             } else {
                 ToolResult.Error("执行命令失败：${e.message}")
             }
