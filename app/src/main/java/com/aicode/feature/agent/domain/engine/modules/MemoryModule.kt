@@ -26,13 +26,15 @@ import javax.inject.Singleton
  * 记忆模块：把「AI 记住了什么」接进引擎。
  *
  * 两件事：
- * 1. 注入——把记忆清单（名称 + 描述）拼进系统提示词，详情仍由模型调 `memory(action=read)` 自取；
+ * 1. 注入——把记忆清单（名称 + 描述）拼进本轮提醒（[turnReminder]），详情仍由模型调 `memory(action=read)` 自取；
  * 2. 沉淀——两条路各管各的：模型对话中主动调 memory 工具记录（受「主动记忆」开关控制，
  *    开关关着时注入里没有这条规则）；按治理周期归纳去重（只看周期，周期为 0 才不跑）。
  *    压缩历史前的抽取不受任何开关控制（属上下文管理，见 CompactionModule）。
  *
- * 缓存分两层：清单（读盘结果 + 分组字符串）按 (sessionId, projectRoot) 缓存，两个入口共用；
- * 注入块在它之上再按开关与话题缓存，保持 system prompt 稳定以命中 KV 缓存；空结果用 "" 占位以区分「未缓存」。
+ * 缓存：清单（读盘结果 + 分组字符串）按 (sessionId, projectRoot) 缓存，注入与变量两个入口共用。
+ *
+ * 注入块走 [turnReminder]（随本轮用户消息下发），不进系统提示词：它按当轮话题召回、每轮都可能变，
+ * 放进 system 会让 KV 缓存的前缀整段失效。
  */
 @Singleton
 class MemoryModule @Inject constructor(
@@ -47,24 +49,9 @@ class MemoryModule @Inject constructor(
     override val order = 50
 
     /**
-     * 注入缓存的 key：会话 + 工作区 + 开关 + 当前话题指纹。
-     *
-     * 带上话题指纹是因为召回要按当轮问题挑记忆；不带的话，一个会话里话题变了
-     * 仍然注入开头那几条，排序就白做了。同一话题的多轮仍会命中缓存。
-     */
-    private data class CacheKey(
-        val sessionId: String?,
-        val projectRoot: String,
-        val activeMemory: Boolean,
-        val queryHash: Int
-    )
-
-    private val cachedByKey = ConcurrentHashMap<CacheKey, String>()
-
-    /**
      * 清单缓存的 key：只有会话 + 工作区。
      *
-     * 不能像 [CacheKey] 那样带上开关与话题指纹：那份缓存是「读盘得到的原始清单」，
+     * 不能带上开关与话题指纹：这份缓存是「读盘得到的原始清单」，
      * 按话题分裂成多份就等于同一轮里读两次盘、把同一批记忆记两次账。
      */
     private data class ListCacheKey(val sessionId: String?, val projectRoot: String)
@@ -87,40 +74,42 @@ class MemoryModule @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 记忆被外部改动（如模型主动调 memory 工具写入）时丢掉缓存，
-        // 否则新记忆要等到换会话才生效——主动记忆就白写了。
-        // 清单缓存同样要丢：它按会话缓存读盘结果，留着就会漏掉刚写进来的那条。
+        // 记忆被外部改动（如模型主动调 memory 工具写入）时丢掉清单缓存，
+        // 否则新记忆要等换会话才生效——刚写进来的这条本轮就看不到。
         scope.launch {
             memoryRepository.changes.collect {
-                cachedByKey.clear()
                 listSnapshotByKey.clear()
             }
         }
     }
 
-    override fun promptFragment(ctx: EngineContext): String? {
-        val activeMemory = memorySettings.activeMemoryEnabledSync()
-        // 开关与话题都进缓存 key：切换开关、换话题后注入内容都要跟着变
-        val key = CacheKey(ctx.sessionId, ctx.projectRoot, activeMemory, queryOf(ctx).hashCode())
-        val cached = cachedByKey[key]
-        if (cached != null) return cached.ifEmpty { null }
+    /**
+     * 记忆清单与主动记忆规则改由 [turnReminder] 下发：它按当轮话题召回，放进系统提示词
+     * 会让 system 每轮都变，KV 缓存的前缀整段失效。
+     */
+    override fun promptFragment(ctx: EngineContext): String? = null
 
-        // 清单为空时也要可能返回规则本身（新用户没有任何记忆时，主动记忆规则必须照样注入）
+    /**
+     * 本轮带给模型的记忆块：主动记忆规则（仅主代理）+ 按当轮话题召回的记忆清单。
+     *
+     * 措辞与原先注入系统提示词时逐字一致，只换了位置。
+     */
+    override fun turnReminder(ctx: EngineContext): String? {
+        val activeMemory = memorySettings.activeMemoryEnabledSync()
+        // 清单为空时也可能只剩规则：新用户没有任何记忆时，主动记忆规则必须照样送去
         val content = listOfNotNull(
             // 子代理不拿主动记忆规则：写用户画像是主代理的事，子代理只管干活
             ACTIVE_MEMORY_RULE.takeIf { activeMemory && !ctx.isSubAgent },
             buildMemoryList(ctx, listSnapshot(ctx).memories)
         ).joinToString("\n\n")
-
-        cachedByKey[key] = content
-        trimIfNeeded()
-        return content.ifEmpty { null }
+        if (content.isEmpty()) return null
+        return "$REMINDER_HEADING\n$content"
     }
 
     /**
      * `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 两个变量的数据：按范围分组的完整清单。
      *
-     * 与 [promptFragment] 走同一个 [listSnapshot]：同一轮里两个入口都会进来，
+     * 与 [turnReminder] 走同一个 [listSnapshot]：同一轮里两个入口都会进来，
      * 共用缓存才能保证读盘与命中记账只发生一次。
      */
     override fun memoryListGroups(ctx: EngineContext): MemoryListGroups = listSnapshot(ctx).groups
@@ -278,9 +267,9 @@ class MemoryModule @Inject constructor(
             // 无论有没有改动都记时间戳：没改动也说明这轮看过了，不该每轮重看
             memorySettings.setLastCuratedAt(System.currentTimeMillis())
             if (result.changed) {
-                cachedByKey.keys
+                listSnapshotByKey.keys
                     .filter { it.sessionId == ctx.sessionId && it.projectRoot == ctx.projectRoot }
-                    .forEach { cachedByKey.remove(it) }
+                    .forEach { listSnapshotByKey.remove(it) }
             }
         } finally {
             curationLock.unlock()
@@ -288,16 +277,10 @@ class MemoryModule @Inject constructor(
     }
 
     override suspend fun onSessionDeleted(ctx: EngineContext) {
-        cachedByKey.keys.removeAll { it.sessionId == ctx.sessionId }
         listSnapshotByKey.keys.removeAll { it.sessionId == ctx.sessionId }
     }
 
-    /** 注入缓存上限：会话多了不能让缓存无限长大。 */
-    private fun trimIfNeeded() {
-        if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
-    }
-
-    /** 清单缓存上限：同上，防会话多了长期累积。 */
+    /** 清单缓存上限：防会话多了长期累积。 */
     private fun trimSnapshotCacheIfNeeded() {
         if (listSnapshotByKey.size > SOURCE_CACHE_LIMIT) listSnapshotByKey.clear()
     }
@@ -306,6 +289,9 @@ class MemoryModule @Inject constructor(
         const val MODULE_ID = "memory"
         const val TAG = "MemoryModule"
         const val SOURCE_CACHE_LIMIT = 64
+
+        /** 记忆块在提醒里的外层小标题：让模型知道这一段是什么。 */
+        const val REMINDER_HEADING = "## 记忆召回"
 
         /** 治理提示词：只发名称+描述，不发正文（省钱）。 */
         const val CURATOR_PROMPT_FILE = "agent/memory-curator.md"
@@ -337,7 +323,7 @@ class MemoryModule @Inject constructor(
         /** 抽取提示词与解析逻辑统一在 [MemoryExtractor]，供压缩前抽取使用。 */
         const val PROMPT_FILE = MemoryExtractor.PROMPT_FILE
 
-        /** 单条记忆注入系统提示词时的条数上限（硬上限，共享给治理器做公平性判据）。
+        /** 单条记忆注入时的条数上限（硬上限，共享给治理器做公平性判据）。
          *
          * 实测结论（MemOS 落地笔记“宁少勿多”）：记忆条数多了反而干扰决策，
          * 3 条是甜点值、10 条已开始干扰。超出部分不展开，靠 [MIN_INJECTED_MEMORIES] 之后的
