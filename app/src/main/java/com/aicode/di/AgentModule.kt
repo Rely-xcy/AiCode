@@ -440,7 +440,6 @@ object AgentModule {
     @Provides
     @Singleton
     fun provideAgentWorkflow(
-        toolRegistry: ToolRegistry,
         aiProviderRepository: AIProviderRepository,
         openAIApi: OpenAIApi,
         anthropicApi: AnthropicApi,
@@ -469,7 +468,6 @@ object AgentModule {
         interruptedWorkRecorder: InterruptedWorkRecorder
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
-            toolRegistry,
             aiProviderRepository,
             openAIApi,
             anthropicApi,
