@@ -134,9 +134,9 @@ class WriteLeaseRegistry @Inject constructor(
         holderLabel: String,
         path: String,
         projectRoot: String
-    ): LeaseConflict? {
+    ): LeaseConflict? = synchronized(claimLock) {
         pruneExpired()
-        val segments = segmentsOf(path, projectRoot) ?: return null
+        val segments = segmentsOf(path, projectRoot) ?: return@synchronized null
         val now = System.currentTimeMillis()
 
         // 同一持有者写自己的范围永远放行，并刷新活跃时间（避免活跃持有者被 TTL 踢掉）。
@@ -144,17 +144,21 @@ class WriteLeaseRegistry @Inject constructor(
             ?.firstOrNull { WriteScopePattern.overlaps(it.segments, segments) }
             ?.let {
                 put(holderId, holderLabel, it.pattern, it.segments, now)
-                return null
+                return@synchronized null
             }
 
+        // 「查冲突 + 认领」必须原子：分开做时，同批两个子代理会同时通过 findConflict 再各自 put，
+        // 静默覆盖正是这个机制要防的。锁只罩这一段（全是内存操作，不涉 IO）。
         val conflict = findConflict(holderId, segments, emptySet())
         if (conflict != null) {
             FileLogger.w(TAG, "写入被拒：$holderLabel 想写 $path，已被 ${conflict.holderLabel}（${conflict.pattern}）持有")
-            return conflict
+            return@synchronized conflict
         }
         put(holderId, holderLabel, path, segments, now)
-        return null
+        null
     }
+
+    private val claimLock = Any()
 
     /** 释放该持有者的全部租约。会话运行结束（成功/取消/异常）与会话被删除都要调，否则只能等 TTL。 */
     fun release(holderId: String) {

@@ -160,8 +160,13 @@ class SystemPromptProvider @Inject constructor(
     }
 
     private inner class ProjectRuleSource {
-        @Volatile private var cached: ProjectRules? = null
-        private var lastSignature: String = ""
+        @Volatile private var ruleCache: RuleCache? = null
+
+        /**
+         * 缓存与签名必须**整体替换**：分两步写（先 cached 再 lastSignature）时，并发调用可能读到
+         * 「A 工作区的规则 + B 工作区的签名」——项目规则是模型必须遵守的硬约束，串味比性能问题严重。
+         */
+        private data class RuleCache(val signature: String, val rules: ProjectRules)
 
         /**
          * 同时读取全局规则（`~/.aicode`）与工作区规则（项目根目录）：各自 `AGENTS.md` 优先、`CLAUDE.md` 兜底。
@@ -177,14 +182,13 @@ class SystemPromptProvider @Inject constructor(
                 append('|')
                 append(project?.first?.absolutePath).append(':').append(project?.first?.lastModified() ?: 0)
             }
-            if (signature == lastSignature && cached != null) return cached
+            ruleCache?.let { if (it.signature == signature) return it.rules }
 
             val rules = ProjectRules(
                 global = global?.first?.let { readRule(it) },
                 project = project?.first?.let { readRule(it) }
             )
-            cached = rules
-            lastSignature = signature
+            ruleCache = RuleCache(signature, rules)
             return rules
         }
 
