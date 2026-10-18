@@ -27,6 +27,41 @@ class ManageMcpTool @Inject constructor(
         const val TAG = "ManageMcpTool"
     }
 
+    /**
+     * 列出服务器：只给名称、地址、键名与开关状态，headers / env 的**值**一律不回显。
+     *
+     * 该动作走 READ_AGENT_CONFIG 免弹窗，所以输出本身就是「无人工确认也能进上下文」的内容，
+     * 凭据不值得也不需要出现在这里。
+     */
+    private fun describeServers(servers: List<com.aicode.feature.agent.domain.mcp.McpServerConfig>): String {
+        if (servers.isEmpty()) return "（没有已配置的 MCP server）"
+        return servers.joinToString("\n") { server ->
+            val target = if (server.isStdio) {
+                buildString {
+                    append("stdio ").append(server.command.orEmpty())
+                    if (server.args.isNotEmpty()) append(' ').append(server.args.joinToString(" "))
+                }
+            } else {
+                server.url.orEmpty()
+            }
+            buildString {
+                append("- ").append(server.name)
+                if (!server.enabled) append("（已停用）")
+                append("：").append(target)
+                if (server.headers.isNotEmpty()) {
+                    append("；headers 键：").append(server.headers.keys.joinToString(", "))
+                }
+                if (server.env.isNotEmpty()) {
+                    append("；env 键：").append(server.env.keys.joinToString(", "))
+                }
+                if (server.auth != null) append("；含鉴权配置")
+                if (server.disabledTools.isNotEmpty()) {
+                    append("；已禁用工具 ").append(server.disabledTools.size).append(" 个")
+                }
+            }
+        }
+    }
+
     override val name = "manageMcp"
     override val description = "管理 Model Context Protocol (MCP) 服务器。支持添加、删除与列表查询。添加/删除会修改 Agent 配置，不会自动安装 Node/Python 等运行时。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
@@ -128,7 +163,9 @@ class ManageMcpTool @Inject constructor(
             when (action) {
                 "list" -> {
                     val servers = readServers()
-                    ToolResult.Success(JsonPrimitive(mcpConfigRepository.serialize(servers)))
+                    // headers / env 里常放 API Key 与 Token，而 list 走 READ_AGENT_CONFIG 免弹窗
+                    // （见 ToolPermissionPolicyEngine），原样回显等于把凭据交给模型、进而进上下文与日志。
+                    ToolResult.Success(JsonPrimitive(describeServers(servers)))
                 }
                 "remove" -> {
                     val name = args["server_name"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("remove 缺少必需参数：server_name")

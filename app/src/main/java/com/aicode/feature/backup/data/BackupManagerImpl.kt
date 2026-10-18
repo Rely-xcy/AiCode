@@ -858,7 +858,15 @@ class BackupManagerImpl @Inject constructor(
 
         val wsDir = File(ws.path)
         if (!isPathInsideWorkspace(wsDir, segments[2])) return RestoreStats()
-        val target = File(wsDir, segments[2])
+        val relative = segments[2]
+        // `.git/hooks/*` 会在容器内以 root 执行（App 的 git 走 LinuxContainerEngine），
+        // `.git/config` 能用 core.hooksPath / filter.clean 定义任意命令——从备份里静默还原它们，
+        // 等于让一份来源不可信的备份在本机容器里拿到执行入口。其余 `.git/`（对象/引用/历史）照常恢复。
+        if (relative.startsWith(".git/hooks/") || relative == ".git/config") {
+            FileLogger.w(TAG, "跳过备份里的安全相关条目：${wsName}/$relative")
+            return RestoreStats(skippedSecurityEntries = 1)
+        }
+        val target = File(wsDir, relative)
         target.parentFile?.mkdirs()
         FileOutputStream(target).use { out -> tar.copyTo(out) }
         FileLogger.i(TAG, "恢复工作区文件：${ws.name}/${segments[2]}")

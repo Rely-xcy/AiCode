@@ -81,6 +81,11 @@ data class RestoreStats(
     val mcpServers: Int = 0,
     val globalPermissionRules: Int = 0,
     val workspaceFiles: Int = 0,
+    /**
+     * 导入时跳过的「安全相关条目」数：git 的 hooks 与 config 能在容器内执行命令，
+     * 这两类不从备份还原（其余 `.git` 内容照常恢复）。
+     */
+    val skippedSecurityEntries: Int = 0,
     /** 本次导入是否真的回写了应用设置段（备份没带时不回写，摘要也就不该说「已覆盖」）。 */
     val settingsRestored: Boolean = false,
     /** 本次导入实际写入的技能文件数（技能目录下的所有文件，含 SKILL.md 与附带的脚本/二进制）。 */
@@ -102,6 +107,7 @@ data class RestoreStats(
         mcpServers = mcpServers + other.mcpServers,
         globalPermissionRules = globalPermissionRules + other.globalPermissionRules,
         workspaceFiles = workspaceFiles + other.workspaceFiles,
+        skippedSecurityEntries = skippedSecurityEntries + other.skippedSecurityEntries,
         settingsRestored = settingsRestored || other.settingsRestored,
         skillFiles = skillFiles + other.skillFiles,
         subagentFiles = subagentFiles + other.subagentFiles,

@@ -558,6 +558,7 @@
     <string name="backup_stat_mcp_servers">· MCP 服务器 %1$s 个</string>
     <string name="backup_stat_permission_rules">· 全局授权规则 %1$s 条</string>
     <string name="backup_stat_workspace_files">· 工作区文件 %1$s 个</string>
+    <string name="backup_stat_skipped_security">· 已跳过 %1$s 个安全相关条目（.git 的 hooks / config）</string>
     <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
     <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
     <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>

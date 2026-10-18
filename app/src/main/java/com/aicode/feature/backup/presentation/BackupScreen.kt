@@ -915,5 +915,8 @@ private fun buildImportSummary(context: android.content.Context, stats: RestoreS
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
+    if (stats.skippedSecurityEntries > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_security, stats.skippedSecurityEntries))
+    }
     append(context.getString(R.string.backup_settings_covered))
 }

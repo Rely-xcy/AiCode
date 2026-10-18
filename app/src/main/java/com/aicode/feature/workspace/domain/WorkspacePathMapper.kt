@@ -99,9 +99,9 @@ class WorkspacePathMapper @Inject constructor(
             p == wsRoot || p == "$wsRoot/" || p == CONTAINER_ROOT || p == "$CONTAINER_ROOT/" -> requireWorkspaceRoot(root)
             p.startsWith("$wsRoot/") -> workspaceFile(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
             p == AICODE_ROOT || p == "$AICODE_ROOT/" -> aicodeRoot()
-            p.startsWith("$AICODE_ROOT/") -> File(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"))
+            p.startsWith("$AICODE_ROOT/") -> containedFile(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"), "AI 配置目录")
             else -> mountedHostFile(p)
-                ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/"))
+                ?: if (p.startsWith("/")) containedFile(rootfsRoot(), p.removePrefix("/"), "容器镜像目录")
                 else workspaceFile(requireWorkspaceRoot(root), p)
         }
         return file
@@ -111,13 +111,21 @@ class WorkspacePathMapper @Inject constructor(
      * 相对路径挂到工作区下之前做 canonical 包含校验：`../../data/...` 这类逃逸必须拒绝，
      * 否则 readFile/listFiles 可以读出工作区之外的文件（备份导入侧已有同款校验）。
      */
-    private fun workspaceFile(root: File, relative: String): File {
-        // 用纯字符串路径归一化（Path.normalize 不访问文件系统）：容器里工作区目录可能尚未创建，
+    private fun workspaceFile(root: File, relative: String): File = containedFile(root, relative, "工作区")
+
+    /**
+     * 把相对路径拼到 [root] 下，并做 canonical 包含校验：`../../data/...` 这类逃逸必须拒绝。
+     *
+     * 三条根（工作区 / AI 配置目录 / 容器镜像目录）共用同一套校验：只做 «拼上根» 不够，
+     * 绝对路径分支同样能把 `..` 带进来（`/root/.aicode/../../data/data/...`）。
+     */
+    private fun containedFile(root: File, relative: String, label: String): File {
+        // 用纯字符串路径归一化（Path.normalize 不访问文件系统）：容器里目录可能尚未创建，
         // canonicalFile 在那种场景下会走系统查询，不可靠。
         val rootPath = Paths.get(root.path).toAbsolutePath().normalize()
         val candidatePath = Paths.get(root.path, relative).toAbsolutePath().normalize()
         if (candidatePath != rootPath && !candidatePath.startsWith(rootPath)) {
-            throw IllegalArgumentException("路径越出工作区：$relative")
+            throw IllegalArgumentException("路径越出$label：$relative")
         }
         return candidatePath.toFile()
     }
@@ -182,7 +190,7 @@ class WorkspacePathMapper @Inject constructor(
         for ((src, dst) in extraMounts()) {
             when {
                 p == dst || p == "$dst/" -> return File(src)
-                p.startsWith("$dst/") -> return File(src, p.removePrefix("$dst/"))
+                p.startsWith("$dst/") -> return containedFile(File(src), p.removePrefix("$dst/"), "挂载目录")
             }
         }
         return null

@@ -48,6 +48,16 @@ object BuiltInSafeCommands {
         "ps", "top", "free", "htop", "vmstat", "lscpu", "lsblk", "arch", "clear", "history", "true", "false"
     ) + GIT_READ_ONLY_PREFIXES
 
+    /**
+     * 敏感路径片段：只读命令的参数命中即不自动放行。
+     *
+     * 白名单保证的是「命令不会写文件」，不等于「读什么都无害」：
+     * `cat /root/.aicode/mcp.json` 泄露 headers/env，`cat ~/.aicode/git-credentials` 直接就是登录凭据。
+     */
+    private val SENSITIVE_PATH_FRAGMENTS = listOf(
+        ".aicode/", "/data/data/", "/data/user/0/", "/data/misc/", "git-credentials"
+    )
+
     /** 该段是否命中任一内置安全前缀。 */
     fun isSafe(segmentTokens: List<String>): Boolean {
         if (segmentTokens.isEmpty()) return false
@@ -56,6 +66,7 @@ object BuiltInSafeCommands {
         // uniq IN OUT。命中这些形式时不再自动放行，交给授权层弹窗。
         val program = segmentTokens.firstOrNull { !it.contains("=") } ?: return false
         val args = segmentTokens.dropWhile { it != program }.drop(1)
+        if (args.any { arg -> SENSITIVE_PATH_FRAGMENTS.any { arg.contains(it) } }) return false
         return when (program) {
             "sort", "tree" -> args.none {
                 it == "-o" || it == "--output" || it.startsWith("--output=") ||
