@@ -49,6 +49,51 @@ class FileMentionRepositoryTest {
     }
 
     @Test
+    fun match_zeroLimit_returnsEmpty() {
+        assertTrue(repository.match(files, "chat", limit = 0).isEmpty())
+    }
+
+    /** 逐键延长查询时，会话内的增量筛选必须与每次从头扫全量得到的结果完全一致。 */
+    @Test
+    fun match_incrementalQueryMatchesFullScan() {
+        val typed = listOf("c", "ch", "cha", "chat", "chati", "chat.md")
+        val incremental = typed.map { repository.match(files, it) }
+        val fresh = typed.map { FileMentionRepository(engine).match(files, it) }
+        assertEquals(fresh, incremental)
+    }
+
+    /** 查询变短或换向（删字符）后也要回到全量筛选，结果同样一致。 */
+    @Test
+    fun match_shorterQueryAfterLongerMatchesFullScan() {
+        repository.match(files, "chatinput")
+        assertEquals(
+            FileMentionRepository(engine).match(files, "chat"),
+            repository.match(files, "chat")
+        )
+        assertEquals(
+            FileMentionRepository(engine).match(files, "a"),
+            repository.match(files, "a")
+        )
+    }
+
+    /** 上一次查询带过 limit 也不能把增量筛选的候选集缩小。 */
+    @Test
+    fun match_narrowingIgnoresPreviousLimit() {
+        repository.match(files, "c", limit = 1)
+        assertEquals(
+            FileMentionRepository(engine).match(files, "chat"),
+            repository.match(files, "chat")
+        )
+    }
+
+    @Test
+    fun match_limitKeepsTopOrdering() {
+        val all = repository.match(files, "chat")
+        assertEquals(all.take(1), repository.match(files, "chat", limit = 1))
+        assertEquals(all.take(2), repository.match(files, "chat", limit = 2))
+    }
+
+    @Test
     fun loadFiles_success_parsesAndDeduplicatesLines() = runBlocking {
         coEvery { engine.runCommandSyncIfReady(any(), any(), any()) } returns CommandResult(
             "a.kt\nsub/b.kt\n\na.kt\n",

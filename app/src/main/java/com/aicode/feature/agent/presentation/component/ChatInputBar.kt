@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -377,36 +380,39 @@ internal fun ChatInputBar(
                         1.dp, MaterialTheme.colorScheme.outlineVariant
                     )
                 ) {
-                    Column(
+                    val mentionHint = when (fileMentionState) {
+                        FileMentionState.Idle, FileMentionState.Loading ->
+                            stringResource(R.string.chat_mention_loading)
+                        FileMentionState.Unavailable ->
+                            stringResource(R.string.chat_mention_unavailable)
+                        is FileMentionState.Error ->
+                            stringResource(R.string.chat_mention_error)
+                        is FileMentionState.Ready -> null
+                    }
+                    LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                            .heightIn(max = 200.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.xs)
                     ) {
-                        val mentionHint = when (fileMentionState) {
-                            FileMentionState.Idle, FileMentionState.Loading ->
-                                stringResource(R.string.chat_mention_loading)
-                            FileMentionState.Unavailable ->
-                                stringResource(R.string.chat_mention_unavailable)
-                            is FileMentionState.Error ->
-                                stringResource(R.string.chat_mention_error)
-                            is FileMentionState.Ready -> null
-                        }
                         when {
-                            mentionHint != null -> Text(
-                                mentionHint,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                            )
-                            mentionFiles.isEmpty() -> Text(
-                                stringResource(R.string.chat_mention_empty),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                            )
-                            else -> mentionFiles.forEach { path ->
+                            mentionHint != null -> item {
+                                Text(
+                                    mentionHint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                                )
+                            }
+                            mentionFiles.isEmpty() -> item {
+                                Text(
+                                    stringResource(R.string.chat_mention_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                                )
+                            }
+                            else -> items(mentionFiles, key = { it }) { path ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
