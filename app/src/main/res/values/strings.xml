@@ -477,8 +477,14 @@
     <string name="about_update_channel">更新通道</string>
     <string name="update_channel_stable">稳定版</string>
     <string name="update_channel_stable_desc">仅检测正式版更新</string>
-    <string name="update_channel_latest">预览版</string>
-    <string name="update_channel_latest_desc">除正式版外，还检测预览版（RC）更新</string>
+    <string name="update_channel_beta">测试版</string>
+    <string name="update_channel_beta_desc">测试版更新，可能包含未完成的功能</string>
+    <string name="update_channel_rc">候选版</string>
+    <string name="update_channel_rc_desc">发布候选版，接近正式版</string>
+    <string name="update_channel_dev">开发版</string>
+    <string name="update_channel_dev_desc">开发构建，随每次提交更新</string>
+    <string name="update_channel_debug">调试版</string>
+    <string name="update_channel_debug_desc">调试构建，仅供排错</string>
     <string name="about_no_changelog">暂无更新说明</string>
     <!-- fork 专属：自建更新源（推上游 PR 前连同下面 fork_update_ 前缀的三条一起删） -->
     <string name="fork_update_release_title">%1$s（%2$s）</string>

@@ -2,6 +2,7 @@ package com.aicode.feature.settings.data.remote
 
 import android.content.Context
 import com.aicode.R
+import com.aicode.feature.settings.data.repository.UpdateChannel
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -11,20 +12,26 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 本 fork 的更新源是否支持「更新通道」选择。自建接口只有一个发布序列，故恒为 false，
- * 关于页据此隐藏该设置项。推上游 PR 前：删除本常量，并拆掉 AboutSection 里引用它的 if 包裹。
+ * 本 fork 的更新源是否支持「更新通道」选择。自建接口按通道分槽发布，故为 true——
+ * 关于页据此展示通道设置项。推上游 PR 前：删除本常量，并拆掉 AboutSection 里引用它的 if 包裹。
  */
-internal const val FORK_UPDATE_SUPPORTS_CHANNEL = false
+internal const val FORK_UPDATE_SUPPORTS_CHANNEL = true
 
 /**
  * 本 fork 专属的检查更新数据源：把上游的 GitHub Releases 换成本 fork 站点的接口。
  *
- * 接口（无鉴权，UTF-8 JSON，正常恒返回 HTTP 200）：`GET {ENDPOINT}` 一次拿回站上最新发布版的
- * 完整信息（id / name / sizeText / date / note / url）。响应里的 `hasUpdate` 是站点拿请求参数
- * `id` 与最新 id 比出来的结论，**不带 id 时恒为 true**，所以这里不传 id：先取回最新发布版，
- * 再在本地判断要不要提示。
+ * 接口（无鉴权，UTF-8 JSON，正常恒返回 HTTP 200）：
+ * `GET {ENDPOINT}?channel=<通道>&code=<本机 versionCode>` 一次拿回该通道发布版的完整信息
+ * （versionName / title / sizeText / date / noteShort / url）。带了 `code`，服务端就会把
+ * `versionCode` 与本机比好，给出 `hasUpdate` 与 `direction`（up / down / same）。
  *
- * 判新分两条路（见 [hasNewVersion]）：
+ * 判新规则：
+ * 1. 响应里有 `hasUpdate` 就以它为准；`direction == "down"`（站上那份比本机旧，用户装的测试包）
+ *    静默当「已是最新」，不再提示。
+ * 2. 只有响应里**没有** `hasUpdate` 字段（老服务端）时，才退回旧的构建哈希 / 发布 id 判据
+ *    （见 [hasNewVersion]），两套不会同时跑。
+ *
+ * 旧判据保留为兜底，其原理：
  * 1. 两边都拿得到构建短哈希——站点包名形如 `aicode-beta-b6c45eea.apk`，App 的 versionName 形如
  *    `1.12.0-rc2-dev.289+gb6c45eea`（见 app/build.gradle.kts 的 gitVersionName()）——按哈希比，
  *    **相等才算最新**。装的是旧包就一定会提示，首次检查也不例外。
@@ -32,7 +39,8 @@ internal const val FORK_UPDATE_SUPPORTS_CHANNEL = false
  *    认账」：id 变了提示，从没记过 id（首次）也提示。此时无法证明站上那份与已装版本一致，
  *    静默会永久漏掉旧包。
  *
- * 两条硬规则：请求失败什么都不做（返回 Error，由调用方静默）；只要响应里带 id 就存下（无论有没有更新）。
+ * 三条硬规则：请求失败什么都不做（返回 Error，由调用方静默）；`released == false` 与
+ * `direction == "down"` 都当「已是最新」；只有走旧判据兜底时才需要记发布 id。
  *
  * 与上游 [UpdateCheckService] 的差异只有「去哪问、拿回什么」：返回类型、弹窗 UI 与触发时机全部
  * 复用上游实现，由 SettingsViewModel.checkUpdate 调换数据源，弹窗按钮改开接口给的 APK 直链。
@@ -55,16 +63,23 @@ class ForkUpdateCheckService @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
     /**
-     * 拉取一次站上最新发布版，判断要不要提示更新。
-     * [localVersion] 传本机 versionName（带 `+g<短哈希>` 才有得比，见 [buildShaFromVersionName]）。
+     * 按通道拉一次发布版，判断要不要提示更新。
+     *
+     * [localVersionCode] 是本机 versionCode，传给服务端后由它判新旧；[localVersionName] 只在响应
+     * 缺 `hasUpdate` 字段时用于旧的构建哈希兜底（见 [buildShaFromVersionName]）；
+     * [channel] 决定问哪个发布槽。
      */
-    suspend fun checkForUpdate(localVersion: String): UpdateCheckResult = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdate(
+        localVersionName: String,
+        localVersionCode: Int,
+        channel: UpdateChannel
+    ): UpdateCheckResult = withContext(Dispatchers.IO) {
         runCatching {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val lastReleaseId = prefs.getString(KEY_LAST_RELEASE_ID, null)?.takeIf { it.isNotBlank() }
-            // 不传 id：不带 id 时接口给的是站上最新发布版的完整信息（name/note/url 都在），
-            // 而 hasUpdate 只是站点按 id 比出来的结论，本地有构建哈希时根本用不上它。
-            val req = okhttp3.Request.Builder().url(ENDPOINT).get().build()
+            val req = okhttp3.Request.Builder()
+                .url("$ENDPOINT?channel=${channel.wireName}&code=$localVersionCode")
+                .get()
+                .build()
             SHARED_CLIENT.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     return@use UpdateCheckResult.Error("HTTP ${resp.code}")
@@ -76,37 +91,67 @@ class ForkUpdateCheckService @Inject constructor(
                     return@use UpdateCheckResult.Error(context.getString(R.string.about_network_error))
                 }
 
-                val releaseId = obj.stringOrEmpty("id")
-                // 无论有没有更新都存 id（回退路径靠它认账）；released=false 时接口给的 id 为空，保持原值不清空。
-                if (releaseId.isNotBlank()) {
-                    prefs.edit().putString(KEY_LAST_RELEASE_ID, releaseId).apply()
-                }
+                // 通道还没有发布版（或发布版指向的文件已删）：静默当最新。
                 if (!obj.booleanOrFalse("released")) {
                     return@use UpdateCheckResult.UpToDate
                 }
 
-                val name = obj.stringOrEmpty("name")
-                val localSha = buildShaFromVersionName(localVersion)
-                val remoteSha = buildShaFromApkName(name)
-                if (!hasNewVersion(localSha, remoteSha, lastReleaseId, releaseId)) {
+                val releaseId = obj.stringOrEmpty("id")
+                val hasUpdate = obj.get("hasUpdate")?.takeIf { !it.isJsonNull }?.asBoolean
+                val shouldReport = shouldReportUpdate(
+                    hasUpdate = hasUpdate,
+                    direction = obj.stringOrEmpty("direction")
+                ) {
+                    // 兜底：老服务端没给 hasUpdate，退回构建哈希 / 发布 id 判新。
+                    val lastReleaseId = prefs.getString(KEY_LAST_RELEASE_ID, null)?.takeIf { it.isNotBlank() }
+                    val report = hasNewVersion(
+                        localSha = buildShaFromVersionName(localVersionName),
+                        remoteSha = buildShaFromApkName(obj.stringOrEmpty("name")),
+                        lastSeenReleaseId = lastReleaseId,
+                        releaseId = releaseId
+                    )
+                    if (releaseId.isNotBlank()) {
+                        prefs.edit().putString(KEY_LAST_RELEASE_ID, releaseId).apply()
+                    }
+                    report
+                }
+                if (!shouldReport) {
                     return@use UpdateCheckResult.UpToDate
                 }
 
-                // 站上那份包名就是「aicode-beta-<sha8>.apk」这种机器名，直接摆给用户看不懂：
-                // 换成「短哈希 · 发布日期」（拿不到哈希时退回去掉 .apk 的包名）。
-                val label = releaseLabel(sha = remoteSha, rawName = name, date = obj.stringOrEmpty("date"))
-                val sizeText = obj.stringOrEmpty("sizeText")
-                val note = obj.stringOrEmpty("note")
+                // 弹窗标题用服务端给的人类可读版本号（title / versionName），后面跟发布日期；
+                // 都缺失时才退回包名（去掉 .apk）。
+                val versionName = obj.stringOrEmpty("versionName")
+                    .ifBlank { obj.stringOrEmpty("title") }
+                    .ifBlank { obj.stringOrEmpty("name").trim().removeSuffix(".apk") }
+                val label = listOf(versionName.trim(), obj.stringOrEmpty("date").trim())
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · ")
+                // 优先用服务端裁好的前 16 行 noteShort；缺字段时退回整份 note，由本地按行截断。
+                val note = obj.stringOrEmpty("noteShort").ifBlank { obj.stringOrEmpty("note") }
                 UpdateCheckResult.NewVersion(
                     UpdateInfo(
                         latestTag = label,
-                        changelog = composeChangelog(label = label, sizeText = sizeText, note = note),
+                        changelog = composeChangelog(
+                            label = label,
+                            sizeText = obj.stringOrEmpty("sizeText"),
+                            note = note
+                        ),
                         updates = listOf(VersionUpdate(tag = label, changelog = note)),
-                        downloadUrl = obj.stringOrEmpty("url").takeIf { it.isNotBlank() }
+                        downloadUrl = downloadUrlOf(obj)
                     )
                 )
             }
         }.getOrElse { UpdateCheckResult.Error(it.message ?: context.getString(R.string.about_network_error)) }
+    }
+
+    /** 更新包直链：优先用服务端给的 `url`（已带 `?dl=1`），缺字段时按 `path` 拼站点地址。 */
+    private fun downloadUrlOf(obj: JsonObject): String? {
+        val url = obj.stringOrEmpty("url")
+        if (url.isNotBlank()) return url
+        val path = obj.stringOrEmpty("path")
+        if (path.isBlank()) return null
+        return SITE_BASE + path + "?dl=1"
     }
 
     /** 弹窗正文：首行是版本标识与安装包大小，空行后接更新日志预览（截断规则见 [previewChangelog]）。 */
@@ -135,8 +180,11 @@ class ForkUpdateCheckService @Inject constructor(
         get(key)?.takeIf { !it.isJsonNull }?.asBoolean ?: false
 
     private companion object {
-        /** 本 fork 的发布信息接口，无鉴权、恒不带参数（带了 id 反而只剩站点的 id 比对结论，见类注释）。 */
+        /** 本 fork 的发布信息接口，无鉴权，按 `?channel=&code=` 取对应通道的发布版。 */
         const val ENDPOINT = "https://rely-xfer.de5.net/dl/update"
+
+        /** 同一站点的根地址，用于从响应里的 `path` 拼出下载直链。 */
+        const val SITE_BASE = "https://rely-xfer.de5.net"
 
         /** 沿用仓库既有的更新偏好文件（见 UpdateCheckSettingsRepository），只加一个自有键。 */
         const val PREFS_NAME = "update_check_prefs"
@@ -155,6 +203,19 @@ class ForkUpdateCheckService @Inject constructor(
         }
     }
 }
+
+/** `direction` 取值之一：服务端发布版比本机旧（用户装的是测试包），此时不提示。 */
+private const val DIRECTION_DOWN = "down"
+
+/**
+ * 要不要提示更新。服务端给了 `hasUpdate` 就以它为准：`direction == "down"`（站上那份比本机旧）
+ * 静默当「已是最新」。只有字段缺失（老服务端）时才跑 [fallback] 的旧判据，两套不并行。
+ */
+internal fun shouldReportUpdate(
+    hasUpdate: Boolean?,
+    direction: String,
+    fallback: () -> Boolean
+): Boolean = if (hasUpdate != null) hasUpdate && direction != DIRECTION_DOWN else fallback()
 
 /** git 短哈希最少 7 位（`git describe` 的默认下限），站点文件名给 8 位；不足 7 位不足以唯一标识一个提交。 */
 private const val MIN_BUILD_SHA_LENGTH = 7
@@ -214,15 +275,6 @@ internal fun hasNewVersion(
     if (releaseId.isBlank()) return false
     return releaseId != lastSeenReleaseId
 }
-
-/**
- * 弹窗里给用户看的版本标识：有构建短哈希就用「哈希 · 发布日期」，否则退回去掉 `.apk` 的包名。
- * 站点包名（`aicode-beta-b6c45eea.apk`）是给机器看的，直接当版本号摆出来不像版本号。
- */
-internal fun releaseLabel(sha: String?, rawName: String, date: String): String =
-    listOf(sha ?: rawName.trim().removeSuffix(".apk").trim(), date.trim())
-        .filter { it.isNotBlank() }
-        .joinToString(" · ")
 
 /**
  * 弹窗正文只取更新日志的前 [maxLines] 行：站点 note 是整份更新日志（几十行，含大量 ──── 分隔线），

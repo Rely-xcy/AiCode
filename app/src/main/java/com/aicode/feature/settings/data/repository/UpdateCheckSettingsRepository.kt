@@ -8,9 +8,40 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import org.json.JSONObject
 
-/** 更新通道：稳定版（仅正式版）/ 最新版（含预览版）。 */
-enum class UpdateChannel {
-    STABLE, LATEST
+/**
+ * 更新通道。[wireName] 是与自建更新源 `/dl/update?channel=` 约定的通道名，
+ * 与后台「上传时按包名/版本名自动推通道」的取值一致。
+ */
+enum class UpdateChannel(val wireName: String) {
+    STABLE("stable"),
+    BETA("beta"),
+    RC("rc"),
+    DEV("dev"),
+    DEBUG("debug");
+
+    companion object {
+        /**
+         * 解析存储值，无法识别时返回 null。旧版本把 beta 通道存成 `LATEST`，改名后必须映射回
+         * [BETA]——否则老用户的存量值会变成非法值，被换回包名推导出的默认通道。
+         */
+        fun fromStored(value: String?): UpdateChannel? {
+            val raw = value?.trim().orEmpty()
+            if (raw.isEmpty()) return null
+            if (raw.equals("latest", ignoreCase = true)) return BETA
+            return entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
+        }
+
+        /**
+         * 用户从未设置过时的默认通道，按包名后缀推导，与后台推通道规则一致：
+         * `.beta` → [BETA]、`.debug` → [DEBUG]、`.dev` → [DEV]，其余一律 [STABLE]。
+         */
+        fun defaultFor(applicationId: String): UpdateChannel = when {
+            applicationId.endsWith(".beta") -> BETA
+            applicationId.endsWith(".debug") -> DEBUG
+            applicationId.endsWith(".dev") -> DEV
+            else -> STABLE
+        }
+    }
 }
 
 /**
@@ -31,11 +62,19 @@ class UpdateCheckSettingsRepository @Inject constructor(
             prefs.edit().putBoolean(KEY_ENABLED, value).apply()
         }
 
-    /** 更新通道，默认稳定版。 */
+    /**
+     * 更新通道。没存过（或存了无法识别的值）时按包名推导默认值（见 [UpdateChannel.defaultFor]）；
+     * 读到旧值 `LATEST` 时顺手写回 `BETA`，完成一次性迁移。
+     */
     var channel: UpdateChannel
-        get() = prefs.getString(KEY_CHANNEL, null)
-            ?.let { runCatching { UpdateChannel.valueOf(it) }.getOrNull() }
-            ?: UpdateChannel.STABLE
+        get() {
+            val stored = prefs.getString(KEY_CHANNEL, null)
+            if (stored.isNullOrBlank()) return UpdateChannel.defaultFor(context.packageName)
+            val parsed = UpdateChannel.fromStored(stored)
+                ?: return UpdateChannel.defaultFor(context.packageName)
+            if (parsed.name != stored) prefs.edit().putString(KEY_CHANNEL, parsed.name).apply()
+            return parsed
+        }
         set(value) {
             prefs.edit().putString(KEY_CHANNEL, value.name).apply()
         }
