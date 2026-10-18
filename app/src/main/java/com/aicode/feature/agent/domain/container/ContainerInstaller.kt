@@ -245,7 +245,7 @@ class ContainerInstaller @Inject constructor(
          * assets 里实际打包的 Alpine 版本，**仅用于日志与排查**，不参与是否需要重装的判定。
          * 换 assets 时同步更新这里，让「装了哪一版」在日志里有据可查。
          */
-        private const val ROOTFS_ASSET_VERSION = "3.21.3"
+        private const val ROOTFS_ASSET_VERSION = "3.21.8"
 
         /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
         private const val DELETE_PROGRESS_STEP = 2000
