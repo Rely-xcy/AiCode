@@ -303,7 +303,6 @@ class ShizukuManager @Inject constructor(
                 ?.packageName
         }.getOrNull()
     }
-    }
 
     /** 申请 Shizuku 授权。需在主线程调用（Shizuku 内部要求）。 */
     fun requestPermission() {
