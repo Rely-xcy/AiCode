@@ -796,6 +796,7 @@
     <string name="chat_goal_pause">Pause goal</string>
     <string name="chat_goal_resume">Resume goal</string>
     <string name="chat_goal_clear">Clear goal</string>
+    <string name="chat_goal_auto_approve_hint">Tools are auto-approved; pause to restore per-call confirmation</string>
     <string name="chat_error_title">Request failed</string>
     <string name="slash_command_compress_desc">Manually compact this session context</string>
     <string name="slash_command_init_desc">Analyze the workspace codebase and generate or improve the AGENTS.md project rules</string>

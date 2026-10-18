@@ -665,10 +665,10 @@ class SettingsViewModel @Inject constructor(
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
 
-    private val _goalMaxTurns = MutableStateFlow(50)
+    private val _goalMaxTurns = MutableStateFlow(GeneralSettingsRepository.DEFAULT_GOAL_MAX_TURNS)
     val goalMaxTurns: StateFlow<Int> = _goalMaxTurns.asStateFlow()
 
-    private val _goalMaxTokens = MutableStateFlow(500_000)
+    private val _goalMaxTokens = MutableStateFlow(GeneralSettingsRepository.DEFAULT_GOAL_MAX_TOKENS)
     val goalMaxTokens: StateFlow<Int> = _goalMaxTokens.asStateFlow()
 
     private val _deleteExternalWorkspaceSessions = MutableStateFlow(false)

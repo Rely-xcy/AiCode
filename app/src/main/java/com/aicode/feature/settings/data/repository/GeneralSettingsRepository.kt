@@ -82,11 +82,11 @@ class GeneralSettingsRepository @Inject constructor(
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
 
-        /** goal 自主循环最大续跑轮数默认 50。 */
-        const val DEFAULT_GOAL_MAX_TURNS = 50
+        /** goal 自主循环最大续跑轮数默认 20：无人看守下的损失上限，不够用时在设置里调大。 */
+        const val DEFAULT_GOAL_MAX_TURNS = 20
 
-        /** goal 自主循环 token 预算默认 500k（按输入+输出累计）。 */
-        const val DEFAULT_GOAL_MAX_TOKENS = 500_000
+        /** goal 自主循环 token 预算默认 20 万（按输入+输出累计），同上。 */
+        const val DEFAULT_GOAL_MAX_TOKENS = 200_000
     }
 
     /** 拉取模型后自动对齐本地列表的开关流；未设置时回退到 true（默认开启）。 */

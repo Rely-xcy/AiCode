@@ -796,6 +796,7 @@
     <string name="chat_goal_pause">暂停目标</string>
     <string name="chat_goal_resume">恢复目标</string>
     <string name="chat_goal_clear">清除目标</string>
+    <string name="chat_goal_auto_approve_hint">工具已自动放行，暂停即恢复逐次确认</string>
     <string name="chat_error_title">请求失败</string>
     <string name="slash_command_compress_desc">手动触发当前会话的上下文压缩</string>
     <string name="slash_command_init_desc">分析当前工作区代码库，生成或改进项目规则 AGENTS.md</string>

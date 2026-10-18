@@ -1365,6 +1365,15 @@ private fun GoalBannerRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                // 只在进行中提示：此时权限走 AUTO，工具不再逐个弹窗，用户得知道这一点（暂停就恢复逐次确认）。
+                if (goal.status == GoalStatus.ACTIVE) {
+                    Text(
+                        text = stringResource(R.string.chat_goal_auto_approve_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.semanticColors.subtleText,
+                        maxLines = 1
+                    )
+                }
             }
             if (goal.status == GoalStatus.ACTIVE || goal.status == GoalStatus.PAUSED) {
                 IconButton(
