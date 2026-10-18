@@ -451,7 +451,8 @@
     <string name="agent_stopped_by_user">Stopped by user</string>
     <string name="agent_tool_executing">%1$s running…</string>
     <string name="agent_stop_refusal">The model declined to answer under its content safety policy.</string>
-    <string name="agent_stop_context_exceeded">This request exceeds the model\'s context window. Compact the context or start a new session.</string>    <string name="agent_context_no_compaction">No compaction needed (too few messages)</string>
+    <string name="agent_stop_context_exceeded">This request exceeds the model\'s context window. Compact the context or start a new session.</string>
+    <string name="agent_stop_server_overloaded">The model service is overloaded (its own CPU threshold was hit and it shed load), and automatic retries did not succeed. Retry in a moment, or switch model / provider.</string>    <string name="agent_context_no_compaction">No compaction needed (too few messages)</string>
     <string name="agent_compaction_failed">Compaction failed: %1$s</string>
     <!-- About -->
     <string name="about_version">Version</string>

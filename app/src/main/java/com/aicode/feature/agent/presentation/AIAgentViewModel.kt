@@ -259,6 +259,8 @@ class AIAgentViewModel @Inject constructor(
             "refusal", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII" ->
                 context.getString(R.string.agent_stop_refusal)
             "model_context_window_exceeded" -> context.getString(R.string.agent_stop_context_exceeded)
+            // 服务端过载：服务商原文（含 CPU 占比）会拼在下面，这里只补一句人能看懂的结论与出路。
+            "server_overloaded" -> context.getString(R.string.agent_stop_server_overloaded)
             else -> null
         } ?: return event.error
         return if (event.error.isBlank()) localized else "$localized\n${event.error}"

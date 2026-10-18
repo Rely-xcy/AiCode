@@ -30,6 +30,8 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.schedule.WriteLease
 import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import com.aicode.feature.agent.domain.subagent.InterruptedWorkRecorder
+import com.aicode.feature.agent.domain.provider.RetryErrorKind
+import com.aicode.feature.agent.domain.provider.toRetryErrorInfo
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
@@ -159,6 +161,9 @@ class StatefulAgentWorkflow @Inject constructor(
          * 附上原始错误正文，模型真实上限就在其中。
          */
         const val CONTEXT_OVERFLOW_REASON_CODE = "model_context_window_exceeded"
+
+        /** 服务端过载（HTTP 503 / server_is_overloaded）：交给 VM 拼本地化说明，原文里的占比数字仍保留。 */
+        const val SERVER_OVERLOADED_REASON_CODE = "server_overloaded"
 
         /**
          * 能绕过工具层准入直接改文件的 shell 类工具（重定向、`sed -i`、rm 等）：
@@ -879,7 +884,9 @@ class StatefulAgentWorkflow @Inject constructor(
                             actionQueue.addLast(
                                 AgentAction.LlmError(
                                     errorText,
-                                    if (e.isContextWindowOverflowError()) CONTEXT_OVERFLOW_REASON_CODE else null
+                                    if (e.isContextWindowOverflowError()) CONTEXT_OVERFLOW_REASON_CODE
+                                    else if (e.toRetryErrorInfo().kind == RetryErrorKind.SERVER_OVERLOADED) SERVER_OVERLOADED_REASON_CODE
+                                    else null
                                 )
                             )
                             callError = e.message ?: e.javaClass.simpleName
