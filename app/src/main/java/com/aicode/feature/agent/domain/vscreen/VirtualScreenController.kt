@@ -29,19 +29,20 @@ class VirtualScreenController @Inject constructor(
     suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Result<String> =
         inject("swipe") { id -> "input -d $id swipe $x1 $y1 $x2 $y2 $durationMs" }
 
-    /** 输入文本：空格与常见 shell 元字符做转义后交给 `input text`。 */
-    suspend fun text(content: String): Result<String> {
-        val escaped = content
-            .replace("\\", "\\\\")
-            .replace(" ", "%s")
-            .replace("'", "\\'")
-            .replace("\"", "\\\"")
-        return inject("text") { id -> "input -d $id text '$escaped'" }
-    }
+    /** 输入文本：转义与空格处理见 [VscreenShellArgs.inputText]——命令跑在 uid 0 下，引号不能自己拼。 */
+    suspend fun text(content: String): Result<String> =
+        inject("text") { id -> "input -d $id text ${VscreenShellArgs.inputText(content)}" }
 
-    /** 按键：直接传 KEYCODE_* 名（BACK / HOME / ENTER 等）。 */
-    suspend fun key(keyCode: String): Result<String> =
-        inject("key") { id -> "input -d $id keyevent $keyCode" }
+    /** 按键：直接传 KEYCODE_* 名（BACK / HOME / ENTER 等）；名字先过白名单校验再进 shell。 */
+    suspend fun key(keyCode: String): Result<String> {
+        val token = VscreenShellArgs.keyCode(keyCode)
+            ?: return Result.failure(
+                IllegalArgumentException(
+                    "keyCode 只接受字母/数字/下划线组成的按键名（如 KEYCODE_HOME 或 HOME），收到：$keyCode"
+                )
+            )
+        return inject("key") { id -> "input -d $id keyevent $token" }
+    }
 
     /**
      * 取一帧落盘，返回文件路径。
@@ -99,7 +100,10 @@ class VirtualScreenController @Inject constructor(
      */
     suspend fun logcat(packageName: String?, lines: Int): Result<String> {
         val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
-        val pkg = packageName ?: screen.packageName
+        val pkg = VscreenShellArgs.packageName(packageName ?: screen.packageName)
+            ?: return Result.failure(
+                IllegalArgumentException("包名不合法：${packageName ?: screen.packageName}")
+            )
         val pid = rootShell.run("pidof $pkg", SHORT_TIMEOUT_MS).output.trim()
         val command = if (pid.isNotEmpty()) {
             "logcat -d -t $lines --pid=$pid"

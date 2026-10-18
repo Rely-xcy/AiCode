@@ -225,9 +225,9 @@ class VirtualScreenManager @Inject constructor(
 
     private fun launchCommand(displayId: Int, packageName: String, activity: String?): String =
         if (activity != null) {
-            "am start --display $displayId -n $packageName/$activity"
+            "am start --display $displayId -n ${VscreenShellArgs.component("$packageName/$activity")}"
         } else {
-            "am start --display $displayId -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $packageName"
+            "am start --display $displayId -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${VscreenShellArgs.component(packageName)}"
         }
 
     private companion object {

@@ -26,6 +26,9 @@ object RootCommandGuard {
         "/data/system", "/data/property", "/data/adb"
     )
 
+    /** 用户数据根：只对「整树删除」生效（子路径照常放行），见 [isWholeTreeDataRoot]。 */
+    private val WHOLE_TREE_DATA_ROOTS = listOf("/data", "/sdcard", "/storage", "/mnt")
+
     /** 直接写块设备 / 分区表 / 刷机的工具：这些命令写错一个字节就是变砖。 */
     private val FLASH_TOOLS = listOf(
         "fastboot", "flash_image", "flash_erase", "mkfs", "mke2fs", "make_ext4fs",
@@ -60,19 +63,66 @@ object RootCommandGuard {
         "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum", "toybox"
     )
 
-    /** 只允许读的 `settings` / `cmd` 子命令；写子命令一律不在默认白名单。 */
+    /** 只允许读的 `settings` 子命令；写子命令一律不在默认白名单。 */
     private val SETTINGS_READ_ONLY = listOf("settings get", "settings list")
+
+    /**
+     * 只允许读的 `cmd` 子命令。
+     *
+     * `cmd` 是分发器：`cmd package clear` 抹掉应用数据、`cmd notification post` 发通知、
+     * `cmd wifi set-wifi-enabled` 改开关——写子命令一律不在默认白名单（维护时只加读类前缀）。
+     */
+    private val CMD_READ_ONLY = listOf(
+        "cmd package list", "cmd package path", "cmd package dump", "cmd package query-",
+        "cmd activity get-", "cmd activity dump", "cmd activity lastanr",
+        "cmd activity stack list", "cmd activity task list", "cmd activity package",
+        "cmd window", "cmd overlay list", "cmd uimode",
+        "cmd wifi status", "cmd wifi list-", "cmd notification list", "cmd notification get-",
+        "cmd stats print", "cmd stats read", "cmd deviceidle get", "cmd deviceidle whitelist",
+        "cmd power", "cmd thermalservice", "cmd user list", "cmd dpm list",
+        "cmd netpolicy list", "cmd webviewupdate", "cmd shortcut get-", "cmd lock_settings get-",
+        "cmd input_method", "cmd bluetooth_manager get-"
+    )
+
+    /**
+     * 只允许读的 `pm` 子命令：应用信息查询。
+     *
+     * `pm clear` / `pm uninstall` 会不可逆地抹掉应用数据，`pm install`/`enable`/`grant` 改写包状态，
+     * 一律不在默认白名单——注释里写的就是「应用信息与控制（不改系统分区）」，读不到的子命令就该拒。
+     */
+    private val PM_READ_ONLY = listOf(
+        "pm list", "pm path", "pm dump", "pm get-", "pm features", "pm query-", "pm resolve-activity"
+    )
 
     data class Rejection(val reason: String)
 
-    /** 首 token 是否在默认白名单内（`settings` 另按只读子命令判定）。 */
+    /** 段分隔符：`;`、`&&`、`||`、`|`、换行。 */
+    private val SEGMENT_SEPARATORS = Regex("(?:&&|\\|\\||[;|\\n])")
+
+    /**
+     * 命令是否**整条**都在默认白名单内：先按 [SEGMENT_SEPARATORS] 拆段，再逐段判定。
+     *
+     * 只看首个 token 是不够的：`ls ;pm clear com.foo`、`ls &&rm -rf /data/system` 会以 `ls`
+     * 混过闸门，而后半段仍以 uid 0 执行。
+     */
     fun isAllowlisted(command: String): Boolean {
-        val normalized = command.replace(Regex("\\s+"), " ").trim().lowercase()
-        if (normalized.isEmpty()) return false
-        val first = normalized.substringBefore(' ')
+        val segments = command.split(SEGMENT_SEPARATORS)
+            .map { it.replace(Regex("\\s+"), " ").trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        if (segments.isEmpty()) return false
+        return segments.all { isSegmentAllowlisted(it) }
+    }
+
+    /** 单段判定：首 token 在名单内，且 `settings`/`cmd`/`pm` 只放只读子命令。 */
+    private fun isSegmentAllowlisted(segment: String): Boolean {
+        val first = segment.substringBefore(' ')
         if (first !in ALLOWED_COMMANDS) return false
-        if (first == "settings") return SETTINGS_READ_ONLY.any { normalized.startsWith(it) }
-        return true
+        return when (first) {
+            "settings" -> SETTINGS_READ_ONLY.any { segment.startsWith(it) }
+            "cmd" -> CMD_READ_ONLY.any { segment.startsWith(it) }
+            "pm" -> PM_READ_ONLY.any { segment.startsWith(it) }
+            else -> true
+        }
     }
 
     /**
@@ -171,8 +221,17 @@ object RootCommandGuard {
 
     private fun isRootOrProtected(target: String): Boolean {
         if (target == "/" || target == "/*" || target == "/*/") return true
+        if (isWholeTreeDataRoot(target)) return true
         return PROTECTED_PATHS.any { path ->
             target == path || target.startsWith("$path/") || target.startsWith("$path/*")
         }
     }
+
+    /**
+     * 整树删除用户数据根（`rm -rf /data`、`rm -rf /sdcard/*`）会一次抹掉全部照片与文件，不可逆。
+     *
+     * 只拦「整棵树」这一种写法：`rm -rf /sdcard/Download/x` 这类子树仍放行，否则正常清理都用不了。
+     */
+    private fun isWholeTreeDataRoot(target: String): Boolean =
+        WHOLE_TREE_DATA_ROOTS.any { root -> target == root || target == "$root/" || target == "$root/*" }
 }

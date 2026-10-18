@@ -174,9 +174,15 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     }
                 }
             }
-            // Shizuku 直接操作宿主系统，AUTO 下也不自动放行，仍需逐次确认（除非已开启「禁用安全拦截」）。
-            if (toolName == SHIZUKU_TOOL && !safetyDisabled) {
-                return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = REASON_SHIZUKU)
+            // Shizuku 与 Root 直接操作宿主系统（后者是 uid 0，破坏力更大），AUTO 下也不自动放行，
+            // 仍需逐次确认（除非已开启「禁用安全拦截」）。与下方 forceAsk 的判定同一口径。
+            if ((toolName == SHIZUKU_TOOL || toolName == ROOT_TOOL) && !safetyDisabled) {
+                val reason = if (toolName == ROOT_TOOL) {
+                    context.getString(R.string.permission_root_not_rememberable)
+                } else {
+                    REASON_SHIZUKU
+                }
+                return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = reason)
             }
             return EvalResult(Verdict.ALLOW, emptyList())
         }

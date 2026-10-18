@@ -123,4 +123,37 @@ class RootCommandGuardTest {
         // settings 只放只读子命令
         assertFalse(RootCommandGuard.isAllowlisted("settings put global airplane_mode_on 1"))
     }
+
+    @Test
+    fun `段分隔符后的命令也要各自过白名单`() {
+        // 只看首个 token 时这几条会以 ls/dumpsys 混过闸门，后半段却是 uid 0 下的写操作。
+        assertFalse(RootCommandGuard.isAllowlisted("ls ;pm clear com.tencent.mm"))
+        assertFalse(RootCommandGuard.isAllowlisted("ls &&rm -rf /data/system"))
+        assertFalse(RootCommandGuard.isAllowlisted("dumpsys ;settings put global airplane_mode_on 1"))
+        assertTrue(RootCommandGuard.isAllowlisted("ls /sdcard ; getprop ro.build.version.release"))
+    }
+
+    @Test
+    fun `cmd 只放行只读子命令`() {
+        assertTrue(RootCommandGuard.isAllowlisted("cmd package list packages"))
+        assertTrue(RootCommandGuard.isAllowlisted("cmd window displays"))
+        assertFalse(RootCommandGuard.isAllowlisted("cmd package clear com.tencent.mm"))
+        assertFalse(RootCommandGuard.isAllowlisted("cmd notification post -S bigtext tag msg"))
+    }
+
+    @Test
+    fun `pm 只放行查询类子命令`() {
+        assertTrue(RootCommandGuard.isAllowlisted("pm list packages -3"))
+        assertTrue(RootCommandGuard.isAllowlisted("pm path com.android.settings"))
+        assertFalse(RootCommandGuard.isAllowlisted("pm clear com.tencent.mm"))
+        assertFalse(RootCommandGuard.isAllowlisted("pm uninstall com.tencent.mm"))
+    }
+
+    @Test
+    fun `整树删除数据根被拦，子树仍放行`() {
+        assertNotNull(RootCommandGuard.check("rm -rf /data"))
+        assertNotNull(RootCommandGuard.check("rm -rf /sdcard"))
+        assertNotNull(RootCommandGuard.check("rm -rf /sdcard/*"))
+        assertNull(RootCommandGuard.check("rm -rf /sdcard/testdir"))
+    }
 }
