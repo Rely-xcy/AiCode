@@ -445,8 +445,13 @@ class SettingsViewModel @Inject constructor(
     private companion object {
         const val MAX_LOG_LINES = 1200
 
-        /** 正式包的 applicationId：只有它能应用内覆盖安装 GitHub Releases 里的包。 */
-        const val RELEASE_APPLICATION_ID = "com.aicode"
+        /**
+         * 本站点会发的包的 applicationId：只有它们能应用内覆盖安装自己那份包。
+         * 之前这里写的是上游的 `com.aicode`，而本 fork 的实际 applicationId 是 `Rely.aicode`，
+         * 导致 `inAppInstallSupported` 对所有变体恒 false —— 更新弹窗的下载按钮永远走不通。
+         * debug 包仍然不给入口：它覆盖安装会与正式包冲突。
+         */
+        val RELEASE_APPLICATION_IDS = setOf("Rely.aicode", "Rely.aicode.beta")
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
         /** 背景透明度停止拖动后的落盘延迟。 */
@@ -1921,9 +1926,13 @@ class SettingsViewModel @Inject constructor(
                 _updateCheckVisible.value = true
                 _updateCheckState.value = UpdateCheckUiState.Checking
             }
-            // fork 专属：数据源换成自建接口，并把本机 versionName 传进去——服务里从 `+g<短哈希>`
-            // 与站点包名里的哈希比对，相等才算最新（见 ForkUpdateCheckService.hasNewVersion）
-            val result = forkUpdateCheckService.checkForUpdate(currentVersionName())
+            // fork 专属：数据源换成自建接口，按当前通道 + 本机 versionCode 问服务端；
+            // 新旧由服务端判（见 ForkUpdateCheckService）
+            val result = forkUpdateCheckService.checkForUpdate(
+                localVersionName = currentVersionName(),
+                localVersionCode = currentVersionCode(),
+                channel = updateCheckSettingsRepository.channel
+            )
             _updateCheckState.value = when (result) {
                 is UpdateCheckResult.UpToDate -> {
                     if (manual) UpdateCheckUiState.UpToDate else UpdateCheckUiState.Idle
@@ -1961,7 +1970,7 @@ class SettingsViewModel @Inject constructor(
      * 包名自检也会把它拦下——索性不给下载入口，省掉一次十几 MB 的白下载。
      */
     val inAppInstallSupported: Boolean
-        get() = context.packageName == RELEASE_APPLICATION_ID
+        get() = context.packageName in RELEASE_APPLICATION_IDS
 
     /**
      * 下载并安装（更新弹窗主按钮）。
@@ -2091,7 +2100,7 @@ class SettingsViewModel @Inject constructor(
         _updateCheckEnabled.value = enabled
     }
 
-    /** 更新通道：稳定版 / 最新版。 */
+    /** 更新通道：稳定版 / 测试版 / rc / 开发版 / 调试版。 */
     fun setUpdateCheckChannel(channel: UpdateChannel) {
         updateCheckSettingsRepository.channel = channel
         _updateCheckChannel.value = channel
@@ -2106,6 +2115,17 @@ class SettingsViewModel @Inject constructor(
     private fun currentVersionName(): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }.getOrDefault("unknown")
+
+    /** 本机 versionCode，传给更新接口用于服务端判新旧；读不到时给 0（服务端按内容比对）。 */
+    private fun currentVersionCode(): Int = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            info.longVersionCode.toInt()
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode
+        }
+    }.getOrDefault(0)
 
     /**
      * 判断日志行是否属于某个 MCP server：只认 MCP 组件写下的日志（tag 以 `Mcp` 开头，

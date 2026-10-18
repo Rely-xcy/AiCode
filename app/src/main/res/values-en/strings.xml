@@ -477,8 +477,14 @@
     <string name="about_update_channel">Update Channel</string>
     <string name="update_channel_stable">Stable</string>
     <string name="update_channel_stable_desc">Stable releases only</string>
-    <string name="update_channel_latest">Preview</string>
-    <string name="update_channel_latest_desc">Also detects pre-releases (RC)</string>
+    <string name="update_channel_beta">Beta</string>
+    <string name="update_channel_beta_desc">Beta builds, may contain unfinished features</string>
+    <string name="update_channel_rc">RC</string>
+    <string name="update_channel_rc_desc">Release candidates, close to stable</string>
+    <string name="update_channel_dev">Dev</string>
+    <string name="update_channel_dev_desc">Development builds, updated per commit</string>
+    <string name="update_channel_debug">Debug</string>
+    <string name="update_channel_debug_desc">Debug builds, for troubleshooting only</string>
     <string name="about_no_changelog">No changelog available</string>
     <!-- fork-only: self-hosted update source (drop these three fork_update_ keys before an upstream PR) -->
     <string name="fork_update_release_title">%1$s (%2$s)</string>

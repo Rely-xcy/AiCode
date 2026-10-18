@@ -143,7 +143,7 @@ internal fun AboutSection(
                 }
             )
             SettingsDivider()
-            // fork 专属：本 fork 的更新源没有「更新通道」概念，该行隐藏（剥离时连同 import 一起删）
+            // 更新通道：本 fork 的更新源按通道分槽发布，可选 stable / beta / rc / dev / debug
             if (FORK_UPDATE_SUPPORTS_CHANNEL) {
                 // 更新通道
                 SettingsRow(
@@ -152,13 +152,7 @@ internal fun AboutSection(
                     onClick = { showChannelSheet = true },
                     trailing = {
                         Text(
-                            text = stringResource(
-                                if (updateCheckChannel == UpdateChannel.STABLE) {
-                                    R.string.update_channel_stable
-                                } else {
-                                    R.string.update_channel_latest
-                                }
-                            ),
+                            text = stringResource(channelLabelRes(updateCheckChannel)),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.semanticColors.subtleText
                         )
@@ -282,7 +276,25 @@ private fun AboutHeaderCard(appName: String, appIcon: androidx.compose.ui.graphi
     }
 }
 
-/** 更新通道底部弹窗：稳定版 / 最新版 单选，样式对齐语言切换。 */
+/** 通道显示名（与服务端通道名一一对应）。 */
+private fun channelLabelRes(channel: UpdateChannel): Int = when (channel) {
+    UpdateChannel.STABLE -> R.string.update_channel_stable
+    UpdateChannel.BETA -> R.string.update_channel_beta
+    UpdateChannel.RC -> R.string.update_channel_rc
+    UpdateChannel.DEV -> R.string.update_channel_dev
+    UpdateChannel.DEBUG -> R.string.update_channel_debug
+}
+
+/** 通道说明：写清这个通道收什么包，避免用户把 dev/debug 当正式版。 */
+private fun channelDescriptionRes(channel: UpdateChannel): Int = when (channel) {
+    UpdateChannel.STABLE -> R.string.update_channel_stable_desc
+    UpdateChannel.BETA -> R.string.update_channel_beta_desc
+    UpdateChannel.RC -> R.string.update_channel_rc_desc
+    UpdateChannel.DEV -> R.string.update_channel_dev_desc
+    UpdateChannel.DEBUG -> R.string.update_channel_debug_desc
+}
+
+/** 更新通道底部弹窗：按通道单选，样式对齐语言切换。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun UpdateChannelSheet(
@@ -312,10 +324,7 @@ private fun UpdateChannelSheet(
                     .padding(bottom = Spacing.md)
             )
 
-            listOf(
-                UpdateChannel.STABLE to stringResource(R.string.update_channel_stable),
-                UpdateChannel.LATEST to stringResource(R.string.update_channel_latest)
-            ).forEach { (channel, label) ->
+            UpdateChannel.entries.forEach { channel ->
                 val selected = channel == current
                 Surface(
                     onClick = {
@@ -332,19 +341,13 @@ private fun UpdateChannelSheet(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = label,
+                                text = stringResource(channelLabelRes(channel)),
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
                             )
                             Text(
-                                text = stringResource(
-                                    if (channel == UpdateChannel.STABLE) {
-                                        R.string.update_channel_stable_desc
-                                    } else {
-                                        R.string.update_channel_latest_desc
-                                    }
-                                ),
+                                text = stringResource(channelDescriptionRes(channel)),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -209,32 +209,31 @@ class ForkUpdateCheckServiceTest {
         assertTrue(hasNewVersion("b6c", "b6c", RELEASE_ID, RELEASE_ID))
     }
 
-    // ---- releaseLabel ----
+    // ---- shouldReportUpdate ----
 
+    /** 服务端给了 hasUpdate=up → 提示，且不跑旧判据。 */
     @Test
-    fun label_usesShaAndDate() {
-        assertEquals(
-            "b6c45eea · 2026-10-04 19:49",
-            releaseLabel(SITE_SHA, "aicode-beta-b6c45eea.apk", "2026-10-04 19:49")
-        )
+    fun serverSaysUp_reportsUpdate() {
+        assertTrue(shouldReportUpdate(hasUpdate = true, direction = "up") { false })
     }
 
+    /** direction=down（站上那份比本机旧，用户装的测试包）→ 静默。 */
     @Test
-    fun label_withoutSha_stripsApkSuffix() {
-        assertEquals(
-            "aicode-1.12.0 · 2026-10-04 19:49",
-            releaseLabel(null, "aicode-1.12.0.apk", "2026-10-04 19:49")
-        )
+    fun serverSaysDown_staysSilent() {
+        assertFalse(shouldReportUpdate(hasUpdate = true, direction = "down") { true })
     }
 
+    /** hasUpdate=false → 静默，无论 fallback 怎么说。 */
     @Test
-    fun label_withoutDate_keepsShaOnly() {
-        assertEquals(SITE_SHA, releaseLabel(SITE_SHA, "aicode-beta-b6c45eea.apk", ""))
+    fun serverSaysNoUpdate_staysSilent() {
+        assertFalse(shouldReportUpdate(hasUpdate = false, direction = "same") { true })
     }
 
+    /** 字段缺失（老服务端）→ 只跑旧判据。 */
     @Test
-    fun label_nothingAtAll_isBlank() {
-        assertEquals("", releaseLabel(null, "", ""))
+    fun missingHasUpdate_fallsBackToLegacyRule() {
+        assertTrue(shouldReportUpdate(hasUpdate = null, direction = "") { true })
+        assertFalse(shouldReportUpdate(hasUpdate = null, direction = "") { false })
     }
 
     // ---- previewChangelog ----
