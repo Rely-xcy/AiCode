@@ -130,7 +130,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 全局代理入口：必须在任何 Hilt 注入 / OkHttpClient 构建之前设置，
         // 使 App 侧全部 HTTP 链路（对话、MCP、更新检查等）按需走全局/提供商代理。
         // 用 base 而非下文才定义的局部 context：attachBaseContext 阶段 base 即合法 Context。
-        AppProxy.applyGlobal(base)
+        // 配置读取器由 di/AppProxyModule 提供（无状态，每次调用同步读 SharedPreferences），
+        // 它不依赖 Hilt，因此这一步仍早于任何注入。
+        AppProxy.applyGlobal(base, com.aicode.di.AppProxySettingsSource)
         val tag = base.getSharedPreferences(LANG_PREFS, android.content.Context.MODE_PRIVATE)
             .getString(LANG_KEY, null)
         val context = if (tag.isNullOrBlank()) {
@@ -228,9 +230,9 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
 
-    /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
+    /** 提供商级代理查询：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
-    lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
+    lateinit var proxyRouteLookup: com.aicode.core.net.ProxyRouteLookup
 
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -246,9 +248,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }
-        // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
+        // 把提供商级代理查询挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
-        AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
+        AppProxy.registerProviderProxyRegistry(proxyRouteLookup)
         // 注册完整版 BouncyCastle 放后台 IO 协程，避免在主线程加载大量密码学类阻塞首屏；
         // 远程 SSH 连接在 appScope 中执行，使用前完成注册即可。
         appScope.launch(Dispatchers.IO) {

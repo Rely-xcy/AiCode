@@ -2,6 +2,8 @@ package com.aicode.feature.settings.data.repository
 
 import android.content.Context
 import androidx.core.content.edit
+import com.aicode.core.net.ProxyEndpointSpec
+import com.aicode.core.net.ProxyScheme
 import com.aicode.feature.settings.domain.model.ProxyType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +25,20 @@ data class ProxyConfig(
     val password: String = "",
     /** 不走代理的主机列表（逗号分隔，精确匹配 host）。 */
     val noProxy: String = DEFAULT_NO_PROXY
-) {
+) : ProxyEndpointSpec {
+
+    // 供 core 侧（AppProxy 的代理映像与测试探针）以窄接口读取，不把本仓库类型反向带进底座。
+    override val proxyScheme: ProxyScheme
+        get() = if (type == ProxyType.SOCKS5) ProxyScheme.SOCKS5 else ProxyScheme.HTTP
+
+    override val proxyHost: String get() = host
+
+    override val proxyPort: Int get() = port
+
+    override val proxyUsername: String get() = username
+
+    override val proxyPassword: String get() = password
+
     /** 配置是否完整可用：仅当开启且 host 非空、port 合法时才会真正走代理。 */
     val valid: Boolean
         get() = host.isNotBlank() && port in 1..65535

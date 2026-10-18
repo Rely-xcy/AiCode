@@ -1,12 +1,6 @@
 package com.aicode.core.net
 
 import android.content.Context
-import com.aicode.feature.settings.data.repository.DEFAULT_NO_PROXY
-import com.aicode.feature.settings.data.repository.ProviderProxyEntry
-import com.aicode.feature.settings.data.repository.ProviderProxyRegistry
-import com.aicode.feature.settings.data.repository.ProxyConfig
-import com.aicode.feature.settings.data.repository.ProxySettingsRepository
-import com.aicode.feature.settings.domain.model.ProxyType
 import okhttp3.Authenticator
 import okhttp3.Credentials
 import okhttp3.Route
@@ -20,8 +14,55 @@ import java.net.SocketAddress
 import java.net.URI
 import java.net.URLEncoder
 
+// 以下类型是 core 需要的最小代理视图：不把 feature 的配置/仓库类型带进底座。
+// 全局配置读写在 feature 侧（SharedPreferences），这里只声明读取口；provider 级分派同样如此。
+
+// 代理协议（映射到 java.net.Proxy.Type）。
+enum class ProxyScheme { HTTP, SOCKS5 }
+
+// 一份代理端点视图：全局配置、provider 条目都通过本接口交给 core，由 core 统一做校验与映射。
+interface ProxyEndpointSpec {
+    val proxyScheme: ProxyScheme
+    val proxyHost: String
+    val proxyPort: Int
+    val proxyUsername: String
+    val proxyPassword: String
+}
+
+fun ProxyEndpointSpec.toProxyEndpoint(): ProxyEndpoint =
+    ProxyEndpoint(proxyScheme, proxyHost, proxyPort, proxyUsername, proxyPassword)
+
+// 选中的代理端点与对应凭据。
+data class ProxyEndpoint(
+    val scheme: ProxyScheme,
+    val host: String,
+    val port: Int,
+    val username: String = "",
+    val password: String = ""
+) {
+    val valid: Boolean get() = host.isNotBlank() && port in 1..65535
+}
+
+// 全局代理配置快照（enabled + 端点 + 绕过列表）；noProxy 为空时按 FALLBACK_NO_PROXY 处理。
+data class ProxySettings(
+    val enabled: Boolean = false,
+    val endpoint: ProxyEndpoint = ProxyEndpoint(ProxyScheme.HTTP, "", 0),
+    val noProxy: String = ""
+)
+
+// 全局配置读取口：每次调用都同步读取最新持久化值（与改动前 readConfig 的时机一致，无缓存）。
+fun interface ProxySettingsSource {
+    fun read(context: Context): ProxySettings
+}
+
+// 提供商级代理查询口：按目标 host+路径命中 provider 专属代理，或按代理服务器地址取握手凭据。
+interface ProxyRouteLookup {
+    fun findByUrl(host: String, path: String?): ProxyEndpoint?
+    fun findByProxyHost(proxyHost: String): ProxyEndpoint?
+}
+
 /**
- * 全局 HTTP 代理接入点（无状态单例，每次读取 SharedPreferences 最新值，改设置即对新连接生效）。
+ * 全局 HTTP 代理接入点（单例，每次实时读最新配置，改设置即对新连接生效）。
  *
  * 接入方式：
  * - [applyGlobal] 在 Application.attachBaseContext（任何 Hilt 注入之前）调用：把动态
@@ -38,50 +79,48 @@ object AppProxy {
     @Volatile
     private var appContext: Context? = null
 
-    /** 提供商级代理注册表（DI 注入后注册）：按目标 host 分派 provider 专属代理。 */
+    // 全局配置读取器：attachBaseContext 阶段传入（此时 Hilt 尚不可用），此后每次 config() 都回调它。
     @Volatile
-    private var providerRegistry: ProviderProxyRegistry? = null
+    private var settingsSource: ProxySettingsSource? = null
+
+    /** 提供商级代理查询（DI 注入后注册）：按目标 host 分派 provider 专属代理。 */
+    @Volatile
+    private var routeLookup: ProxyRouteLookup? = null
 
     /** 在 Application.attachBaseContext 中调用（早于 OkHttpClient 首次构建）。 */
-    fun applyGlobal(context: Context) {
+    fun applyGlobal(context: Context, settings: ProxySettingsSource) {
         // attachBaseContext 阶段 getApplicationContext() 可能为 null（Application 尚未完全
         // 绑定），此时直接用传入的 base（Application 本身就是合法 Context）——否则后续
         // config() 读不到代理设置，所有请求静默直连（表现为容器内代理生效而 App 侧不生效）。
         appContext = context.applicationContext ?: context
+        settingsSource = settings
         ProxySelector.setDefault(selector)
         java.net.Authenticator.setDefault(httpUrlConnectionAuthenticator)
     }
 
     /** 由 DI 层在启动装配后注册（AIEditorApp.onCreate），此后 selector 按 host 分派 provider 代理。 */
-    fun registerProviderProxyRegistry(registry: ProviderProxyRegistry) {
-        providerRegistry = registry
+    fun registerProviderProxyRegistry(lookup: ProxyRouteLookup) {
+        routeLookup = lookup
     }
 
-    private fun config(): ProxyConfig {
-        val ctx = appContext ?: return ProxyConfig()
-        return ProxySettingsRepository.readConfig(ctx)
+    private fun config(): ProxySettings {
+        val ctx = appContext ?: return ProxySettings()
+        val source = settingsSource ?: return ProxySettings()
+        return source.read(ctx)
     }
-
-    /** 某次 select 选中的代理（provider 级优先于全局）与对应凭据。 */
-    private data class SelectedProxy(
-        val type: ProxyType, val host: String, val port: Int,
-        val username: String, val password: String
-    )
 
     /** 按目标 host+路径分派：provider 级代理优先（路径前缀最具体者胜），否则全局代理；不可用返回 null。 */
-    private fun selectProxy(host: String, path: String?): SelectedProxy? {
-        providerRegistry?.findByUrl(host, path)?.takeIf { it.valid }?.let { e ->
-            return SelectedProxy(e.type, e.host, e.port, e.username, e.password)
-        }
+    private fun selectProxy(host: String, path: String?): ProxyEndpoint? {
+        routeLookup?.findByUrl(host, path)?.takeIf { it.valid }?.let { return it }
         val cfg = config()
-        if (!cfg.enabled || !cfg.valid) return null
-        return SelectedProxy(cfg.type, cfg.host, cfg.port, cfg.username, cfg.password)
+        if (!cfg.enabled || !cfg.endpoint.valid) return null
+        return cfg.endpoint
     }
 
-    private fun proxyOf(sel: SelectedProxy): Proxy {
-        val type = when (sel.type) {
-            ProxyType.HTTP -> Proxy.Type.HTTP
-            ProxyType.SOCKS5 -> Proxy.Type.SOCKS
+    private fun proxyOf(sel: ProxyEndpoint): Proxy {
+        val type = when (sel.scheme) {
+            ProxyScheme.HTTP -> Proxy.Type.HTTP
+            ProxyScheme.SOCKS5 -> Proxy.Type.SOCKS
         }
         return Proxy(type, InetSocketAddress(sel.host, sel.port))
     }
@@ -108,15 +147,15 @@ object AppProxy {
         override fun authenticate(route: Route?, response: okhttp3.Response): okhttp3.Request? {
             if (response.code != 407) return null
             val url = response.request.url
-            providerRegistry?.findByUrl(url.host, url.encodedPath)?.takeIf { it.username.isNotBlank() }?.let { e ->
+            routeLookup?.findByUrl(url.host, url.encodedPath)?.takeIf { it.username.isNotBlank() }?.let { e ->
                 return response.request.newBuilder()
                     .header("Proxy-Authorization", Credentials.basic(e.username, e.password))
                     .build()
             }
             val cfg = config()
-            if (!cfg.enabled || cfg.username.isBlank()) return null
+            if (!cfg.enabled || cfg.endpoint.username.isBlank()) return null
             return response.request.newBuilder()
-                .header("Proxy-Authorization", Credentials.basic(cfg.username, cfg.password))
+                .header("Proxy-Authorization", Credentials.basic(cfg.endpoint.username, cfg.endpoint.password))
                 .build()
         }
     }
@@ -141,34 +180,34 @@ object AppProxy {
                     val proxyHost = getRequestingHost()
                         ?: getRequestingSite()?.hostAddress
                         ?: return null
-                    providerRegistry?.findByProxyHost(proxyHost)?.let { e ->
+                    routeLookup?.findByProxyHost(proxyHost)?.let { e ->
                         if (e.username.isNotBlank()) {
                             return PasswordAuthentication(e.username, e.password.toCharArray())
                         }
                     }
                     val cfg = config()
-                    if (cfg.type == ProxyType.SOCKS5 && cfg.username.isNotBlank() &&
-                        cfg.host.equals(proxyHost, ignoreCase = true)
+                    if (cfg.endpoint.scheme == ProxyScheme.SOCKS5 && cfg.endpoint.username.isNotBlank() &&
+                        cfg.endpoint.host.equals(proxyHost, ignoreCase = true)
                     ) {
-                        return PasswordAuthentication(cfg.username, cfg.password.toCharArray())
+                        return PasswordAuthentication(cfg.endpoint.username, cfg.endpoint.password.toCharArray())
                     }
                     return null
                 }
                 if (requestorType != RequestorType.PROXY) return null
                 if (protocol != "http" && protocol != "https") return null
                 val cfg = config()
-                if (!cfg.enabled || cfg.username.isBlank()) return null
-                return PasswordAuthentication(cfg.username, cfg.password.toCharArray())
+                if (!cfg.enabled || cfg.endpoint.username.isBlank()) return null
+                return PasswordAuthentication(cfg.endpoint.username, cfg.endpoint.password.toCharArray())
             }
         }
 
     /** 容器内进程的代理环境变量；未启用或配置不完整时返回空 map（直连）。 */
     fun proxyEnv(context: Context): Map<String, String> {
-        val cfg = ProxySettingsRepository.readConfig(context)
-        if (!cfg.enabled || !cfg.valid) return emptyMap()
-        val noProxy = cfg.noProxy.ifBlank { DEFAULT_NO_PROXY }
-        return when (cfg.type) {
-            ProxyType.HTTP -> {
+        val cfg = settingsSource?.read(context) ?: return emptyMap()
+        if (!cfg.enabled || !cfg.endpoint.valid) return emptyMap()
+        val noProxy = cfg.noProxy.ifBlank { FALLBACK_NO_PROXY }
+        return when (cfg.endpoint.scheme) {
+            ProxyScheme.HTTP -> {
                 val proxyUrl = "http://${authority(cfg)}"
                 mapOf(
                     "HTTP_PROXY" to proxyUrl,
@@ -177,7 +216,7 @@ object AppProxy {
                     "NO_PROXY" to noProxy
                 )
             }
-            ProxyType.SOCKS5 -> {
+            ProxyScheme.SOCKS5 -> {
                 // socks5h：域名解析也走代理（防 DNS 泄漏）。只设 ALL_PROXY 而不设
                 // HTTP_PROXY/HTTPS_PROXY——否则 curl 对 http/https 目标会优先用
                 // http_proxy 直连式代理协议连到 SOCKS 端口而失败。
@@ -191,11 +230,12 @@ object AppProxy {
     }
 
     /** 代理 URL 的 host:port 部分；有用户名时拼 userinfo（百分号编码）。 */
-    private fun authority(cfg: ProxyConfig): String =
-        if (cfg.username.isBlank()) {
-            "${cfg.host}:${cfg.port}"
+    private fun authority(cfg: ProxySettings): String =
+        if (cfg.endpoint.username.isBlank()) {
+            "${cfg.endpoint.host}:${cfg.endpoint.port}"
         } else {
-            "${encodeUserInfo(cfg.username)}:${encodeUserInfo(cfg.password)}@${cfg.host}:${cfg.port}"
+            "${encodeUserInfo(cfg.endpoint.username)}:${encodeUserInfo(cfg.endpoint.password)}@" +
+                "${cfg.endpoint.host}:${cfg.endpoint.port}"
         }
 
     /** NO_PROXY 匹配：逗号分隔，语义与 curl（容器侧）一致——`*` 全部直连；
@@ -203,7 +243,7 @@ object AppProxy {
      *  `host:port` 需端口一致；IPv4/IPv6 CIDR 网段（如 10.0.0.0/8、fd00::/8）按前缀匹配；
      *  大小写不敏感；配置为空时回退默认值（与容器注入一致）。 */
     private fun isNoProxy(host: String, port: Int, noProxy: String): Boolean {
-        val list = noProxy.ifBlank { DEFAULT_NO_PROXY }
+        val list = noProxy.ifBlank { FALLBACK_NO_PROXY }
         val h = host.lowercase()
         return list.split(",").any { e ->
             val entry = e.trim().lowercase()
@@ -298,6 +338,11 @@ object AppProxy {
      *  测试代理是否真正转发流量。不用第三方 IP 查询服务：避免隐私外发（出口 IP
      *  不出本机），且 204 响应不依赖探测服务的文本格式。 */
     private const val PROBE_URL = "https://www.google.com/generate_204"
+
+    // 配置层默认绕过列表的兜底副本：正常路径 source 已给出完整值，这里只处理返回空白列表的情况
+    // （与改动前 isNoProxy 对空列表回退默认值的语义保持一致）。
+    private const val FALLBACK_NO_PROXY =
+        "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1"
     private const val TEST_TIMEOUT_SECONDS = 8L
 
     /**
@@ -305,15 +350,15 @@ object AppProxy {
      * [probeUrl] 为测试目标 URL，留空回退默认值；
      * HTTP 代理认证走 407 Basic；SOCKS5 认证经全局 Authenticator 按 host 分派（见上）。
      */
-    suspend fun testProxy(context: Context, cfg: ProxyConfig, probeUrl: String = PROBE_URL): ProxyTestResult =
+    suspend fun testProxy(context: Context, cfg: ProxyEndpointSpec, probeUrl: String = PROBE_URL): ProxyTestResult =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            if (cfg.host.isBlank() || cfg.port !in 1..65535) {
+            if (cfg.proxyHost.isBlank() || cfg.proxyPort !in 1..65535) {
                 return@withContext ProxyTestResult(false, context.getString(com.aicode.R.string.proxy_test_invalid_config))
             }
-            probe(context, SelectedProxy(cfg.type, cfg.host, cfg.port, cfg.username, cfg.password), probeUrl)
+            probe(context, cfg.toProxyEndpoint(), probeUrl)
         }
 
-    private suspend fun probe(context: Context, sel: SelectedProxy, probeUrl: String): ProxyTestResult {
+    private suspend fun probe(context: Context, sel: ProxyEndpoint, probeUrl: String): ProxyTestResult {
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(TEST_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(TEST_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
