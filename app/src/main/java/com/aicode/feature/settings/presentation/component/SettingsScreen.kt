@@ -1086,7 +1086,21 @@ fun SettingsScreen(
                         onDelete = { memoryToDelete = it }
                     )
                     detailMemory?.let { memory ->
-                        MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
+                        MemoryDetailSheet(
+                            memory = memory,
+                            onDismiss = { detailMemory = null },
+                            // 详情里改/删先关弹层：编辑是全屏分区，删要走二次确认，
+                            // 弹层留在下面会跟新分区或确认框抢焦点
+                            onEdit = {
+                                detailMemory = null
+                                memoryEditorTarget = MemoryEditorTarget(memory)
+                                section = SettingsSection.MemoryEditor
+                            },
+                            onDelete = {
+                                detailMemory = null
+                                memoryToDelete = memory
+                            }
+                        )
                     }
                     // 删除记忆二次确认：确认按钮里才真正删；显示名用列表行同一个字段（memory.name）
                     memoryToDelete?.let { memory ->

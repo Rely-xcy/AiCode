@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.aicode.feature.settings.presentation.SessionShortTermState
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -56,10 +59,17 @@ import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.User
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * 记忆页（长期记忆）：顶部一张只读的「本次会话（短期）」卡片，下面才是主动记忆开关 +
- * 治理周期（周期归零即关闭）+ 当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除）。
+ * 记忆页（长期记忆）：主体是当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除），
+ * 其后是主动记忆开关 + 治理周期（周期归零即关闭），最后是只读的「本次会话（短期）」卡片。
+ *
+ * 列表排在最前、两张设置/状态卡沉底，是按使用频率排的：列表才是用户来这一页要看的东西，
+ * 设置与只读状态放前面会把列表挤到首屏折线以下。
  *
  * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
  * 混成一张清单会让人以为上下文也会被存下来。
@@ -94,59 +104,36 @@ internal fun MemorySection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
-        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
-        if (shortTerm != null) {
-            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+        // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
+        // 空态也包进分组卡片，否则一行灰字悬在卡片体系之外，看着像漏渲染的占位。
+        if (memories.isEmpty()) {
             SettingsGroup {
-                SettingsRow(
-                    icon = null,
-                    title = shortTerm.title,
-                    subtitle = stringResource(R.string.memory_session_card_desc)
+                EmptyState()
+            }
+        } else {
+            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
+            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
+            if (globalMemories.isNotEmpty()) {
+                SettingsGroupHeader(
+                    text = stringResource(R.string.memory_group_global_count, globalMemories.size)
                 )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_context_label),
-                    trailing = {
-                        SessionValueText(
-                            stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
-                        )
-                    }
+                MemoryGroup(
+                    memories = globalMemories,
+                    onOpenDetail = onOpenDetail,
+                    onLongClick = { actionMemory = it },
+                    onDelete = onDelete
                 )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_fold_label),
-                    trailing = {
-                        SessionValueText(
-                            if (shortTerm.foldCount == 0) {
-                                stringResource(R.string.memory_session_no_fold)
-                            } else {
-                                stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
-                            }
-                        )
-                    }
+            }
+            if (projectMemories.isNotEmpty()) {
+                SettingsGroupHeader(
+                    text = stringResource(R.string.memory_group_project_count, projectMemories.size)
                 )
-                // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
-                if (shortTerm.lastInputTokens > 0) {
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = null,
-                        title = stringResource(R.string.memory_session_input_label),
-                        trailing = {
-                            SessionValueText(
-                                // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
-                                // 与聊天页指示器的「估算/真实」用同一对文案。
-                                stringResource(
-                                    R.string.memory_session_input_value,
-                                    shortTerm.lastInputTokens,
-                                    stringResource(R.string.common_token_source_reported)
-                                )
-                            )
-                        }
-                    )
-                }
+                MemoryGroup(
+                    memories = projectMemories,
+                    onOpenDetail = onOpenDetail,
+                    onLongClick = { actionMemory = it },
+                    onDelete = onDelete
+                )
             }
         }
 
@@ -164,6 +151,7 @@ internal fun MemorySection(
                 icon = null,
                 title = stringResource(R.string.memory_active_memory),
                 subtitle = stringResource(R.string.memory_active_memory_desc),
+                subtitleMaxLines = 2,
                 trailing = {
                     AppSwitch(
                         checked = activeMemoryEnabled,
@@ -222,28 +210,59 @@ internal fun MemorySection(
             }
         }
 
-        if (memories.isEmpty()) {
-            EmptyState()
-        } else {
-            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
-            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
-            if (globalMemories.isNotEmpty()) {
-                SettingsGroupHeader(text = stringResource(R.string.memory_group_global))
-                MemoryGroup(
-                    memories = globalMemories,
-                    onOpenDetail = onOpenDetail,
-                    onLongClick = { actionMemory = it },
-                    onDelete = onDelete
+        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
+        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
+        if (shortTerm != null) {
+            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+            SettingsGroup {
+                SettingsRow(
+                    icon = null,
+                    title = shortTerm.title,
+                    subtitle = stringResource(R.string.memory_session_card_desc)
                 )
-            }
-            if (projectMemories.isNotEmpty()) {
-                SettingsGroupHeader(text = stringResource(R.string.memory_group_project))
-                MemoryGroup(
-                    memories = projectMemories,
-                    onOpenDetail = onOpenDetail,
-                    onLongClick = { actionMemory = it },
-                    onDelete = onDelete
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_session_context_label),
+                    trailing = {
+                        SessionValueText(
+                            stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
+                        )
+                    }
                 )
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_session_fold_label),
+                    trailing = {
+                        SessionValueText(
+                            if (shortTerm.foldCount == 0) {
+                                stringResource(R.string.memory_session_no_fold)
+                            } else {
+                                stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
+                            }
+                        )
+                    }
+                )
+                // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
+                if (shortTerm.lastInputTokens > 0) {
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = null,
+                        title = stringResource(R.string.memory_session_input_label),
+                        trailing = {
+                            SessionValueText(
+                                // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
+                                // 与聊天页指示器的「估算/真实」用同一对文案。
+                                stringResource(
+                                    R.string.memory_session_input_value,
+                                    shortTerm.lastInputTokens,
+                                    stringResource(R.string.common_token_source_reported)
+                                )
+                            )
+                        }
+                    )
+                }
             }
         }
     }
@@ -371,6 +390,8 @@ private fun MemoryRow(
         ) {
             Box(
                 modifier = Modifier
+                    // 40dp 圆角块 + 8dp 圆角与 MCP / 技能 / 子代理 / 容器列表行一致，
+                    // 刻意不用令牌：这几处必须像素对齐，改一个就会跟其它列表行错开
                     .size(40.dp)
                     .background(
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -379,7 +400,13 @@ private fun MemoryRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = FeatherIcons.FileText,
+                    // 画像与笔记是两种东西：自动沉淀出的用户画像要一眼认出来，
+                    // 与名称旁的来源徽章一起表达“这条不是我在对话里让它记的”
+                    imageVector = if (memory.kind == MemoryKind.PROFILE) {
+                        FeatherIcons.User
+                    } else {
+                        FeatherIcons.FileText
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -496,30 +523,94 @@ private fun MemoryScopePill(scope: MemoryScope) {
 }
 
 /**
- * 记忆详情：名称、来源、描述与完整正文。
+ * 记忆详情：名称当标题，下面一行徽章（作用域 / 置顶 / 来源），再是描述、元信息与完整正文，
+ * 底部给编辑 / 删除两个入口。
  *
  * 注入到系统提示词的只有「名称 + 描述」，正文平时看不到，详情页才展开。
+ * 编辑/删除除了长按菜单还在这里出现：刚看完正文往往正是要改或要删的时候，
+ * 退回列表再长按多一步，也容易对错条目。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MemoryDetailSheet(
     memory: Memory,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // 加了元信息与底部入口后内容会超屏；不加滚动的话长正文会把入口顶出可视区
+                .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            SettingsGroupHeader(text = memory.name)
-            SettingsGroup {
+            Text(
+                text = memory.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = Spacing.lg, top = Spacing.sm)
+            )
+            // 徽章行：与列表行同一套 pill，不另造视觉
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MemoryScopePill(scope = memory.scope)
+                if (memory.pinned) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    McpPill(
+                        text = stringResource(R.string.memory_pinned),
+                        textColor = MaterialTheme.colorScheme.tertiary,
+                        backgroundColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                    )
+                }
+                // 来源与列表行同一条规则：只给自动沉淀类挂，NOTE 全是对话中记的
+                if (memory.kind == MemoryKind.PROFILE) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    MemorySourcePill(memory = memory)
+                }
+            }
+            SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
                 SettingsRow(
                     icon = null,
-                    title = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
-                    subtitle = memorySourceText(memory)
+                    title = memory.description.ifBlank { stringResource(R.string.mcp_no_description) }
                 )
+            }
+            // 元信息：没有值的行整行不摆，沿用短期卡那条约定（不拿 0 或空占位凑数）
+            val hasMeta = memory.hitCount > 0 || memory.lastHitAt > 0 || memory.createdAt > 0
+            if (hasMeta) {
+                SettingsGroupHeader(text = stringResource(R.string.memory_detail_meta))
+                SettingsGroup {
+                    if (memory.hitCount > 0) {
+                        SettingsRow(
+                            icon = null,
+                            title = stringResource(R.string.memory_detail_hits, memory.hitCount)
+                        )
+                    }
+                    if (memory.lastHitAt > 0) {
+                        if (memory.hitCount > 0) SettingsDivider()
+                        SettingsRow(
+                            icon = null,
+                            title = stringResource(
+                                R.string.memory_detail_last_hit,
+                                relativeTimeText(memory.lastHitAt)
+                            )
+                        )
+                    }
+                    if (memory.createdAt > 0) {
+                        if (memory.hitCount > 0 || memory.lastHitAt > 0) SettingsDivider()
+                        SettingsRow(
+                            icon = null,
+                            title = stringResource(
+                                R.string.memory_detail_created,
+                                formatEpochDate(memory.createdAt)
+                            )
+                        )
+                    }
+                }
             }
             SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
             SettingsGroup {
@@ -530,9 +621,87 @@ internal fun MemoryDetailSheet(
                     modifier = Modifier.padding(Spacing.lg)
                 )
             }
+            SettingsGroup {
+                MemoryDetailActionRow(
+                    icon = FeatherIcons.Edit2,
+                    title = stringResource(R.string.common_edit),
+                    onClick = onEdit
+                )
+                SettingsDivider()
+                MemoryDetailActionRow(
+                    icon = FeatherIcons.Trash2,
+                    title = stringResource(R.string.common_delete),
+                    titleColor = MaterialTheme.colorScheme.error,
+                    onClick = onDelete
+                )
+            }
         }
     }
 }
+
+/**
+ * 详情弹层的动作行：尺寸与 [SettingsRow] 一致，只多一个标题色参数。
+ *
+ * 不复用 SettingsRow：它的标题色写死 onSurface，而共享组件不在本页改动范围内；
+ * 删除行必须用 error 色才能与编辑行区分开。
+ */
+@Composable
+private fun MemoryDetailActionRow(
+    icon: ImageVector,
+    title: String,
+    onClick: () -> Unit,
+    titleColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = titleColor,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(Spacing.md))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = titleColor,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = FeatherIcons.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.semanticColors.subtleText,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/**
+ * 「最后命中」的相对时间：超过 30 天回落到绝对日期——「87 天前」还得自己心算。
+ */
+@Composable
+private fun relativeTimeText(epochMillis: Long): String {
+    val elapsed = System.currentTimeMillis() - epochMillis
+    return when {
+        elapsed < 60_000L -> stringResource(R.string.memory_time_just_now)
+        elapsed < 3_600_000L ->
+            stringResource(R.string.memory_time_minutes_ago, (elapsed / 60_000L).toInt())
+        elapsed < 86_400_000L ->
+            stringResource(R.string.memory_time_hours_ago, (elapsed / 3_600_000L).toInt())
+        elapsed < 30 * 86_400_000L ->
+            stringResource(R.string.memory_time_days_ago, (elapsed / 86_400_000L).toInt())
+        else -> formatEpochDate(epochMillis)
+    }
+}
+
+/** 绝对日期：与调用统计页的时间格式同源（yyyy/M/d）。 */
+private fun formatEpochDate(epochMillis: Long): String =
+    SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date(epochMillis))
 
 /**
  * 长按记忆弹出的操作菜单：编辑 / 删除。

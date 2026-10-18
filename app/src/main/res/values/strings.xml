@@ -1241,7 +1241,7 @@
 
     <!-- Memory Settings -->
     <string name="memory_empty">还没有记忆</string>
-    <string name="memory_empty_hint">对话中让 AI 记住的长期内容会显示在这里</string>
+    <string name="memory_empty_hint">AI 会在对话中自动沉淀（需打开主动记忆）；也可以点右上角「+」手动新增</string>
     <string name="memory_active_memory">主动记忆</string>
     <string name="memory_active_memory_desc">打开后模型会在对话中主动沉淀记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>
@@ -1249,8 +1249,18 @@
     <string name="memory_source_manual">对话中记录</string>
     <string name="memory_detail_content">内容</string>
     <string name="memory_detail_empty">（暂无正文）</string>
+    <string name="memory_detail_meta">信息</string>
+    <string name="memory_detail_hits">命中 %1$d 次</string>
+    <string name="memory_detail_last_hit">最后命中 %1$s</string>
+    <string name="memory_detail_created">创建于 %1$s</string>
+    <string name="memory_time_just_now">刚刚</string>
+    <string name="memory_time_minutes_ago">%1$d 分钟前</string>
+    <string name="memory_time_hours_ago">%1$d 小时前</string>
+    <string name="memory_time_days_ago">%1$d 天前</string>
     <string name="memory_group_global">全局记忆</string>
+    <string name="memory_group_global_count">全局记忆（%1$d）</string>
     <string name="memory_group_project">项目记忆</string>
+    <string name="memory_group_project_count">项目记忆（%1$d）</string>
     <string name="memory_add">新增记忆</string>
     <string name="memory_long_term_header">记忆（跨会话）</string>
     <string name="memory_long_term_desc">跨会话生效：每条记忆的名称与描述都会注入后续对话的系统提示词。</string>
