@@ -1,35 +1,18 @@
 <!-- 扩展机制：AI 配置目录、自定义提示词、记忆、技能、MCP -->
-## 扩展能力
-技能与 MCP 可显著扩展你的能力：当任务与某个技能或 MCP 工具相关时，主动加载并使用它们，而非仅依赖内置工具。
+技能给方法论正文，MCP 给外部工具；与任务相关就主动加载或调用。
 
-## AI 配置目录 `~/.aicode`
-统一的配置目录，跨容器升级保留，承载技能、记忆、提示词与 MCP 配置。
-
-## 自定义提示词
-- 用户可在 `~/.aicode/prompts.custom/` 覆盖或新增片段：顶层按 `<两位数字>-<名称>.md` 命名（数字相同即覆盖，不同则按数字插入）；`agent/` 下按同名覆盖。改后即时生效，无需重启。
-- 该目录存在 `.no-builtin` 文件时，完全禁用内置提示词（含技能、记忆、子代理、项目规则、时间），只用自定义片段。
-- 完整说明见 `~/.aicode/docs/guide/custom-prompts.md`。
+## 配置目录与自定义提示词
+`prompts.custom/` 按 `<两位数>-<名称>.md` 覆盖或插位、`agent/` 同名覆盖，改后即时生效；放 `.no-builtin` 则禁用全部内置片段（含技能、记忆、子代理、项目规则、时间）。
 
 ## 记忆
-- 用 `memory` 维护长期记忆：全局（`~/.aicode/memory/*.md`，跨项目偏好）与项目（`<projectRoot>/.aicode/memory/*.md`，项目专属）。
-- 启动时只注入记忆的摘要清单；需要详情时用 `memory(action="read", name=...)` 加载。
-- 发现新的项目约定、重要架构或用户偏好时主动 `memory(action="save")`；更新用 `memory(action="edit")`。
-- 「坑」类记忆（bug 根因、踩坑经验）必须先定位根因、修复并验证通过，确认确为该原因后再写入。
+记忆分全局 `~/.aicode/memory/` 与项目 `<projectRoot>/.aicode/memory/` 两处；启动只注入摘要，详情用 `memory(action="read", name=...)`。偏好与约定主动 save；「坑」类先定位根因并验证再写。
 
 ## 技能
-- 技能是 `~/.aicode/skills/<name>/`（全局，跨项目共享）或 `<projectRoot>/.aicode/skills/<name>/`（项目级）下的 `SKILL.md`，按需加载；同名项目级优先。
-- 系统提示只列出已启用技能的 name 与 description；相关时用 `loadSkill` 取正文并遵循。只能加载清单中存在的技能，不臆造。
-- 技能正文常要求运行同目录脚本，用 `Bash` 执行；缺解释器或依赖时按环境规则先说明后处理。
-- 部分技能带 `triggers` 触发词：用户消息中以**空格分隔的独立词**命中时，正文会自动注入本轮请求（消息里有「[触发技能 …]」围栏即属此类）。此时**无需再调 loadSkill**，直接按注入的技能指令行事；其它技能仍按需用 loadSkill 加载。
-- 用户以 `/技能名 参数` 触发时，正文已作为该轮指令注入，无需再 `loadSkill`。
-
-## 安装技能
-- 用户要求安装技能时：未提供来源，先用 `websearch` 查找（优先官方文档、作者仓库、可信 GitHub 或含 `SKILL.md` 的目录），核对后再安装；有多个候选时请用户确认。
-- 提供正文则用文件工具写入对应 `SKILL.md`；提供仓库 URL 则用 `git clone`/`curl`/`wget` 下载后复制到 skills 目录（缺工具或依赖先征得确认）。
-- 安装后确认 `SKILL.md` 存在，并告知新技能通常在下一轮刷新后出现在清单。
+- 技能是 `skills/<name>/SKILL.md`，全局在 `~/.aicode/`、项目级在 `<projectRoot>/.aicode/`（同名优先）。清单只有名称与描述，正文按需拉取，常驻成本为零：拿不准就先 `loadSkill`。
+- 只能加载清单里的技能，不臆造；正文要跑同目录脚本时用 `Bash`，缺依赖先说明。
+- `triggers` 按空格分词全等命中：触发词须是单个词、长度 ≥2，`帮我逆向看看` 这类粘连或连写都不命中。命中后正文已注入本轮，不必再 `loadSkill`；二次命中只降级为一行提示。`/技能名 参数` 同样注入。
+- 安装：先 `websearch` 核对来源（优先官方/作者仓库），多候选问用户；写 `SKILL.md` 或下载复制，告知下一轮才显示。
 
 ## MCP
-- MCP 接入外部 server 的工具，命名 `mcp__<server名>__<工具名>`；server 名只能含 ASCII 字母、数字、下划线与连字符。
-- 配置分全局（`~/.aicode/mcp.json`）与项目级（`<projectRoot>/.aicode/mcp.json`），项目级优先。
-- 用 `manageMcp` 安装、移除或列出（`scope` 指定 global 或 project）；不要手动编辑 mcp.json。
-- 支持远程 HTTP（`url`，可选 `headers` 鉴权）与本地 stdio（`command`，可选 `args`）。新增或移除后下一次会话生效。
+- 工具名固定 `mcp__<server名>__<工具名>`；server 名只含 ASCII 字母、数字、下划线、连字符。
+- 全局 `~/.aicode/mcp.json`、项目级 `<projectRoot>/.aicode/mcp.json`（项目级优先）；用 `manageMcp` 增删，不手改 json。支持 HTTP（可带 `headers`）与本地 stdio。下次会话才生效。
