@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -542,7 +543,9 @@ internal fun MemoryDetailSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                // 加了元信息与底部入口后内容会超屏；不加滚动的话长正文会把入口顶出可视区
+                // 弹层内容槽在部分分支给的是无界高度，verticalScroll 需要上界才知道能滚多少；
+                // 不封顶时可见区＝内容高度、滚动范围恒为 0，长正文就“滑不动”。
+                .heightIn(max = 560.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)

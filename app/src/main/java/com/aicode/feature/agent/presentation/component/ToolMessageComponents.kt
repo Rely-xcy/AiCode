@@ -120,10 +120,10 @@ internal val DiffRemoveText: Color
     @Composable get() = MaterialTheme.semanticColors.diffRemove
 
 internal const val DIFF_COLLAPSE_THRESHOLD = 20
-internal const val TOOL_SECTION_LINE_LIMIT = 20
+internal const val TOOL_SECTION_LINE_LIMIT = 200
 
 /** 工具「指令 / 结果」展开窗口的最大高度：超出后在窗口内滚动，不再无限撑高。 */
-private val ToolSectionMaxHeight = 240.dp
+private val ToolSectionMaxHeight = 320.dp
 
 /** 工具窗口底部渐隐遮罩高度（仅当内容还可继续下滚时显示）。 */
 private val ToolSectionFadeHeight = 24.dp
