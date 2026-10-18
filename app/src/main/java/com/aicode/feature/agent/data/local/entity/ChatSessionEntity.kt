@@ -26,7 +26,10 @@ data class ChatSessionEntity(
     val goal: String? = null,
     /** goal 生命周期状态；[goal] 为 null 时无意义。 */
     val goalStatus: String? = null,
-    // 与迁移 68 的 `NOT NULL DEFAULT 0` 逐字对上：本仓约定「迁移写了 DEFAULT，实体就要声明同值」。
+    // 与迁移 68 的 `NOT NULL DEFAULT 0` 逐字对上。注意这条约定**只适用于新增列**：
+    // 历史列千万别回头补注解——Room 只在实体声明了 defaultValue 时才比对库里的 dflt_value，
+    // 而老库经 ALTER 升级后的默认值与全新安装并不一致（参考 62→68 的 remote_connections.sort_order
+    // 为 '0'、而 65→68 与全新安装为 null），补上就会让其中一半存量报「Migration didn't properly handle」。
     @ColumnInfo(defaultValue = "0")
     val goalTurnCount: Int = 0,
     @ColumnInfo(defaultValue = "0")
