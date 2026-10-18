@@ -737,7 +737,7 @@
     <string name="permission_deny_command_by_project_rule">This command is forbidden by the project permission rules</string>
     <string name="permission_elevation_title">Confirm privileged operation</string>
     <string name="permission_elevation_not_rememberable">The command hit the built-in safety protection. Elevation is allowed once only and cannot be remembered</string>
-    <string name="permission_deny_with_elevate_hint">%1$s. If you really need to run it, retry the call with `%2$s: true` and the system will ask the user for approval.</string>
+    <string name="permission_deny_with_elevate_hint">%1$s. Instead: (1) split it into separate commands and call them individually (each is judged on its own); (2) if you really need it as one command, retry with `%2$s: true` and the user will be asked; (3) use the dedicated tools for reading, searching and listing. Do not work around this check by wrapping it in a script or a nested shell.</string>
     <string name="permission_non_rememberable_capabilities">This tool modifies the agent configuration, the container environment, or invokes external dynamic tools. To reduce the risk of over-approval, it can only be allowed once</string>
     <string name="permission_rm_unrememberable">High-risk delete (recursive, wildcard, or forced batch delete). To keep your data safe it cannot be remembered and can only be allowed once</string>
     <string name="permission_rm_deny_root">Safety protection: high-risk delete blocked (deleting the root directory)</string>

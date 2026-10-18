@@ -737,7 +737,7 @@
     <string name="permission_deny_command_by_project_rule">该命令被项目权限规则策略禁止执行</string>
     <string name="permission_elevation_title">高危操作提权确认</string>
     <string name="permission_elevation_not_rememberable">命令命中内置安全防护，提权仅支持单次放行，不可记忆</string>
-    <string name="permission_deny_with_elevate_hint">%1$s。如确需执行，可在调用时加 `%2$s: true` 重试，系统将向用户请求授权。</string>
+    <string name="permission_deny_with_elevate_hint">%1$s。换成做法：① 拆成多条独立命令分别调用（每条各自判定）；② 确需整条执行时加 `%2$s: true`，系统会向用户请求授权；③ 读取/检索/列目录改专用工具。**不要用脚本包装、嵌套 shell 等方式绕开判定。**</string>
     <string name="permission_non_rememberable_capabilities">该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行</string>
     <string name="permission_rm_unrememberable">高风险删除操作（递归/通配/强制批量删除），为确保数据安全不可记忆，仅可单次放行</string>
     <string name="permission_rm_deny_root">安全防护：禁止执行高危删除操作（根目录删除）</string>
