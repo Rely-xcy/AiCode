@@ -11,7 +11,11 @@ on:
     # 纯文档/资源改动不影响构建产物，跳过 CI 省时间（public 仓库虽不扣额度，但省 11 分钟等待）。
     # 注意：只要本次 push 含任一非忽略路径的改动，CI 仍会触发。
     paths-ignore:
-      - '**.md'
+      # 只忽略「不影响构建产物」的文档。不要写 '**.md'：它会把 app/src/main/assets/prompts/*.md
+      # 一起挡在 CI 外，而那些片段决定 AI 行为、属于代码。新增根目录文档请在此显式列出。
+      - 'README.md'
+      - 'README.en.md'
+      - 'CLAUDE.md'
       - 'docs/**'
       - 'docs-site/**'
       - 'LICENSE'
@@ -21,7 +25,11 @@ on:
   pull_request:
     branches: [ main, fork/release ]
     paths-ignore:
-      - '**.md'
+      # 只忽略「不影响构建产物」的文档。不要写 '**.md'：它会把 app/src/main/assets/prompts/*.md
+      # 一起挡在 CI 外，而那些片段决定 AI 行为、属于代码。新增根目录文档请在此显式列出。
+      - 'README.md'
+      - 'README.en.md'
+      - 'CLAUDE.md'
       - 'docs/**'
       - 'docs-site/**'
       - 'LICENSE'

@@ -283,7 +283,7 @@ private data class ModelStatsPaging(
 )
 
 /** 技能列表页的 UI 状态：技能 + 来源作用域 + 启停状态。 */
-/** 设置 → 工具授权：「虚拟屏 root 通道」的探测状态。 */
+/** 设置 → 软件权限：「设备 root 通道」的探测状态。 */
 enum class VscreenRootChannelState { UNKNOWN, PROBING, AVAILABLE, UNAVAILABLE }
 
 data class SkillUiEntry(
