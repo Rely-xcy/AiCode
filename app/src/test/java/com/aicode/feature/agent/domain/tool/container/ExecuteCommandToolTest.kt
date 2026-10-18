@@ -72,9 +72,11 @@ class ExecuteCommandToolTest {
         coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         coEvery { engine.runCommandSync(any(), any(), any()) } returns "ok"
 
-        val result = tool().execute(commandArgs("ls"))
+        // 用 pwd 而不是 ls：ls 会命中 ShellToolRoutingHint 的「列目录用 list 更好」提示，
+        // 输出就不再是原样回传，这条用例的正向对照会失真。
+        val result = tool().execute(commandArgs("pwd"))
 
         assertEquals(ToolResult.Success(JsonPrimitive("ok")), result)
-        coVerify(exactly = 1) { engine.runCommandSync("ls", workPath, any()) }
+        coVerify(exactly = 1) { engine.runCommandSync("pwd", workPath, any()) }
     }
 }
