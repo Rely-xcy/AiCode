@@ -1479,7 +1479,7 @@ fun AIChatPanel(
         }
     }
     LaunchedEffect(listState) {
-        snapshotFlow { isAtBottom && !userScrollGesture }.collect { atBottom ->
+        snapshotFlow { isAtBottom && !userScrollGesture && !pointerDown }.collect { atBottom ->
             if (atBottom) followBottom = true
         }
     }
@@ -1516,7 +1516,8 @@ fun AIChatPanel(
     val calibrateToAnchor: suspend () -> Unit = remember(listState) {
         {
             // 无向下滚动空间（内容不满屏或已滚到锚点）：最后内容必然在安全区上方，无需校准。
-            if (followBottom && !userScrollGesture && listState.canScrollForward) {
+            // 手指在屏幕上（哪怕还没越过 touch slop）也不动视口：门槛见 [shouldCalibrateToAnchor]。
+            if (shouldCalibrateToAnchor(followBottom, userScrollGesture, pointerDown, listState.canScrollForward)) {
                 val layout = listState.layoutInfo
                 val lastIndex = layout.totalItemsCount - 1
                 if (lastIndex >= 0) {
