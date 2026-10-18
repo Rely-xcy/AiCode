@@ -15,7 +15,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -53,6 +53,7 @@ import com.aicode.core.theme.semanticColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -904,6 +905,10 @@ fun AIChatPanel(
         if (kept.size != pendingUserMessages.size) pendingUserMessages = kept
     }
     val listState = rememberLazyListState()
+    // 滚动进行中：以 lambda 形式交给下游，读发生在真正需要它的那个组合作用域里（子组件、
+    // graphicsLayer）。在本函数体里直接读会把「手势起停」变成整块面板的重组信号，
+    // 而一次手势里这个值至少翻两次。
+    val scrolling: () -> Boolean = remember(listState) { { listState.isScrollInProgress } }
     // 消息未就绪时的加载提示：本地读库通常几十毫秒，立刻显示反而闪一下，等一小会儿还没就绪才提示。
     var showMessagesLoading by remember(currentSessionId) { mutableStateOf(false) }
     LaunchedEffect(currentSessionId, messagesReady) {
@@ -917,8 +922,11 @@ fun AIChatPanel(
     // 贴底滚动留白：首帧测量前用兜底值（约输入框 + 间距），实测悬浮层高度后改为动态值，
     // 横幅/面板/输入框任何形态下最后一条消息都停在悬浮层上方不被遮挡。
     val inputBarBottomReserveDp = 156.dp
+    val reserveDensity = LocalDensity.current
+    // 高度已按整 dp 量化过（[quantizeLayerHeightPx]）：亚像素抖动不再产生新的状态值，
+    // 否则每次键盘动画/布局微调都会重组整块面板并重建列表的 contentPadding。
     var floatingLayerHeightPx by remember { mutableStateOf(0) }
-    val inputBarReservePx = with(LocalDensity.current) {
+    val inputBarReservePx = with(reserveDensity) {
         (if (floatingLayerHeightPx > 0) floatingLayerHeightPx + FLOATING_LAYER_GAP_DP.toPx()
         else inputBarBottomReserveDp.toPx()).toInt()
     }
@@ -1431,11 +1439,19 @@ fun AIChatPanel(
         }
     }
 
-    LaunchedEffect(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress) {
-        if (!pointerDown && userScrollGesture && !nestedFling && !listState.isScrollInProgress) {
-            delay(150)
-            userScrollGesture = false
-            followBottom = isAtBottom
+    // 手势收尾：这四个状态以前是 LaunchedEffect 的 key——key 在组合期求值，等于每次状态翻转
+    // 都把整块面板重组一遍（按下/抬起、产生滚动量、惯性起停，一次手势六到十次）。
+    // 改为在协程里订阅，组合体完全不读它们；collectLatest 的取消语义与原来的「key 变了就
+    // 丢掉未走完的 delay」一致。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            ScrollSettleState(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress)
+        }.collectLatest { settle ->
+            if (!settle.pointerDown && settle.userScrollGesture && !settle.nestedFling && !settle.scrolling) {
+                delay(150)
+                userScrollGesture = false
+                followBottom = isAtBottom
+            }
         }
     }
 
@@ -1993,19 +2009,19 @@ fun AIChatPanel(
             } // 内容层结束
 
             // 悬浮层：错误气泡 / 面板 / 输入框（蒙版在 ChatInputBar 内部，跟随键盘上移）
-            val floatingPanelAlpha by animateFloatAsState(
-                targetValue = if (listState.isScrollInProgress) 0.4f else 1f,
-                animationSpec = tween(200),
-                label = "floating-panel-alpha"
-            )
+            // 滚动弱化系数由协程驱动、只在 graphicsLayer 里读，手势起停与淡入淡出都不重组。
+            val floatingPanelAlpha = rememberScrollFadeAlpha(scrolling)
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
-                    .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
+                    .onGloballyPositioned {
+                        val quantized = quantizeLayerHeightPx(it.size.height, reserveDensity.density)
+                        if (quantized > 0) floatingLayerHeightPx = quantized
+                    }
             ) {
-            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha }) {
+            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha.value }) {
                 StatusBanner(state = agentState)
             }
 
@@ -2014,7 +2030,7 @@ fun AIChatPanel(
             val lastUploadingCount = rememberLastNonNull(uploadingCount.takeIf { it > 0 })
             AnimatedVisibility(
                 visible = uploadingCount > 0,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2026,7 +2042,7 @@ fun AIChatPanel(
                 visible = pendingQuestion != null,
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .graphicsLayer { alpha = floatingPanelAlpha },
+                    .graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2044,7 +2060,7 @@ fun AIChatPanel(
             val planForPanel = rememberLastNonNull(planApproval)
             AnimatedVisibility(
                 visible = planApproval != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2063,7 +2079,7 @@ fun AIChatPanel(
             // 才知道自己插进去了（真实反馈过他因此以为没生效）。
             AnimatedVisibility(
                 visible = interjectionAck != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn(tween(140)) + expandVertically(tween(180)),
                 exit = fadeOut(tween(160)) + shrinkVertically(tween(180))
             ) {
@@ -2172,7 +2188,7 @@ fun AIChatPanel(
                 },
                 reportedTokenProgress = sessionContextUsage?.reportedProgress ?: 0f,
                 tokenUsageEstimated = sessionContextUsage?.isEstimated ?: false,
-                isScrolling = listState.isScrollInProgress,
+                scrolling = scrolling,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,
                 onModelSheetDismiss = onDismissModelSheetInOnboarding,
@@ -2192,7 +2208,10 @@ fun AIChatPanel(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(bottom = with(LocalDensity.current) { floatingLayerHeightPx.toDp() } + Spacing.xs)
-                    .onGloballyPositioned { permissionPanelHeightPx = if (pendingPermission != null) it.size.height else 0 },
+                    .onGloballyPositioned {
+                        permissionPanelHeightPx =
+                            if (pendingPermission != null) quantizeLayerHeightPx(it.size.height, reserveDensity.density) else 0
+                    },
                 enter = fadeIn(tween(220)) +
                         slideInVertically(tween(220)) { it / 3 } +
                         scaleIn(initialScale = 0.96f, animationSpec = tween(220)),
@@ -2206,7 +2225,7 @@ fun AIChatPanel(
                         onChoice = { choice -> viewModel.resolveToolPermission(request.id, choice) },
                         sessionTitle = pendingPermissionSessionTitle,
                         forceCollapse = dashboardCollapseActive,
-                        isScrolling = listState.isScrollInProgress
+                        scrolling = scrolling
                     )
                 }
             }
@@ -2322,6 +2341,36 @@ internal fun <T : Any> rememberLastNonNull(value: T?): T? {
 }
 
 private class LastNonNullHolder<T : Any>(var value: T? = null)
+
+/**
+ * 滚动弱化系数（1 ↔ 0.4）：直接用 [scrolling] 的返回值，但订阅在协程里、写入 [Animatable]，
+ * 调用方只在 `graphicsLayer { alpha = … }` 里读 `value`。
+ *
+ * 以前每个调用点各自一句 animateFloatAsState(targetValue = if (isScrolling) …)：target 在组合期求值，
+ * 下拉一下就把所在组合作用域整个重组（聊天面板本身上千行）。现在手势起停只启动一段协程，
+ * 淡入淡出的每一帧也只刷新图层。
+ *
+ * 取消语义与 animateFloatAsState 一致：新目标一到就取消未走完的动画，从当前值继续。
+ */
+@Composable
+internal fun rememberScrollFadeAlpha(scrolling: () -> Boolean): State<Float> {
+    val alpha = remember { Animatable(1f) }
+    val scrollingState = rememberUpdatedState(scrolling)
+    LaunchedEffect(Unit) {
+        snapshotFlow { scrollingState.value() }.collectLatest { scrollingNow ->
+            alpha.animateTo(if (scrollingNow) 0.4f else 1f, tween(200))
+        }
+    }
+    return alpha
+}
+
+/** 手势收尾判定用的四个状态，整体订阅以避免任一状态翻转都令面板重组。 */
+private data class ScrollSettleState(
+    val pointerDown: Boolean,
+    val userScrollGesture: Boolean,
+    val nestedFling: Boolean,
+    val scrolling: Boolean
+)
 
 /**
  * 工具卡片入场动画的调度器：决定哪些消息该播入场、以及各自错开多久。
