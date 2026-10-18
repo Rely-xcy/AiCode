@@ -92,17 +92,12 @@ class ExecuteCommandTool @Inject constructor(
     ): PendingToolPermission {
         val command = args["command"]?.jsonPrimitive?.contentOrNull ?: "未知命令"
         val timeoutSeconds = resolveTimeoutMs(args) / 1000L
-        val scriptNotice = ShellScriptNotice.forCommand(command)
         return PendingToolPermission(
             id = callId,
             toolName = name,
             title = "确认执行命令",
             summary = command,
-            details = buildString {
-                append("将在当前执行环境中执行。\n超时：${timeoutSeconds} 秒")
-                // 脚本执行的盲区要在授权前讲清楚：守卫看不到脚本内部的管道/多语句。
-                if (scriptNotice != null) append("\n\n").append(scriptNotice)
-            },
+            details = "将在当前执行环境中执行。\n超时：${timeoutSeconds} 秒",
             argsPreview = argsPreview
         )
     }
