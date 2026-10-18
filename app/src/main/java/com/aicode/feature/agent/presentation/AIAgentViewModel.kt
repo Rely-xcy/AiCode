@@ -2248,6 +2248,10 @@ class AIAgentViewModel @Inject constructor(
                     }
                     is AgentEvent.Failed -> {
                         failed = true
+                        // 失败轮不再补发 Completed（见工作流收尾），所以这里要自己把「重试/换 Key/压缩中」
+                        // 这三个瞬时状态收掉，否则失败后界面会停在转圈上。
+                        setRetryState(sessionId, null)
+                        setKeySwitchState(sessionId, null)
                         setCompacting(sessionId, false)
                         setAgentState(sessionId, AgentUIState.Error(describeFailure(event)))
                         // 子代理会话失败时通知父会话

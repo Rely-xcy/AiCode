@@ -1180,11 +1180,15 @@ class StatefulAgentWorkflow @Inject constructor(
             }
         }
         
-        state.error?.let {
+        val error = state.error
+        if (error != null) {
             runOutcome = OUTCOME_FAILED
-            send(AgentEvent.Failed(it, state.errorCode))
+            send(AgentEvent.Failed(error, state.errorCode))
+        } else {
+            // 失败轮不再补发 Completed：VM 收到它会给父会话发一条「子代理已完成」通知（与 Failed
+            // 重复，父会话还会因此多起一轮、依据是假事实）。VM 的 Failed 分支已做同样的状态收尾。
+            send(AgentEvent.Completed)
         }
-        send(AgentEvent.Completed)
     }
 
     /**
