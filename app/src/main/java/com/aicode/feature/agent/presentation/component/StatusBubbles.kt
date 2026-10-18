@@ -374,8 +374,10 @@ private const val TYPEWRITER_DRAIN_HARD_MS = 600L
 /** 上游吐字速率估算的滑动窗口时长（ms）。 */
 private const val TYPEWRITER_RATE_WINDOW_MS = 500L
 
-/** 打字机渲染节流间隔（ms）：~21fps 的快照足够顺滑，同时把流式期间的 md 解析频率压下一半。 */
-private const val TYPEWRITER_RENDER_INTERVAL_MS = 48L
+/** 打字机渲染节流间隔（ms）：渲染文本快照频率。间隔越小越顺滑，但每次快照都会让 Markdown
+ *  全量重解析（后台）+ 整段重组重测量（主线程），长文本下间隔太小就是「字在原地整段刷新」的
+ *  掉帧来源。96ms（~10fps）在可读性与流畅之间取平衡：解析频率减半，主线程每秒少 10 次全段布局。 */
+private const val TYPEWRITER_RENDER_INTERVAL_MS = 96L
 
 /** 按码点数量截断字符串，避免把 emoji 等代理对截成孤立的半个字符。 */
 private fun truncateToCodePoints(text: String, codePoints: Int): String {
@@ -454,7 +456,7 @@ internal data class TypewriterText(val text: String)
  * [typewriterRate]：滞后被压在 [TYPEWRITER_LAG_TARGET] 附近，不会越积越多。
  *
  * 渲染文本每 [TYPEWRITER_RENDER_INTERVAL_MS] 快照一次（throttle 而非 debounce，
- * 保证打字期间渲染持续可见增长），把 md 解析频率压在 ~21fps（间隔 48ms）；text 突变（换会话 /
+ * 保证打字期间渲染持续可见增长），把 md 解析频率压在间隔对应的帧率；text 突变（换会话 /
  * 新一轮 / 重试）时补全为当前全文，之后继续跟着 delta 打字。
  *
  * 上游结束（[active] 变 false）**不再一帧补全**：剩余那一小段按 [typewriterDrainRate] 匀速
