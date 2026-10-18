@@ -79,6 +79,8 @@
     <string name="settings_shizuku_peer_title">当前连接</string>
     <string name="settings_shizuku_peer_adb">adb shell（uid 2000）</string>
     <string name="permission_root_not_rememberable">该工具以设备 root（uid 0）操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆</string>
+    <string name="tool_root_permission_title">确认执行 root 命令</string>
+    <string name="tool_root_permission_details">将以设备 root（uid 0）身份在 Android 系统上执行（仅限只读/调试类命令）。\n超时：%1$d 秒</string>
     <string name="root_channel_title">设备 root 通道</string>
     <string name="root_channel_desc">Root 工具与虚拟屏都需要设备已 root；点击检测</string>
     <string name="root_channel_status_unknown">未检测</string>
@@ -728,6 +730,23 @@
     <string name="permission_rules_unconfirmed_project_reason">项目级授权规则当前读不到（工作区未就绪或读取失败），无法确认是否存在项目级 DENY 规则；为避免绕过项目授权，本次仅支持单次放行，不可记忆</string>
     <string name="permission_rules_unconfirmed_global_title">全局授权规则暂不可用</string>
     <string name="permission_rules_unconfirmed_global_reason">全局级授权规则当前读不到（文件读取或解析失败），无法确认是否存在全局 DENY 规则；为避免绕过全局授权，本次仅支持单次放行，不可记忆</string>
+    <!-- 授权弹窗与拒绝理由：ToolPermissionPolicyEngine 里的用户可见文案（不得在该文件硬编码中文） -->
+    <string name="permission_shizuku_not_rememberable">Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆</string>
+    <string name="permission_plan_mode_deny">当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。请在计划模式下仅调用只读工具探索代码，不要尝试修改文件或执行命令。</string>
+    <string name="permission_deny_tool_by_project_rule">该工具被项目权限规则策略禁止执行</string>
+    <string name="permission_deny_command_by_project_rule">该命令被项目权限规则策略禁止执行</string>
+    <string name="permission_elevation_title">高危操作提权确认</string>
+    <string name="permission_elevation_not_rememberable">命令命中内置安全防护，提权仅支持单次放行，不可记忆</string>
+    <string name="permission_deny_with_elevate_hint">%1$s。如确需执行，可在调用时加 `%2$s: true` 重试，系统将向用户请求授权。</string>
+    <string name="permission_non_rememberable_capabilities">该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行</string>
+    <string name="permission_rm_unrememberable">高风险删除操作（递归/通配/强制批量删除），为确保数据安全不可记忆，仅可单次放行</string>
+    <string name="permission_rm_deny_root">安全防护：禁止执行高危删除操作（根目录删除）</string>
+    <string name="permission_rm_deny_relative">安全防护：禁止执行高危删除操作（全局或相对路径通配删除）</string>
+    <string name="permission_rm_deny_home">安全防护：禁止执行高危删除操作（用户目录删除）</string>
+    <string name="permission_rm_deny_workspace">安全防护：禁止执行高危删除操作（工作区根目录删除）</string>
+    <string name="permission_rm_deny_tmp">安全防护：禁止执行高危删除操作（系统临时目录整体删除）</string>
+    <string name="permission_rm_deny_system_dir">安全防护：禁止执行高危删除操作（系统关键目录删除）</string>
+    <string name="permission_rm_deny_unanalyzable">安全防护：命令含命令替换、子 shell 或绝对路径重定向等无法静态判定的构造，且疑似破坏性操作，无法确认安全</string>
     <string name="chat_plan_completed">计划已完成</string>
     <string name="chat_continue_feedback">继续反馈</string>
     <string name="chat_approve_and_implement">批准并实施</string>

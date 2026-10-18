@@ -79,6 +79,8 @@
     <string name="settings_shizuku_peer_title">Connected as</string>
     <string name="settings_shizuku_peer_adb">adb shell (uid 2000)</string>
     <string name="permission_root_not_rememberable">This tool acts on the host Android system as device root (uid 0). High risk, so only one-time approval is allowed and it cannot be remembered</string>
+    <string name="tool_root_permission_title">Confirm root command</string>
+    <string name="tool_root_permission_details">Will run on the Android system as device root (uid 0) (read-only/debug commands only).\nTimeout: %1$d s</string>
     <string name="root_channel_title">Device root channel</string>
     <string name="root_channel_desc">The Root tool and the virtual display both require device root; tap to check</string>
     <string name="root_channel_status_unknown">Not checked</string>
@@ -728,6 +730,23 @@
     <string name="permission_rules_unconfirmed_project_reason">The project-level permission rules cannot be read right now (workspace not ready or read failed), so a project-level DENY rule cannot be ruled out. To avoid bypassing project permissions, this call can only be allowed once and cannot be remembered</string>
     <string name="permission_rules_unconfirmed_global_title">Global permission rules are unavailable</string>
     <string name="permission_rules_unconfirmed_global_reason">The global permission rules cannot be read right now (file read or parse failed), so a global DENY rule cannot be ruled out. To avoid bypassing global permissions, this call can only be allowed once and cannot be remembered</string>
+    <!-- Permission dialog and denial reasons: user-visible strings produced by ToolPermissionPolicyEngine -->
+    <string name="permission_shizuku_not_rememberable">Shizuku operates on the host Android system directly as adb shell. High risk, so only one-time approval is allowed and it cannot be remembered</string>
+    <string name="permission_plan_mode_deny">PLAN mode is active and the system sandbox forbids changing system state or running write operations. In plan mode, only use read-only tools to explore the code; do not try to modify files or run commands.</string>
+    <string name="permission_deny_tool_by_project_rule">This tool is forbidden by the project permission rules</string>
+    <string name="permission_deny_command_by_project_rule">This command is forbidden by the project permission rules</string>
+    <string name="permission_elevation_title">Confirm privileged operation</string>
+    <string name="permission_elevation_not_rememberable">The command hit the built-in safety protection. Elevation is allowed once only and cannot be remembered</string>
+    <string name="permission_deny_with_elevate_hint">%1$s. If you really need to run it, retry the call with `%2$s: true` and the system will ask the user for approval.</string>
+    <string name="permission_non_rememberable_capabilities">This tool modifies the agent configuration, the container environment, or invokes external dynamic tools. To reduce the risk of over-approval, it can only be allowed once</string>
+    <string name="permission_rm_unrememberable">High-risk delete (recursive, wildcard, or forced batch delete). To keep your data safe it cannot be remembered and can only be allowed once</string>
+    <string name="permission_rm_deny_root">Safety protection: high-risk delete blocked (deleting the root directory)</string>
+    <string name="permission_rm_deny_relative">Safety protection: high-risk delete blocked (global or relative-path wildcard delete)</string>
+    <string name="permission_rm_deny_home">Safety protection: high-risk delete blocked (deleting the home directory)</string>
+    <string name="permission_rm_deny_workspace">Safety protection: high-risk delete blocked (deleting the workspace root)</string>
+    <string name="permission_rm_deny_tmp">Safety protection: high-risk delete blocked (deleting the whole system temp directory)</string>
+    <string name="permission_rm_deny_system_dir">Safety protection: high-risk delete blocked (deleting a critical system directory)</string>
+    <string name="permission_rm_deny_unanalyzable">Safety protection: the command contains constructs that cannot be statically analyzed (command substitution, subshell, absolute-path redirection) and looks destructive, so it cannot be confirmed safe</string>
     <string name="chat_plan_completed">Plan completed</string>
     <string name="chat_continue_feedback">Continue feedback</string>
     <string name="chat_approve_and_implement">Approve and implement</string>

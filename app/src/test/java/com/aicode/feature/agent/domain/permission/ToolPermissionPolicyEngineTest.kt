@@ -27,13 +27,41 @@ class ToolPermissionPolicyEngineTest {
 
     /**
      * 弹窗标题与说明取自 `strings.xml`，用例只断言「给不给弹窗、能不能记忆、什么标题」，
-     * 四个键各返回一段可区分的中文，断言非空即可。
+     * 所以把引擎会读到的键都 stub 成真实中文（严格 mock 未 stub 会抛 MockKException）。
+     * 注意两处断言依赖具体文案：rm 根目录删除的原文前缀，以及含 elevate 二字的重试提示。
      */
     private val context = mockk<Context>().apply {
         every { getString(R.string.permission_rules_unconfirmed_project_title) } returns "项目授权规则暂不可用（测试）"
         every { getString(R.string.permission_rules_unconfirmed_project_reason) } returns "项目级规则读不到，仅单次放行（测试）"
         every { getString(R.string.permission_rules_unconfirmed_global_title) } returns "全局授权规则暂不可用（测试）"
         every { getString(R.string.permission_rules_unconfirmed_global_reason) } returns "全局级规则读不到，仅单次放行（测试）"
+        every { getString(R.string.permission_plan_mode_deny) } returns
+            "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。"
+        every { getString(R.string.permission_shizuku_not_rememberable) } returns
+            "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
+        every { getString(R.string.permission_deny_tool_by_project_rule) } returns "该工具被项目权限规则策略禁止执行"
+        every { getString(R.string.permission_deny_command_by_project_rule) } returns "该命令被项目权限规则策略禁止执行"
+        every { getString(R.string.permission_elevation_title) } returns "高危操作提权确认"
+        every { getString(R.string.permission_elevation_not_rememberable) } returns
+            "命令命中内置安全防护，提权仅支持单次放行，不可记忆"
+        every { getString(R.string.permission_deny_with_elevate_hint, *anyVararg()) } returns
+            "安全防护：禁止执行高危删除操作（根目录删除）。如确需执行，可在调用时加 `elevate: true` 重试，系统将向用户请求授权。"
+        every { getString(R.string.permission_non_rememberable_capabilities) } returns
+            "该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行"
+        every { getString(R.string.permission_rm_unrememberable) } returns
+            "高风险删除操作（递归/通配/强制批量删除），为确保数据安全不可记忆，仅可单次放行"
+        every { getString(R.string.permission_rm_deny_root) } returns "安全防护：禁止执行高危删除操作（根目录删除）"
+        every { getString(R.string.permission_rm_deny_relative) } returns
+            "安全防护：禁止执行高危删除操作（全局或相对路径通配删除）"
+        every { getString(R.string.permission_rm_deny_home) } returns "安全防护：禁止执行高危删除操作（用户目录删除）"
+        every { getString(R.string.permission_rm_deny_workspace) } returns
+            "安全防护：禁止执行高危删除操作（工作区根目录删除）"
+        every { getString(R.string.permission_rm_deny_tmp) } returns
+            "安全防护：禁止执行高危删除操作（系统临时目录整体删除）"
+        every { getString(R.string.permission_rm_deny_system_dir) } returns
+            "安全防护：禁止执行高危删除操作（系统关键目录删除）"
+        every { getString(R.string.permission_rm_deny_unanalyzable) } returns
+            "安全防护：命令含命令替换、子 shell 或绝对路径重定向等无法静态判定的构造，且疑似破坏性操作，无法确认安全"
     }
 
     private fun engine(

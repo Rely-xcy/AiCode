@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.tool.root
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.BoundedOutput
 import com.aicode.feature.agent.domain.tool.AgentTool
@@ -10,6 +12,7 @@ import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.domain.vscreen.RootShell
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,7 +33,8 @@ import javax.inject.Inject
  * 用途：辅助调试宿主系统（`pm`/`am`/`cmd`/`dumpsys`/`input`/`screencap` 等）与虚拟屏自动化测试。
  */
 class RootTool @Inject constructor(
-    private val rootShell: RootShell
+    private val rootShell: RootShell,
+    @param:ApplicationContext private val context: Context
 ) : AgentTool() {
 
     private companion object {
@@ -79,9 +83,9 @@ class RootTool @Inject constructor(
         return PendingToolPermission(
             id = callId,
             toolName = name,
-            title = "确认执行 root 命令",
+            title = context.getString(R.string.tool_root_permission_title),
             summary = command,
-            details = "将以设备 root（uid 0）身份在 Android 系统上执行（仅限只读/调试类命令）。\n超时：${timeoutSeconds} 秒",
+            details = context.getString(R.string.tool_root_permission_details, timeoutSeconds),
             argsPreview = argsPreview
         )
     }
