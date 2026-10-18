@@ -228,7 +228,8 @@ object RootCommandGuard {
     }
 
     /**
-     * 整树删除用户数据根（`rm -rf /data`、`rm -rf /sdcard/*`）会一次抹掉全部照片与文件，不可逆。
+     * 整树删除用户数据根（`rm -rf /data`、`rm -rf /sdcard` 及其整树通配形式）会一次抹掉全部照片与文件，
+     * 不可逆。
      *
      * 只拦「整棵树」这一种写法：`rm -rf /sdcard/Download/x` 这类子树仍放行，否则正常清理都用不了。
      */
