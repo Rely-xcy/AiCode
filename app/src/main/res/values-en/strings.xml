@@ -838,7 +838,7 @@
     <string name="slash_command_init_desc">Analyze the workspace codebase and generate or improve the AGENTS.md project rules</string>
     <string name="slash_command_usage_desc">View today and all-time call count, token usage and estimated cost</string>
     <string name="slash_command_goal_desc">Set a session goal; the AI loops autonomously until done or the budget runs out</string>
-    <string name="slash_command_context_desc">Debug: show this session's context estimate and compaction thresholds</string>
+    <string name="slash_command_context_desc">Debug: show this session\'s context estimate and compaction thresholds</string>
     <string name="retry_error_rate_limit">Rate limit</string>
     <string name="retry_error_server_overloaded">Server overloaded</string>
     <string name="retry_error_server">Server error</string>
