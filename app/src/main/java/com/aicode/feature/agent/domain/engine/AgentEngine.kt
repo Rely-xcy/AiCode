@@ -36,6 +36,20 @@ class AgentEngine @Inject constructor(
         return pieces.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
     }
 
+    /**
+     * 本轮随用户消息下发的提醒片段，按 [EngineModule.order] 拼接；全部为空时返回 null。
+     *
+     * 与 [promptFragment] 分开：那些内容每轮都会变（按当轮话题召回、清单被模型改过），
+     * 放进系统提示词会让 KV 缓存的前缀整段失效。
+     */
+    fun turnReminder(ctx: EngineContext): String? {
+        val pieces = sortedModules().mapNotNull { module ->
+            runModule(module, "turnReminder") { it.turnReminder(ctx) }
+                ?.takeIf { it.isNotBlank() }
+        }
+        return pieces.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
+    }
+
     /** 各模块本轮提供的工具，按模块顺序拼接，同名只保留第一个。 */
     fun tools(ctx: EngineContext): List<AgentTool> =
         sortedModules()

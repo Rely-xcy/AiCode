@@ -21,7 +21,8 @@ import javax.inject.Singleton
  * 任务模块：把「当前会话的任务清单」接进引擎。
  *
  * 两个口子，一前一后：
- * 1. **注入**——每轮把清单连同新鲜度放进系统提示词，让进度在上下文压到多深时都看得见
+ * 1. **注入**——每轮把清单连同新鲜度随本轮用户消息下发（[turnReminder]，不进系统提示词：
+ *    清单每轮都可能被模型改，放进 system 会打断 KV 缓存前缀），让进度在上下文压到多深时都看得见
  *    （清单存在独立表里而不是消息历史里，就是为了这个）；
  * 2. **收尾守卫**——模型要给出本轮最终回复时在边界上拦一次：这一轮在推进任务、清单里还有
  *    未完成项、清单却整轮没被动过，或清单已全部完成、收尾时却没清空，就把「清单该动却没动」
@@ -68,11 +69,22 @@ class TaskModule @Inject constructor(
         }
     }
 
-    override fun promptFragment(ctx: EngineContext): String? {
-        val sessionId = ctx.sessionId
-        val items = sessionId?.let { snapshotOf(it) }
-        // 子代理的纪律段走 [subAgentRules]（不受 inject 门禁），这里不再重复一遍
-        return renderBlock(items, ctx, withRules = !ctx.isSubAgent)
+    /**
+     * 清单与纪律规则改由 [turnReminder] 下发：清单会被模型每轮改动，放进系统提示词会让 system 变，
+     * KV 缓存的前缀整段失效。
+     */
+    override fun promptFragment(ctx: EngineContext): String? = null
+
+    /**
+     * 本轮带给模型的任务块：纪律规则（主代理）+ 清单快照（子代理只给清单，规则走 [subAgentRules]）。
+     *
+     * 快照未就绪时只说纪律、不对清单下任何断言；子代理既没清单也没规则时返回 null，不留空标题。
+     */
+    override fun turnReminder(ctx: EngineContext): String? {
+        val items = ctx.sessionId?.let { snapshotOf(it) }
+        val block = renderBlock(items, ctx, withRules = !ctx.isSubAgent).trim()
+        if (block.isEmpty()) return null
+        return "$REMINDER_HEADING\n$block"
     }
 
     /**
@@ -188,6 +200,9 @@ class TaskModule @Inject constructor(
 
         /** 同时跟踪的会话数上限：只防长期累积。 */
         const val MAX_WATCHED_SESSIONS = 64
+
+        /** 任务块在提醒里的外层小标题：让模型知道这一段是什么。 */
+        const val REMINDER_HEADING = "## 当前任务清单"
 
         /** 清单全部完成、且这么久没再动过，才提一句「该清空或建新清单」：刚做完那一轮不念。 */
         const val ALL_DONE_QUIET_MINUTES = 30L

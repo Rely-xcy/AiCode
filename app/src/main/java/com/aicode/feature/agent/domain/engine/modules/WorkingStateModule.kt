@@ -15,10 +15,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 工作状态模块：把「本会话已确定的任务理解」每轮注入系统提示词。
+ * 工作状态模块：把「本会话已确定的任务理解」每轮带给模型。
  *
  * 与 [TaskModule] 的分工：任务清单记「要做哪些事」，这里记「为什么做、做到哪、定过什么」。
- * 两者都存独立表、都每轮注入，所以上下文压缩到多深都不会丢——这正是「越聊越傻」的根治：
+ * 两者都存独立表、都每轮下发（[turnReminder]，不进系统提示词：内容会随工作推进而变），
+ * 所以上下文压缩到多深都不会丢——这正是「越聊越傻」的根治：
  * 模型缺的从来不是逐字历史，而是「当前任务是什么」的稳定理解。
  *
  * 注入是同步的（[EngineModule.promptFragment] 不是 suspend），沿用 [TaskModule]/[MemoryModule]
@@ -57,14 +58,21 @@ class WorkingStateModule @Inject constructor(
         }
     }
 
-    override fun promptFragment(ctx: EngineContext): String? {
-        // 子代理任务短、窗口小，注入工作状态只会增加噪音。
+    /**
+     * 工作状态改由 [turnReminder] 下发：它会随工作推进被重写，放进系统提示词会让 system 变，
+     * KV 缓存的前缀整段失效。
+     */
+    override fun promptFragment(ctx: EngineContext): String? = null
+
+    /** 本轮带给模型的会话工作状态；子代理任务短、窗口小，不给它——只有噪音。 */
+    override fun turnReminder(ctx: EngineContext): String? {
         if (ctx.isSubAgent) return null
         val sessionId = ctx.sessionId ?: return null
         watch(sessionId)
         val content = snapshotBySession[sessionId] ?: return null
         if (content.isBlank()) return null
         return buildString {
+            append(REMINDER_HEADING).append("\n")
             append("会话工作状态（每轮重新注入，压缩上下文不会丢；这是本会话已确定的任务理解）：\n")
             append("硬约束优先于本会话其它一切安排，任何一条都不得违反。\n\n")
             append(content)
@@ -128,6 +136,9 @@ class WorkingStateModule @Inject constructor(
 
         /** 同时跟踪的会话数上限：只防长期累积。 */
         const val MAX_WATCHED_SESSIONS = 64
+
+        /** 工作状态块在提醒里的外层小标题：让模型知道这一段是什么。 */
+        const val REMINDER_HEADING = "## 会话工作状态"
 
         /** 每多少轮收尾刷新一次工作状态：太频繁等于给每轮加一次模型调用。 */
         const val UPDATE_EVERY_TURNS = 5
