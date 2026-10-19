@@ -1,7 +1,6 @@
 package com.aicode.di
 
 import com.aicode.feature.agent.domain.engine.EngineModule
-import com.aicode.feature.agent.domain.engine.modules.ArgumentProjectionModule
 import com.aicode.feature.agent.domain.engine.modules.CompactionModule
 import com.aicode.feature.agent.domain.engine.modules.MemoryModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
@@ -33,10 +32,6 @@ abstract class EngineBindingsModule {
     @Binds
     @IntoSet
     abstract fun bindCompactionModule(module: CompactionModule): EngineModule
-
-    @Binds
-    @IntoSet
-    abstract fun bindArgumentProjectionModule(module: ArgumentProjectionModule): EngineModule
 
     @Binds
     @IntoSet

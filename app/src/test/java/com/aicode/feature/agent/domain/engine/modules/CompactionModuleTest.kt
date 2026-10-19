@@ -160,7 +160,7 @@ class CompactionModuleTest {
 
     /**
      * 阶段 1 验收：软线（默认 40%）以上、硬线以下，消息列表必须**原样返回**——
-     * 软精简已移除，请求链路不再做任何历史改写（参数瘦身由 ArgumentProjectionModule 负责）。
+     * 软精简与参数投影均已删除，请求链路不做任何历史改写。
      */
     @Test
     fun `软线以上硬线以下不触发任何改写，消息原样返回`() = runBlocking {
