@@ -2809,7 +2809,7 @@ class AIAgentViewModel @Inject constructor(
                 appendLine("| 项 | 值 |")
                 appendLine("|---|---|")
                 appendLine("| 消息数 | ${history?.size ?: 0} |")
-                appendLine("| 估算 tokens | ${formatTokenCount(tokens)} |")
+                appendLine("| 估算 tokens | ${formatTokenCount(tokens.toLong())} |")
                 appendLine("| 软线 | ${soft}% |")
                 appendLine("| 硬线 | ${hard}% |")
                 appendLine("| 兜底线 | ${guard}% |")
