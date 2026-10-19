@@ -21,13 +21,15 @@ import javax.inject.Singleton
  */
 @Singleton
 class MemoryExtractor @Inject constructor(
-    private val memoryRepository: MemoryRepository
+    private val memoryRepository: MemoryRepository,
+    private val pendingQueue: MemoryPendingQueue
 ) {
 
     /**
      * @param complete 一次性模型调用能力：给 user prompt，返回模型输出（system prompt 由调用方按
      *   [PROMPT_FILE] 解析好，保证两个入口用的是同一份抽取提示词）。
-     * @return 写入条数；没有可记的、解析失败、模型返回空都返回 0。
+     * @return 实际写入条数；写盘失败的条目进 pending 队列等下次重试，不计入返回值。
+     *   没有可记的、解析失败、模型返回空都返回 0。
      */
     suspend fun extract(
         projectRoot: String,
@@ -45,9 +47,10 @@ class MemoryExtractor @Inject constructor(
         val entries = parseEntries(raw)
         if (entries.isEmpty()) return 0
 
+        var written = 0
         entries.forEach { entry ->
             // 抽出来的都是「关于用户」的稳定结论，跨项目通用，因此统一写全局。
-            memoryRepository.saveMemory(
+            val saved = memoryRepository.saveMemory(
                 name = entry.name,
                 description = entry.description,
                 content = entry.content,
@@ -56,9 +59,27 @@ class MemoryExtractor @Inject constructor(
                 kind = MemoryKind.PROFILE,
                 source = source
             )
+            if (saved) {
+                written++
+            } else {
+                // 写失败不能算成功：先进 pending 队列，下次治理/下次启动时重试
+                pendingQueue.enqueue(
+                    PendingMemoryEntry(
+                        name = entry.name,
+                        description = entry.description,
+                        content = entry.content,
+                        scope = MemoryScope.GLOBAL.name,
+                        projectRoot = projectRoot,
+                        kind = MemoryKind.PROFILE.name,
+                        source = source,
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                FileLogger.w(TAG, "记忆写盘失败，已加入重试队列: ${entry.name}")
+            }
         }
-        FileLogger.i(TAG, "抽取长期记忆 ${entries.size} 条: ${entries.joinToString { it.name }}")
-        return entries.size
+        FileLogger.i(TAG, "抽取长期记忆 $written/${entries.size} 条: ${entries.joinToString { it.name }}")
+        return written
     }
 
     /** 交给模型的输入：已有长期记忆（防重复）+ 本轮对话（截断，控制 token）。 */

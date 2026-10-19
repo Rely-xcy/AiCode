@@ -97,7 +97,7 @@ class CompactionModuleTest {
         val usageHolder = ContextUsageHolder()
         val module = CompactionModule(
             compactor = fixedLazy(compactor),
-            memoryExtractor = MemoryExtractor(mockk(relaxed = true)),
+            memoryExtractor = MemoryExtractor(mockk(relaxed = true), mockk(relaxed = true)),
             sessionBriefExtractor = SessionBriefExtractor(mockk(relaxed = true)),
             systemPromptProvider = fixedLazy(mockk<SystemPromptProvider>(relaxed = true)),
             modelMetadataService = metadata,

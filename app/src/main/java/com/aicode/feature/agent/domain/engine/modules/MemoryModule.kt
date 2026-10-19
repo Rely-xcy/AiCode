@@ -258,6 +258,9 @@ class MemoryModule @Inject constructor(
             if (lockedLastCuratedAt > 0 && checkedAt - lockedLastCuratedAt < intervalHours * 60L * 60 * 1000) return
 
             val complete = ctx.oneShot
+            // 治理周期到了就顺手补写上次写失败的抽取结果：治理读的是磁盘上的全量清单，
+            // 同一轮补进来的条目可以直接参与合并/归档判断，不用等下个周期。
+            val recovered = memoryRepository.retryPendingMemories()
             val result = memoryCurator.curate(
                 projectRoot = ctx.projectRoot,
                 complete = complete?.let { oneShot ->
@@ -266,7 +269,7 @@ class MemoryModule @Inject constructor(
             )
             // 无论有没有改动都记时间戳：没改动也说明这轮看过了，不该每轮重看
             memorySettings.setLastCuratedAt(System.currentTimeMillis())
-            if (result.changed) {
+            if (result.changed || recovered > 0) {
                 listSnapshotByKey.keys
                     .filter { it.sessionId == ctx.sessionId && it.projectRoot == ctx.projectRoot }
                     .forEach { listSnapshotByKey.remove(it) }
