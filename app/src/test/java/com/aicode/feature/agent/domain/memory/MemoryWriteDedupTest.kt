@@ -36,7 +36,7 @@ class MemoryWriteDedupTest {
     }
 
     private fun memoryFiles(root: File): List<File> =
-        root.listFiles { file -> file.isFile && file.extension == "md" }.orEmpty()
+        root.listFiles { file -> file.isFile && file.extension == "md" }?.toList().orEmpty()
 
     @Test
     fun `规范化名称相同则更新原条目而不是新建`() {
