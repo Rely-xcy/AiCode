@@ -228,7 +228,15 @@ data class ChatMessagesState(
     val messages: List<AgentUIMessage>,
     val loaded: Boolean,
     val hasMore: Boolean = false,
-    val isLoadingMore: Boolean = false
+    val isLoadingMore: Boolean = false,
+    /**
+     * 这份状态对应的分页上限。
+     *
+     * 用它判断「是否已有一次还没产出的上滑加载」：台账 [_messageLimit] 大于它就是在途。
+     * 以前用一个「在途集合」在流产出时清除，一旦某次流没产出（切会话、代际被 flatMapLatest
+     * 换掉）就会永久残留，上滑从此被拦死——改成比较数值后没有任何需要清的状态。
+     */
+    val limit: Int = 0
 )
 
 /**
