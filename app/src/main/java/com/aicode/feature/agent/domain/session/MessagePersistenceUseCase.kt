@@ -5,6 +5,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.toolCallsFrozenForHistory
 import com.aicode.feature.agent.domain.model.toolCallsJsonForStorage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
@@ -147,9 +148,20 @@ class MessagePersistenceUseCase @Inject constructor(
      * content 保持用户原话，界面与回放都不认它，只在组装请求时拼回模型侧文本。
      * 按快照上限截断：提醒文本来自可被用户自定义覆盖的 prompts 文件，不能任由它撑大单行。
      */
-    suspend fun attachModelReminder(messageId: String, reminder: String) {
-        agentMessageDao.updateModelReminder(messageId, capBytes(reminder, MAX_SNAPSHOT_BYTES))
+    suspend fun attachModelReminder(messageId: String, reminder: String): String {
+        val stored = capBytes(reminder, MAX_SNAPSHOT_BYTES)
+        agentMessageDao.updateModelReminder(messageId, stored)
+        return stored
     }
+
+    /**
+     * 一条消息在落库那一刻的形态。发送侧必须先过这里再拼请求，落库与发送才是同一串字节。
+     *
+     * 库里读回来的是截断后的正文/思考与「摘录 + 合法 JSON」的工具参数；若本轮发的是内存原文，
+     * 下一轮从库里重建历史时这条消息就变形了，它之后的前缀全部未命中。
+     * 这里调用的都是常量上限下的纯函数，且对已经处理过的消息幂等，所以同一消息在任何一轮都得到同一结果。
+     */
+    fun frozenForHistory(message: AgentMessage): AgentMessage = frozenForHistory(message, json)
 
     companion object {
         /**
@@ -191,6 +203,26 @@ class MessagePersistenceUseCase @Inject constructor(
         /** UTF-8 单字符最多占 3 字节，故 [String.length] 的三倍不超上限时无需实际编码即可放行。 */
         private fun definitelyFits(raw: String, maxBytes: Int): Boolean =
             raw.length.toLong() * 3 <= maxBytes
+
+        /**
+         * [frozenForHistory] 的纯函数体：与落库共用同一个 [Json] 配置与同一组上限常量。
+         * 对已经是冻结形态的消息幂等——第二次调用不会再改任何字节。
+         */
+        internal fun frozenForHistory(message: AgentMessage, json: Json): AgentMessage = when (message) {
+            is AgentMessage.UserMessage -> message.copy(
+                content = sanitizeContent(message.content),
+                modelReminder = message.modelReminder?.let { capBytes(it, MAX_SNAPSHOT_BYTES) }
+            )
+            is AgentMessage.AssistantMessage -> message.copy(
+                content = sanitizeContent(message.content),
+                // 工具参数按落库快照回解：截断始终发生在 JSON 字符串值内部，结构本身保持合法。
+                toolCalls = toolCallsFrozenForHistory(message.toolCalls, MAX_SNAPSHOT_BYTES, json),
+                reasoning = sanitizeContent(message.reasoning),
+                signature = capBytes(message.signature, MAX_SNAPSHOT_BYTES),
+                thinkingBlocksJson = capBytes(message.thinkingBlocksJson, MAX_SNAPSHOT_BYTES)
+            )
+            is AgentMessage.ToolResultMessage -> message.copy(result = sanitizeContent(message.result))
+        }
 
         /**
          * 落库前的内容净化，为所有 provider/模型提供统一兜底防线：

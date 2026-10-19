@@ -92,6 +92,11 @@ data class AgentContext(
      * 此时提醒只在本轮请求里生效。
      */
     val userMessageId: String? = null,
+    /**
+     * 技能关键词命中后要注入的正文。由 workflow 与模式/任务清单等提醒拼成同一条 modelReminder
+     * 写进用户行，再随请求发出；不拼进 content——正文一变，这行及其后的前缀缓存全部作废。
+     */
+    val skillInjection: String? = null,
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）：退出 PLAN 时恢复到它，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,
@@ -109,6 +114,11 @@ data class AgentContext(
      * 由 ViewModel 从会话行算一次往下传，下层只读它，不再各自推导。
      */
     val isSubAgent: Boolean = false,
+    /**
+     * 本轮（一次用户请求 = 一次 agent 循环）的标识：同一轮工具循环里的多次模型调用共用它。
+     * 发送前兜底截断按它冻结，避免相邻两次调用因为估算抖动截出不同字节。
+     */
+    val turnId: String? = null,
     /**
      * 本会话绑定的自定义子代理定义；非空表示本轮按定义组装提示词与工具集，
      * 与「是不是子代理会话」无关（见 [isSubAgent]）。

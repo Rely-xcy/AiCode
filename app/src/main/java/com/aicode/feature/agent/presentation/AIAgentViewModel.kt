@@ -1857,18 +1857,19 @@ class AIAgentViewModel @Inject constructor(
         }
 
         // 技能关键词自动触发（见「技能关键词触发设计.md」）：普通消息中把某个技能的触发词作为
-        // 空格分隔的独立词说出时，把该技能正文注入 modelRequest（落库/气泡仍是用户原话）。
+        // 空格分隔的独立词说出时，把该技能正文作为本轮用户行的 modelReminder 注入。
+        // 不拼进正文：正文一旦改写，这行及其后所有历史的前缀缓存全部作废。
         // 斜杠命令已在上面分流返回，优先级天然更高；自动触发轮次（/init、后台通知）不参与匹配。
         val triggeredHits = if (isAutoTrigger || request.startsWith("/")) {
             emptyList()
         } else {
             slashCommandRegistry.findTriggered(request, sessionId)
         }
-        val effectiveModelRequest = if (triggeredHits.isEmpty()) {
-            modelRequest
+        val skillInjection = if (triggeredHits.isEmpty()) {
+            null
         } else {
             val primary = triggeredHits.first()
-            val injection = buildString {
+            buildString {
                 if (primary.deduped) {
                     appendLine("（技能 ${primary.skill.name} 已在本会话加载过，完整指令可用 loadSkill 取回）")
                 } else {
@@ -1882,10 +1883,11 @@ class AIAgentViewModel @Inject constructor(
                 if (!primary.deduped) {
                     appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
                 }
-            }
-            val prefix = modelRequest.takeIf { it != request }?.plus("\n\n")
-            (prefix ?: "") + request + "\n\n" + injection.trimEnd()
+            }.trimEnd()
         }
+        // 发出去的就是 modelRequest（附件说明已经包含在里面）。旧代码在命中技能时把它和 request
+        // 再拼一遍，既重复又只活在请求里——下一轮从库里重建历史时这行必然变字。
+        val effectiveModelRequest = modelRequest
 
         // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
         val currentSession = sessionUseCase.getSessionById(sessionId)
@@ -1983,6 +1985,9 @@ class AIAgentViewModel @Inject constructor(
                     ?.let { agentDefinitionRepository.findIncludingDisabled(it) }
             }
 
+            // 本轮（一次用户请求 = 一次 agent 循环）的标识：同一轮的多次模型调用共用一个，
+            // 发送前兜底截断据此冻结，不随两次调用之间的估算抖动换截法。
+            val turnId = UUID.randomUUID().toString()
             val agentContext = AgentContext(
                 currentFile = currentFile,
                 selectedCode = selectedCode,
@@ -1992,6 +1997,8 @@ class AIAgentViewModel @Inject constructor(
                 inputImages = inputImages,
                 sessionId = sessionId,
                 userMessageId = userMsgId,
+                skillInjection = skillInjection,
+                turnId = turnId,
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
                 goal = sessionDomain?.goal,

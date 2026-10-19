@@ -31,7 +31,7 @@ import javax.inject.Singleton
  * 阈值、档位、硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
  * 本类只提供两个变换，便于单独验证：
  * - [compact]：调摘要模型折叠早期对话，并把结果落库；
- * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库）。
+ * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库，按轮次冻结产出）。
  *
  * 三个变换都不读设置、不解析模型目录：预算由调用方算好传进来。
  */
@@ -84,8 +84,9 @@ class ContextCompactor @Inject constructor(
 
         val result = messages.toMutableList()
         var changed = false
-        // 从最大的开始削，只削到刚好落进预算为止，避免把小消息也一起截短。
-        val order = messages.indices.sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+        // 只从最老的消息开始截：固定顺序 + 固定预算，同一份输入永远得到同一串字节。
+        // 按「最大优先」截会让同一轮相邻两次调用的截点随估算漂移，前缀随之变形。
+        val order = messages.indices
         for (index in order) {
             if (estimate <= budgetTokens) break
             val before = TokenEstimator.estimateMessage(result[index])
@@ -756,8 +757,9 @@ class ContextCompactor @Inject constructor(
      * 工具参数按字段重建：把「能重新读回来」的大块正文换成可读摘录（头尾逐字 + 省略说明 +
      * readFile 回读指针），其它超长值头尾截断，小字段（路径、命令开头这类定位信息）原样保留。
      *
-     * 结果直接写进本副本的 `arguments`：[enforceWindowLimit] 是发送前兜底，产出只活在本次请求里
-     * （不落库）；每次都以原文重算，重复截断是幂等的。
+     * 结果直接写进本副本的 `arguments`：这是发送前兜底，产出本身不落库。
+     * 同一轮内的多次模型调用共用第一份产出（见 CompactionModule 的轮内冻结），旧消息不再重截；
+     * 对同一输入重算也是幂等的，所以缓存与重算得到的是同一串字节。
      *
      * 为什么给摘录而不是整段占位说明：占位说明把「我写过什么」从模型视野里整个抹掉——
      * 模型看不到文件当时的结构与收尾状态，只能整份重新 read 才敢接着改，也更容易把占位文字

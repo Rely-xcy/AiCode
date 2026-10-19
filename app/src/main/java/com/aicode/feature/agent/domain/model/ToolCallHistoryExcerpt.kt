@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.model
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.workflow.BULK_ARG_KEYS
 import com.aicode.feature.agent.domain.workflow.bulkArgumentExcerptOf
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -91,6 +92,21 @@ internal fun toolCallsJsonForStorage(
         encoded = json.encodeToString(calls)
     }
     return encoded
+}
+
+/**
+ * 落库快照对应的工具调用列表：发送侧要先拿到与落库同一份形态，再拼请求。
+ *
+ * 解码回来而不是另写一套截断：请求里发出去的参数必须与下一轮从库里读回来的逐字节同形，
+ * 否则这条 assistant 消息在下一轮变形，它之后的前缀全部未命中。
+ */
+internal fun toolCallsFrozenForHistory(
+    toolCalls: List<ToolCall>,
+    maxBytes: Int,
+    json: Json = Json { ignoreUnknownKeys = true }
+): List<ToolCall> {
+    if (toolCalls.isEmpty()) return emptyList()
+    return json.decodeFromString(toolCallsJsonForStorage(toolCalls, maxBytes, json))
 }
 
 private fun fitsUtf8(text: String, maxBytes: Int): Boolean =

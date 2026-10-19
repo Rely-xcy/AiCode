@@ -26,6 +26,11 @@ data class EngineContext(
      */
     val isSubAgent: Boolean = false,
     /**
+     * 本轮（一次用户请求 = 一次 agent 循环）的标识：同一轮工具循环里的多次模型调用共用。
+     * 发送前兜底截断按它冻结旧消息的截法；null 表示调用方没提供轮次边界（如手动压缩）。
+     */
+    val turnId: String? = null,
+    /**
      * 子代理定义的名称；没有自定义定义时（默认子代理）为 null。
      * 与 [isSubAgent] 不同义：这个字段带上名字，只供模块在固定提示段里渲染角色行。
      */

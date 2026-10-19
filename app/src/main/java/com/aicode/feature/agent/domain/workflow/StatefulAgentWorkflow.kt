@@ -291,6 +291,11 @@ class StatefulAgentWorkflow @Inject constructor(
         data class ExecuteToolBatch(val toolCalls: List<ToolCall>) : AgentSideEffect
         /** 整批取消（用户拒绝批次中某个调用）：补发已启动工具的完成事件，清理 UI「执行中」状态。 */
         data class CancelToolBatch(val toolCalls: List<ToolCall>) : AgentSideEffect
+        /**
+         * 轮内守卫消息（截断续写 / 清单收尾 / 记忆兜底）：落库为 USER 行并带上 isInterjection，
+         * UI 不渲染气泡。只进内存上下文不落库的话，下一轮重建历史会少这一条，它之后的前缀全部未命中。
+         */
+        data class PersistUserMessage(val id: String, val content: String) : AgentSideEffect
     }
 
     private suspend fun getEffectiveProvider(sessionId: String?): AIProvider {
@@ -431,13 +436,18 @@ class StatefulAgentWorkflow @Inject constructor(
                 effects.add(AgentSideEffect.CallLlm)
             }
             is AgentAction.LlmResponse -> {
-                val assistantMsg = AgentMessage.AssistantMessage(
-                    content = action.response.content,
-                    toolCalls = action.response.toolCalls,
-                    reasoning = action.response.reasoning ?: "",
-                    signature = action.response.signature ?: "",
-                    thinkingBlocksJson = action.response.thinkingBlocksJson ?: "",
-                    images = action.response.images
+                // 先过落库上限再进上下文：正文/思考截断、工具参数换成落库快照（合法 JSON 的摘录）。
+                // 下一次请求与下一轮从库里重建的历史因此是同一串字节；若发原文、落库才截，
+                // 这条 assistant 消息在下一轮就会变字，它之后的整段前缀全部未命中。
+                val assistantMsg = messagePersistenceUseCase.frozenForHistory(
+                    AgentMessage.AssistantMessage(
+                        content = action.response.content,
+                        toolCalls = action.response.toolCalls,
+                        reasoning = action.response.reasoning ?: "",
+                        signature = action.response.signature ?: "",
+                        thinkingBlocksJson = action.response.thinkingBlocksJson ?: "",
+                        images = action.response.images
+                    )
                 )
                 newState = state.copy(
                     messages = state.messages + assistantMsg,
@@ -453,25 +463,31 @@ class StatefulAgentWorkflow @Inject constructor(
                             errorCode = action.response.stopReason
                         )
                     } else if (action.response.isTruncated) {
-                        newState = newState.copy(
-                            messages = newState.messages + AgentMessage.UserMessage(content = "你的回复因长度限制被截断了，请从截断处继续。")
-                        )
+                        val reminder = guardMessage("你的回复因长度限制被截断了，请从截断处继续。")
+                        newState = newState.copy(messages = newState.messages + reminder)
+                        effects.add(AgentSideEffect.PersistUserMessage(reminder.id, reminder.content))
                         effects.add(AgentSideEffect.CallLlm)
                     } else if (action.todoGuardReminder != null) {
-                        // 收尾守卫拦下：这一轮活干完了，清单却整轮没动。提醒只进本轮上下文，不落库、不上 UI。
+                        // 收尾守卫拦下：这一轮活干完了，清单却整轮没动。
+                        // 提醒必须落库（一条 isInterjection 的 USER 行，UI 不渲染）：只进本轮上下文的话，
+                        // 下一轮重建历史少了这一条，从这里往后的前缀全部作废。
+                        val reminder = guardMessage(action.todoGuardReminder)
                         newState = newState.copy(
-                            messages = newState.messages + AgentMessage.UserMessage(content = action.todoGuardReminder),
+                            messages = newState.messages + reminder,
                             todoReminderSent = true
                         )
+                        effects.add(AgentSideEffect.PersistUserMessage(reminder.id, reminder.content))
                         effects.add(AgentSideEffect.CallLlm)
                     } else if (shouldRemindMemory(newState, action.response.content)) {
                         // 兜底：回复声称记住了、本轮却没有任何 memory 工具调用（提示词管「倾向」，这里管「保证」）。
-                        // 补一条系统提醒让它当场补调用；提醒消息只进本轮上下文，不落库、不上 UI。
+                        // 补一条提醒让它当场补调用；同样落库为 UI 不渲染的 USER 行，保证下轮历史同字节。
                         FileLogger.w(TAG, "回复声称已写入记忆但本轮无 memory 工具调用，注入提醒重发")
+                        val reminder = guardMessage(MemoryClaimGuard.REMINDER)
                         newState = newState.copy(
-                            messages = newState.messages + AgentMessage.UserMessage(content = MemoryClaimGuard.REMINDER),
+                            messages = newState.messages + reminder,
                             memoryReminderSent = true
                         )
+                        effects.add(AgentSideEffect.PersistUserMessage(reminder.id, reminder.content))
                         effects.add(AgentSideEffect.CallLlm)
                     } else {
                         newState = newState.copy(isFinished = true)
@@ -516,17 +532,21 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 早前检查点已送达的插话同样拼在取消补发的工具结果之后（与 ToolBatchFinished 同口径）：
                         // 它们的事件已落库，若模型侧不带，Anthropic 会因 tool_result 与用户消息错位而丢结果（潜在 400）。
                         val cancelled = newState.batchToolCalls.map { call ->
-                            AgentMessage.ToolResultMessage(
-                                id = call.id,
-                                toolName = call.name,
-                                result = ToolResult.Error(
-                                    "用户拒绝了本轮工具调用，该调用未执行。",
-                                    USER_REJECTED_CODE
-                                ).toTransportString()
+                            messagePersistenceUseCase.frozenForHistory(
+                                AgentMessage.ToolResultMessage(
+                                    id = call.id,
+                                    toolName = call.name,
+                                    result = ToolResult.Error(
+                                        "用户拒绝了本轮工具调用，该调用未执行。",
+                                        USER_REJECTED_CODE
+                                    ).toTransportString()
+                                )
                             )
                         }
                         newState = state.copy(
-                            messages = state.messages + cancelled + state.pendingInterjections,
+                            messages = state.messages + cancelled + state.pendingInterjections.map {
+                                messagePersistenceUseCase.frozenForHistory(it)
+                            },
                             batchToolCalls = emptyList(),
                             pendingPermissionCalls = emptyList(),
                             approvedToolCalls = emptyList(),
@@ -568,16 +588,21 @@ class StatefulAgentWorkflow @Inject constructor(
                 newState.batchToolCalls.forEach { call ->
                     val batchResult = newState.rejectedToolResults[call.id] ?: resultsById[call.id] ?: return@forEach
                     appendedMessages.add(
-                        AgentMessage.ToolResultMessage(
-                            id = batchResult.id,
-                            toolName = batchResult.toolName,
-                            result = batchResult.result,
-                            images = batchResult.images
+                        // 工具结果与落库同一形态：超长正文在本轮发送前就按落库上限截断。
+                        messagePersistenceUseCase.frozenForHistory(
+                            AgentMessage.ToolResultMessage(
+                                id = batchResult.id,
+                                toolName = batchResult.toolName,
+                                result = batchResult.result,
+                                images = batchResult.images
+                            )
                         )
                     )
                 }
                 newState = state.copy(
-                    messages = state.messages + appendedMessages + action.interjections,
+                    messages = state.messages + appendedMessages + action.interjections.map {
+                        messagePersistenceUseCase.frozenForHistory(it)
+                    },
                     batchToolCalls = emptyList(),
                     pendingPermissionCalls = emptyList(),
                     approvedToolCalls = emptyList(),
@@ -589,6 +614,9 @@ class StatefulAgentWorkflow @Inject constructor(
         
         return Pair(newState, effects)
     }
+
+    private fun guardMessage(content: String): AgentMessage.UserMessage =
+        AgentMessage.UserMessage(id = "guard-${java.util.UUID.randomUUID()}", content = content)
 
     /**
      * 要不要补一次「记忆没真的写」的提醒：开关打开、本轮还没补过、且回复确实声称写入了。
@@ -652,7 +680,9 @@ class StatefulAgentWorkflow @Inject constructor(
         // （见 SystemPromptProvider.EngineFragmentSource），其它来源不受影响。
         val promptContext = if (userRequest.isBlank()) currentContext else currentContext.copy(
             history = currentContext.history + AgentMessage.UserMessage(
-                content = userRequest,
+                // 只用于本轮记忆召回/片段组装，不进库：技能注入仍按请求里的位置算在提醒里。
+                content = listOfNotNull(userRequest, currentContext.skillInjection)
+                    .joinToString("\n\n"),
                 images = currentContext.inputImages
             )
         )
@@ -670,24 +700,29 @@ class StatefulAgentWorkflow @Inject constructor(
                 )
             )
         }
-        val turnReminder = listOfNotNull(modeReminder, interruptedNotice, volatileBlocks)
+        // 技能注入排在模式/任务清单/记忆提醒之前：旧实现里它紧跟在用户原话后面，
+        // 挪到提醒里也要保持同一顺序，模型看到的语义不变。
+        val turnReminder = listOfNotNull(
+            currentContext.skillInjection,
+            modeReminder,
+            interruptedNotice,
+            volatileBlocks
+        )
             .joinToString("\n\n")
             .ifBlank { null }
         // 提醒必须**落库**：它是本轮请求里「模型可见字节」的一部分。不落库时，下一轮重建历史只剩正文，
         // 于是上一轮整段 assistant / 工具输出在本轮全部变成未命中——**每轮断一次前缀**，
         // 这比「历史里多几份副本」贵得多（实测缓存命中率掉到 67%，取证见记录 b93f9b13）。
         // 写入失败就不注入：宁可少一块信息，也不要把「发出去的」与「存下来的」弄成两份不同字节。
+        // 用实际写入的字符串当请求里的提醒（会按快照上限截断），两处才是同一串字节。
         val reminderForRequest = turnReminder?.let { reminder ->
             val rowId = currentContext.userMessageId
             if (rowId == null) {
                 reminder
             } else {
-                val written = runCatching {
+                runCatching {
                     messagePersistenceUseCase.attachModelReminder(rowId, reminder)
-                }.isSuccess
-                if (written) {
-                    reminder
-                } else {
+                }.getOrElse {
                     FileLogger.w(TAG, "写入本轮提醒失败，本轮不注入提醒")
                     null
                 }
@@ -699,10 +734,13 @@ class StatefulAgentWorkflow @Inject constructor(
             runCatching { memorySettingsRepository.activeMemoryEnabled() }.getOrDefault(false)
         actionQueue.addLast(
             AgentAction.InitRequest(
-                initialMessages = currentContext.history + AgentMessage.UserMessage(
-                    content = userRequest,
-                    images = currentContext.inputImages,
-                    modelReminder = reminderForRequest
+                // 用户请求也先过落库上限：超长粘贴在本轮就截断，下一轮从库里读回来的才是同一串字节。
+                initialMessages = currentContext.history + messagePersistenceUseCase.frozenForHistory(
+                    AgentMessage.UserMessage(
+                        content = userRequest,
+                        images = currentContext.inputImages,
+                        modelReminder = reminderForRequest
+                    )
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
             )
@@ -756,6 +794,13 @@ class StatefulAgentWorkflow @Inject constructor(
 
             for (effect in effects) {
                 when (effect) {
+                    is AgentSideEffect.PersistUserMessage -> send(
+                        AgentEvent.UserMessageAdded(
+                            effect.id,
+                            effect.content,
+                            isInterjection = true
+                        )
+                    )
                     is AgentSideEffect.CallLlm -> {
                         val providerInUse = aiProvider
                         // 压缩轮：若配置了压缩专用模型，使用独立压缩模型压缩
@@ -774,7 +819,9 @@ class StatefulAgentWorkflow @Inject constructor(
                                 projectRoot = currentContext.projectRoot,
                                 mode = currentContext.mode,
                                 // 子代理判定由会话行决定，这里只透传（见 AgentContext.isSubAgent）
-                                isSubAgent = currentContext.isSubAgent
+                                isSubAgent = currentContext.isSubAgent,
+                                // 同一轮的多次模型调用共用它：发送前兜底据此冻结，不随估算抖动换截法。
+                                turnId = currentContext.turnId
                             ),
                             LlmCall(
                                 messages = state.messages,
@@ -1134,7 +1181,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                     id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
                                     content = text,
                                     modelReminder = INTERJECTION_REMINDER
-                                )
+                                ).let { messagePersistenceUseCase.frozenForHistory(it) }
                             }
                         // 已并入 action，从 state 里清掉，避免 reduce 再拼一次。
                         state = state.copy(pendingInterjections = emptyList())
@@ -1355,10 +1402,12 @@ class StatefulAgentWorkflow @Inject constructor(
                 val text = item.message?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 DeliveredInterjection(
                     notification = item,
-                    message = AgentMessage.UserMessage(
-                        id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
-                        content = text,
-                        modelReminder = INTERJECTION_REMINDER
+                    message = messagePersistenceUseCase.frozenForHistory(
+                        AgentMessage.UserMessage(
+                            id = item.clientMessageId ?: (INTERJECT_ROW_ID_PREFIX + item.seq),
+                            content = text,
+                            modelReminder = INTERJECTION_REMINDER
+                        )
                     )
                 )
             }
@@ -1585,7 +1634,8 @@ class StatefulAgentWorkflow @Inject constructor(
                 sessionId = ctx.sessionId,
                 projectRoot = ctx.projectRoot,
                 mode = ctx.mode,
-                isSubAgent = ctx.isSubAgent
+                isSubAgent = ctx.isSubAgent,
+                turnId = ctx.turnId
             ),
             LlmCall(
                 messages = baseMessages,

@@ -60,16 +60,17 @@ sealed class AgentEvent {
     ) : AgentEvent()
 
     /**
-     * 用户在工作期间插入了一条消息（消息队列的「立即插入」）。
+     * 一条用户侧消息要落库：运行中插话，或轮内守卫消息（截断续写 / 清单收尾 / 记忆兜底）。
      *
      * 它按用户消息处理，不降级成系统通知：模型侧位置在当前这批工具结果之后（见
      * [StatefulAgentWorkflow][com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），
      * 落库按普通用户消息采（落库行 id 即 [id]，乐观气泡据此退场）；该行带 [isInterjection]，
-     * UI 不把它渲染为时间线上的气泡。
+     * UI 不把它渲染为时间线上的气泡。守卫消息必须走这里，只进内存上下文会让下一轮重建的历史少一条，
+     * 从该位置起的前缀缓存全部失效。
      *
      * @param id 界面侧预生成的消息行 id（无界面 id 时为随序号生成的稳定 id）
      * @param content 用户原文，不经任何包装
-     * @param isInterjection 这是运行中插话：落库行 UI 不渲染，仅作为记录与模型 payload。
+     * @param isInterjection 这是运行中插话或轮内守卫：落库行 UI 不渲染，仅作为记录与模型 payload。
      * @param modelReminder 运行中插话的模型侧围栏（随行落库，组装请求时拼回）；非插话恒为 null。
      */
     data class UserMessageAdded(
