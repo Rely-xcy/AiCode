@@ -14,29 +14,34 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 参数指针化模块：请求组装处的历史改写入口，现已**关闭**（[RUNTIME_PROJECTION_ENABLED] = false）。
+ * 参数指针化模块：请求组装处对 [BULK_ARG_KEYS] 大字段做纯函数摘录（上下文压缩重设计 §9 阶段 0）。
  *
- * 保留原因：模块仍注册在引擎里，关掉只能让它返回「不变更」，不能把它从顺序中摘掉，
- * 否则引擎模块顺序变化会影响其它模块的观测结果。摘录逻辑也留在这里，便于出问题时快速对照。
+ * write/edit 把整个文件正文塞进 arguments，每一轮请求都原样再发一遍，是历史增长的另一大头。
+ * 本模块在每次发请求前把它换成摘录（头尾逐字 + 省略说明 + readFile 回读指针），规则与软精简
+ * 共用 [bulkArgumentExcerptOf]。
  *
- * 关闭原因：请求时按当前上下文重算摘录，会让同一条历史消息在不同轮次得到不同形态
- * （例如同一字段这轮超阈值、下轮因为上下文变化不再超），推出去的历史前缀字节随之变化，
- * 服务商的前缀缓存从第一个变字的位置起全部失效。现在改为**写入时一次写定**：
- * [com.aicode.feature.agent.domain.model.excerptToolCallsForHistory] 在消息进入内存历史与落库时执行，
- * 写进去的形态就是以后每轮发送的形态。
+ * 与软精简的关键差异——这里是**纯函数投影，不落库**：
+ * - 每次组装请求时从原文（`ToolCall.arguments`）确定性重算，
+ *   同一输入永远得到同一输出，逐字节稳定，不破坏前缀缓存；
+ * - 不写持久投影（软精简的持久载体已删除），`arguments` 原文一字不动——执行、UI、落库、
+ *   TokenEstimator 的原文基线全部不受影响；
+ * - 因此**没有「投影前沿」问题**：不落库意味着没有跨轮持久改动，每轮从原文重算，改哪儿都不会
+ *   让历史前缀的字节变掉（历史里的原文本来就没变过）。
  *
- * 因此本模块的 [beforeLlmCall] 直接返回 null，历史一字不改。
+ * 与旧软精简相反的取舍——摘录形态 + 执行边界守卫已拦住「摘录回写」。
+ *
+ * 挂在 CompactionModule（order 10）之后：先让压缩模块把历史折叠/精简定型，再对本轮
+ * 最终要发送的消息做投影，避免折叠结果被再次加工或互相覆盖。
  */
 @Singleton
 class ArgumentProjectionModule @Inject constructor() : EngineModule {
 
     override val id = MODULE_ID
 
-    // 压缩之后、其余模块之前：保留原顺序位，模块本身不再改动消息。
+    // 压缩之后、其余模块之前：投影的是「最终要发送的消息」。
     override val order = ORDER
 
     override suspend fun beforeLlmCall(ctx: EngineContext, call: LlmCall): LlmCall? {
-        if (!RUNTIME_PROJECTION_ENABLED) return null
         var changed = false
         var savedTokens = 0
         val projected = call.messages.map { message ->
@@ -82,23 +87,14 @@ class ArgumentProjectionModule @Inject constructor() : EngineModule {
         const val TAG = "ArgumentProjection"
 
         /**
-         * 运行时投影开关：必须为 false。
-         *
-         * 历史里的工具参数已在写入时摘录（见 [com.aicode.feature.agent.domain.model.excerptToolCallsForHistory]），
-         * 请求时再改一次会让「发出去的字节」与「存下来的字节」分叉，前缀缓存从改动处失效。
-         * 留作紧急回滚开关：打开后本模块恢复旧行为，但同时必须接受缓存命中率下降。
-         */
-        const val RUNTIME_PROJECTION_ENABLED = false
-
-        /**
          * 排在 CompactionModule（order 10）之后：投影「最终要发送的消息」。
          * 取 20 而不是 11：给后续可能插在两者之间的模块留位。
          */
         const val ORDER = 20
 
         /**
-         * 旧投影阈值（字符）。模块关闭后不再参与请求组装，仅作为回滚时的对照值；
-         * 写入时摘录用 [com.aicode.feature.agent.domain.model.HISTORY_TOOL_ARG_THRESHOLD_CHARS]（同为 8_000）。
+         * 参数投影阈值（设计 §8：~8K 字符）。与工具结果指针化的 MAX_INLINE_CHARS（8K）同量级：
+         * 超过这个量级的正文，模型当下用得上的就是头尾，中段需要时 readFile 回读。
          */
         const val BULK_ARG_THRESHOLD_CHARS = 8_000
 

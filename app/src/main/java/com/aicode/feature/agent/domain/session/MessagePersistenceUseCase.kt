@@ -5,7 +5,6 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
-import com.aicode.feature.agent.domain.model.toolCallsJsonForStorage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -112,13 +111,7 @@ class MessagePersistenceUseCase @Inject constructor(
                 role = role.name,
                 content = sanitizeContent(content),
                 timestamp = nextTimestamp(),
-                // 工具参数在写入这一刻定型（摘录 + JSON 合法的大小收敛），此后任何一轮请求都不再改写：
-                // 请求时再投影会让同一条历史消息在不同轮次变形，使前缀缓存整段失效。
-                toolCallsJson = if (toolCalls.isNotEmpty()) {
-                    toolCallsJsonForStorage(toolCalls, MAX_SNAPSHOT_BYTES, json)
-                } else {
-                    null
-                },
+                toolCallsJson = if (toolCalls.isNotEmpty()) capBytes(json.encodeToString(toolCalls), MAX_SNAPSHOT_BYTES) else null,
                 toolCallId = toolCallId,
                 toolName = toolName,
                 toolArgs = toolArgs?.let { capBytes(it, MAX_TOOL_ARGS_BYTES) },

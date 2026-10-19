@@ -94,14 +94,6 @@ interface EngineModule {
     fun promptFragment(ctx: EngineContext): String? = null
 
     /**
-     * 随本轮用户消息一起送给模型的提醒片段（落 `modelReminder` 列，不进系统提示词）。
-     *
-     * 每轮都会变的内容放这里：系统提示词一变，KV 缓存的前缀就整段失效；放这里对模型的可见性不变，
-     * 只是换了位置。由 [AgentEngine] 按 [order] 拼接，调用方拼到最后一条用户消息上。
-     */
-    fun turnReminder(ctx: EngineContext): String? = null
-
-    /**
      * 子代理会话的固定规则片段：本会话是子代理时**必定**注入，不受 `AgentDefinition.inject` 门禁。
      *
      * 与 [promptFragment] 分开的原因：后者在子代理路径上跟着 `inject` 走（如关掉 `MEMORY` 就整段不注入），

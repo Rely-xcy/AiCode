@@ -647,51 +647,17 @@ class StatefulAgentWorkflow @Inject constructor(
         val modeReminder = takeModeReminderIfChanged(currentContext.sessionId, currentContext.mode)
         // 上一个代理被打断时留下的半成品：搭同一条带外通道送一次，别让它变成 system 里多出来的一段
         val interruptedNotice = interruptedWorkRecorder.takeNotice(currentContext.projectRoot)
-        // 记忆召回按「这一轮在问什么」挑：history 是发请求之前的快照，不含本轮用户消息，
-        // 不补进去的话新话题的第一轮还在按上一轮的旧话题召回。只有引擎片段与提醒组装读 history
-        // （见 SystemPromptProvider.EngineFragmentSource），其它来源不受影响。
-        val promptContext = if (userRequest.isBlank()) currentContext else currentContext.copy(
-            history = currentContext.history + AgentMessage.UserMessage(
-                content = userRequest,
-                images = currentContext.inputImages
-            )
-        )
-        // 每轮都可能变的三块（会话工作状态 / 当前任务清单 / 记忆召回）不进系统提示词：system 一变，
-        // KV 缓存的前缀就整段失效。它们改走这条提醒，模型看到的内容不变、位置换到用户消息之后；
-        // 顺序由模块 order 决定（工作状态 15 → 任务清单 20 → 记忆 50）。
-        val volatileBlocks = withContext(Dispatchers.IO) {
-            agentEngine.turnReminder(
-                EngineContext(
-                    sessionId = currentContext.sessionId,
-                    projectRoot = currentContext.projectRoot,
-                    mode = currentContext.mode,
-                    history = promptContext.history,
-                    isSubAgent = currentContext.isSubAgent
-                )
-            )
-        }
-        val turnReminder = listOfNotNull(modeReminder, interruptedNotice, volatileBlocks)
+        val turnReminder = listOfNotNull(modeReminder, interruptedNotice)
             .joinToString("\n\n")
             .ifBlank { null }
-        // 提醒必须**落库**：它是本轮请求里「模型可见字节」的一部分。不落库时，下一轮重建历史只剩正文，
-        // 于是上一轮整段 assistant / 工具输出在本轮全部变成未命中——**每轮断一次前缀**，
-        // 这比「历史里多几份副本」贵得多（实测缓存命中率掉到 67%，取证见记录 b93f9b13）。
-        // 写入失败就不注入：宁可少一块信息，也不要把「发出去的」与「存下来的」弄成两份不同字节。
-        val reminderForRequest = turnReminder?.let { reminder ->
-            val rowId = currentContext.userMessageId
-            if (rowId == null) {
-                reminder
-            } else {
-                val written = runCatching {
-                    messagePersistenceUseCase.attachModelReminder(rowId, reminder)
-                }.isSuccess
-                if (written) {
-                    reminder
-                } else {
-                    FileLogger.w(TAG, "写入本轮提醒失败，本轮不注入提醒")
-                    null
-                }
-            }
+        // 提醒是「模型可见的那份」，不拼进正文：content 只留用户原话（界面/落库/回放都只认它），
+        // 提醒落 modelReminder 列，组装请求时再拼回（见 AgentMessage.UserMessage.modelFacingContent）。
+        // 落库后下一轮重建历史时这条的模型侧文本与上一轮一致，不会在该位置打断前缀缓存。
+        // 自动触发轮次（/init、/skill 等）没有对应的用户行，提醒只在本轮请求里生效。
+        val reminderRowId = currentContext.userMessageId
+        if (turnReminder != null && reminderRowId != null) {
+            runCatching { messagePersistenceUseCase.attachModelReminder(reminderRowId, turnReminder) }
+                .onFailure { FileLogger.w(TAG, "写入本轮提醒失败，本轮提醒只在内存态生效", it) }
         }
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，主动记忆规则在 MemoryModule 就没给它注入，
         // 兜底也无从谈起。判据必须与那道门禁同源（都是 isSubAgent），不能再用「有没有自定义定义」近似。
@@ -702,12 +668,21 @@ class StatefulAgentWorkflow @Inject constructor(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(
                     content = userRequest,
                     images = currentContext.inputImages,
-                    modelReminder = reminderForRequest
+                    modelReminder = turnReminder
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
             )
         )
 
+        // 记忆召回按「这一轮在问什么」挑：history 是发请求之前的快照，不含本轮用户消息，
+        // 不补进去的话新话题的第一轮还在按上一轮的旧话题召回。只有引擎片段读 history（见
+        // SystemPromptProvider.EngineFragmentSource），其它来源不受影响。
+        val promptContext = if (userRequest.isBlank()) currentContext else currentContext.copy(
+            history = currentContext.history + AgentMessage.UserMessage(
+                content = userRequest,
+                images = currentContext.inputImages
+            )
+        )
         // 提示词构建会读取技能/子代理/记忆等文件（远程模式经 SFTP），必须离开收集本工作流的线程（Main），
         // 否则远程模式下每次会话首次发消息都会在主线程做多次文件/网络往返。
         val promptStartedNs = System.nanoTime()

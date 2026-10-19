@@ -171,22 +171,6 @@ class ContextCompactor @Inject constructor(
             }
         }
 
-        // 自适应收敛：摘要窗口把 head 卡得很小时，tail 往往占掉几乎整段历史，折完并不比原来小，
-        // 下方那道最终判据就会整体放弃（不落库、历史一条不少）。这里在多折的前提下把 tail 起点
-        // 往后挪，直到折完确实更小；受 tail 地板约束，不会把「最近这一轮」折没。
-        // 代价：多折进 head 的原文可能超出摘要窗口预算，被 trim 掉的那段只能靠存档找回。
-        val shrink = convergeSplitIndex(messages, splitIndex, estimatedTokens)
-        if (shrink.splitIndex != splitIndex) {
-            FileLogger.i(
-                TAG,
-                "保留区自适应收缩：切点 $splitIndex → ${shrink.splitIndex}（${shrink.rounds} 轮）" +
-                    " 折后预计 ${projectedCompactedTokens(messages, shrink.splitIndex)} / 原估算 $estimatedTokens tokens" +
-                    " 保留条数 ${messages.size - shrink.splitIndex}" +
-                    "（地板 $MIN_TAIL_MESSAGES 条 / $MIN_TAIL_TOKENS tokens）"
-            )
-            splitIndex = shrink.splitIndex
-        }
-
         val head = messages.subList(0, splitIndex)
         val tail = messages.subList(splitIndex, messages.size)
         // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
@@ -858,6 +842,31 @@ class ContextCompactor @Inject constructor(
             text.takeLast(tail)
     }
 
+    /**
+     * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
+     *
+     * OpenAI API 要求 role: "tool" 消息必须紧接在包含对应 tool_calls 的 assistant 消息之后。
+     * 如果 tail 以 ToolResultMessage 开头，压缩后其前面的 assistant 消息（摘要）不含 toolCalls，
+     * 该 tool 消息就变成了"孤立"的，API 会报 400 错误。
+     */
+    private fun adjustSplitIndex(messages: List<AgentMessage>, initialSplitIndex: Int): Int {
+        var splitIndex = initialSplitIndex
+
+        while (splitIndex > 0 && messages[splitIndex] is AgentMessage.ToolResultMessage) {
+            splitIndex--
+        }
+
+        if (splitIndex >= 0 && messages[splitIndex] is AgentMessage.AssistantMessage) {
+            val assistantMsg = messages[splitIndex] as AgentMessage.AssistantMessage
+            if (assistantMsg.toolCalls.isNotEmpty()) {
+                // 这个 assistant 和紧随其后的 tool results 必须一起保留在 tail 中
+                return splitIndex
+            }
+        }
+
+        return splitIndex
+    }
+
     private fun selectTailStartIndex(messages: List<AgentMessage>, budgetTokens: Int): Int {
         var total = 0
         var splitIndex = messages.size
@@ -956,6 +965,39 @@ class ContextCompactor @Inject constructor(
         return null
     }
 
+    /**
+     * head 开头的连续摘要块（marker+summary 对与 legacy 前缀摘要）：新语义下它们是冻结的独立块，
+     * 折叠时原样保留在折叠结果的前缀里（新块追加在它们之后），不再被新摘要吸收。
+     */
+    private fun leadingCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
+        val blocks = mutableListOf<AgentMessage>()
+        var index = 0
+        while (index < messages.size) {
+            val current = messages[index]
+            val next = messages.getOrNull(index + 1)
+            if (
+                current is AgentMessage.UserMessage &&
+                current.content == CONTEXT_COMPACTION_MARKER &&
+                next is AgentMessage.AssistantMessage
+            ) {
+                blocks.add(current)
+                blocks.add(next)
+                index += 2
+                continue
+            }
+            if (
+                current is AgentMessage.AssistantMessage &&
+                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
+            ) {
+                blocks.add(current)
+                index++
+                continue
+            }
+            break
+        }
+        return blocks
+    }
+
     private fun String.cleanSummary(): String =
         removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart()
 
@@ -980,181 +1022,6 @@ class ContextCompactor @Inject constructor(
         }
         return truncated
     }
-}
-
-/**
- * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
- *
- * OpenAI API 要求 role: "tool" 消息必须紧接在包含对应 tool_calls 的 assistant 消息之后。
- * 如果 tail 以 ToolResultMessage 开头，压缩后其前面的 assistant 消息（摘要）不含 toolCalls，
- * 该 tool 消息就变成了"孤立"的，API 会报 400 错误。
- */
-internal fun adjustSplitIndex(messages: List<AgentMessage>, initialSplitIndex: Int): Int {
-    var splitIndex = initialSplitIndex
-
-    while (splitIndex > 0 && messages[splitIndex] is AgentMessage.ToolResultMessage) {
-        splitIndex--
-    }
-
-    if (splitIndex >= 0 && messages[splitIndex] is AgentMessage.AssistantMessage) {
-        val assistantMsg = messages[splitIndex] as AgentMessage.AssistantMessage
-        if (assistantMsg.toolCalls.isNotEmpty()) {
-            // 这个 assistant 和紧随其后的 tool results 必须一起保留在 tail 中
-            return splitIndex
-        }
-    }
-
-    return splitIndex
-}
-
-/**
- * head 开头的连续摘要块（marker+summary 对与 legacy 前缀摘要）：新语义下它们是冻结的独立块，
- * 折叠时原样保留在折叠结果的前缀里（新块追加在它们之后），不再被新摘要吸收。
- */
-internal fun leadingCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
-    val blocks = mutableListOf<AgentMessage>()
-    var index = 0
-    while (index < messages.size) {
-        val current = messages[index]
-        val next = messages.getOrNull(index + 1)
-        if (
-            current is AgentMessage.UserMessage &&
-            current.content == CONTEXT_COMPACTION_MARKER &&
-            next is AgentMessage.AssistantMessage
-        ) {
-            blocks.add(current)
-            blocks.add(next)
-            index += 2
-            continue
-        }
-        if (
-            current is AgentMessage.AssistantMessage &&
-            current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
-        ) {
-            blocks.add(current)
-            index++
-            continue
-        }
-        break
-    }
-    return blocks
-}
-
-/**
- * 摘要正文长度的保守上界（token）。
- *
- * 折叠收益要按「最坏的摘要」预估：摘要模型被要求全文 ≤1200 字（见 `assets/prompts/agent/compact-summary.md`
- * 的长度预算），中文约 1 字 1 token；再加上存档提示、markdown 结构与「模型轻微超写」的余量，取 1600。
- * 方向必须偏大：估小了会把「实际更大」的折叠当成更小而放行，最终判据仍然会整体放弃这一轮；
- * 估大只是多折几条原文进 head（它们本就该折）。
- */
-internal const val SUMMARY_TOKEN_ESTIMATE = 1_600
-
-/**
- * 自适应收缩最多迭代几轮。
- *
- * 单轮已经按 token 差值一次挪到位，剩下的轮数只是给「tail 起点落在工具消息上要往前回溯」这类
- * 挪不动 / 挪少了的情况兜底；再多也只会在同样的地板上打转。
- */
-internal const val MAX_SPLIT_SHRINK_ROUNDS = 3
-
-/**
- * 保留区地板（条数：一条用户消息 + 助手回复 + 一轮工具调用与结果），也就是「当前这一轮发生了什么」
- * 的最小单元。再往下缩，接手者连正在做的事都看不到，摘要再准也接不上。
- */
-internal const val MIN_TAIL_MESSAGES = 4
-
-/**
- * 保留区地板（token）。
- *
- * 最小档位的保留预算 [com.aicode.feature.settings.domain.model.ModelContextPolicy.MIN_PRESERVE_RECENT_TOKENS]
- * 是 2000，这里允许最多压到它的一半：更早的内容由摘要接手，但最近半档必须仍是原文，
- * 否则「刚说过的话」要靠摘要转述，精度不够。
- */
-internal const val MIN_TAIL_TOKENS = 1_000
-
-/** [convergeSplitIndex] 的结果：收缩后的 tail 起点与收敛轮数（0 表示原切点已经是能省空间的）。 */
-internal data class SplitShrink(val splitIndex: Int, val rounds: Int)
-
-/**
- * 折叠后的预计大小（token）：旧摘要块 + 标记 + 新摘要（取保守上界 [SUMMARY_TOKEN_ESTIMATE]）+ tail。
- *
- * 与 [ContextCompactor.compact] 末尾那道最终判据算的是同一组量，区别只在于真实摘要正文此刻还不存在，
- * 用它长度的保守上界代替。
- */
-internal fun projectedCompactedTokens(messages: List<AgentMessage>, splitIndex: Int): Int {
-    if (splitIndex <= 0 || splitIndex >= messages.size) return TokenEstimator.estimateMessages(messages)
-    val head = messages.subList(0, splitIndex)
-    val tail = messages.subList(splitIndex, messages.size)
-    return TokenEstimator.estimateMessages(leadingCompactionPairs(head)) +
-        TokenEstimator.estimateMessage(AgentMessage.UserMessage(content = CONTEXT_COMPACTION_MARKER)) +
-        SUMMARY_TOKEN_ESTIMATE +
-        TokenEstimator.estimateMessages(tail)
-}
-
-/**
- * 保留区起点自适应收敛：折完之后必须真的比原来小，否则整轮压缩会在最终判据那里被整体放弃，
- * 历史一条不落地留在窗口里——超大会话就是这样永远压不下来的。
- *
- * 触发场景：摘要模型窗口把 head 卡得很小，tail 于是占掉几乎整段历史（tail 起点被顶到很靠前），
- * 折完只是「摘要 + 几乎原样的 tail」。这里把 tail 起点往后挪（多折、少留），直到折完确实更小。
- *
- * 纯函数：只读 [messages] 与本地估算，不发请求、不碰 IO，便于单测。实际落库仍由
- * [ContextCompactor.compact] 的最终判据把守——这里估偏了也只意味着这轮白算一次。
- */
-internal fun convergeSplitIndex(
-    messages: List<AgentMessage>,
-    initialSplitIndex: Int,
-    estimatedTokens: Int
-): SplitShrink {
-    if (initialSplitIndex <= 0 || initialSplitIndex >= messages.size || estimatedTokens <= 0) {
-        return SplitShrink(initialSplitIndex, 0)
-    }
-    var splitIndex = initialSplitIndex
-    var rounds = 0
-    while (rounds < MAX_SPLIT_SHRINK_ROUNDS) {
-        val projected = projectedCompactedTokens(messages, splitIndex)
-        if (projected < estimatedTokens) break
-        // +1 是要求严格小于：折完与原来持平同样算没省空间。
-        val next = shrinkSplitIndex(messages, splitIndex, projected - estimatedTokens + 1)
-        if (next <= splitIndex) break
-        splitIndex = next
-        rounds++
-    }
-    return SplitShrink(splitIndex, rounds)
-}
-
-/**
- * 把 tail 起点往后挪，直到从 tail 里挪走至少 [tokensToRemove] token 或撞到地板。
- *
- * 两道上限：tail 至少留 [MIN_TAIL_MESSAGES] 条、至少留 [MIN_TAIL_TOKENS] token；挪到的位置还不能是
- * 孤立的 tool 结果（[adjustSplitIndex] 会往前回溯到配对的 assistant，可能挪得比预期少）。
- */
-private fun shrinkSplitIndex(
-    messages: List<AgentMessage>,
-    splitIndex: Int,
-    tokensToRemove: Int
-): Int {
-    val limit = minOf(messages.size - MIN_TAIL_MESSAGES, tailFloorIndex(messages))
-    if (limit <= splitIndex) return splitIndex
-    var candidate = splitIndex
-    var removed = 0
-    // 按消息累计而不是按位置比例：单条消息可能就占 tail 的大半，逐条挪才不会一步跨过地板。
-    while (candidate < limit && removed < tokensToRemove) {
-        removed += TokenEstimator.estimateMessage(messages[candidate])
-        candidate++
-    }
-    return adjustSplitIndex(messages, candidate).coerceAtLeast(splitIndex)
-}
-
-/** 满足「tail 至少留 [MIN_TAIL_TOKENS]」的最靠后切点：从末尾往前累计到够数为止。 */
-private fun tailFloorIndex(messages: List<AgentMessage>): Int {
-    var tokens = 0
-    for (index in messages.indices.reversed()) {
-        tokens += TokenEstimator.estimateMessage(messages[index])
-        if (tokens >= MIN_TAIL_TOKENS) return index
-    }
-    return 0
 }
 
 /**
