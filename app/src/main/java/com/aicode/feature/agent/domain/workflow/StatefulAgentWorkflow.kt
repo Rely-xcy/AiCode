@@ -673,9 +673,26 @@ class StatefulAgentWorkflow @Inject constructor(
         val turnReminder = listOfNotNull(modeReminder, interruptedNotice, volatileBlocks)
             .joinToString("\n\n")
             .ifBlank { null }
-        // 提醒只挂在**本轮请求的内存消息**上（见下面 InitRequest），不落 modelReminder 列：
-        // 一旦落库，历史重建会把每轮的三块原样带回，第 N 轮就多出 (N-1) 份副本，与「省 token」相反。
-        // 不落库不会伤前缀缓存：块挂在最后一条用户消息上，下一轮来新消息时它自然回到只有正文的原样。
+        // 提醒必须**落库**：它是本轮请求里「模型可见字节」的一部分。不落库时，下一轮重建历史只剩正文，
+        // 于是上一轮整段 assistant / 工具输出在本轮全部变成未命中——**每轮断一次前缀**，
+        // 这比「历史里多几份副本」贵得多（实测缓存命中率掉到 67%，取证见记录 b93f9b13）。
+        // 写入失败就不注入：宁可少一块信息，也不要把「发出去的」与「存下来的」弄成两份不同字节。
+        val reminderForRequest = turnReminder?.let { reminder ->
+            val rowId = currentContext.userMessageId
+            if (rowId == null) {
+                reminder
+            } else {
+                val written = runCatching {
+                    messagePersistenceUseCase.attachModelReminder(rowId, reminder)
+                }.isSuccess
+                if (written) {
+                    reminder
+                } else {
+                    FileLogger.w(TAG, "写入本轮提醒失败，本轮不注入提醒")
+                    null
+                }
+            }
+        }
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，主动记忆规则在 MemoryModule 就没给它注入，
         // 兜底也无从谈起。判据必须与那道门禁同源（都是 isSubAgent），不能再用「有没有自定义定义」近似。
         val memoryGuardEnabled = !currentContext.isSubAgent &&
@@ -685,7 +702,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 initialMessages = currentContext.history + AgentMessage.UserMessage(
                     content = userRequest,
                     images = currentContext.inputImages,
-                    modelReminder = turnReminder
+                    modelReminder = reminderForRequest
                 ),
                 memoryGuardEnabled = memoryGuardEnabled
             )
