@@ -65,6 +65,7 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.provider.RetryErrorInfo
 import com.aicode.feature.agent.domain.provider.RetryErrorKind
+import com.aicode.feature.agent.domain.workflow.CompactionProgress
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import com.aicode.core.ui.ExpandableChevronIcon
@@ -210,11 +211,22 @@ internal fun ThinkingBubble(label: String) {
     )
 }
 
-/** 上下文压缩期间的临时状态行，不落库。 */
+/**
+ * 上下文压缩期间的临时状态行，不落库。
+ *
+ * 拿到步数时显示「正在整理上下文（2/5）」：分块折叠要跑好几轮摘要调用，只写「正在压缩」
+ * 时用户分不清是慢还是卡死。步数未知（刚开始、或只有一次调用）时退回通用文案。
+ */
 @Composable
-internal fun CompactionProgressBubble() {
+internal fun CompactionProgressBubble(progress: CompactionProgress = CompactionProgress.Idle) {
+    val running = progress as? CompactionProgress.Running
+    val label = if (running != null && running.totalSteps > 0) {
+        stringResource(R.string.chat_compaction_progress, running.step, running.totalSteps)
+    } else {
+        stringResource(R.string.chat_compressing_context)
+    }
     AgentBusyIndicator(
-        label = stringResource(R.string.chat_compressing_context),
+        label = label,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = ChatStyle.toolRowMinHeight),

@@ -299,6 +299,33 @@ class CompactionModuleTest {
     }
 
     /**
+     * 估算缓存不能改变发布给界面的判定值：同一份消息重复判定两次，两次发布的数与直接估算逐值相等。
+     *
+     * 缓存是模块内部实现，从事件/快照层面只能看到「值对不对」；命中次数由
+     * [MessageEstimateCacheTest] 直接验证。两次调用都用同一份列表对象，第二次会走缓存。
+     */
+    @Test
+    fun `重复判定同一份消息时发布的估算值不变`() = runBlocking {
+        val compactor = mockk<ContextCompactor>(relaxed = true)
+        every { compactor.enforceWindowLimit(any(), any()) } answers { firstArg() }
+        val h = harness(compactor = compactor)
+        val ctx = EngineContext(sessionId = "cache", projectRoot = "/ws")
+        val messages = listOf(
+            AgentMessage.UserMessage(id = "u1", content = "汉".repeat(3_000)),
+            AgentMessage.UserMessage(id = "u2", content = "继续")
+        )
+
+        repeat(2) {
+            h.module.beforeLlmCall(
+                ctx,
+                LlmCall(messages = messages, windowProvider = h.provider, summaryProvider = h.provider)
+            )
+            val usage = assertNotNull(h.usageHolder.usage.value["cache"])
+            assertEquals(TokenEstimator.estimateMessages(messages), usage.currentTokens)
+        }
+    }
+
+    /**
      * 阶段 4：合并失败不影响主折叠——合并返回 null 后，折叠照常触发并成功。
      */
     @Test

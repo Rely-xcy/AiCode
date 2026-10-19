@@ -243,6 +243,10 @@ class ContextCompactor @Inject constructor(
                 FileLogger.w(TAG, "折叠前回调失败，继续压缩", e)
             }
         }
+        // 进度步数：单块只算一次摘要调用；多块是「逐块摘要 + 一次合并」。
+        // 只用来给界面报数，不参与任何切分或判定。
+        val progressTotalSteps = if (chunks.size == 1) 1 else chunks.size + 1
+
         val previousSummary: String? = null
         // 结构化文件账本：只从被折叠的这段历史的工具调用参数里取，作为摘要请求的附加输入，
         // 并由代码在摘要末尾追加固定小节（不新增表，靠摘要正文持久化）。
@@ -263,6 +267,7 @@ class ContextCompactor @Inject constructor(
             }
             val summaryInstruction =
                 buildSummaryInstruction(previousSummary) + fileLedgerPrompt(ledgerEntries)
+            onEvent(AgentEvent.CompactionProgressChanged(step = 1, totalSteps = progressTotalSteps))
             val outcome = requestSummaryCall(
                 summaryProvider = summaryProvider,
                 sessionId = sessionId,
@@ -296,6 +301,12 @@ class ContextCompactor @Inject constructor(
                 }
                 val instruction = buildChunkSummaryInstruction(index, chunks.size) +
                     fileLedgerPrompt(chunkLedgers[index])
+                onEvent(
+                    AgentEvent.CompactionProgressChanged(
+                        step = index + 1,
+                        totalSteps = progressTotalSteps
+                    )
+                )
                 val outcome = requestSummaryCall(
                     summaryProvider = summaryProvider,
                     sessionId = sessionId,
@@ -319,6 +330,12 @@ class ContextCompactor @Inject constructor(
                 }
                 chunkSummaries += outcome.content
             }
+            onEvent(
+                AgentEvent.CompactionProgressChanged(
+                    step = chunks.size + 1,
+                    totalSteps = progressTotalSteps
+                )
+            )
             val merged = mergeChunkSummaries(
                 summaries = chunkSummaries,
                 ledgerEntries = ledgerEntries,

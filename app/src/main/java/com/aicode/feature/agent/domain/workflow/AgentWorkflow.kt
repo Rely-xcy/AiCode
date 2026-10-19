@@ -99,6 +99,15 @@ sealed class AgentEvent {
     /** 上下文压缩流程已结束（成功或失败）。仅用于 UI 实时展示，不落库。 */
     object CompactionFinished : AgentEvent()
 
+    /**
+     * 压缩进行到第几步（仅 UI 实时展示，不落库）。
+     *
+     * [step] 从 1 起，[totalSteps] 是本次折叠预计要做的摘要段数（分块数 + 合并步）。
+     * 与 [CompactionStarted] 的分工：那个只说明「开始了」，这个让界面把「正在压缩上下文」
+     * 换成「正在整理上下文（2/5）」——分块折叠一次可能要等好几轮模型调用，不给步数就像卡死。
+     */
+    data class CompactionProgressChanged(val step: Int, val totalSteps: Int) : AgentEvent()
+
     /** 上下文压缩失败（如压缩模型不可用）。携带失败原因，UI 展示为可展开的失败卡片；不落库。 */
     data class CompactionFailed(val reason: String) : AgentEvent()
 
@@ -114,6 +123,31 @@ sealed class AgentEvent {
 
     /** 模式已切换（由 AI 调用 planMode 触发），UI 据此展示计划审查面板等。 */
     data class ModeChanged(val newMode: AgentMode, val reason: String) : AgentEvent()
+}
+
+/**
+ * 压缩进度的界面状态（仅实时展示，不落库）。
+ *
+ * 只有 [Running] 会挂到界面上；[Done] 表示这次压缩已经收尾，界面据此把提示收起——
+ * 失败也归到 [Done]：失败本身已由既有的失败卡片表达，不再叠加一条进度。
+ */
+sealed interface CompactionProgress {
+    data object Idle : CompactionProgress
+
+    /** [step] 为 0 表示刚开始、步数还不知道，界面退回通用文案。 */
+    data class Running(val step: Int, val totalSteps: Int) : CompactionProgress
+
+    data object Done : CompactionProgress
+
+    companion object {
+        /** 事件驱动的状态转移；与本压缩无关的事件不改变状态。 */
+        fun next(current: CompactionProgress, event: AgentEvent): CompactionProgress = when (event) {
+            is AgentEvent.CompactionStarted -> Running(step = 0, totalSteps = 0)
+            is AgentEvent.CompactionProgressChanged -> Running(event.step, event.totalSteps)
+            AgentEvent.CompactionFinished, is AgentEvent.CompactionFailed -> Done
+            else -> current
+        }
+    }
 }
 
 interface AgentWorkflow {

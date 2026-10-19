@@ -77,6 +77,7 @@ import com.aicode.feature.workspace.domain.FileEntry
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.feature.agent.domain.workflow.AgentEvent
+import com.aicode.feature.agent.domain.workflow.CompactionProgress
 import com.aicode.feature.agent.domain.workflow.ContextUsage
 import com.aicode.feature.agent.domain.workflow.ContextUsageHolder
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
@@ -958,6 +959,16 @@ class AIAgentViewModel @Inject constructor(
 
     private val _compactingSessions = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
+    /** 每会话的压缩步数；为空时界面用通用文案（刚开始、步数还不知道）。 */
+    private val _compactionProgresses = MutableStateFlow<Map<String, CompactionProgress>>(emptyMap())
+
+    val compactionProgress: StateFlow<CompactionProgress> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(CompactionProgress.Idle)
+            else _compactionProgresses.map { it[id] ?: CompactionProgress.Idle }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CompactionProgress.Idle)
+
     private val _llmCallEvents = MutableSharedFlow<LlmCallEvent>(extraBufferCapacity = 16)
     /** 每次单次 LLM 请求返回事件（携带单次 Token 统计）。 */
     val llmCallEvents: SharedFlow<LlmCallEvent> = _llmCallEvents.asSharedFlow()
@@ -973,6 +984,21 @@ class AIAgentViewModel @Inject constructor(
             _compactingSessions.value + (sessionId to true)
         } else {
             _compactingSessions.value - sessionId
+        }
+        // 收起「正在压缩」的同时丢掉步数：结束（成功或失败）后都不该再留着「3/5」。
+        if (!compacting) _compactionProgresses.value = _compactionProgresses.value - sessionId
+    }
+
+    private fun updateCompactionProgress(sessionId: String, event: AgentEvent) {
+        val next = CompactionProgress.next(
+            current = _compactionProgresses.value[sessionId] ?: CompactionProgress.Idle,
+            event = event
+        )
+        // 只有「进行中」需要留在表里；Idle/Done 都从表里摘掉（Done 就是「收尾了，不再显示」）。
+        _compactionProgresses.value = if (next is CompactionProgress.Running) {
+            _compactionProgresses.value + (sessionId to next)
+        } else {
+            _compactionProgresses.value - sessionId
         }
     }
 
@@ -2099,8 +2125,14 @@ class AIAgentViewModel @Inject constructor(
                         setStreamingText(sessionId, null)
                         setStreamingReasoning(sessionId, null)
                         setCompacting(sessionId, true)
+                        updateCompactionProgress(sessionId, event)
+                    }
+                    is AgentEvent.CompactionProgressChanged -> {
+                        updateCompactionProgress(sessionId, event)
                     }
                     AgentEvent.CompactionFinished -> {
+                        // 收尾时由 setCompacting(false) 一并清掉步数，不会留下「4/5」。
+                        updateCompactionProgress(sessionId, event)
                         setCompacting(sessionId, false)
                     }
                     is AgentEvent.CompactionFailed -> {
@@ -2952,8 +2984,15 @@ class AIAgentViewModel @Inject constructor(
             try {
                 val changed = agentWorkflow.compactSession(sid) { event ->
                     when (event) {
-                        is AgentEvent.CompactionStarted -> setCompacting(sid, true)
-                        AgentEvent.CompactionFinished -> setCompacting(sid, false)
+                        is AgentEvent.CompactionStarted -> {
+                            setCompacting(sid, true)
+                            updateCompactionProgress(sid, event)
+                        }
+                        is AgentEvent.CompactionProgressChanged -> updateCompactionProgress(sid, event)
+                        AgentEvent.CompactionFinished -> {
+                            updateCompactionProgress(sid, event)
+                            setCompacting(sid, false)
+                        }
                         is AgentEvent.CompactionFailed -> {
                             failed = true
                             setCompacting(sid, false)

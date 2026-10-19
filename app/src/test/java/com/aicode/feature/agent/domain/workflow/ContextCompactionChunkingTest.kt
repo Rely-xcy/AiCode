@@ -280,6 +280,57 @@ class ContextCompactionChunkingTest {
         )
     }
 
+    /** 分块折叠一次要跑 N 轮摘要 + 1 次合并：每段开始前上报「第几/共几」，界面才不是干等。 */
+    @Test
+    fun `分块摘要按块与合并上报进度`() = runBlocking {
+        prepare()
+        stubSequential(listOf("块1", "块2", "块3", "合并摘要"))
+        val events = mutableListOf<AgentEvent>()
+
+        val result = compactor.compact(
+            messages = history(),
+            summaryProvider = provider,
+            sessionId = "s",
+            preserveRecentTokens = 1,
+            summaryWindowTokens = 400,
+            hardThreshold = 40_000,
+            contextLimit = 100_000,
+            onEvent = { events += it }
+        )
+
+        assertNotNull(result)
+        val progress = events.filterIsInstance<AgentEvent.CompactionProgressChanged>()
+        // 3 块 + 1 次合并，从 1 数到 4，总步数始终为 4。
+        assertEquals(listOf(1 to 4, 2 to 4, 3 to 4, 4 to 4), progress.map { it.step to it.totalSteps })
+    }
+
+    /** 只有一次摘要调用时也报一次进度：总步数为 1，界面显示「1/1」。 */
+    @Test
+    fun `单块折叠上报一步`() = runBlocking {
+        prepare()
+        stubSequential(listOf("单块摘要"))
+        val events = mutableListOf<AgentEvent>()
+
+        val result = compactor.compact(
+            messages = listOf(
+                AgentMessage.UserMessage(id = "a", content = "汉".repeat(600)),
+                AgentMessage.AssistantMessage(id = "b", content = "done"),
+                AgentMessage.UserMessage(id = "goal", content = "继续")
+            ),
+            summaryProvider = provider,
+            sessionId = "s",
+            preserveRecentTokens = 1,
+            summaryWindowTokens = 100_000,
+            hardThreshold = 40_000,
+            contextLimit = 100_000,
+            onEvent = { events += it }
+        )
+
+        assertNotNull(result)
+        val progress = events.filterIsInstance<AgentEvent.CompactionProgressChanged>()
+        assertEquals(listOf(1 to 1), progress.map { it.step to it.totalSteps })
+    }
+
     private fun AgentMessage.text(): String = when (this) {
         is AgentMessage.UserMessage -> content
         is AgentMessage.AssistantMessage -> content

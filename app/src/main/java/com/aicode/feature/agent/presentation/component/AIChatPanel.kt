@@ -792,6 +792,8 @@ fun AIChatPanel(
     val messagesReady = messagesState.loaded && messagesState.sessionId == currentSessionId
     val runningTool by viewModel.runningTool.collectAsStateWithLifecycle()
     val isCompacting by viewModel.isCompacting.collectAsStateWithLifecycle()
+    // 压缩步数（2/5）：只影响「正在压缩」那行文案，不新增弹窗、不占输入框。
+    val compactionProgress by viewModel.compactionProgress.collectAsStateWithLifecycle()
     val retryState by viewModel.retryState.collectAsStateWithLifecycle()
     val keySwitchState by viewModel.keySwitchState.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
@@ -1968,7 +1970,7 @@ fun AIChatPanel(
                                 when (tailKind) {
                                     TailKind.THINKING -> ThinkingBubble(label = thinkingLabel)
                                     TailKind.STREAMING -> StreamingBubble(text = typewriterRenderText, cache = markdownCache)
-                                    TailKind.COMPACTING -> CompactionProgressBubble()
+                                    TailKind.COMPACTING -> CompactionProgressBubble(progress = compactionProgress)
                                     TailKind.RETRYING -> {
                                         val rs = retryState
                                         if (rs != null) RetryingBubble(rs.attempt, rs.maxRetries, rs.error) else Box(Modifier)

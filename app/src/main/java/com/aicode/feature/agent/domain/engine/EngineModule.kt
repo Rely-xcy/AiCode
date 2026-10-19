@@ -66,7 +66,7 @@ data class LlmCall(
     val overheadTokens: Int = 0,
     /** 手动强制压缩（用户点「压缩上下文」）。 */
     val force: Boolean = false,
-    /** 压缩过程要往 UI 推的事件（开始/结束/失败）。 */
+    /** 压缩过程要往 UI 推的事件（开始/进度/结束/失败）。 */
     val onEvent: suspend (AgentEvent) -> Unit = {}
 )
 

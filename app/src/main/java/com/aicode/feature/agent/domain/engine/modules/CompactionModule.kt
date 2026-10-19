@@ -154,7 +154,7 @@ class CompactionModule @Inject constructor(
 
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
-        val rawEstimate = TokenEstimator.estimateMessages(messages) + call.overheadTokens
+        val rawEstimate = estimateCache.estimate(ctx.sessionId, messages) + call.overheadTokens
         // 增量校准：上一轮的真实 usage 与那一轮的原始估算配对，减掉已确认的高估量（只减不上加，
         // 低估那一头由下面的 max(lastInputTokens, …) 自己兜住）。基线缺一条（该会话首轮、
         // provider 不回传 usage、刚被 onSessionDeleted 清掉）就不校准，判定式与加这功能之前一字不差
@@ -189,7 +189,7 @@ class CompactionModule @Inject constructor(
                 effectiveMessages = merged
                 effectiveCurrentTokens =
                     maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0,
-                        TokenEstimator.estimateMessages(merged) + call.overheadTokens)
+                        estimateCache.estimate(ctx.sessionId, merged) + call.overheadTokens)
             }
         }
 
@@ -330,7 +330,7 @@ class CompactionModule @Inject constructor(
                     ctx.sessionId?.let { foldFailedTokens.remove(it) }
                     // 折叠腾出的空间可能当场被保留区与固定开销吃完（最近原文本身就占满窗口）。
                     // 这里如实记一笔并把位点记住：本轮不再折，接下来几轮也不在原地反复折。
-                    val afterFold = TokenEstimator.estimateMessages(result) + call.overheadTokens
+                    val afterFold = estimateCache.estimate(ctx.sessionId, result) + call.overheadTokens
                     if (afterFold >= hardThreshold) {
                         FileLogger.w(
                             TAG,
@@ -371,7 +371,7 @@ class CompactionModule @Inject constructor(
             rememberRawEstimate(ctx, rawEstimate)
             return null
         }
-        rememberRawEstimate(ctx, TokenEstimator.estimateMessages(guarded) + call.overheadTokens)
+        rememberRawEstimate(ctx, estimateCache.estimate(ctx.sessionId, guarded) + call.overheadTokens)
         return call.copy(messages = guarded)
     }
 
@@ -389,6 +389,13 @@ class CompactionModule @Inject constructor(
     )
 
     private val turnGuardProjections = ConcurrentHashMap<String, TurnGuardProjection>()
+
+    /**
+     * 整段消息估算缓存：判定、折叠前后与发送前兜底会反复估算同一段历史，见 [MessageEstimateCache]。
+     *
+     * 只省重复计算，不改判定用的数：命中条件保证列表逐元素同一，缓存值与重算值相等。
+     */
+    private val estimateCache = MessageEstimateCache()
 
     /**
      * 发送前兜底：同一轮（[EngineContext.turnId] 相同）里已发出的消息不再重截。
@@ -425,7 +432,7 @@ class CompactionModule @Inject constructor(
             return if (messages === frozen) messages else frozen
         }
         // 保存区（已发出的前缀）占用的预算先从兜底预算里扣掉，只对新增尾部做剩余额度内的截断。
-        val remaining = guardBudget - TokenEstimator.estimateMessages(frozen)
+        val remaining = guardBudget - estimateCache.estimate(ctx.sessionId, frozen)
         val tail = messages.subList(frozen.size, messages.size)
         val guardedTail = compactor.get().enforceWindowLimit(tail, budgetTokens = remaining)
         if (guardedTail === tail) {
@@ -548,6 +555,7 @@ class CompactionModule @Inject constructor(
         ctx.sessionId?.let { lastRawEstimates.remove(it) }
         ctx.sessionId?.let { mergeFailedTokens.remove(it) }
         ctx.sessionId?.let { turnGuardProjections.remove(it) }
+        ctx.sessionId?.let { estimateCache.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {
