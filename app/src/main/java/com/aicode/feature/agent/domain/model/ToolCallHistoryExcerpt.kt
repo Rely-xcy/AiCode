@@ -148,6 +148,7 @@ private fun JsonElement.capLongestString(targetLength: Int, cap: (String) -> Str
         } else {
             this
         }
-        is JsonObject -> JsonObject(mapValues { (key, value) -> key to value.capLongestString(targetLength, cap) })
+        // mapValues 保留键，lambda 只需返回新值（返回 键 to 值 会得到 Pair<String, JsonElement>）。
+        is JsonObject -> JsonObject(mapValues { (_, value) -> value.capLongestString(targetLength, cap) })
         is JsonArray -> JsonArray(map { it.capLongestString(targetLength, cap) })
     }
