@@ -2,6 +2,7 @@ package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -200,8 +201,8 @@ internal fun ChatInputBar(
     sessionId: String = "",
     onTodoExpandedChange: (Boolean) -> Unit = {},
     forceCollapseDashboard: Boolean = false,
-    /** 消息列表是否正在滚动（订阅式读取，不在调用方组合期取值）；真时内容区淡出到 40%。 */
-    scrolling: () -> Boolean = { false },
+    /** 消息列表正在滚动时内容区淡出到 40%，停止滚动恢复；用于长列表阅读时降低底部干扰（同 git 页 tab 栏）。 */
+    isScrolling: Boolean = false,
     forceOpenModelSheet: Boolean = false,
     onSelectModelInOnboarding: (() -> Unit)? = null,
     onModelSheetDismiss: (() -> Unit)? = null,
@@ -273,7 +274,11 @@ internal fun ChatInputBar(
     ) {
         val imeInset = rememberImeBottomInset()
         // 滚动弱化：内容区（slash 菜单/排队面板/数据面板/输入框本体）整体淡出到 40%，蒙版渐变保持不透明。
-        val contentAlpha = rememberScrollFadeAlpha(scrolling)
+        val contentAlpha by animateFloatAsState(
+            targetValue = if (isScrolling) 0.4f else 1f,
+            animationSpec = tween(200),
+            label = "inputbar-content-alpha"
+        )
         // 渐变终点固定在蒙版可视高度内：若跟随整个 Box（含 imeInset 被键盘拉长的部分），
         // 键盘弹起时可见区域只占渐变前段，alpha 被摊薄到几乎透明——看起来像没有蒙版。
         val maskGradientEndY = with(LocalDensity.current) { INPUT_BAR_MASK_HEIGHT.toPx() }
@@ -304,7 +309,7 @@ internal fun ChatInputBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .graphicsLayer { alpha = contentAlpha.value }
+                    .graphicsLayer { alpha = contentAlpha }
                     .padding(horizontal = Spacing.lg)
                     .padding(bottom = Spacing.md)
                     .padding(bottom = imeInset)
@@ -923,21 +928,24 @@ internal fun ToolPermissionPanel(
     modifier: Modifier = Modifier,
     sessionTitle: String = "",
     forceCollapse: Boolean = false,
-    /** 消息列表是否正在滚动（订阅式读取）；真时面板淡出到 40%。 */
-    scrolling: () -> Boolean = { false }
+    isScrolling: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(true) }
     // 余额面板展开时同帧收起本面板，避免叠加
     val effectiveExpanded = expanded && !forceCollapse
 
     // 滚动弱化：用户上下滑动列表时，悬浮授权弹窗跟随淡化为 40%，避免遮挡用户查看背后消息；停止滑动后平滑恢复
-    val panelAlpha = rememberScrollFadeAlpha(scrolling)
+    val panelAlpha by animateFloatAsState(
+        targetValue = if (isScrolling) 0.4f else 1f,
+        animationSpec = tween(durationMillis = 200),
+        label = "permission-panel-alpha"
+    )
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
-            .graphicsLayer { alpha = panelAlpha.value },
+            .graphicsLayer { alpha = panelAlpha },
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(Radius.md),
         border = androidx.compose.foundation.BorderStroke(
