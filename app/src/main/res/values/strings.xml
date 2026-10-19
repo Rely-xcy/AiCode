@@ -551,6 +551,10 @@
     <string name="backup_data_permissions">授权规则</string>
     <string name="backup_data_app_settings">应用设置</string>
     <string name="backup_data_workspace">工作区文件</string>
+    <string name="backup_data_memory">长期记忆</string>
+    <string name="backup_data_memory_hint">全局与当前工作区的记忆目录；默认不导出</string>
+    <string name="backup_data_session_briefs">会话工作状态</string>
+    <string name="backup_data_session_briefs_hint">会话摘要与当前进展；默认不导出</string>
     <string name="backup_data_skills_agents">技能与子代理</string>
     <string name="backup_data_panel_scripts">面板脚本</string>
     <string name="backup_workspace_git_hint">工作区文件建议通过 Git 提交备份，导出备份仅作备用</string>
@@ -564,9 +568,11 @@
     <string name="backup_stat_chat_sessions">· 聊天会话 %1$s 个</string>
     <string name="backup_stat_chat_messages">· 聊天消息 %1$s 条</string>
     <string name="backup_stat_todo_items">· 待办项 %1$s 条</string>
+    <string name="backup_stat_session_briefs">· 会话工作状态 %1$s 条</string>
     <string name="backup_stat_mcp_servers">· MCP 服务器 %1$s 个</string>
     <string name="backup_stat_permission_rules">· 全局授权规则 %1$s 条</string>
     <string name="backup_stat_workspace_files">· 工作区文件 %1$s 个</string>
+    <string name="backup_stat_memory_files">· 记忆文件 %1$s 个</string>
     <string name="backup_stat_skipped_security">· 已跳过 %1$s 个安全相关条目（.git 的 hooks / config）</string>
     <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
     <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
@@ -583,6 +589,8 @@
     <string name="backup_export_failed">导出失败</string>
     <string name="backup_wrong_password">备份口令错误，或加密备份文件已损坏</string>
     <string name="backup_import_failed">导入失败</string>
+    <string name="backup_space_insufficient">存储空间不足：本次操作约需 %1$s，当前可用 %2$s。请清理空间后重试（尚未写入任何数据）。</string>
+    <string name="backup_import_partial">恢复中断：%1$s\n\n以下数据已写入；重新导入不会产生重复记录：\n%2$s</string>
 
     <!-- 网络备份 -->
     <string name="backup_net_section">网络备份</string>
@@ -1380,7 +1388,7 @@
     <string name="skills_scope_project">当前项目</string>
     <string name="skills_name_hint">建议用英文小写，如 pdf-report</string>
     <string name="skills_description_hint">简述何时该用它，AI 据此判断要不要加载</string>
-    <string name="chat_skill_triggered_chip">⚡ 已触发技能：%1$s</string>
+    <string name="chat_skill_triggered_chip">已触发技能：%1$s</string>
     <string name="skills_triggers_label">触发词</string>
     <string name="skills_triggers_hint">如：逆向, 脱壳, reverse</string>
     <string name="skills_triggers_help">消息中以空格分隔的独立词命中时自动注入本技能正文（如「帮我 逆向 看看」）；需逗号分隔，至少 2 个字符，不支持带空格的词组</string>

@@ -551,6 +551,10 @@
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
     <string name="backup_data_workspace">Workspace Files</string>
+    <string name="backup_data_memory">Long-term Memory</string>
+    <string name="backup_data_memory_hint">Global and current workspace memory files; off by default</string>
+    <string name="backup_data_session_briefs">Session Working State</string>
+    <string name="backup_data_session_briefs_hint">Session briefs and current progress; off by default</string>
     <string name="backup_data_skills_agents">Skills &amp; Subagents</string>
     <string name="backup_data_panel_scripts">Panel Scripts</string>
     <string name="backup_workspace_git_hint">Workspace files are best backed up via Git; the export here is only a fallback</string>
@@ -564,9 +568,11 @@
     <string name="backup_stat_chat_sessions">· Chat Sessions: %1$s</string>
     <string name="backup_stat_chat_messages">· Chat Messages: %1$s</string>
     <string name="backup_stat_todo_items">· Todo Items: %1$s</string>
+    <string name="backup_stat_session_briefs">· Session Working States: %1$s</string>
     <string name="backup_stat_mcp_servers">· MCP Servers: %1$s</string>
     <string name="backup_stat_permission_rules">· Global Permission Rules: %1$s</string>
     <string name="backup_stat_workspace_files">· Workspace Files: %1$s</string>
+    <string name="backup_stat_memory_files">· Memory Files: %1$s</string>
     <string name="backup_stat_skipped_security">· Skipped %1$s security-sensitive entries (.git hooks/config)</string>
     <string name="backup_stat_skill_files">· Skill Files: %1$s</string>
     <string name="backup_stat_subagent_files">· Subagent Files: %1$s</string>
@@ -583,6 +589,8 @@
     <string name="backup_export_failed">Export failed</string>
     <string name="backup_wrong_password">Wrong backup password, or the encrypted backup file is corrupted</string>
     <string name="backup_import_failed">Import failed</string>
+    <string name="backup_space_insufficient">Not enough storage: this operation needs about %1$s but only %2$s is available. Free up space and try again (nothing has been written).</string>
+    <string name="backup_import_partial">Restore interrupted: %1$s\n\nSome data was already written; re-importing will not create duplicates:\n%2$s</string>
 
     <!-- 网络备份 -->
     <string name="backup_net_section">Cloud backup</string>
@@ -1380,7 +1388,7 @@
     <string name="skills_scope_project">This project</string>
     <string name="skills_name_hint">Lowercase is recommended, e.g. pdf-report</string>
     <string name="skills_description_hint">When to use it; the AI decides whether to load it by this text</string>
-    <string name="chat_skill_triggered_chip">⚡ Skill triggered: %1$s</string>
+    <string name="chat_skill_triggered_chip">Skill triggered: %1$s</string>
     <string name="skills_triggers_label">Trigger words</string>
     <string name="skills_triggers_hint">e.g. reverse, unpack, triage</string>
     <string name="skills_triggers_help">The skill auto-injects when a trigger word appears as a standalone space-separated token in the message (e.g. "help me reverse this"); comma-separated, at least 2 chars, no multi-word phrases</string>
