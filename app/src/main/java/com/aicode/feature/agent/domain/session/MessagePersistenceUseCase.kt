@@ -163,6 +163,13 @@ class MessagePersistenceUseCase @Inject constructor(
      */
     fun frozenForHistory(message: AgentMessage): AgentMessage = frozenForHistory(message, json)
 
+    /**
+     * 保留具体类型的重载：调用方（插话列表、`ToolBatchFinished`）要的是 `UserMessage`，
+     * 泛型版本返回 `AgentMessage` 会让上游的 `List<UserMessage>` 参数与 `content/modelReminder` 解析失败。
+     */
+    fun frozenForHistory(message: AgentMessage.UserMessage): AgentMessage.UserMessage =
+        frozenForHistory(message as AgentMessage, json) as AgentMessage.UserMessage
+
     companion object {
         /**
          * 单条消息各文本字段的持久化上限（UTF-8 字节数）。远小于 SQLite CursorWindow 单窗口约 2MB
