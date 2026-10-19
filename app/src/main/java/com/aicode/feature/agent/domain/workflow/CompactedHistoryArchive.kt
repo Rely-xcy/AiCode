@@ -9,6 +9,29 @@ import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** 容器内 AI 配置根目录（与 [CompactedHistoryArchive] 的归档目录拼接口径一致）。 */
+internal const val AICODE_CONTAINER_ROOT = "/root/.aicode"
+
+internal const val COMPACTED_HISTORY_DIR_NAME = "compacted-history"
+
+/** 归档文件的容器内目录；摘要正文里的路径与 prune 的引用解析共用它，避免两处漂移。 */
+internal const val COMPACTED_HISTORY_CONTAINER_DIR =
+    "$AICODE_CONTAINER_ROOT/$COMPACTED_HISTORY_DIR_NAME"
+
+internal val COMPACTED_HISTORY_PATH_REGEX =
+    Regex(Regex.escape(COMPACTED_HISTORY_CONTAINER_DIR) + """/([A-Za-z0-9._-]+\.md)""")
+
+/**
+ * 从若干份活跃摘要正文里解析归档文件名。
+ *
+ * 摘要正文是本项目里归档路径的唯一权威来源（[CompactedHistoryArchive.archive] 把路径附在
+ * 摘要末尾，链合并提示词又要求逐条保留），所以直接解析正文即可，不需要额外的引用索引文件。
+ */
+internal fun referencedArchiveFileNames(summaries: List<String>): Set<String> =
+    summaries.flatMap { summary ->
+        COMPACTED_HISTORY_PATH_REGEX.findAll(summary).map { it.groupValues[1] }.toList()
+    }.toSet()
+
 /**
  * 压缩前把被折叠的历史原文存档成文件，并在摘要里附上路径。
  *
@@ -23,8 +46,7 @@ class CompactedHistoryArchive @Inject constructor(
 ) {
     private companion object {
         const val TAG = "CompactedHistoryArchive"
-        const val AICODE_ROOT = "/root/.aicode"
-        const val DIR = "compacted-history"
+        const val DIR = COMPACTED_HISTORY_DIR_NAME
 
         /** 单条消息写入档案的上限，防止一条巨型工具输出撑爆文件。 */
         const val MAX_FIELD_CHARS = 200_000
@@ -40,15 +62,24 @@ class CompactedHistoryArchive @Inject constructor(
     /** 存档目录（宿主路径）。 */
     val archiveDir: File get() = File(containerInstaller.aicodeDir, DIR)
 
-    /** @return 容器内路径；落盘失败返回 null（调用方降级为不提示路径）。 */
-    fun archive(sessionId: String?, messages: List<AgentMessage>): String? {
+    /**
+     * @param referencedFiles 仍被活跃摘要引用的归档文件名；null 表示引用未知（不执行 prune，
+     *   宁可多留文件，也不能删掉摘要里还能读到的原文）。
+     * @return 容器内路径；落盘失败返回 null（调用方降级为不提示路径）。
+     */
+    fun archive(
+        sessionId: String?,
+        messages: List<AgentMessage>,
+        referencedFiles: Set<String>? = null
+    ): String? {
         if (messages.isEmpty()) return null
         return try {
             val dir = archiveDir.apply { mkdirs() }
             val file = uniqueFile(dir, sessionId)
             file.writeText(render(messages), Charsets.UTF_8)
-            prune(dir)
-            val path = "$AICODE_ROOT/$DIR/${file.name}"
+            // 新文件本身也受保护：单次归档就可能超过总大小配额，不能刚写完就把自己删了。
+            if (referencedFiles != null) prune(dir, referencedFiles + file.name)
+            val path = "$COMPACTED_HISTORY_CONTAINER_DIR/${file.name}"
             FileLogger.i(TAG, "已归档 ${messages.size} 条被压缩历史: $path")
             path
         } catch (e: Exception) {
@@ -99,8 +130,13 @@ class CompactedHistoryArchive @Inject constructor(
         return text.take(MAX_FIELD_CHARS) + "\n[档案内单条消息过长，已截断 ${text.length - MAX_FIELD_CHARS} 字符]"
     }
 
-    /** 保留策略：先按天数删过期，再按文件数与总大小从最旧开始删。 */
-    private fun prune(dir: File) {
+    /**
+     * 保留策略：先按天数删过期，再按文件数与总大小从最旧开始删。
+     *
+     * [referenced] 里的文件跳过：它们仍被活跃摘要引用，删了就等于摘要里的路径失效。
+     * 跳过不中断循环——过期/超量条件对后面的文件仍然成立时要继续删。
+     */
+    private fun prune(dir: File, referenced: Set<String>) {
         val files = dir.listFiles { file -> file.isFile && file.name.endsWith(".md") }?.toList().orEmpty()
         if (files.isEmpty()) return
         val sorted = files.sortedBy { it.lastModified() }
@@ -113,6 +149,7 @@ class CompactedHistoryArchive @Inject constructor(
             val tooMany = remaining > RETENTION_MAX_FILES
             val tooBig = totalBytes > RETENTION_MAX_BYTES
             if (!expired && !tooMany && !tooBig) break
+            if (file.name in referenced) continue
             val size = file.length()
             if (file.delete()) {
                 totalBytes -= size

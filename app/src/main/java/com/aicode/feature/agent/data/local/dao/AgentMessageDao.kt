@@ -268,6 +268,10 @@ interface AgentMessageDao {
     @Query("SELECT * FROM agent_messages ORDER BY timestamp ASC")
     suspend fun getAllOnce(): List<AgentMessageEntity>
 
+    /** 所有会话里仍活跃的摘要正文（归档保留策略据此避让仍被引用的文件）。 */
+    @Query("SELECT content FROM agent_messages WHERE isContextSummary = 1 AND isCompacted = 0 AND isContextExcluded = 0")
+    suspend fun getActiveSummaryContents(): List<String>
+
     /** 分页读取（keyset：按 timestamp,id 字典序取 [limit] 条），供备份流式导出。 */
     @Query("SELECT * FROM agent_messages WHERE timestamp > :lastTimestamp OR (timestamp = :lastTimestamp AND id > :lastId) ORDER BY timestamp ASC, id ASC LIMIT :limit")
     suspend fun getPageAfter(lastTimestamp: Long, lastId: String, limit: Int): List<AgentMessageEntity>

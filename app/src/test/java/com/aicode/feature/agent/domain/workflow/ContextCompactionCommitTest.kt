@@ -18,6 +18,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -222,29 +223,29 @@ class ContextCompactionCommitTest {
     }
 
     @Test
-    fun `head 超出摘要窗口时前移拆分点，早期原文留在保留区不被丢弃`() = runBlocking {
+    fun `head 超出摘要窗口时分块折叠，不再前移拆分点`() = runBlocking {
         prepare()
         stubSummary(AIResponse("Handoff", stopReason = "stop"))
 
-        // preserveRecentTokens=1 → tail 只留最后一条；summaryWindowTokens=100 → 摘要预算 70 tokens，
-        // 三条 head（600 + 1 + 590 汉字）装不下，必须前移拆分点。
+        // preserveRecentTokens=1 → tail 只留最后一条；summaryWindowTokens=400 → 摘要预算 280 tokens，
+        // 三条 head（600 + 1 + 590 汉字）装不下，按窗口切成三块，再合并成一条摘要。
         val result = compactor.compact(
             messages = history(),
             summaryProvider = provider,
             sessionId = "s",
             preserveRecentTokens = 1,
-            summaryWindowTokens = 100,
+            summaryWindowTokens = 400,
             hardThreshold = 40_000,
             contextLimit = 100_000
         )
 
         assertNotNull(result)
-        // 新行为：a 进摘要，b/c 被前移留在 tail；旧行为会把 a 丢掉、b/c 进摘要，
-        // 结果里看不到 590 字那条原文。
-        val userContents = result!!.filterIsInstance<AgentMessage.UserMessage>().map { it.content }
-        assertTrue(
-            "被前移的早期原文应留在 tail，而不是被静默丢弃",
-            userContents.any { it == "汉".repeat(590) }
+        // 新行为：head 全部折进一条摘要（不再把 590 字那条前移回保留区）。
+        assertEquals(3, result!!.size)
+        assertTrue((result[1] as AgentMessage.AssistantMessage).content.contains("Handoff"))
+        assertFalse(
+            "分块折叠后早期原文应已进入摘要，而不是继续留在 tail",
+            result.filterIsInstance<AgentMessage.UserMessage>().any { it.content == "汉".repeat(590) }
         )
     }
 }
