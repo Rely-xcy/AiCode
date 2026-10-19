@@ -1,7 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -254,60 +253,6 @@ internal fun MarkdownContent(
             )
         }
     }
-}
-
-/**
- * 流式块级渲染开关：true = 冻结块各自解析、每帧只重解析尾块；false = 整段逐帧重解析（旧行为）。
- * 真机若出现块拼接错位，把这里改成 false 即可整体回退，没有其它改动依赖它。
- */
-internal const val USE_BLOCK_STREAMING = true
-
-/**
- * 流式正文渲染：把 [text] 切成「冻结块 + 尾块」，冻结块各自独立走 MarkdownContent 并停在
- * 自己的组合槽位里，只有尾块随打字机每帧重解析。
- *
- * 冻结块以块内容为 remember key（等价于内容哈希，且没有哈希碰撞导致串块的风险），
- * 内容不变的块在重组时被 Compose 跳过，块内的解析状态机不会重建。冻结块不写全局解析缓存：
- * 那里存的是整篇消息，写半截内容会把定稿消息的缓存挤掉。
- */
-@Composable
-internal fun StreamingMarkdownContent(
-    text: String,
-    color: Color,
-    modifier: Modifier = Modifier,
-    cache: MarkdownRenderCache? = null
-) {
-    if (!USE_BLOCK_STREAMING) {
-        MarkdownContent(text = text, color = color, modifier = modifier, cache = cache, streaming = true)
-        return
-    }
-    val blocks = remember(text) { splitStreamingBlocks(text) }
-    val blockModifier = remember { Modifier.fillMaxWidth() }
-    Column(modifier = modifier) {
-        blocks.frozen.forEach { block ->
-            FrozenMarkdownBlock(block = block, color = color, modifier = blockModifier)
-        }
-        MarkdownContent(
-            text = blocks.tail,
-            color = color,
-            modifier = blockModifier,
-            cache = cache,
-            streaming = true
-        )
-    }
-}
-
-/**
- * 单独抽成 composable 是为了让 Compose 能按参数跳过：入参全是稳定类型，块文本不变时整棵
- * 子树不重组，冻结块的解析、测量与绘制成本归零。
- */
-@Composable
-private fun FrozenMarkdownBlock(
-    block: String,
-    color: Color,
-    modifier: Modifier
-) {
-    MarkdownContent(text = block, color = color, modifier = modifier, cache = null, streaming = false)
 }
 
 /**

@@ -1983,11 +1983,7 @@ fun AIChatPanel(
                                 }
                                 when (tailKind) {
                                     TailKind.THINKING -> ThinkingBubble(label = thinkingLabel)
-                                    TailKind.STREAMING -> StreamingBubble(
-                                        text = typewriterRenderText,
-                                        cache = markdownCache,
-                                        streaming = streamingText != null
-                                    )
+                                    TailKind.STREAMING -> StreamingBubble(text = typewriterRenderText, cache = markdownCache)
                                     TailKind.COMPACTING -> CompactionProgressBubble()
                                     TailKind.RETRYING -> {
                                         val rs = retryState

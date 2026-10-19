@@ -605,31 +605,18 @@ internal fun rememberTypewriterStreamingText(
 @Composable
 internal fun StreamingBubble(
     text: String,
-    cache: MarkdownRenderCache? = null,
-    /** 文本是否仍在流式增长。false = 流式已结束（定稿前置阶段），回到整段一次性渲染。 */
-    streaming: Boolean = true
+    cache: MarkdownRenderCache? = null
 ) {
     val renderText = text
     // 与落库助手正文同构：不套容器，直接铺在页面底色上，底部挂「生成中」的点
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (streaming) {
-            StreamingMarkdownContent(
-                text = renderText,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth(),
-                cache = cache
-            )
-        } else {
-            // 定稿兜底：不再按块渲染（块缓存随这里的分支一起丢弃），全文一次解析，
-            // 与落库后的助手气泡走同一条路径，也顺带校验块切分没有丢内容。
-            MarkdownContent(
-                text = renderText,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth(),
-                cache = cache,
-                streaming = false
-            )
-        }
+        MarkdownContent(
+            text = renderText,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(),
+            cache = cache,
+            streaming = true
+        )
         Spacer(Modifier.height(Spacing.xs))
         TypingDots(color = MaterialTheme.colorScheme.primary, dotSize = 5.dp)
     }
