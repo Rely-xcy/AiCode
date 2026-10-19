@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.dao.CompactionChainBlocksNotMarkedException
 import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
@@ -9,11 +10,9 @@ import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
-import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,8 +27,8 @@ import org.junit.Test
  * 1. 触发判定与合并批：`summaryChainStatus` 只数未淘汰的新语义块，`mergeOldestChainBlocks`
  *    只取最旧 [ContextCompactor] 调用方给的 blockCount 个块；
  * 2. 提交动作：新 marker+summary 对落库（`foldsUpToTimestamp` = 被合并块中最大边界），
- *    被合并块的 marker+summary 行标 `isCompacted`（`markChainBlocksCompacted`）；
- * 3. 失败路径：摘要响应不可用 / 不省空间 / 落库失败时，不标任何行（或已回滚），
+ *    被合并块的 marker+summary 行标 `isCompacted`（`insertChainMergePair` 事务内调用 `markChainBlocksCompacted`）；
+ * 3. 失败路径：摘要响应不可用 / 不省空间 / 事务回滚时，不落新块也不标任何行，
  *    返回 null——合并失败不影响主折叠。
  */
 class ContextCompactionChainMergeTest {
@@ -71,7 +70,7 @@ class ContextCompactionChainMergeTest {
         coEvery { provider.complete(any(), any(), any()) } returns AIResponse(response, stopReason = "stop")
         coEvery { provider.complete(any(), any(), any(), any()) } returns AIResponse(response, stopReason = "stop")
         coEvery { provider.complete(any(), any(), any(), any(), any()) } returns AIResponse(response, stopReason = "stop")
-        coEvery { dao.insert(any()) } just Runs
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 4
     }
 
     /** 内存视图：链块对在前（与回放一致），跟一条 tail 用户消息。 */
@@ -114,7 +113,7 @@ class ContextCompactionChainMergeTest {
     fun `合并后块数减合并批加一 且被合并块标 isCompacted`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(4)
         stubMerge("合并后的摘要")
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 4
 
         val chain = compactor.summaryChainStatus("s")!!
         val messages = memoryMessages(4)
@@ -133,19 +132,22 @@ class ContextCompactionChainMergeTest {
         // 新块对在最前（与回放的摘要链前置一致）
         assertEquals(CONTEXT_COMPACTION_MARKER, (result[0] as AgentMessage.UserMessage).content)
 
-        // 新摘要对落库：summary 带 foldsUpToTimestamp = 被合并块中最大边界（第 1 块边界 110）
-        coVerify(exactly = 2) { dao.insert(any()) }
-        // 标记被合并块的 4 行（2 个 marker + 2 个 summary）
+        // 新摘要对与旧块标记在同一次事务调用里：summary 带 foldsUpToTimestamp = 被合并块中最大边界（第 1 块边界 110）
         coVerify(exactly = 1) {
-            dao.markChainBlocksCompacted("s", listOf("marker-0", "summary-0", "marker-1", "summary-1"))
+            dao.insertChainMergePair(
+                any(), any(), "s",
+                listOf("marker-0", "summary-0", "marker-1", "summary-1")
+            )
         }
+        // 不再有分两次写的单行 insert
+        coVerify(exactly = 0) { dao.insert(any()) }
     }
 
     @Test
     fun `摘要响应不可用时不落库也不标行`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         stubMerge("")
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 4
 
         val chain = compactor.summaryChainStatus("s")!!
         val result = compactor.mergeOldestChainBlocks(
@@ -154,8 +156,7 @@ class ContextCompactionChainMergeTest {
         )
 
         assertNull(result)
-        coVerify(exactly = 0) { dao.insert(any()) }
-        coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
+        coVerify(exactly = 0) { dao.insertChainMergePair(any(), any(), any(), any()) }
         // 摘要调用成功返回过（kind=compaction 记账），只是我们主动拒绝
         coVerify(exactly = 1) { records.insert(any()) }
     }
@@ -165,7 +166,7 @@ class ContextCompactionChainMergeTest {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         // 合并「摘要」比原摘要还长（把每份都复述一遍）→ 不省空间 → 不提交
         stubMerge("合并后的摘要（归档路径 /root/.aicode/compacted-history/arch-0.md）".repeat(6))
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 4
 
         val chain = compactor.summaryChainStatus("s")!!
         val result = compactor.mergeOldestChainBlocks(
@@ -174,15 +175,16 @@ class ContextCompactionChainMergeTest {
         )
 
         assertNull(result)
-        coVerify(exactly = 0) { dao.insert(any()) }
-        coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
+        coVerify(exactly = 0) { dao.insertChainMergePair(any(), any(), any(), any()) }
     }
 
     @Test
-    fun `标记旧块失败时回滚新块`() = runBlocking {
+    fun `旧块标记未命中时事务回滚且不手工补偿`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(3)
         stubMerge("合并后的摘要")
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 0 // 未命中 → 回滚
+        // 模拟事务方法内部「一行都没标到」：抛异常让 Room 回滚整个事务
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } throws
+            CompactionChainBlocksNotMarkedException("s")
 
         val chain = compactor.summaryChainStatus("s")!!
         val result = compactor.mergeOldestChainBlocks(
@@ -191,15 +193,17 @@ class ContextCompactionChainMergeTest {
         )
 
         assertNull(result)
-        // 新块先插了，标记未命中 → 两行都被删掉
-        coVerify(exactly = 2) { dao.deleteMessageById(any()) }
+        // 新块与旧块都在同一个事务里，失败即整体回滚；compactor 不再逐行删新块。
+        coVerify(exactly = 1) { dao.insertChainMergePair(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.deleteMessageById(any()) }
     }
 
     @Test
     fun `合并成功后视图不再包含被合并块且回放边界取剩余块最大边界`() = runBlocking {
         coEvery { dao.getMessagesBySessionOnce("s") } returns chainRows(4)
         stubMerge("合并后的摘要")
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 4
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 4
 
         val chain = compactor.summaryChainStatus("s")!!
         val result = compactor.mergeOldestChainBlocks(
@@ -228,10 +232,8 @@ class ContextCompactionChainMergeTest {
             summaryProvider = provider, sessionId = "s", blockCount = 1
         )
 
-        // 单块链：合并后不省空间（新摘要 ≥ 原块）会走「不省空间」闸门；块数为 0 时直接 null。
-        // 无论走哪条，都不应有标记发生。
-        if (result == null) {
-            coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
-        }
+        // 单块链直接返回 null（blocks.size < 2）；无论走哪条，都不应有任何事务写入。
+        assertNull(result)
+        coVerify(exactly = 0) { dao.insertChainMergePair(any(), any(), any(), any()) }
     }
 }

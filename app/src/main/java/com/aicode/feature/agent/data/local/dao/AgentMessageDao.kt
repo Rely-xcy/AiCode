@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -14,6 +15,41 @@ interface AgentMessageDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(messages: List<AgentMessageEntity>)
+
+    /**
+     * 折叠提交：marker 与摘要两行在同一个事务里落库。
+     *
+     * 分两次 insert 时，agent_messages 的每次写入都会让分页消息与摘要行两路 Flow 重跑，
+     * 一次折叠就让聊天页整表重建两轮。事务把失效通知压到提交时一次。
+     * 原子性同时接替了调用方原先的补偿：摘要写失败时 marker 一并回滚，不会留下孤立 marker。
+     */
+    @Transaction
+    suspend fun insertCompactionPair(marker: AgentMessageEntity, summary: AgentMessageEntity) {
+        insert(marker)
+        insert(summary)
+    }
+
+    /**
+     * 链合并提交：新块两行与旧块淘汰标记在同一个事务里完成，返回被标记的旧块行数。
+     *
+     * 一行都没命中时抛 [CompactionChainBlocksNotMarkedException]，Room 随之回滚整个事务，
+     * 刚插的新块不会留下——与原先「标旧块失败删新块」等价，而且中间态不对外可见。
+     */
+    @Transaction
+    suspend fun insertChainMergePair(
+        marker: AgentMessageEntity,
+        summary: AgentMessageEntity,
+        sessionId: String,
+        supersededIds: List<String>
+    ): Int {
+        insert(marker)
+        insert(summary)
+        val marked = markChainBlocksCompacted(sessionId, supersededIds)
+        if (marked == 0) {
+            throw CompactionChainBlocksNotMarkedException(sessionId)
+        }
+        return marked
+    }
 
     @Query("SELECT * FROM (SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC")
     fun getMessagesBySessionPaged(sessionId: String, limit: Int): Flow<List<AgentMessageEntity>>
@@ -278,6 +314,10 @@ data class ChatSearchMatch(
     val content: String,
     val timestamp: Long
 )
+
+/** 链合并时旧块一行都没标到：抛出让 Room 回滚事务，新块随之撤销。 */
+class CompactionChainBlocksNotMarkedException(sessionId: String) :
+    IllegalStateException("链合并未命中任何旧块行，事务已回滚，会话 $sessionId")
 
 /** 单个会话的短期上下文统计（[AgentMessageDao.sessionContextStats] 的投影）。 */
 data class SessionContextStats(

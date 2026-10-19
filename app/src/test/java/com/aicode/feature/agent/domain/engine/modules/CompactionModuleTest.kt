@@ -252,8 +252,8 @@ class CompactionModuleTest {
             }
         }
         coEvery { dao.getMessagesBySessionOnce("s1") } returns rows
-        // 合并标记命中
-        coEvery { dao.markChainBlocksCompacted(any(), any()) } returns 12
+        // 合并提交命中（事务方法内含新块插入 + 旧块标记）
+        coEvery { dao.insertChainMergePair(any(), any(), any(), any()) } returns 12
 
         val prompts = mockk<SystemPromptProvider>(relaxed = true)
         every { prompts.resolvePrompt(any()) } returns "合并提示词 {{INSTRUCTION}}"
@@ -294,8 +294,8 @@ class CompactionModuleTest {
             )
         )
 
-        // 合并确实发生了：被合并块被标 isCompacted（12 行 = 6 对），新摘要落库
-        coVerify { dao.markChainBlocksCompacted("s1", any()) }
+        // 合并确实发生了：新块与旧块标记在同一次事务调用里落库（12 行 = 6 对旧块）
+        coVerify { dao.insertChainMergePair(any(), any(), "s1", any()) }
     }
 
     /**
@@ -380,8 +380,8 @@ class CompactionModuleTest {
         )
 
         // 合并确实被触发（13 块 > 12），但合并请求被完整性闸门拒绝（截断）——
-        // 失败发生在「标记旧块」之前，所以标记一次都没发生。
-        coVerify(exactly = 0) { dao.markChainBlocksCompacted(any(), any()) }
+        // 失败发生在事务写入之前，所以事务方法一次都没调。
+        coVerify(exactly = 0) { dao.insertChainMergePair(any(), any(), any(), any()) }
         // 核心断言：合并失败不影响主流程——本轮请求照常返回（调用方发得出请求，兜底仍生效）。
         // 折叠是否成功发 CompactionFinished 取决于 tail 体量（6 万字的单条消息折完仍可能超线，
         // 那时只有 CompactionFailed/截断），不是这条测试的断言点。

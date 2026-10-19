@@ -44,13 +44,14 @@ class ContextCompactionCommitTest {
 
     private val compactor = ContextCompactor(dao, prompts, records, archive)
 
-    private val inserted = slot<AgentMessageEntity>()
+    private val insertedMarker = slot<AgentMessageEntity>()
+    private val insertedSummary = slot<AgentMessageEntity>()
 
     private fun prepare() {
         every { provider.providerId } returns "provider"
         every { provider.model } returns "summary"
         every { prompts.resolvePrompt(any()) } returns "你是一个上下文压缩引擎。{{INSTRUCTION}}"
-        coEvery { dao.insert(capture(inserted)) } just Runs
+        coEvery { dao.insertCompactionPair(capture(insertedMarker), capture(insertedSummary)) } just Runs
         coEvery { dao.getMessagesBySessionOnce("s") } returns rows("a", "b", "c", "goal")
     }
 
@@ -104,8 +105,8 @@ class ContextCompactionCommitTest {
         assertEquals(5, result!!.size)
         assertEquals("旧摘要", (result[1] as AgentMessage.AssistantMessage).content)
         assertTrue((result[3] as AgentMessage.AssistantMessage).content.contains("Second handoff"))
-        // 两次插入：marker + 摘要；不标 head、不回收旧块
-        coVerify(exactly = 2) { dao.insert(any()) }
+        // 一次事务写入 marker + 摘要；不标 head、不回收旧块
+        coVerify(exactly = 1) { dao.insertCompactionPair(any(), any()) }
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
         coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
     }
@@ -140,7 +141,7 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
     }
 
@@ -151,7 +152,7 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     @Test
@@ -161,7 +162,7 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     @Test
@@ -176,7 +177,7 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     // ---------- 闸门二：必须真的更小 ----------
@@ -193,7 +194,7 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(tinyHead))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     // ---------- 闸门三：提交时写覆盖边界 ----------
@@ -210,12 +211,12 @@ class ContextCompactionCommitTest {
         assertEquals(3, result!!.size)
         assertTrue(result[1] is AgentMessage.AssistantMessage)
         assertTrue((result[1] as AgentMessage.AssistantMessage).content.contains("Concise handoff"))
-        coVerify(exactly = 2) { dao.insert(any()) }
+        coVerify(exactly = 1) { dao.insertCompactionPair(any(), any()) }
         // 新语义：head 不标 isCompacted、旧摘要不回收——库对折叠是纯追加
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
         coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
         // 摘要行带覆盖边界（foldsUpToTimestamp），回放据此裁窗口
-        val summaryRow = inserted.captured
+        val summaryRow = insertedSummary.captured
         assertTrue(summaryRow.isContextSummary)
         assertEquals(500L, summaryRow.foldsUpToTimestamp)
     }

@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.dao.CompactionChainBlocksNotMarkedException
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
@@ -338,8 +339,6 @@ class ContextCompactor @Inject constructor(
         var stablePrefixTokens = 0
 
         if (sessionId != null) {
-            // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
-            var markerPersisted = false
             try {
                 val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
                 // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
@@ -355,8 +354,10 @@ class ContextCompactor @Inject constructor(
                     onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
                     return null
                 }
-                // 先插 marker + 摘要，摘要没插成功则回滚删 marker（head 不标 isCompacted，
-                // 不存在「标了却没有摘要顶上」的丢失面；插入失败只意味着本轮没折成，原文仍在窗口里）。
+                // marker + 摘要同一个事务落库：摘要写失败时 marker 一并回滚，
+                // 不会留下孤立 marker（回放会把它当成用户刚问过的那句）。
+                // head 不标 isCompacted，不存在「标了却没有摘要顶上」的丢失面；
+                // 插入失败只意味着本轮没折成，原文仍在窗口里。
                 // 摘要块落点仍在 tail 之前：回放/UI 顺序 = 摘要链 → 剩余窗口。
                 val markerTs = (anchorTs - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
@@ -365,28 +366,24 @@ class ContextCompactor @Inject constructor(
                 val headEndTs = head.lastOrNull()
                     ?.let { resolveRowTimestamp(dbEntities, it) }
                     ?: (markerTs - 1).coerceAtLeast(0L)
-                agentMessageDao.insert(
-                    AgentMessageEntity(
-                        id = markerId,
-                        sessionId = sessionId,
-                        role = MessageRole.USER.name,
-                        content = CONTEXT_COMPACTION_MARKER,
-                        timestamp = markerTs,
-                        isCompactionMarker = true
-                    )
+                val markerRow = AgentMessageEntity(
+                    id = markerId,
+                    sessionId = sessionId,
+                    role = MessageRole.USER.name,
+                    content = CONTEXT_COMPACTION_MARKER,
+                    timestamp = markerTs,
+                    isCompactionMarker = true
                 )
-                markerPersisted = true
-                agentMessageDao.insert(
-                    AgentMessageEntity(
-                        id = compactedId,
-                        sessionId = sessionId,
-                        role = MessageRole.ASSISTANT.name,
-                        content = finalMessage.content,
-                        timestamp = summaryTs,
-                        isContextSummary = true,
-                        foldsUpToTimestamp = headEndTs
-                    )
+                val summaryRow = AgentMessageEntity(
+                    id = compactedId,
+                    sessionId = sessionId,
+                    role = MessageRole.ASSISTANT.name,
+                    content = finalMessage.content,
+                    timestamp = summaryTs,
+                    isContextSummary = true,
+                    foldsUpToTimestamp = headEndTs
                 )
+                agentMessageDao.insertCompactionPair(markerRow, summaryRow)
                 FileLogger.i(TAG, "已持久化摘要块到数据库，会话 $sessionId，覆盖边界=$headEndTs")
 
                 // 记账用：折叠后的摘要链状态。链内块数 = 未淘汰的摘要行数（含本次新插的），
@@ -399,13 +396,7 @@ class ContextCompactor @Inject constructor(
                         .joinToString("\n") { it.content }
                 ) + TokenEstimator.estimateMessage(compactedMessage)
             } catch (e: Exception) {
-                // 摘要没插进去 = 本次压缩作废，那先落库的 marker 必须一并删掉：
-                // 回放时它是一条孤立的用户消息「What did we do so far?」——历史没被折叠，
-                // 模型却会以为用户刚问过这句；removeCompactionPairs 只成对清理，认不出这种孤儿。
-                if (markerPersisted) {
-                    runCatching { agentMessageDao.deleteMessageById(markerId) }
-                        .onFailure { FileLogger.w(TAG, "回滚压缩 marker 失败，回放会多出一条孤立 marker", it) }
-                }
+                // 事务已把本次两行一并回滚：不留孤立 marker，也无需再手工补偿。
                 FileLogger.e(TAG, "持久化压缩结果失败，放弃本次压缩（不标记 head）", e)
                 return null
             }
@@ -552,9 +543,9 @@ class ContextCompactor @Inject constructor(
      * 合并产出的新摘要把「各份摘要里引用的归档路径」逐条保留（见 compact-chain-merge.md），
      * 原文退路不变；再归档一次只会重复消耗存储配额（归档目录有 32MB/30 文件的保留上限）。
      *
-     * 失败语义：任何一步失败都返回 null；提交顺序是「先插新块、后标旧块、标失败删新块」，
-     * 任何中间态都不会丢历史。调用方（CompactionModule）在硬折叠判定之前调用本方法，
-     * 失败只记日志、下轮再试，不影响主折叠。
+     * 失败语义：任何一步失败都返回 null；新块两行与旧块标记在同一个事务里（[AgentMessageDao.insertChainMergePair]），
+     * 标记未命中时事务整体回滚，不会留下孤立新块，也不会出现「旧块已标、新摘要缺失」。
+     * 调用方（CompactionModule）在硬折叠判定之前调用本方法，失败只记日志、下轮再试，不影响主折叠。
      *
      * @return 合并后的消息视图；不可合并（块不够、摘要不可用、不省空间）返回 null。
      */
@@ -655,22 +646,20 @@ class ContextCompactor @Inject constructor(
             return null
         }
 
-        // 提交顺序与 compact 同源：先插新块，再标旧块；标旧块失败则删掉刚插的新块恢复原链。
-        // 中间态是「新旧块同时回放」——语义重复但不丢数据；反过来的顺序（先标后插）一旦插入失败
-        // 就会出现「旧块已标、新摘要缺失」的丢失面，回放直接缺掉这段历史。
+        // 提交语义与原先一致：新块与旧块标记在同一个事务里，要么全成、要么全不成。
+        // 先插新块后标旧块仍需保留在事务方法内部——若先标后插且插入失败，
+        // 会出现「旧块已标、新摘要缺失」的丢失面；事务回滚能盖住它，但顺序不改更安全。
         try {
-            agentMessageDao.insert(
-                AgentMessageEntity(
+            agentMessageDao.insertChainMergePair(
+                marker = AgentMessageEntity(
                     id = markerId,
                     sessionId = sessionId,
                     role = MessageRole.USER.name,
                     content = CONTEXT_COMPACTION_MARKER,
                     timestamp = markerTs,
                     isCompactionMarker = true
-                )
-            )
-            agentMessageDao.insert(
-                AgentMessageEntity(
+                ),
+                summary = AgentMessageEntity(
                     id = summaryId,
                     sessionId = sessionId,
                     role = MessageRole.ASSISTANT.name,
@@ -678,26 +667,16 @@ class ContextCompactor @Inject constructor(
                     timestamp = markerTs + 1,
                     isContextSummary = true,
                     foldsUpToTimestamp = boundary
-                )
+                ),
+                sessionId = sessionId,
+                supersededIds = removedIds.toList()
             )
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "链合并落库新摘要失败，放弃本次合并（旧块未标）", e)
+        } catch (e: CompactionChainBlocksNotMarkedException) {
+            // 旧块可能刚被回退逻辑动过：事务已把新块一并回滚，链保持原样。
+            FileLogger.w(TAG, "链合并标记旧块未命中任何行，事务已回滚，放弃本次合并", e)
             return null
-        }
-        val marked = runCatching { agentMessageDao.markChainBlocksCompacted(sessionId, removedIds.toList()) }
-            .getOrElse {
-                FileLogger.w(TAG, "链合并标记旧块失败，回滚新摘要块", it)
-                runCatching { agentMessageDao.deleteMessageById(markerId) }
-                    .onFailure { FileLogger.w(TAG, "链合并回滚 marker 失败，回放会多出一条孤立 marker", it) }
-                runCatching { agentMessageDao.deleteMessageById(summaryId) }
-                    .onFailure { FileLogger.w(TAG, "链合并回滚摘要失败，会残留一份未标旧块的新摘要", it) }
-                return null
-            }
-        if (marked == 0) {
-            // 标记未命中：旧块可能刚被回退逻辑动过。同样回滚新块，保持链原样。
-            runCatching { agentMessageDao.deleteMessageById(markerId) }
-            runCatching { agentMessageDao.deleteMessageById(summaryId) }
-            FileLogger.w(TAG, "链合并标记旧块未命中任何行，已回滚新块，放弃本次合并")
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "链合并落库失败，事务已回滚（旧块未标）", e)
             return null
         }
 
