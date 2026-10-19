@@ -531,6 +531,28 @@ private fun LocalBackupTab(
                 }
             )
             WorkspaceBackupHint()
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_memory),
+                subtitle = stringResource(R.string.backup_data_memory_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.memoryFiles,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(memoryFiles = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_session_briefs),
+                subtitle = stringResource(R.string.backup_data_session_briefs_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.sessionBriefs,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(sessionBriefs = it)) }
+                    )
+                }
+            )
         }
 
         SettingsGroupHeader(text = stringResource(R.string.backup_actions))
@@ -906,17 +928,27 @@ private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) 
 
 private fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
     appendLine(context.getString(R.string.backup_restored_data))
+    append(buildRestoreStatsLines(context, stats))
+    append(context.getString(R.string.backup_settings_covered))
+}
+
+/** 逐行列出还原统计；导入成功摘要与「部分写入」失败提示共用，避免两处口径不一。 */
+internal fun buildRestoreStatsLines(context: android.content.Context, stats: RestoreStats): String = buildString {
     if (stats.providers > 0) appendLine(context.getString(R.string.backup_stat_providers, stats.providers))
     if (stats.remoteConnections > 0) appendLine(context.getString(R.string.backup_stat_remote_connections, stats.remoteConnections))
     if (stats.remoteMounts > 0) appendLine(context.getString(R.string.backup_stat_remote_mounts, stats.remoteMounts))
     if (stats.chatSessions > 0) appendLine(context.getString(R.string.backup_stat_chat_sessions, stats.chatSessions))
     if (stats.agentMessages > 0) appendLine(context.getString(R.string.backup_stat_chat_messages, stats.agentMessages))
     if (stats.todoItems > 0) appendLine(context.getString(R.string.backup_stat_todo_items, stats.todoItems))
+    if (stats.sessionBriefs > 0) appendLine(context.getString(R.string.backup_stat_session_briefs, stats.sessionBriefs))
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
+    if (stats.memoryFiles > 0) appendLine(context.getString(R.string.backup_stat_memory_files, stats.memoryFiles))
+    if (stats.skillFiles > 0) appendLine(context.getString(R.string.backup_stat_skill_files, stats.skillFiles))
+    if (stats.subagentFiles > 0) appendLine(context.getString(R.string.backup_stat_subagent_files, stats.subagentFiles))
+    if (stats.panelScriptFiles > 0) appendLine(context.getString(R.string.backup_stat_panel_scripts, stats.panelScriptFiles))
     if (stats.skippedSecurityEntries > 0) {
         appendLine(context.getString(R.string.backup_stat_skipped_security, stats.skippedSecurityEntries))
     }
-    append(context.getString(R.string.backup_settings_covered))
 }

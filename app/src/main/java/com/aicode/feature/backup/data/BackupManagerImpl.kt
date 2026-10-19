@@ -6,10 +6,12 @@ import com.aicode.core.util.FileLogger
 import com.aicode.core.util.GitIgnoreMatcher
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
+import com.aicode.feature.agent.data.local.entity.SessionBriefEntity
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
@@ -21,18 +23,22 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionConfigRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.backup.domain.AgentMessageDto
+import com.aicode.feature.backup.domain.AvailableSpaceProvider
 import com.aicode.feature.backup.domain.BackupCrypto
 import com.aicode.feature.backup.domain.BackupDecryptionException
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupMetadata
 import com.aicode.feature.backup.domain.BackupOptions
 import com.aicode.feature.backup.domain.BackupSnapshot
+import com.aicode.feature.backup.domain.BackupSpace
 import com.aicode.feature.backup.domain.ChatSessionDto
 import com.aicode.feature.backup.domain.ImportPreview
+import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.RemoteMountDto
 import com.aicode.feature.backup.domain.RestoreStats
+import com.aicode.feature.backup.domain.SessionBriefDto
 import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
@@ -56,6 +62,7 @@ import com.aicode.feature.workspace.data.local.entity.RemoteMountEntity
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver
+import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.Workspace
 import com.aicode.feature.workspace.domain.model.WorkspaceType
@@ -109,7 +116,9 @@ class BackupManagerImpl @Inject constructor(
     private val skillRepository: SkillRepository,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val skillConfigRepository: SkillConfigRepository,
-    private val agentDefinitionConfigRepository: AgentDefinitionConfigRepository
+    private val agentDefinitionConfigRepository: AgentDefinitionConfigRepository,
+    private val sessionBriefDao: SessionBriefDao,
+    private val availableSpace: AvailableSpaceProvider
 ) : BackupManager {
 
     private val json = Json {
@@ -127,6 +136,7 @@ class BackupManagerImpl @Inject constructor(
     override suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream) {
         withContext(Dispatchers.IO) {
             val pw = password?.takeIf { it.isNotEmpty() }
+            ensureExportSpace(encrypted = pw != null, options = options)
             if (pw == null) {
                 writeTarGz(output, options)
                 return@withContext
@@ -213,12 +223,15 @@ class BackupManagerImpl @Inject constructor(
     override suspend fun import(
         input: InputStream,
         password: CharArray?,
+        uncompressedBytes: Long,
         selectedWorkspaces: Set<String>?
     ): Result<RestoreStats> {
         val pw = password?.takeIf { it.isNotEmpty() }
         return withContext(Dispatchers.IO) {
             FileLogger.i(TAG, "导入备份开始（${if (pw != null) "加密" else "明文"}${if (selectedWorkspaces != null) "，勾选工作区=${selectedWorkspaces.size}个" else "，全量"}）")
             runCatching {
+                // 预检必须在任何写库动作之前：空间不足时直接失败，不留下半套数据。
+                ensureRestoreSpace(uncompressedBytes)
                 openTar(input, pw).use { source ->
                     restoreFromTar(source.tar, selectedWorkspaces)
                 }
@@ -237,19 +250,21 @@ class BackupManagerImpl @Inject constructor(
                 openTar(input, pw).use { source ->
                     val tar = source.tar
                     var workspaces: List<WorkspaceBackupMeta> = emptyList()
+                    var uncompressedBytes = 0L
                     var entry = tar.nextEntry
                     while (entry != null) {
+                        // 把整个 tar 走完：一是拿到全部条目的声明大小做恢复前空间预检，
+                        // 二是让 gzip 的完整性校验（尾部 CRC）在写入任何数据之前先跑一遍。
+                        uncompressedBytes += entry.size.coerceAtLeast(0L)
                         if (entry.name == FILE_METADATA) {
                             val plain = tar.readBytes()
                             val metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
                             checkVersion(metadata.schemaVersion)
                             workspaces = metadata.workspaces
-                            // 导出时 metadata.json 为首个条目，读到即可停，避免遍历大段 jsonl
-                            break
                         }
                         entry = tar.nextEntry
                     }
-                    ImportPreview(workspaces)
+                    ImportPreview(workspaces, uncompressedBytes)
                 }
             }
             .onSuccess { FileLogger.i(TAG, "导入预览完成：${it.workspaces.size} 个工作区") }
@@ -273,6 +288,59 @@ class BackupManagerImpl @Inject constructor(
             )
         }
     }
+
+    // ── 空间预检 ──────────────────────────────────────────────
+
+    /** 恢复要写库：检查数据库所在分区的可用空间。 */
+    private fun ensureRestoreSpace(uncompressedBytes: Long) {
+        val target = context.getDatabasePath(AgentDatabase.DATABASE_NAME)?.parentFile ?: context.filesDir
+        BackupSpace.requireSpace(availableSpace.availableBytes(target), uncompressedBytes)
+    }
+
+    /**
+     * 导出也要落本地临时文件，因此检查应用缓存分区的可用空间。
+     *
+     * 明文导出时只有各段 jsonl 会落到缓存（工作区/资产/记忆直接流式写进 tar），按数据库体积估算即可；
+     * 加密导出要把整个 tar.gz 先写进缓存，按全部待导出数据估算。tar.gz 是压缩后的产物，
+     * 以未压缩体积做基数偏保守，但不会让正常导出因「算不准」而中途盘满。
+     */
+    private fun ensureExportSpace(encrypted: Boolean, options: BackupOptions) {
+        val payload = if (encrypted) estimateExportBytes(options) else databaseBytes()
+        if (payload <= 0) return
+        BackupSpace.requireSpace(availableSpace.availableBytes(context.cacheDir), payload)
+    }
+
+    private fun databaseBytes(): Long {
+        val db = context.getDatabasePath(AgentDatabase.DATABASE_NAME) ?: return 0
+        return db.length() + File("${db.path}-wal").length()
+    }
+
+    /** 粗估导出体积：数据库 + 勾选的工作区/记忆/资产。目录读不到时按 0 计，不阻断导出。 */
+    private fun estimateExportBytes(options: BackupOptions): Long {
+        var total = databaseBytes()
+        if (options.workspaceFiles) {
+            backupLocalWorkspaces().forEach { ws ->
+                walkWorkspaceFiles(ws) { file, _ -> total += file.length() }
+            }
+        }
+        if (options.memoryFiles) {
+            memoryRoots().forEach { total += directoryBytes(it.root.trimEnd('/'), MEMORY_MAX_DEPTH) }
+        }
+        if (options.skillsAndAgents || options.panelScripts) {
+            assetRoots().forEach { root ->
+                val enabled = if (root.kind == AssetKind.PANEL_SCRIPT) options.panelScripts else options.skillsAndAgents
+                if (enabled) total += directoryBytes(root.root.trimEnd('/'), ASSET_MAX_DEPTH)
+            }
+        }
+        return total
+    }
+
+    private fun directoryBytes(base: String, maxDepth: Int): Long = runCatching {
+        fileAccess.listFilesRecursive(base, maxDepth).sumOf { relative ->
+            val rel = normalizeAssetPath(relative) ?: return@sumOf 0L
+            runCatching { fileAccess.fileSize("$base/$rel") }.getOrDefault(0L)
+        }
+    }.getOrElse { 0L }
 
     /** 打开 tar 流：先按需解密到临时文件，再解压；调用方负责 [TarSource.close]。 */
     private fun openTar(input: InputStream, pw: CharArray?): TarSource {
@@ -319,6 +387,12 @@ class BackupManagerImpl @Inject constructor(
                     }
                     if (options.skillsAndAgents || options.panelScripts) {
                         writeAssetEntries(tar, options)
+                    }
+                    if (options.memoryFiles) {
+                        writeMemoryEntries(tar)
+                    }
+                    if (options.sessionBriefs) {
+                        writeSessionBriefEntries(tar)
                     }
                     if (options.chatHistory) {
                         writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
@@ -608,69 +682,155 @@ class BackupManagerImpl @Inject constructor(
         return AssetTarget("${root.root.trimEnd('/')}/$rel", root.kind)
     }
 
+    // ── 记忆与会话工作状态 ───────────────────────────────────
+
+    /**
+     * 长期记忆目录：全局 + 当前工作区项目级。项目级用与技能/子代理一致的容器路径
+     * （`~/workspace/.aicode/memory`），走 [FileAccessProvider]，本地与远程同一套读写入口。
+     */
+    private fun memoryRoots(): List<MemoryRoot> = listOf(
+        MemoryRoot(MEMORY_GLOBAL_PREFIX, "~/.aicode/memory"),
+        MemoryRoot(MEMORY_PROJECT_PREFIX, "${WorkspacePathMapper.CONTAINER_ROOT}/.aicode/memory")
+    )
+
+    /** 把勾选的记忆目录下的每个文件写成一个 tar 条目（`memories/global|project/<相对路径>`）。 */
+    private fun writeMemoryEntries(tar: TarArchiveOutputStream) {
+        memoryRoots().forEach { root ->
+            val base = root.root.trimEnd('/')
+            val files = runCatching { fileAccess.listFilesRecursive(base, MEMORY_MAX_DEPTH) }.getOrElse { e ->
+                FileLogger.w(TAG, "读取记忆目录失败，跳过：$base（${e.message}）")
+                emptyList()
+            }
+            files.forEach { relative ->
+                val rel = normalizeAssetPath(relative)
+                if (rel == null) {
+                    FileLogger.w(TAG, "跳过越界的记忆路径：$base/$relative")
+                } else {
+                    runCatching { fileAccess.readBytes("$base/$rel") }
+                        .onSuccess { writeTarEntry(tar, "${root.prefix}$rel", it) }
+                        .onFailure { FileLogger.w(TAG, "读取记忆文件失败，跳过：$base/$rel（${it.message}）") }
+                }
+            }
+        }
+    }
+
+    private suspend fun writeSessionBriefEntries(tar: TarArchiveOutputStream) {
+        writeJsonlFileEntry(tar, FILE_SESSION_BRIEFS) { writer ->
+            sessionBriefDao.getAllOnce().forEach { writer.writeLine(json.encodeToString(SessionBriefDto.serializer(), it.toDto())) }
+        }
+    }
+
+    /** 还原单个记忆条目：`memories/<层级>/<相对路径>` 落到对应记忆目录根下，覆盖同名文件。 */
+    private fun restoreMemoryEntry(tar: TarArchiveInputStream, entry: TarArchiveEntry): RestoreStats {
+        if (entry.isDirectory) return RestoreStats()
+        val target = resolveMemoryTarget(entry.name)
+        if (target == null) {
+            FileLogger.w(TAG, "跳过无法解析的记忆条目：${entry.name}")
+            return RestoreStats()
+        }
+        val bytes = tar.readBytes()
+        return runCatching { fileAccess.writeBytes(target, bytes, overwrite = true) }
+            .fold(
+                onSuccess = {
+                    FileLogger.i(TAG, "恢复记忆文件：$target（${bytes.size} 字节）")
+                    RestoreStats(memoryFiles = 1)
+                },
+                onFailure = { e ->
+                    FileLogger.w(TAG, "写入记忆文件失败，跳过：$target（${e.message}）")
+                    RestoreStats()
+                }
+            )
+    }
+
+    private fun resolveMemoryTarget(entryName: String): String? {
+        val root = memoryRoots().firstOrNull { entryName.startsWith(it.prefix) } ?: return null
+        val rel = normalizeAssetPath(entryName.removePrefix(root.prefix)) ?: return null
+        return "${root.root.trimEnd('/')}/$rel"
+    }
+
     // ── 导入辅助 ──────────────────────────────────────────────
 
     private suspend fun restoreFromTar(tar: TarArchiveInputStream, selectedWorkspaces: Set<String>?): RestoreStats {
         val restoreMapping = mutableMapOf<String, Workspace>()
         var metadata: BackupMetadata? = null
         var stats = RestoreStats()
-        var entry = tar.nextEntry
-        while (entry != null) {
-            when (entry.name) {
-                FILE_LEGACY_SNAPSHOT -> {
-                    val plain = tar.readBytes()
-                    val snapshot = json.decodeFromString(BackupSnapshot.serializer(), String(plain, Charsets.UTF_8))
-                    checkVersion(snapshot.schemaVersion)
-                    return restoreLegacy(snapshot)
-                }
-                FILE_METADATA -> {
-                    val plain = tar.readBytes()
-                    metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
-                    checkVersion(metadata.schemaVersion)
-                }
-                FILE_SESSIONS -> {
-                    val count = restoreJsonl(tar, ChatSessionDto.serializer()) { dtos ->
-                        chatSessionDao.upsertAll(
-                            dtos.map { dto ->
-                                dto.copy(
-                                    workspacePath = resolveSessionWorkspace(dto.workspacePath, restoreMapping)
-                                ).toEntity()
+        try {
+            var entry = tar.nextEntry
+            while (entry != null) {
+                when (entry.name) {
+                    FILE_LEGACY_SNAPSHOT -> {
+                        val plain = tar.readBytes()
+                        val snapshot = json.decodeFromString(BackupSnapshot.serializer(), String(plain, Charsets.UTF_8))
+                        checkVersion(snapshot.schemaVersion)
+                        return restoreLegacy(snapshot)
+                    }
+                    FILE_METADATA -> {
+                        val plain = tar.readBytes()
+                        metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
+                        checkVersion(metadata.schemaVersion)
+                    }
+                    FILE_SESSIONS -> {
+                        val count = restoreJsonl(tar, ChatSessionDto.serializer()) { dtos ->
+                            chatSessionDao.upsertAll(
+                                dtos.map { dto ->
+                                    dto.copy(
+                                        workspacePath = resolveSessionWorkspace(dto.workspacePath, restoreMapping)
+                                    ).toEntity()
+                                }
+                            )
+                            // 只在写库成功后才计数：失败时 partialStats 要反映「真正落库了多少」
+                            stats += RestoreStats(chatSessions = dtos.size)
+                        }
+                        FileLogger.i(TAG, "恢复会话 $count 条")
+                    }
+                    FILE_MESSAGES -> {
+                        val count = restoreJsonl(tar, AgentMessageDto.serializer()) { dtos ->
+                            agentMessageDao.insertAll(dtos.map { it.toEntity() })
+                            stats += RestoreStats(agentMessages = dtos.size)
+                        }
+                        FileLogger.i(TAG, "恢复消息 $count 条")
+                    }
+                    FILE_TODOS -> {
+                        val count = restoreJsonl(tar, TodoItemDto.serializer()) { dtos ->
+                            todoItemDao.upsertAll(dtos.map { it.toEntity() })
+                            stats += RestoreStats(todoItems = dtos.size)
+                        }
+                        FileLogger.i(TAG, "恢复待办 $count 条")
+                    }
+                    FILE_SESSION_BRIEFS -> {
+                        val count = restoreJsonl(tar, SessionBriefDto.serializer()) { dtos ->
+                            // 主键是 sessionId，逐条 REPLACE：重复导入不会产生重复行，
+                            // 逐条计数也让「同一批里的第 N 条失败」能反映真正写进去的数量。
+                            dtos.forEach {
+                                sessionBriefDao.upsert(it.toEntity())
+                                stats += RestoreStats(sessionBriefs = 1)
                             }
-                        )
+                        }
+                        FileLogger.i(TAG, "恢复会话工作状态 $count 条")
                     }
-                    FileLogger.i(TAG, "恢复会话 $count 条")
-                    stats += RestoreStats(chatSessions = count)
-                }
-                FILE_MESSAGES -> {
-                    val count = restoreJsonl(tar, AgentMessageDto.serializer()) { dtos ->
-                        agentMessageDao.insertAll(dtos.map { it.toEntity() })
-                    }
-                    FileLogger.i(TAG, "恢复消息 $count 条")
-                    stats += RestoreStats(agentMessages = count)
-                }
-                FILE_TODOS -> {
-                    val count = restoreJsonl(tar, TodoItemDto.serializer()) { dtos ->
-                        todoItemDao.upsertAll(dtos.map { it.toEntity() })
-                    }
-                    FileLogger.i(TAG, "恢复待办 $count 条")
-                    stats += RestoreStats(todoItems = count)
-                }
-                else -> {
-                    when {
-                        entry.name.startsWith(WORKSPACE_PREFIX) ->
-                            stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
-                        entry.name.startsWith(ASSET_PREFIX) -> stats += restoreAssetEntry(tar, entry)
+                    else -> {
+                        when {
+                            entry.name.startsWith(WORKSPACE_PREFIX) ->
+                                stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+                            entry.name.startsWith(ASSET_PREFIX) -> stats += restoreAssetEntry(tar, entry)
+                            entry.name.startsWith(MEMORY_PREFIX) -> stats += restoreMemoryEntry(tar, entry)
+                        }
                     }
                 }
+                entry = tar.nextEntry
             }
-            entry = tar.nextEntry
+            val meta = metadata ?: run {
+                FileLogger.e(TAG, "导入失败：tar 中缺少 metadata.json")
+                error("不是有效的 AiCode 备份文件：缺少 metadata.json")
+            }
+            FileLogger.i(TAG, "tar 解析完成，开始还原元数据段")
+            return stats + restoreMeta(meta)
+        } catch (e: PartialRestoreException) {
+            // 子段（旧格式 / 元数据段）已有自己的计数：合并，别把外层已写的条目丢掉
+            throw PartialRestoreException(stats + e.partialStats, e.cause ?: e)
+        } catch (e: Throwable) {
+            throw PartialRestoreException(stats, e)
         }
-        val meta = metadata ?: run {
-            FileLogger.e(TAG, "导入失败：tar 中缺少 metadata.json")
-            error("不是有效的 AiCode 备份文件：缺少 metadata.json")
-        }
-        FileLogger.i(TAG, "tar 解析完成，开始还原元数据段")
-        return stats + restoreMeta(meta)
     }
 
     /** 逐行解析 jsonl 条目，每 [PAGE_SIZE] 条回调一次批量插入；返回该文件的总条数。 */
@@ -722,27 +882,33 @@ class BackupManagerImpl @Inject constructor(
 
     /** 旧格式（单文件 snapshot.json 完整快照）还原。 */
     private suspend fun restoreLegacy(snapshot: BackupSnapshot): RestoreStats {
-        var stats = restoreMeta(snapshot.toMetadata())
-        if (snapshot.chatSessions.isNotEmpty()) {
-            // 按备份中的工作区路径逐个解析到目标工作区（不存在则自动创建空工作区），不再全部塞进当前工作区。
-            val restoreMapping = mutableMapOf<String, Workspace>()
-            chatSessionDao.upsertAll(
-                snapshot.chatSessions.map {
-                    it.copy(workspacePath = resolveSessionWorkspace(it.workspacePath, restoreMapping)).toEntity()
-                }
-            )
+        var stats = RestoreStats()
+        try {
+            stats += restoreMeta(snapshot.toMetadata())
+            if (snapshot.chatSessions.isNotEmpty()) {
+                // 按备份中的工作区路径逐个解析到目标工作区（不存在则自动创建空工作区），不再全部塞进当前工作区。
+                val restoreMapping = mutableMapOf<String, Workspace>()
+                chatSessionDao.upsertAll(
+                    snapshot.chatSessions.map {
+                        it.copy(workspacePath = resolveSessionWorkspace(it.workspacePath, restoreMapping)).toEntity()
+                    }
+                )
+                stats += RestoreStats(chatSessions = snapshot.chatSessions.size)
+            }
+            if (snapshot.agentMessages.isNotEmpty()) {
+                agentMessageDao.insertAll(snapshot.agentMessages.map { it.toEntity() })
+                stats += RestoreStats(agentMessages = snapshot.agentMessages.size)
+            }
+            if (snapshot.todoItems.isNotEmpty()) {
+                todoItemDao.upsertAll(snapshot.todoItems.map { it.toEntity() })
+                stats += RestoreStats(todoItems = snapshot.todoItems.size)
+            }
+            return stats
+        } catch (e: PartialRestoreException) {
+            throw e
+        } catch (e: Throwable) {
+            throw PartialRestoreException(stats, e)
         }
-        if (snapshot.agentMessages.isNotEmpty()) {
-            agentMessageDao.insertAll(snapshot.agentMessages.map { it.toEntity() })
-        }
-        if (snapshot.todoItems.isNotEmpty()) {
-            todoItemDao.upsertAll(snapshot.todoItems.map { it.toEntity() })
-        }
-        return stats + RestoreStats(
-            chatSessions = snapshot.chatSessions.size,
-            agentMessages = snapshot.agentMessages.size,
-            todoItems = snapshot.todoItems.size
-        )
     }
 
     /**
@@ -761,66 +927,73 @@ class BackupManagerImpl @Inject constructor(
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null} " +
                 "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null}"
         )
-        if (meta.providers.isNotEmpty()) {
-            aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
-        }
-        if (meta.remoteConnections.isNotEmpty()) {
-            remoteConnectionDao.insertAllConnections(meta.remoteConnections.mapNotNull { it.toEntity() })
-        }
-        if (meta.remoteMounts.isNotEmpty()) {
-            // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
-            val connectionIds = remoteConnectionDao.getAllConnectionsOnce().map { it.id }.toSet()
-            remoteConnectionDao.insertAllMounts(
-                meta.remoteMounts.map { it.toEntity() }.filter { it.connectionId in connectionIds }
-            )
-        }
-        if (meta.mcpServers.isNotEmpty()) {
-            mcpConfigRepository.setGlobalServers(meta.mcpServers)
-            mcpManager.reload()
-        }
-        if (meta.globalPermissionRules.isNotEmpty()) {
-            permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
-        }
-        // 启停配置：备份没带（字段为 null）时一个字都不写，与本字段出现之前的导入行为逐字一致；
-        // 带了就整份覆盖两级文件（备份里的名单为准，本机多出来的禁用项不删）。
-        val skillsAgentsConfigRestored = meta.skillsAgentsConfig?.let { restoreSkillsAgentsConfig(it) } ?: false
-        if (meta.appSettingsIncluded) {
-            meta.themeMode?.let { themeSettingsRepository.restore(it) }
-            themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
-            keepaliveSettingsRepository.restore(meta.keepaliveEnabled)
-            liveNotificationSettingsRepository.restore(meta.liveNotificationEnabled)
-            approvalNotificationSettingsRepository.restore(meta.approvalNotificationEnabled)
-            screenOnSettingsRepository.restore(meta.screenOnEnabled)
-            agentSoundSettingsRepository.restore(meta.agentSoundEnabled)
-            generalSettingsRepository.restoreAutoRemoveStaleModels(meta.autoRemoveStaleModels)
-            generalSettingsRepository.restoreStartupSessionMode(meta.startupSessionMode)
-            generalSettingsRepository.restoreFirstByteTimeoutSec(meta.firstByteTimeoutSec)
-            generalSettingsRepository.restoreStreamIdleTimeoutSec(meta.streamIdleTimeoutSec)
-            generalSettingsRepository.restoreMaxNetworkRetries(meta.maxNetworkRetries)
-            generalSettingsRepository.restoreEnterToSend(meta.enterToSend)
-            generalSettingsRepository.restoreCompactionThresholdPercent(meta.compactionThresholdPercent)
-            generalSettingsRepository.restoreSoftCompactionThresholdPercent(meta.softCompactionThresholdPercent)
-            generalSettingsRepository.restoreSendFileMaxSizeMb(meta.sendFileMaxSizeMb)
-            generalSettingsRepository.restoreDeleteExternalWorkspaceSessions(meta.deleteExternalWorkspaceSessions)
-            logSettingsRepository.restore(meta.logLevel)
-            if (meta.visionProviderId.isNotBlank() || meta.visionModel.isNotBlank()) {
-                visionModelSettingsRepository.setVisionModel(meta.visionProviderId, meta.visionModel)
+        // 逐段计数：中途失败时 partialStats 要能说清哪些段已写入、各多少条。
+        var stats = RestoreStats()
+        try {
+            if (meta.providers.isNotEmpty()) {
+                aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
+                stats += RestoreStats(providers = meta.providers.size)
             }
-            if (meta.compactionProviderId.isNotBlank() || meta.compactionModel.isNotBlank()) {
-                compactionModelSettingsRepository.setCompactionModel(meta.compactionProviderId, meta.compactionModel)
+            if (meta.remoteConnections.isNotEmpty()) {
+                remoteConnectionDao.insertAllConnections(meta.remoteConnections.mapNotNull { it.toEntity() })
+                stats += RestoreStats(remoteConnections = meta.remoteConnections.size)
             }
-            meta.syncSettings?.let { syncSettingsRepository.restore(it) }
+            if (meta.remoteMounts.isNotEmpty()) {
+                // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
+                val connectionIds = remoteConnectionDao.getAllConnectionsOnce().map { it.id }.toSet()
+                remoteConnectionDao.insertAllMounts(
+                    meta.remoteMounts.map { it.toEntity() }.filter { it.connectionId in connectionIds }
+                )
+                stats += RestoreStats(remoteMounts = meta.remoteMounts.size)
+            }
+            if (meta.mcpServers.isNotEmpty()) {
+                mcpConfigRepository.setGlobalServers(meta.mcpServers)
+                mcpManager.reload()
+                stats += RestoreStats(mcpServers = meta.mcpServers.size)
+            }
+            if (meta.globalPermissionRules.isNotEmpty()) {
+                permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
+                stats += RestoreStats(globalPermissionRules = meta.globalPermissionRules.size)
+            }
+            // 启停配置：备份没带（字段为 null）时一个字都不写，与本字段出现之前的导入行为逐字一致；
+            // 带了就整份覆盖两级文件（备份里的名单为准，本机多出来的禁用项不删）。
+            val skillsAgentsConfigRestored = meta.skillsAgentsConfig?.let { restoreSkillsAgentsConfig(it) } ?: false
+            if (skillsAgentsConfigRestored) stats += RestoreStats(skillsAgentsConfigRestored = true)
+            if (meta.appSettingsIncluded) {
+                meta.themeMode?.let { themeSettingsRepository.restore(it) }
+                themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
+                keepaliveSettingsRepository.restore(meta.keepaliveEnabled)
+                liveNotificationSettingsRepository.restore(meta.liveNotificationEnabled)
+                approvalNotificationSettingsRepository.restore(meta.approvalNotificationEnabled)
+                screenOnSettingsRepository.restore(meta.screenOnEnabled)
+                agentSoundSettingsRepository.restore(meta.agentSoundEnabled)
+                generalSettingsRepository.restoreAutoRemoveStaleModels(meta.autoRemoveStaleModels)
+                generalSettingsRepository.restoreStartupSessionMode(meta.startupSessionMode)
+                generalSettingsRepository.restoreFirstByteTimeoutSec(meta.firstByteTimeoutSec)
+                generalSettingsRepository.restoreStreamIdleTimeoutSec(meta.streamIdleTimeoutSec)
+                generalSettingsRepository.restoreMaxNetworkRetries(meta.maxNetworkRetries)
+                generalSettingsRepository.restoreEnterToSend(meta.enterToSend)
+                generalSettingsRepository.restoreCompactionThresholdPercent(meta.compactionThresholdPercent)
+                generalSettingsRepository.restoreSoftCompactionThresholdPercent(meta.softCompactionThresholdPercent)
+                generalSettingsRepository.restoreSendFileMaxSizeMb(meta.sendFileMaxSizeMb)
+                generalSettingsRepository.restoreDeleteExternalWorkspaceSessions(meta.deleteExternalWorkspaceSessions)
+                logSettingsRepository.restore(meta.logLevel)
+                if (meta.visionProviderId.isNotBlank() || meta.visionModel.isNotBlank()) {
+                    visionModelSettingsRepository.setVisionModel(meta.visionProviderId, meta.visionModel)
+                }
+                if (meta.compactionProviderId.isNotBlank() || meta.compactionModel.isNotBlank()) {
+                    compactionModelSettingsRepository.setCompactionModel(meta.compactionProviderId, meta.compactionModel)
+                }
+                meta.syncSettings?.let { syncSettingsRepository.restore(it) }
+                // 设置是一整段回写的，全部写完才算“已覆盖”；中途失败不计，避免摘要说已恢复实际没有。
+                stats += RestoreStats(settingsRestored = true)
+            }
+            return stats
+        } catch (e: PartialRestoreException) {
+            throw e
+        } catch (e: Throwable) {
+            throw PartialRestoreException(stats, e)
         }
-
-        return RestoreStats(
-            providers = meta.providers.size,
-            remoteConnections = meta.remoteConnections.size,
-            remoteMounts = meta.remoteMounts.size,
-            mcpServers = meta.mcpServers.size,
-            globalPermissionRules = meta.globalPermissionRules.size,
-            settingsRestored = meta.appSettingsIncluded,
-            skillsAgentsConfigRestored = skillsAgentsConfigRestored
-        )
     }
 
     /**
@@ -1038,6 +1211,9 @@ class BackupManagerImpl @Inject constructor(
     private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt, parentId)
     private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt, parentId)
 
+    private fun SessionBriefEntity.toDto() = SessionBriefDto(sessionId, content, updatedAt)
+    private fun SessionBriefDto.toEntity() = SessionBriefEntity(sessionId, content, updatedAt)
+
     private companion object {
         const val TAG = "BackupManager"
         const val PAGE_SIZE = 500
@@ -1045,8 +1221,17 @@ class BackupManagerImpl @Inject constructor(
         const val FILE_SESSIONS = "chatSessions.jsonl"
         const val FILE_MESSAGES = "messages.jsonl"
         const val FILE_TODOS = "todoItems.jsonl"
+        const val FILE_SESSION_BRIEFS = "sessionBriefs.jsonl"
         const val FILE_LEGACY_SNAPSHOT = "snapshot.json"
         const val WORKSPACE_PREFIX = "workspaces/"
+
+        /** 记忆目录条目前缀，下面按「全局/项目」细分。 */
+        const val MEMORY_PREFIX = "memories/"
+        const val MEMORY_GLOBAL_PREFIX = "${MEMORY_PREFIX}global/"
+        const val MEMORY_PROJECT_PREFIX = "${MEMORY_PREFIX}project/"
+
+        /** 记忆目录遍历深度：根文件算 1 层，够盖住 `.superseded/` 这类子目录。 */
+        const val MEMORY_MAX_DEPTH = 4
 
         /** 技能 / 子代理 / 面板脚本的资产条目前缀，下面按「类别/层级」细分。 */
         const val ASSET_PREFIX = "assets/"
@@ -1090,6 +1275,9 @@ private class TarSource(
 
 /** 一类可备份资产：tar 条目前缀（带结尾斜杠）、容器路径根、导入摘要计数类别。 */
 private class AssetRoot(val prefix: String, val root: String, val kind: AssetKind)
+
+/** 一个记忆目录：tar 条目前缀（带结尾斜杠）与容器路径根。 */
+private class MemoryRoot(val prefix: String, val root: String)
 
 /** 资产类别，决定导入摘要把它算进哪一行。 */
 private enum class AssetKind { SKILL, SUBAGENT, PANEL_SCRIPT }

@@ -299,3 +299,13 @@ data class TodoItemDto(
     /** 父任务 id；旧备份缺该字段时为 null。 */
     val parentId: String? = null
 )
+
+/**
+ * 会话工作状态（`session_briefs`）。主键是 sessionId，恢复时按主键 REPLACE，重复导入不会产生重复行。
+ */
+@Serializable
+data class SessionBriefDto(
+    val sessionId: String,
+    val content: String,
+    val updatedAt: Long
+)

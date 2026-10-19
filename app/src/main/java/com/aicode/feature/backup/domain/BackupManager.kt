@@ -28,13 +28,16 @@ interface BackupManager {
      * 流式解包并还原备份文件。
      * @param input 调用方负责打开与关闭输入流
      * @param password 备份未加密时传 null 或空；加密文件必须提供正确口令。
+     * @param uncompressedBytes 解压后数据量（[ImportPreview.uncompressedBytes]）：写入前据此做空间预检，
+     *   目标分区不足以 [BackupSpace.SAFETY_FACTOR] 的余量容纳时直接失败，不进入写入流程。
      * @param selectedWorkspaces 非 null 时只恢复这些工作区的文件（导入前由 [previewImport] 勾选）；
      *   null 表示全量恢复（备份无工作区数据或旧调用）。
-     * @return 还原统计（各数据段条目数）；口令错误/格式不符/版本过高时返回失败。
+     * @return 还原统计（各数据段条目数）；口令错误/格式不符/版本过高/空间不足时返回失败。
      */
     suspend fun import(
         input: InputStream,
         password: CharArray?,
+        uncompressedBytes: Long,
         selectedWorkspaces: Set<String>? = null
     ): Result<RestoreStats>
 
@@ -49,9 +52,11 @@ interface BackupManager {
     suspend fun prepareImport(input: InputStream, password: CharArray?): File
 }
 
-/** 导入预览结果：备份中的工作区列表（供勾选）。 */
+/** 导入预览结果：备份中的工作区列表（供勾选）与解压后数据量（供空间预检）。 */
 data class ImportPreview(
-    val workspaces: List<WorkspaceBackupMeta>
+    val workspaces: List<WorkspaceBackupMeta>,
+    /** tar 内所有条目声明大小之和；旧格式（snapshot.json）也算在其中。 */
+    val uncompressedBytes: Long = 0
 ) {
     val hasWorkspaceData: Boolean get() = workspaces.isNotEmpty()
 }
@@ -68,7 +73,11 @@ data class BackupOptions(
     /** 技能与子代理：全局 + 项目两级的技能目录、子代理目录，以及同两级的启停配置。 */
     val skillsAndAgents: Boolean = true,
     /** 面板脚本目录（`~/.aicode/scripts`）。 */
-    val panelScripts: Boolean = true
+    val panelScripts: Boolean = true,
+    /** 长期记忆目录：全局 `~/.aicode/memory/` 与当前工作区的 `.aicode/memory/`。默认关。 */
+    val memoryFiles: Boolean = false,
+    /** 会话工作状态（`session_briefs` 表）。默认关。 */
+    val sessionBriefs: Boolean = false
 )
 
 data class RestoreStats(
@@ -95,8 +104,18 @@ data class RestoreStats(
     /** 本次导入实际写入的面板脚本文件数。 */
     val panelScriptFiles: Int = 0,
     /** 本次导入是否真的回写了技能 / 子代理的启停配置（备份没带、或项目级因工作区未落定被跳过时为 false）。 */
-    val skillsAgentsConfigRestored: Boolean = false
+    val skillsAgentsConfigRestored: Boolean = false,
+    /** 本次导入写入的记忆文件数（全局 + 项目两级）。 */
+    val memoryFiles: Int = 0,
+    /** 本次导入回写的会话工作状态条数。 */
+    val sessionBriefs: Int = 0
 ) {
+    /** 是否已经写入了任何业务数据：失败提示据此区分「一条都没写」与「写了半套」。 */
+    val hasWrittenData: Boolean
+        get() = providers + remoteConnections + remoteMounts + chatSessions + agentMessages +
+            todoItems + mcpServers + globalPermissionRules + workspaceFiles + skillFiles +
+            subagentFiles + panelScriptFiles + memoryFiles + sessionBriefs > 0
+
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
         remoteConnections = remoteConnections + other.remoteConnections,
@@ -112,6 +131,20 @@ data class RestoreStats(
         skillFiles = skillFiles + other.skillFiles,
         subagentFiles = subagentFiles + other.subagentFiles,
         panelScriptFiles = panelScriptFiles + other.panelScriptFiles,
-        skillsAgentsConfigRestored = skillsAgentsConfigRestored || other.skillsAgentsConfigRestored
+        skillsAgentsConfigRestored = skillsAgentsConfigRestored || other.skillsAgentsConfigRestored,
+        memoryFiles = memoryFiles + other.memoryFiles,
+        sessionBriefs = sessionBriefs + other.sessionBriefs
     )
 }
+
+/**
+ * 恢复中途失败：携带已经写入的统计，供 UI 如实提示「部分数据已写入」而不是假装成功。
+ *
+ * 不引入跨表大事务：Room 的整库事务要在一个事务里跑完整条流式导入，事务期间所有写入锁在同一连接上，
+ * WAL 无法推进、失败时回滚日志还可能大于可用空间，反而放大「空间不足」的风险；
+ * 且各数据段本来就是按 id 幂等 upsert，重新导入即可补齐。
+ */
+class PartialRestoreException(
+    val partialStats: RestoreStats,
+    cause: Throwable
+) : IllegalStateException("恢复中断：部分数据已写入", cause)
