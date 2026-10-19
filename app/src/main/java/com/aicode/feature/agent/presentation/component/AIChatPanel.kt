@@ -2361,8 +2361,7 @@ internal fun rememberScrollFadeAlpha(scrolling: () -> Boolean): State<Float> {
             alpha.animateTo(if (scrollingNow) 0.4f else 1f, tween(200))
         }
     }
-    // Animatable 本身不是 State；asState() 才是可被 graphicsLayer 延迟读的 State<Float>。
-    return alpha.asState()
+    return alpha
 }
 
 /** 手势收尾判定用的四个状态，整体订阅以避免任一状态翻转都令面板重组。 */
