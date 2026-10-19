@@ -67,6 +67,9 @@ interface SlashCommandContext {
     /** /usage —— 以 Markdown 表格输出今日与累计的调用次数、token 用量与预估费用。 */
     fun showUsage()
 
+    /** /context —— 调试用：输出当前会话的上下文估算 token、软/硬/兜底三条阈值线。 */
+    fun showContextInfo()
+
     /** /init —— 触发一次 agent 回合，分析代码库并生成/改进项目规则文件；[prompt] 为指令正文。 */
     fun initProject(prompt: String)
 

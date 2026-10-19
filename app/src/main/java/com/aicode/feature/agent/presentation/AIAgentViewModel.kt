@@ -30,6 +30,7 @@ import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -80,6 +81,7 @@ import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.agent.domain.workflow.CompactionProgress
 import com.aicode.feature.agent.domain.workflow.ContextUsage
 import com.aicode.feature.agent.domain.workflow.ContextUsageHolder
+import com.aicode.feature.agent.domain.workflow.TokenEstimator
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
@@ -2781,6 +2783,37 @@ class AIAgentViewModel @Inject constructor(
             // /usage 统计行不属于对话上下文：isContextExcluded 是它「从不进上下文」的标记
             // （迁移 58 把已升级用户的旧行也是这么归的）；isCompacted 一并置上，免得它被
             // 短期上下文规模统计当成活行。两者都防住后，回退恢复也不会把它放回上下文。
+            messagePersistenceUseCase.persist(
+                sid,
+                MessageRole.ASSISTANT,
+                table.trimEnd(),
+                isCompacted = true,
+                isContextExcluded = true
+            )
+        }
+    }
+
+    /** /context —— 调试用：展示当前会话的上下文估算与阈值线。与 /usage 一样不进入对话上下文。 */
+    override fun showContextInfo() {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch {
+            // 用真实历史重建（buildHistory 与引擎同源），估算尽量贴近实际发送量。
+            val history = runCatching {
+                messagePersistenceUseCase.buildHistory(sid, SessionUseCase.PENDING_TOOL_MARKER)
+            }.getOrNull()
+            val tokens = history?.let { TokenEstimator.estimateMessages(it) } ?: 0
+            val hard = generalSettingsRepository.compactionThresholdPercent()
+            val soft = generalSettingsRepository.softCompactionThresholdPercent()
+            val guard = ModelContextPolicy.GUARD_BUDGET_PERCENT
+            val table = buildString {
+                appendLine("| 项 | 值 |")
+                appendLine("|---|---|")
+                appendLine("| 消息数 | ${history?.size ?: 0} |")
+                appendLine("| 估算 tokens | ${formatTokenCount(tokens)} |")
+                appendLine("| 软线 | ${soft}% |")
+                appendLine("| 硬线 | ${hard}% |")
+                appendLine("| 兜底线 | ${guard}% |")
+            }
             messagePersistenceUseCase.persist(
                 sid,
                 MessageRole.ASSISTANT,
