@@ -743,6 +743,8 @@ fun AppNavigation(
                                 editorLine = paneEditorLine,
                                 onClose = { paneKind = WorkbenchPaneKind.NONE },
                                 onOpenFile = { path -> openFile(path, 0, false) },
+                                // rc5 的平板右栏脏状态确认：主分支把调用重构进了 if (paneOpen)，
+                                // 故把该参数落在这里，而不是保留旧位置那份重复调用
                                 editorLeaveGuard = editorLeaveGuard,
                                 modifier = Modifier.weight(1f - paneSplit)
                             )

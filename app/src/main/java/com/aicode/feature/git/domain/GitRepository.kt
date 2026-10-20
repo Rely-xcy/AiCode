@@ -778,7 +778,7 @@ class GitRepository @Inject constructor(
         val cwd = repoCwd()
         val local = withContext(Dispatchers.IO) {
             runCatching {
-                java.io.File(cwd, path)
+                java.io.File(repoCwd(), path)
                     .takeIf { it.isFile }
                     ?.also { if (it.length() > MAX_DIFF_FILE_BYTES) throw GitOutputTooLargeException() }
                     ?.readText()
@@ -790,7 +790,7 @@ class GitRepository @Inject constructor(
         if (local != null) return local
         val result = engine.runCommandSyncUnbounded(
             "cat -- ${shellQuote(path)}",
-            cwd
+            repoCwd()
         )
         if (result.outputTruncated) throw GitOutputTooLargeException()
         return if (result.exitCode == 0) result.output else ""

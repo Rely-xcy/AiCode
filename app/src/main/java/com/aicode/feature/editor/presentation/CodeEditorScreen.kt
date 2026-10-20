@@ -194,6 +194,7 @@ fun CodeEditorScreen(
                 }
                 is SaveResult.Conflict -> {
                     // 冲突时放弃"保存并退出"的意图：先让用户决定怎么处理这次冲突。
+                    // rc5 起 pendingExit 已被 pendingLeave（+ EditorLeaveGuard）取代，这里跟着换成它。
                     pendingLeave = null
                     saveConflictDiskContent = result.diskContent
                 }

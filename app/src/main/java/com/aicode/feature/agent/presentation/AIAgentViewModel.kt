@@ -2376,6 +2376,12 @@ class AIAgentViewModel @Inject constructor(
                     runCatching { sessionUseCase.updateGoalStatus(sessionId, GoalStatus.PAUSED) }
                 }
             }
+            // goal 自主循环期间用户打断：暂停目标，避免下条消息后自动续跑（对齐 Codex「打断即暂停」）。
+            if (goalActiveAtTurn) {
+                viewModelScope.launch {
+                    runCatching { sessionUseCase.updateGoalStatus(sessionId, GoalStatus.PAUSED) }
+                }
+            }
             throw e
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)

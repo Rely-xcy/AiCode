@@ -123,6 +123,14 @@ fun DownloadedImageRecord.effectiveVersion(): String =
     version.takeIf { it.isNotBlank() } ?: versionFromDownloadFileName(entryId, fileUri)
 
 /**
+ * 磁盘上这份下载文件的版本号：记录字段优先；升级前的旧记录没有该字段，
+ * 退回从下载文件名解析（文件名一直带版本号），这样旧记录也能正确提示「有新版」，不必做数据迁移。
+ * 两者都拿不到时返回空串，调用方按「不知道版本」处理，不误报。
+ */
+fun DownloadedImageRecord.effectiveVersion(): String =
+    version.takeIf { it.isNotBlank() } ?: versionFromDownloadFileName(entryId, fileUri)
+
+/**
  * 持久化当前选中的容器 profile 与用户自定义 profile 列表。
  *
  * DataStore 用法与 [ThemeSettingsRepository] 一致（构造注入即可，无需 DI module）。
@@ -161,6 +169,16 @@ class ContainerSettingsRepository @Inject constructor(
      */
     val customProfilesFlow: Flow<List<ContainerProfile>> = context.containerDataStore.data.map { prefs ->
         decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: emptyList()
+    }
+
+    /**
+     * 当前选中的 profile。id 在列表中已不存在（被删除）时回退列表首项，列表为空回退内置 Alpine，
+     * 保证调用方总能拿到一个可用 profile。
+     */
+    val activeProfileFlow: Flow<ContainerProfile> = combine(activeProfileIdFlow, customProfilesFlow) { id, profiles ->
+        profiles.firstOrNull { it.id == id }
+            ?: profiles.firstOrNull()
+            ?: ContainerProfile.BUILTIN_ALPINE
     }
 
     /**

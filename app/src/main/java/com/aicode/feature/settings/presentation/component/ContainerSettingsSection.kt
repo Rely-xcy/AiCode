@@ -5,12 +5,16 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -27,9 +31,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,15 +67,22 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.ui.containerOsLogo
@@ -93,11 +104,12 @@ import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Trash2
-import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * 容器镜像二级页：所有容器（含内置 Alpine）统一管理——列表单选切换、编辑、重置、左滑删除；
@@ -106,9 +118,6 @@ import kotlinx.coroutines.withContext
  * 选中某个 profile 时按其 [ContainerProfile.mode] 同步切全局执行模式——本地镜像走 PRoot 容器，
  * 远程 SSH 镜像走 SSH exec/SFTP。
  */
-
-/** 列表 item key 前缀：标识容器行身份，拖拽回调靠它反查 profile id。 */
-private const val CONTAINER_PROFILE_PREFIX = "container_profile_"
 @Composable
 internal fun ContainerSection(
     profiles: List<ContainerProfile>,
@@ -127,9 +136,13 @@ internal fun ContainerSection(
     /** 非 null 说明正在重置，界面弹不可取消的进度框直到删完。 */
     resetState: ContainerResetUiState? = null,
     onRestoreBuiltin: () -> Unit = {},
-    remoteConnections: List<RemoteConnection> = emptyList()
+    remoteConnections: List<RemoteConnection> = emptyList(),
+    /** 长按拖拽排序落库（顺序即列表存储顺序）。 */
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
+    // 长按拖拽排序的触感反馈（与「供应商」页一致：进入拖拽与松手各一次）
+    val hapticFeedback = LocalHapticFeedback.current
     var showAddSheetInternal by remember { mutableStateOf(false) }
     val showAddSheet = showAddSheetInternal || showAddSheetExternal
     var editingProfile by remember { mutableStateOf<ContainerProfile?>(null) }
@@ -161,43 +174,69 @@ internal fun ContainerSection(
             }
         }
     } else {
-        val settingsViewModel = rememberSettingsViewModel()
-        val lazyListState = rememberLazyListState()
-        val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-            val viewModel = settingsViewModel ?: return@rememberReorderableLazyListState
-            val moved = itemIdOf(from.key, CONTAINER_PROFILE_PREFIX) ?: return@rememberReorderableLazyListState
-            val target = itemIdOf(to.key, CONTAINER_PROFILE_PREFIX) ?: return@rememberReorderableLazyListState
-            viewModel.reorderContainerProfiles(moved, target)
+        // 与「供应商」页一致：一行一张独立圆角卡片（8dp 间距），长按行内容拖拽排序
+        val listState = rememberLazyListState()
+        val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+            onReorder(from.index, to.index)
         }
         LazyColumn(
-            state = lazyListState,
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.xl)
+                .padding(bottom = Spacing.xl),
+            contentPadding = PaddingValues(top = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
             itemsIndexed(
                 items = profiles,
-                key = { _, profile -> listItemKey(CONTAINER_PROFILE_PREFIX, profile.id) }
-            ) { index, profile ->
-                ReorderableCardRow(
+                key = { _, profile -> profile.id }
+            ) { _, profile ->
+                ReorderableItem(
                     state = reorderableState,
-                    key = listItemKey(CONTAINER_PROFILE_PREFIX, profile.id),
-                    isFirst = index == 0,
-                    isLast = index == profiles.lastIndex,
-                    dragLabel = "containerDrag"
-                ) { dragModifier ->
-                    ContainerRow(
-                        profile = profile,
-                        active = profile.id == activeProfileId,
-                        defaultContainerId = defaultContainerId,
-                        osId = osMap[profile.id],
-                        subtitle = profileSubtitle(context, profile, remoteConnections),
-                        onSelect = { if (profile.id != activeProfileId) pendingSwitch = profile },
-                        onEdit = { editingProfile = profile },
-                        onDelete = { deletingProfile = profile },
-                        dragModifier = dragModifier
+                    key = profile.id
+                ) { isDragging ->
+                    val dragScale by animateFloatAsState(
+                        targetValue = if (isDragging) 0.95f else 1f,
+                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                        label = "containerDragScale"
                     )
+                    val dragElevation by animateDpAsState(
+                        targetValue = if (isDragging) 8.dp else 0.dp,
+                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                        label = "containerDragElevation"
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(Radius.lg),
+                        color = MaterialTheme.semanticColors.cardSurface,
+                        shadowElevation = dragElevation,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                scaleX = dragScale
+                                scaleY = dragScale
+                            }
+                    ) {
+                        ContainerRow(
+                            profile = profile,
+                            active = profile.id == activeProfileId,
+                            defaultContainerId = defaultContainerId,
+                            osId = osMap[profile.id],
+                            subtitle = profileSubtitle(context, profile, remoteConnections),
+                            onSelect = { if (profile.id != activeProfileId) pendingSwitch = profile },
+                            onEdit = { editingProfile = profile },
+                            onDelete = { deletingProfile = profile },
+                            dragModifier = Modifier.longPressDraggableHandle(
+                                onDragStarted = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                },
+                                onDragStopped = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                }
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -322,8 +361,9 @@ private fun deleteHint(context: Context, profile: ContainerProfile): String = wh
 }
 
 /**
- * 单个容器行：分组内白底行，左侧图标方块 + 名称（内置带徽章）/副标题，右侧选中勾选 + 编辑/重置按钮，左滑删除。
- * 行主体点击切换镜像（未选中时弹确认）。
+ * 单个容器行：卡片内白底行，左侧图标方块 + 名称（内置带徽章）/副标题，右侧编辑按钮，左滑删除。
+ * 行主体点击切换镜像（未选中时弹确认）；选中的容器以名称变主题色表示（不再额外放勾选图标）。
+ * [dragModifier] 由列表侧提供（长按拖动排序的手柄），只挂在左侧信息区，避免与左滑删除抢手势。
  */
 @Composable
 private fun ContainerRow(
@@ -338,6 +378,7 @@ private fun ContainerRow(
     dragModifier: Modifier = Modifier
 ) {
     val light = settingsLightMode()
+    val sortDescription = stringResource(R.string.container_sort_long_press)
 
     SwipeToDeleteRow(
         onDelete = onDelete,
@@ -346,99 +387,98 @@ private fun ContainerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(dragModifier)
-                .padding(horizontal = Spacing.lg, vertical = 12.dp),
+                .padding(horizontal = Spacing.lg, vertical = 12.dp)
+                // 去掉勾选图标后，选中状态靠语义属性保留给读屏
+                .semantics { selected = active },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 左侧图标方块
-            Box(
+            Row(
                 modifier = Modifier
-                    .size(40.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    .weight(1f)
+                    .then(dragModifier)
+                    .semantics { contentDescription = sortDescription },
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                val osIcon = containerOsLogo(osId)
-                if (osIcon != null) {
-                    Icon(
-                        painter = osIcon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .align(Alignment.Center)
-                    )
-                } else {
-                    Icon(
-                        imageVector = if (profile.mode == ExecutionMode.REMOTE_SSH) FeatherIcons.Server else FeatherIcons.HardDrive,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .align(Alignment.Center)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(Spacing.md))
-
-            // 中间：名称（内置徽章）+ 副标题
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = profile.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Normal,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (profile.isBuiltin) {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        SourceBadge(
-                            text = stringResource(R.string.container_builtin_badge),
-                            color = MaterialTheme.colorScheme.primary
+                // 左侧图标方块
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp)
                         )
-                    } else if (profile.mode == ExecutionMode.REMOTE_SSH) {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        SourceBadge(
-                            text = stringResource(R.string.container_ssh_badge),
-                            color = MaterialTheme.colorScheme.secondary
+                ) {
+                    val osIcon = containerOsLogo(osId)
+                    if (osIcon != null) {
+                        Icon(
+                            painter = osIcon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .align(Alignment.Center)
                         )
                     } else {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        SourceBadge(
-                            text = stringResource(R.string.container_custom_badge),
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-                    if (profile.id == defaultContainerId) {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        SourceBadge(
-                            text = stringResource(R.string.container_default_badge),
-                            color = MaterialTheme.semanticColors.warning
+                        Icon(
+                            imageVector = if (profile.mode == ExecutionMode.REMOTE_SSH) FeatherIcons.Server else FeatherIcons.HardDrive,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .align(Alignment.Center)
                         )
                     }
                 }
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
 
-            // 选中勾选
-            if (active) {
-                Spacer(modifier = Modifier.width(Spacing.sm))
-                Icon(
-                    imageVector = FeatherIcons.Check,
-                    contentDescription = stringResource(R.string.container_active),
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
+                Spacer(modifier = Modifier.width(Spacing.md))
+
+                // 中间：名称（内置徽章）+ 副标题
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = profile.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Normal,
+                            // 选中态：名称变主题色（替代原先行尾的勾选图标）
+                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (profile.isBuiltin) {
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            SourceBadge(
+                                text = stringResource(R.string.container_builtin_badge),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else if (profile.mode == ExecutionMode.REMOTE_SSH) {
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            SourceBadge(
+                                text = stringResource(R.string.container_ssh_badge),
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            SourceBadge(
+                                text = stringResource(R.string.container_custom_badge),
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                        if (profile.id == defaultContainerId) {
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            SourceBadge(
+                                text = stringResource(R.string.container_default_badge),
+                                color = MaterialTheme.semanticColors.warning
+                            )
+                        }
+                    }
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
 
             // 编辑入口（所有容器）：行尾铅笔，点击进入编辑弹窗（行主体点击是切换）
