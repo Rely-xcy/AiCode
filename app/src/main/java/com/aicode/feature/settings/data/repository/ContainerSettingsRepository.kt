@@ -173,16 +173,6 @@ class ContainerSettingsRepository @Inject constructor(
             ?: ContainerProfile.BUILTIN_ALPINE
     }
 
-    /**
-     * 当前选中的 profile。id 在列表中已不存在（被删除）时回退列表首项，列表为空回退内置 Alpine，
-     * 保证调用方总能拿到一个可用 profile。
-     */
-    val activeProfileFlow: Flow<ContainerProfile> = combine(activeProfileIdFlow, customProfilesFlow) { id, profiles ->
-        profiles.firstOrNull { it.id == id }
-            ?: profiles.firstOrNull()
-            ?: ContainerProfile.BUILTIN_ALPINE
-    }
-
     suspend fun setActiveProfile(id: String) {
         context.containerDataStore.edit { it[ACTIVE_PROFILE_ID_KEY] = id }
     }
