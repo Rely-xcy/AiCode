@@ -838,7 +838,6 @@
     <string name="slash_command_init_desc">分析当前工作区代码库，生成或改进项目规则 AGENTS.md</string>
     <string name="slash_command_usage_desc">查看今日与累计的调用次数、token 用量与预估费用</string>
     <string name="slash_command_goal_desc">设定会话持续目标，AI 自主循环推进至达成或预算耗尽</string>
-    <string name="slash_command_context_desc">调试：查看当前会话的上下文估算与压缩阈值</string>
     <string name="retry_error_rate_limit">速率限制</string>
     <string name="retry_error_server_overloaded">服务器负载过高</string>
     <string name="retry_error_server">服务端错误</string>
