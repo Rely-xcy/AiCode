@@ -23,7 +23,16 @@ android {
     // 只有它能被 macrobenchmark 接住；universal 是含两套容器镜像的通用 flavor。
     targetProjectPath = ":app"
     experimentalProperties["android.experimental.self-instrumenting"] = true
-    experimentalProperties["android.experimental.testTargetVariant"] = "universalBenchmark"
+
+    // app 有 container 维度的三个 flavor，生成器必须声明同一维度与同名 flavor，否则 Gradle
+    // 无法在 universalBenchmark / armsoloBenchmark / x86soloBenchmark 之间选择，报
+    // "cannot choose between the following variants"。
+    flavorDimensions += "container"
+    productFlavors {
+        create("universal") { dimension = "container" }
+        create("armsolo") { dimension = "container" }
+        create("x86solo") { dimension = "container" }
+    }
 
     buildTypes {
         create("benchmark") {
