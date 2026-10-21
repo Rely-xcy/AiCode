@@ -45,7 +45,7 @@ jobs:
 
       - name: Compile generator test APK
         # 先编译再来模拟器：配置/依赖/DSL 错误在这里就暴露，不用等 20 分钟开完机
-        run: ./gradlew :baselineprofile:assembleBenchmark --stacktrace
+        run: ./gradlew :baselineprofile:assembleUniversalBenchmark --stacktrace
 
       - name: Generate baseline profile on emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -55,7 +55,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace
+          script: ./gradlew :baselineprofile:connectedUniversalBenchmarkAndroidTest --stacktrace
 
       - name: Upload generated profile
         if: always()
