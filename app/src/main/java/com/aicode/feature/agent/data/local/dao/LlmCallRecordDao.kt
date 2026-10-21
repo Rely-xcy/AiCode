@@ -91,6 +91,14 @@ interface LlmCallRecordDao {
     suspend fun deleteAll()
 
     /**
+     * 删除 [cutoff] 之前的调用明细，返回删除行数。
+     *
+     * 走 createdAt 索引：没有过期行时只是一次索引 seek，可以每次进设置页都跑。
+     */
+    @Query("DELETE FROM llm_call_records WHERE createdAt < :cutoff")
+    suspend fun deleteOlderThan(cutoff: Long): Int
+
+    /**
      * 按天聚合（本地时区：把 createdAt 平移 [tzOffsetMillis] 后再按 86400000 取整切天）。
      * [tzOffsetMillis] 由调用方按当前系统时区提供（TimeZone.getDefault().getOffset(now)）。
      */
