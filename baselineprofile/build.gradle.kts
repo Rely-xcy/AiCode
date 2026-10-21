@@ -41,6 +41,8 @@ android {
             // :terminal-emulator 等库模块没有 benchmark 变体，缺这一行会报
             // "No matching variant of project :terminal-emulator"。
             matchingFallbacks += "release"
+            // 自定义 buildType 不会自动继承 debug 签名，不签会 INSTALL_PARSE_FAILED_NO_CERTIFICATES
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
