@@ -37,6 +37,10 @@ android {
     buildTypes {
         create("benchmark") {
             isDebuggable = false
+            // 解析 :app 的传递依赖时 fallback 取自发起解析的变体（就是本模块的 benchmark）：
+            // :terminal-emulator 等库模块没有 benchmark 变体，缺这一行会报
+            // "No matching variant of project :terminal-emulator"。
+            matchingFallbacks += "release"
         }
     }
 
