@@ -15,7 +15,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -739,6 +739,15 @@ internal fun splitLongContent(text: String): List<String> {
     return chunks
 }
 
+/** 滚动尾窗判定的四元组：比四个独立 LaunchedEffect key 更稳——
+ *  后者每个都在组合期读，滚动/惯性一变就整屏重组。 */
+private data class ScrollSettleSignal(
+    val pointerDown: Boolean,
+    val userScrollGesture: Boolean,
+    val nestedFling: Boolean,
+    val scrollInProgress: Boolean,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AIChatPanel(
@@ -906,6 +915,12 @@ fun AIChatPanel(
         if (kept.size != pendingUserMessages.size) pendingUserMessages = kept
     }
     val listState = rememberLazyListState()
+    // 滚动状态只喂给两个子组件的绘制期 alpha。包成派生 State 传给子组件，读取下沉到
+    // graphicsLayer 里：直接传 listState.isScrollInProgress 会在本函数体内求值，
+    // 滚动开始/结束各重组一次整个面板（含全部可见 item 的 Markdown）。
+    val scrollInProgressState = remember(listState) {
+        derivedStateOf { listState.isScrollInProgress }
+    }
     // 消息未就绪时的加载提示：本地读库通常几十毫秒，立刻显示反而闪一下，等一小会儿还没就绪才提示。
     var showMessagesLoading by remember(currentSessionId) { mutableStateOf(false) }
     LaunchedEffect(currentSessionId, messagesReady) {
@@ -1277,16 +1292,16 @@ fun AIChatPanel(
     // 的行 id」）。ViewModel 在本轮 AssistantText（有可见正文或思考）落库前登记该行主键
     // （currentSessionPendingAssistantRowId），这里只需判断它是否已出现在 messages 里。
     // 不再做前缀 / 双向包含猜同源，也不再依赖 4s 强制退休窗口。
-    val assistantSettled by remember {
-        derivedStateOf {
-            isAssistantSettled(
-                streamingText = streamingText,
-                streamingReasoning = streamingReasoning,
-                pendingRowId = pendingAssistantRowId,
-                messages = messages
-            )
-        }
-    }
+    // 不能套无 key 的 remember + derivedStateOf：messages 是组合期求值出来的普通值
+    // （messagesState.messages 见上），不是 State。lambda 一旦捕获它就固定在首次组合的那份
+    // 列表上，本轮助手行落库后 derived 也不会重算，assistantSettled 恒 false —— 底部思考气泡
+    // 永不退休，与消息里的完整思考重复显示（上面完整、下面残段）。
+    val assistantSettled = isAssistantSettled(
+        streamingText = streamingText,
+        streamingReasoning = streamingReasoning,
+        pendingRowId = pendingAssistantRowId,
+        messages = messages
+    )
 
     LaunchedEffect(streamingText, assistantSettled) {
         val st = streamingText
@@ -1446,11 +1461,20 @@ fun AIChatPanel(
         }
     }
 
-    LaunchedEffect(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress) {
-        if (!pointerDown && userScrollGesture && !nestedFling && !listState.isScrollInProgress) {
-            delay(150)
-            userScrollGesture = false
-            followBottom = isAtBottom
+    // 这四个值原本直接当 LaunchedEffect 的 key：每个都在组合期读，滚动或惯性一开始就整屏
+    // 重组一次（快速连滑时每次都要重跑全部可见 item 的组合）。改成 effect 内观察四元组，
+    // collectLatest 保留「新事件到达即取消上一次 150ms 等待」的原语义。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            ScrollSettleSignal(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress)
+        }.collectLatest { signal ->
+            if (!signal.pointerDown && signal.userScrollGesture &&
+                !signal.nestedFling && !signal.scrollInProgress
+            ) {
+                delay(150)
+                userScrollGesture = false
+                followBottom = isAtBottom
+            }
         }
     }
 
@@ -2017,11 +2041,19 @@ fun AIChatPanel(
             } // 内容层结束
 
             // 悬浮层：错误气泡 / 面板 / 输入框（蒙版在 ChatInputBar 内部，跟随键盘上移）
-            val floatingPanelAlpha by animateFloatAsState(
-                targetValue = if (listState.isScrollInProgress) 0.4f else 1f,
-                animationSpec = tween(200),
-                label = "floating-panel-alpha"
-            )
+            // 只在绘制期生效的滚动淡出：改成 Animatable + effect 驱动、graphicsLayer 内读 value。
+            // 原来 targetValue 直接绑 listState.isScrollInProgress、再用 by 在组合期取值：滚动开始/
+            // 结束各重组一次整个面板，tween 200 的动画期间更是每帧重组一次（约 12 帧 × 2 次/滑动），
+            // 每次重组都要重跑全部可见 item 的组合与 Markdown，是快速滑动掉帧的主要来源之一。
+            val floatingPanelAlpha = remember { Animatable(1f) }
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
+                    floatingPanelAlpha.animateTo(
+                        targetValue = if (scrolling) 0.4f else 1f,
+                        animationSpec = tween(200)
+                    )
+                }
+            }
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -2029,7 +2061,7 @@ fun AIChatPanel(
                     // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
                     .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
             ) {
-            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha }) {
+            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha.value }) {
                 StatusBanner(state = agentState)
             }
 
@@ -2038,7 +2070,7 @@ fun AIChatPanel(
             val lastUploadingCount = rememberLastNonNull(uploadingCount.takeIf { it > 0 })
             AnimatedVisibility(
                 visible = uploadingCount > 0,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2050,7 +2082,7 @@ fun AIChatPanel(
                 visible = pendingQuestion != null,
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .graphicsLayer { alpha = floatingPanelAlpha },
+                    .graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2068,7 +2100,7 @@ fun AIChatPanel(
             val planForPanel = rememberLastNonNull(planApproval)
             AnimatedVisibility(
                 visible = planApproval != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2087,7 +2119,7 @@ fun AIChatPanel(
             // 才知道自己插进去了（真实反馈过他因此以为没生效）。
             AnimatedVisibility(
                 visible = interjectionAck != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
                 enter = fadeIn(tween(140)) + expandVertically(tween(180)),
                 exit = fadeOut(tween(160)) + shrinkVertically(tween(180))
             ) {
@@ -2196,7 +2228,7 @@ fun AIChatPanel(
                 },
                 reportedTokenProgress = sessionContextUsage?.reportedProgress ?: 0f,
                 tokenUsageEstimated = sessionContextUsage?.isEstimated ?: false,
-                isScrolling = listState.isScrollInProgress,
+                scrollInProgress = scrollInProgressState,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,
                 onModelSheetDismiss = onDismissModelSheetInOnboarding,
@@ -2230,7 +2262,7 @@ fun AIChatPanel(
                         onChoice = { choice -> viewModel.resolveToolPermission(request.id, choice) },
                         sessionTitle = pendingPermissionSessionTitle,
                         forceCollapse = dashboardCollapseActive,
-                        isScrolling = listState.isScrollInProgress
+                        scrollInProgress = scrollInProgressState
                     )
                 }
             }
