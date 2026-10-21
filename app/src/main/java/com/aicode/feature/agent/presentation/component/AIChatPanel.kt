@@ -62,6 +62,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +98,7 @@ import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.AIAgentViewModel
+import com.aicode.feature.agent.presentation.RunningToolOutput
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.QueuedRequest
 import com.aicode.feature.agent.presentation.hasVisibleContent
@@ -1653,7 +1655,8 @@ fun AIChatPanel(
     // 的兜底；卡片比一屏高时前者算出的目标被夹到 0，后者干脆把 item 顶到视口顶——两条路径都会让
     // 被点的那一行整条跳到顶部（概率性出现，取决于点的那一刻布局稳定到哪一帧）。这个跳动比
     // 「展开后底部被输入框挡一点」难接受得多，整段重定位逻辑去掉。
-    val onToolItemToggled: () -> Unit = { followBottom = false }
+    // 记忆化：这个 lambda 会作为 item 渲染依赖传下去，每次重组新建会让整表依赖失效。
+    val onToolItemToggled: () -> Unit = remember { { followBottom = false } }
 
     // 顶部快到头时加载更多历史。绝不能把 firstVisibleItemIndex 作为组合期读取的 effect key：
     // fling 中 index 每跨一个 item 就变一次，会让整个 AIChatPanel 大函数随之重组、连带全部可见
@@ -1723,109 +1726,41 @@ fun AIChatPanel(
         }
     }
 
-    // 渲染一条 item。轮头 / 工具分组的展开内容与折叠头在同一 Composable 内用 AnimatedVisibility
-    // 整体展开（而非逐个列表项各自 placement 动画）：高度平滑撑开、内容跟着一起走，手感是一个整体。
-    @Composable
-    fun RenderChatItem(item: ChatRenderItem) {
-        val header = item.turnHeader
-        val group = item.toolGroup
-        when {
-            header != null -> {
-                // 运行中且无过程项（如轮首用户行还没落库/被翻出窗口）：纯状态行不可点——
-                // 点开是空的 AnimatedVisibility，用户会以为「卡住了、点不开」。
-                val clickable = !header.running || header.processCount > 0
-                TurnCollapseHeader(
-                    running = header.running,
-                    durationMs = header.endMessageId?.let { taskDurations[it] },
-                    expanded = header.expanded,
-                    processCount = header.processCount,
-                    enabled = clickable,
-                    onToggle = {
-                        viewModel.setTurnExpanded(header.key, !header.expanded)
-                        onToolItemToggled()
-                    }
-                )
-                AnimatedVisibility(
-                    visible = header.expanded,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        item.turnProcess.forEach { child -> RenderChatItem(child) }
-                    }
-                }
-            }
-            item.contentType == REASONING_CONTENT_TYPE -> {
-                // 助手的思考抽为过程项：展开态交给宿主持久化，划出视口/切页返回仍保持。
-                ReasoningBubble(
-                    text = item.message.reasoning.orEmpty(),
-                    cache = markdownCache,
-                    durationMs = reasoningDurations[item.message.id],
-                    expandedOverride = reasoningOverrideSnapshot[item.message.id],
-                    onExpandedChange = { viewModel.setReasoningExpanded(item.message.id, it) }
-                )
-            }
-            group != null -> {
-                ToolCallGroupHeader(
-                    count = group.size,
-                    running = group.any { it.id in runningToolIds || it.isToolRunning(null) },
-                    expanded = item.groupExpanded,
-                    onToggle = {
-                        viewModel.setToolExpanded(item.key, !item.groupExpanded)
-                        onToolItemToggled()
-                    }
-                )
-                AnimatedVisibility(
-                    visible = item.groupExpanded,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
-                    Column {
-                        group.forEach { member ->
-                            val live = runningTool.firstOrNull { it.messageId == member.id }?.text
-                            AgentMessageItem(
-                                message = member,
-                                showActions = member.id in actionableMessageIds,
-                                liveOutput = live,
-                                markdownCache = markdownCache,
-                                onRewindClick = { viewModel.openRewindMenu(it) },
-                                onMoreClick = { messageForMenu = it },
-                                toolExpandedOverride = toolGroupOverrideSnapshot[member.id],
-                                onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
-                                onToolToggle = onToolItemToggled,
-                                // 分组展开时成员行内缩一级，与分组头区分层级
-                                contentPadding = ToolGroupMemberPadding,
-                                entryDelayMs = messageEntryDelays[member.id]
-                            )
-                        }
-                    }
-                }
-            }
-            else -> {
-                val message = item.message
-                val live = runningTool.firstOrNull { it.messageId == message.id }?.text
-                AgentMessageItem(
-                    message = message,
-                    showActions = message.id in actionableMessageIds,
-                    liveOutput = live,
-                    markdownCache = markdownCache,
-                    contentSlice = item.slice,
-                    isChunkHeader = item.isChunkHeader,
-                    isChunkFooter = item.isChunkFooter,
-                    reasoningVisible = item.reasoningVisible,
-                    onRewindClick = { viewModel.openRewindMenu(it) },
-                    onMoreClick = { messageForMenu = it },
-                    toolExpandedOverride = toolGroupOverrideSnapshot[message.id],
-                    onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(message.id, isExpanded) },
-                    onToolToggle = onToolItemToggled,
-                    reasoningDurationMs = reasoningDurations[message.id],
-                    taskDurationMs = taskDurations[message.id],
-                    turnUsage = turnUsages[message.id],
-                    entryDelayMs = messageEntryDelays[message.id],
-                    triggeredSkills = triggeredSkills[message.id].orEmpty()
-                )
-            }
-        }
+    // item 渲染依赖打包：字段全为 val，依赖不变时 remember 复用同一实例，
+    // 顶层 RenderChatItem 才能作为可跳过组真的跳过重组。
+    val onOpenMessageMenu: (AgentUIMessage) -> Unit = remember { { messageForMenu = it } }
+    val chatItemEnv = remember(
+        viewModel,
+        markdownCache,
+        taskDurations,
+        reasoningDurations,
+        turnUsages,
+        actionableMessageIds,
+        toolGroupOverrideSnapshot,
+        reasoningOverrideSnapshot,
+        messageEntryDelays,
+        triggeredSkills,
+        runningToolIds,
+        runningTool,
+        onToolItemToggled,
+        onOpenMessageMenu
+    ) {
+        ChatItemEnv(
+            viewModel = viewModel,
+            markdownCache = markdownCache,
+            taskDurations = taskDurations,
+            reasoningDurations = reasoningDurations,
+            turnUsages = turnUsages,
+            actionableMessageIds = actionableMessageIds,
+            toolGroupOverrides = toolGroupOverrideSnapshot,
+            reasoningOverrides = reasoningOverrideSnapshot,
+            messageEntryDelays = messageEntryDelays,
+            triggeredSkills = triggeredSkills,
+            runningToolIds = runningToolIds,
+            runningTools = runningTool,
+            onToolItemToggled = onToolItemToggled,
+            onOpenMessageMenu = onOpenMessageMenu,
+        )
     }
 
     CompositionLocalProvider(
@@ -1923,7 +1858,7 @@ fun AIChatPanel(
                         )
                     ) {
                         itemsIndexed(chatItems, key = { _, item -> item.key }, contentType = { _, item -> item.contentType }) { _, item ->
-                            RenderChatItem(item)
+                            RenderChatItem(item, chatItemEnv)
                         }
                         val reasoning = displayStreamingReasoning
                         val showReasoning = reasoning?.hasVisibleContent() == true
@@ -2390,6 +2325,138 @@ private fun ScrollToBottomButton(
                 contentDescription = stringResource(R.string.common_scroll_to_bottom),
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/**
+ * item 渲染所需的共享依赖，一次性打包传入。
+ *
+ * 标 [Stable] 而非不可变：字段全为 val、实例本身不换，但 [reasoningDurations] 是 ViewModel 的
+ * SnapshotStateMap，内容会变（组合期读它即订阅）。依赖未变时由 remember 复用同一实例，
+ * 顶层 [RenderChatItem] 才能作为可跳过组真的跳过重组。
+ * 原先它写作 [AIChatPanel] 内的局部函数，编译器不为局部函数生成跳过组，
+ * 父级任何一次重组都会把全部可见 item 重跑一遍（含 Markdown 解析）。
+ */
+@Stable
+private class ChatItemEnv(
+    val viewModel: AIAgentViewModel,
+    val markdownCache: MarkdownRenderCache,
+    val taskDurations: Map<String, Long>,
+    val reasoningDurations: Map<String, Long>,
+    val turnUsages: Map<String, TurnUsage>,
+    val actionableMessageIds: Set<String>,
+    val toolGroupOverrides: Map<String, Boolean>,
+    val reasoningOverrides: Map<String, Boolean>,
+    val messageEntryDelays: Map<String, Long>,
+    val triggeredSkills: Map<String, List<String>>,
+    val runningToolIds: Set<String>,
+    val runningTools: List<RunningToolOutput>,
+    val onToolItemToggled: () -> Unit,
+    val onOpenMessageMenu: (AgentUIMessage) -> Unit,
+)
+
+// 渲染一条 item。轮头 / 工具分组的展开内容与折叠头在同一 Composable 内用 AnimatedVisibility
+// 整体展开（而非逐个列表项各自 placement 动画）：高度平滑撑开、内容跟着一起走，手感是一个整体。
+@Composable
+private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
+    val header = item.turnHeader
+    val group = item.toolGroup
+    when {
+        header != null -> {
+            // 运行中且无过程项（如轮首用户行还没落库/被翻出窗口）：纯状态行不可点——
+            // 点开是空的 AnimatedVisibility，用户会以为「卡住了、点不开」。
+            val clickable = !header.running || header.processCount > 0
+            TurnCollapseHeader(
+                running = header.running,
+                durationMs = header.endMessageId?.let { env.taskDurations[it] },
+                expanded = header.expanded,
+                processCount = header.processCount,
+                enabled = clickable,
+                onToggle = {
+                    env.viewModel.setTurnExpanded(header.key, !header.expanded)
+                    env.onToolItemToggled()
+                }
+            )
+            AnimatedVisibility(
+                visible = header.expanded,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    item.turnProcess.forEach { child -> RenderChatItem(child, env) }
+                }
+            }
+        }
+        item.contentType == REASONING_CONTENT_TYPE -> {
+            // 助手的思考抽为过程项：展开态交给宿主持久化，划出视口/切页返回仍保持。
+            ReasoningBubble(
+                text = item.message.reasoning.orEmpty(),
+                cache = env.markdownCache,
+                durationMs = env.reasoningDurations[item.message.id],
+                expandedOverride = env.reasoningOverrides[item.message.id],
+                onExpandedChange = { env.viewModel.setReasoningExpanded(item.message.id, it) }
+            )
+        }
+        group != null -> {
+            ToolCallGroupHeader(
+                count = group.size,
+                running = group.any { it.id in env.runningToolIds || it.isToolRunning(null) },
+                expanded = item.groupExpanded,
+                onToggle = {
+                    env.viewModel.setToolExpanded(item.key, !item.groupExpanded)
+                    env.onToolItemToggled()
+                }
+            )
+            AnimatedVisibility(
+                visible = item.groupExpanded,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+            ) {
+                Column {
+                    group.forEach { member ->
+                        val live = env.runningTools.firstOrNull { it.messageId == member.id }?.text
+                        AgentMessageItem(
+                            message = member,
+                            showActions = member.id in env.actionableMessageIds,
+                            liveOutput = live,
+                            markdownCache = env.markdownCache,
+                            onRewindClick = { env.viewModel.openRewindMenu(it) },
+                            onMoreClick = { env.onOpenMessageMenu(it) },
+                            toolExpandedOverride = env.toolGroupOverrides[member.id],
+                            onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(member.id, isExpanded) },
+                            onToolToggle = env.onToolItemToggled,
+                            // 分组展开时成员行内缩一级，与分组头区分层级
+                            contentPadding = ToolGroupMemberPadding,
+                            entryDelayMs = env.messageEntryDelays[member.id]
+                        )
+                    }
+                }
+            }
+        }
+        else -> {
+            val message = item.message
+            val live = env.runningTools.firstOrNull { it.messageId == message.id }?.text
+            AgentMessageItem(
+                message = message,
+                showActions = message.id in env.actionableMessageIds,
+                liveOutput = live,
+                markdownCache = env.markdownCache,
+                contentSlice = item.slice,
+                isChunkHeader = item.isChunkHeader,
+                isChunkFooter = item.isChunkFooter,
+                reasoningVisible = item.reasoningVisible,
+                onRewindClick = { env.viewModel.openRewindMenu(it) },
+                onMoreClick = { env.onOpenMessageMenu(it) },
+                toolExpandedOverride = env.toolGroupOverrides[message.id],
+                onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(message.id, isExpanded) },
+                onToolToggle = env.onToolItemToggled,
+                reasoningDurationMs = env.reasoningDurations[message.id],
+                taskDurationMs = env.taskDurations[message.id],
+                turnUsage = env.turnUsages[message.id],
+                entryDelayMs = env.messageEntryDelays[message.id],
+                triggeredSkills = env.triggeredSkills[message.id].orEmpty()
             )
         }
     }
