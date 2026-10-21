@@ -1337,15 +1337,17 @@ fun AIChatPanel(
         active = streamingText != null,
         sessionKey = currentSessionId
     )
-    val typewriterRenderText = typewriter.text
     // 思考过程同样走打字机：与回复文本共用同一速率自适应逻辑。
     // 正文开始输出（streamingText 非空）即视为思考结束：思考打字机立即收尾，
     // 避免思考还没打完、正文已开始导致两者叠着慢慢打。
-    val typewriterReasoningText = rememberTypewriterStreamingText(
+    val typewriterReasoning = rememberTypewriterStreamingText(
         text = displayStreamingReasoning ?: "",
         active = streamingReasoning != null && streamingText == null,
         sessionKey = currentSessionId
-    ).text
+    )
+    // 两者的渲染文本都不在这里取。本函数是整块聊天面板，而打字机每 24ms 提交一次；
+    // 在这里读它的 State 等于每次提交都重组整个面板（含全部可见 item 的 Markdown 重解析），
+    // 低刷下单帧装不下就是能感知的顿挫。订阅点已下移到尾巴 item 内。
 
     // 自动滚动跟随
     // 两个状态都必须 saveable：窄窗打开编辑器 / 终端 / Git / 设置都是全屏路由，聊天页整棵组合
@@ -1970,7 +1972,7 @@ fun AIChatPanel(
                                     val reasoningLive = reasoningTiming != null && reasoningTiming?.second == null &&
                                         !showStreaming && preparingTool == null
                                     ReasoningBubble(
-                                        text = typewriterReasoningText,
+                                        text = typewriterReasoning.text(),
                                         cache = markdownCache,
                                         showTimer = reasoningLive,
                                         durationMs = reasoningTiming?.let { (start, end) -> end?.minus(start) },
@@ -1982,7 +1984,7 @@ fun AIChatPanel(
                                 }
                                 when (tailKind) {
                                     TailKind.THINKING -> ThinkingBubble(label = thinkingLabel)
-                                    TailKind.STREAMING -> StreamingBubble(text = typewriterRenderText, cache = markdownCache)
+                                    TailKind.STREAMING -> StreamingBubble(text = typewriter.text(), cache = markdownCache)
                                     TailKind.COMPACTING -> CompactionProgressBubble(progress = compactionProgress)
                                     TailKind.RETRYING -> {
                                         val rs = retryState

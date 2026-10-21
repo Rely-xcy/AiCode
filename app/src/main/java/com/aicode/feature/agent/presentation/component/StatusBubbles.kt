@@ -455,8 +455,14 @@ internal fun typewriterRate(lag: Float, arrivalRate: Float, drainRate: Float? = 
 internal fun typewriterDrainRate(lag: Float): Float =
     (lag / TYPEWRITER_DRAIN_SECONDS).coerceIn(TYPEWRITER_MIN_RATE, TYPEWRITER_DRAIN_MAX_RATE)
 
-/** 打字机当前渲染结果：[text] 为应渲染文本（上游全文的前缀）。 */
-internal data class TypewriterText(val text: String)
+/**
+ * 打字机当前渲染结果：[text] 读取应渲染文本（上游全文的前缀）。
+ *
+ * 刻意用函数而不是直接给字符串：渲染进度是组合期外的高频 State（每 [TYPEWRITER_RENDER_INTERVAL_MS] 一次），
+ * 直接返回字符串等于在调用点读取该 State——调用点在 [AIChatPanel] 主体里，会让整个聊天面板每次提交都重组，
+ * 滚动手感直接取决于每帧能扫完多少可见消息。包成函数后，谁读谁订阅，实际订阅者只有尾巴 item。
+ */
+internal data class TypewriterText(val text: () -> String)
 
 /**
  * 速率自适应打字机：显示文本滞后于上游累积文本，打字速度跟随模型吐字速度。
@@ -601,7 +607,7 @@ internal fun rememberTypewriterStreamingText(
         // 追平后确保渲染完整文本（while 退出时 shownCodePoints 已到 available）
         if (renderText != text) commitRender(text)
     }
-    return TypewriterText(text = renderText)
+    return TypewriterText(text = { renderText })
 }
 
 /**
