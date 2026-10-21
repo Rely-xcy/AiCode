@@ -236,8 +236,9 @@ class ContainerInstaller @Inject constructor(
          * 与 assets 实际版本的对应关系见 [ROOTFS_ASSET_VERSION]；容器内真实版本以 `/etc/alpine-release`
          * 为准，不要靠本标记推断。
          *
-         * 内置 rootfs 固定在 3.21 分支：该分支的 apk-tools 2.14 在 proot 下可靠，apk 源分支也据此固定
-         * （见 assets/aicode/lib/env-common.sh 的兜底 v3.21）。
+         * 内置 rootfs 自 3.24 起使用 apk-tools 3.x（3.21 及更早是 2.14）。apk 源分支不写死：
+         * assets/aicode/lib/env-common.sh 优先从 /etc/apk/repositories 读，其次按 /etc/os-release 推断，
+         * 兜底 v3.24（与内置一致）。已装用户的容器仍停在 3.21.8，其 os-release 会让它继续用 v3.21 源。
          */
         private const val INSTALL_VERSION = "alpine-3.21.3-v6"
 
@@ -245,7 +246,7 @@ class ContainerInstaller @Inject constructor(
          * assets 里实际打包的 Alpine 版本，**仅用于日志与排查**，不参与是否需要重装的判定。
          * 换 assets 时同步更新这里，让「装了哪一版」在日志里有据可查。
          */
-        private const val ROOTFS_ASSET_VERSION = "3.21.8"
+        private const val ROOTFS_ASSET_VERSION = "3.24.2"
 
         /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
         private const val DELETE_PROGRESS_STEP = 2000
