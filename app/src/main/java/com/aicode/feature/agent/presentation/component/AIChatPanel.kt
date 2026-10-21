@@ -928,14 +928,15 @@ fun AIChatPanel(
     // 工具调用（分组头 / 单条工具行）的手动展开态：放在 ViewModel 里，切页、滚出视口回收后仍保留。
     // key = 分组 key（`toolgroup:<组内首条消息 id>`）或单条消息 id。
     val toolExpansionOverrides = viewModel.toolExpansionOverrides
-    // 快照：读一次 map 让组合订阅到它的变化，同时给下面的 remember 一个可比较的 key。
-    val toolGroupOverrideSnapshot = toolExpansionOverrides.toMap()
+    // 快照：derivedStateOf 订阅底层 SnapshotStateMap，但只在内容真变时才换实例。
+    // 直接 toMap() 每次重组都新建 Map，会把下面 chatItems 的 remember key 顶掉、整表重建。
+    val toolGroupOverrideSnapshot by remember { derivedStateOf { toolExpansionOverrides.toMap() } }
     // 整轮折叠的手动展开态，同款快照。
     val turnExpansionOverrides = viewModel.turnExpansionOverrides
-    val turnOverrideSnapshot = turnExpansionOverrides.toMap()
+    val turnOverrideSnapshot by remember { derivedStateOf { turnExpansionOverrides.toMap() } }
     // 思考卡片的展开态，同款快照。
     val reasoningExpansionOverrides = viewModel.reasoningExpansionOverrides
-    val reasoningOverrideSnapshot = reasoningExpansionOverrides.toMap()
+    val reasoningOverrideSnapshot by remember { derivedStateOf { reasoningExpansionOverrides.toMap() } }
     // 正在执行的工具 id 集合：只让集合内容参与 remember key，避免实时输出逐字刷新导致整表重建。
     val runningToolIds by remember { derivedStateOf { runningTool.mapTo(HashSet()) { it.messageId } } }
     val scope = rememberCoroutineScope()
