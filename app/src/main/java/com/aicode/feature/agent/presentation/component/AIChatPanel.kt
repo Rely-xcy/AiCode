@@ -1270,12 +1270,16 @@ fun AIChatPanel(
     // 的行 id」）。ViewModel 在本轮 AssistantText（有可见正文或思考）落库前登记该行主键
     // （currentSessionPendingAssistantRowId），这里只需判断它是否已出现在 messages 里。
     // 不再做前缀 / 双向包含猜同源，也不再依赖 4s 强制退休窗口。
-    val assistantSettled = isAssistantSettled(
-        streamingText = streamingText,
-        streamingReasoning = streamingReasoning,
-        pendingRowId = pendingAssistantRowId,
-        messages = messages
-    )
+    val assistantSettled by remember {
+        derivedStateOf {
+            isAssistantSettled(
+                streamingText = streamingText,
+                streamingReasoning = streamingReasoning,
+                pendingRowId = pendingAssistantRowId,
+                messages = messages
+            )
+        }
+    }
 
     LaunchedEffect(streamingText, assistantSettled) {
         val st = streamingText
@@ -1652,7 +1656,12 @@ fun AIChatPanel(
     // 的兜底；卡片比一屏高时前者算出的目标被夹到 0，后者干脆把 item 顶到视口顶——两条路径都会让
     // 被点的那一行整条跳到顶部（概率性出现，取决于点的那一刻布局稳定到哪一帧）。这个跳动比
     // 「展开后底部被输入框挡一点」难接受得多，整段重定位逻辑去掉。
-    val onToolItemToggled: () -> Unit = { followBottom = false }
+    val onToolItemToggled: () -> Unit = remember { { followBottom = false } }
+
+    // 传给列表 item 的点击回调必须固定实例：LazyColumn 的 item 是 top-level 可跳过 composable，
+    // 每次重组新建 lambda 会让参数比较恒不相等，父级重组时可见 item 全部重跑（低刷单帧溢出即掉帧）。
+    val onRewindClick: (String) -> Unit = remember { { id: String -> viewModel.openRewindMenu(id) } }
+    val onMoreClick: (AgentUIMessage) -> Unit = remember { { message: AgentUIMessage -> messageForMenu = message } }
 
     // 顶部快到头时加载更多历史。绝不能把 firstVisibleItemIndex 作为组合期读取的 effect key：
     // fling 中 index 每跨一个 item 就变一次，会让整个 AIChatPanel 大函数随之重组、连带全部可见
@@ -1787,10 +1796,12 @@ fun AIChatPanel(
                                 showActions = member.id in actionableMessageIds,
                                 liveOutput = live,
                                 markdownCache = markdownCache,
-                                onRewindClick = { viewModel.openRewindMenu(it) },
-                                onMoreClick = { messageForMenu = it },
+                                onRewindClick = onRewindClick,
+                                onMoreClick = onMoreClick,
                                 toolExpandedOverride = toolGroupOverrideSnapshot[member.id],
-                                onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
+                                onToolExpandedChange = remember(member.id) {
+                                    { isExpanded: Boolean -> viewModel.setToolExpanded(member.id, isExpanded) }
+                                },
                                 onToolToggle = onToolItemToggled,
                                 // 分组展开时成员行内缩一级，与分组头区分层级
                                 contentPadding = ToolGroupMemberPadding,
@@ -1812,10 +1823,12 @@ fun AIChatPanel(
                     isChunkHeader = item.isChunkHeader,
                     isChunkFooter = item.isChunkFooter,
                     reasoningVisible = item.reasoningVisible,
-                    onRewindClick = { viewModel.openRewindMenu(it) },
-                    onMoreClick = { messageForMenu = it },
+                    onRewindClick = onRewindClick,
+                    onMoreClick = onMoreClick,
                     toolExpandedOverride = toolGroupOverrideSnapshot[message.id],
-                    onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(message.id, isExpanded) },
+                    onToolExpandedChange = remember(message.id) {
+                        { isExpanded: Boolean -> viewModel.setToolExpanded(message.id, isExpanded) }
+                    },
                     onToolToggle = onToolItemToggled,
                     reasoningDurationMs = reasoningDurations[message.id],
                     taskDurationMs = taskDurations[message.id],
