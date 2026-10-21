@@ -200,6 +200,15 @@ android {
             // :terminal-emulator / :terminal-view 无 beta 变体，依赖解析回退到它们的 release 变体。
             matchingFallbacks += "release"
         }
+        // 仅供 :baselineprofile 采集冷启动 profile 使用（.github/workflows/baseline-profile.yml）。
+        // 必须是 release 型（非 debuggable）且与发布包同 R8 配置，否则采到的类名与方法在混淆后对不上，
+        // profile 等于白采集；CI 无 release keystore，故签名固定用 debug 以便装进模拟器。
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+        }
     }
 
     compileOptions {
@@ -413,6 +422,10 @@ dependencies {
 
     // Core Android（1.17.0 起提供 NotificationCompat 的实时通知推广接口 setRequestPromotedOngoing）
     implementation("androidx.core:core:1.17.0")
+
+    // 在 Android 12 以下的后台把 APK 内 baseline profile 编译进 ART：12+ 由系统安装时自动处理，
+    // 8.0–11 需要它在空闲时安装一次，否则 src/main/baseline-prof.txt 只影响 dex 布局、不预热代码。
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

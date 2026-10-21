@@ -21,4 +21,7 @@ rootProject.name = "app"
 include(":app")
 include(":terminal-emulator")
 include(":terminal-view")
+// Baseline Profile 生成器：com.android.test 模块，仅在手动触发的工作流里跑
+// （.github/workflows/baseline-profile.yml），日常 CI 不构建它。
+include(":baselineprofile")
 

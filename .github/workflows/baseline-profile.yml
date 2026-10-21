@@ -1,0 +1,71 @@
+name: Baseline Profile
+
+# 手动触发，**不**在 push 时自动跑：需要模拟器 + KVM，一次 20 分钟上下，
+# 而日常 CI 的门禁只需要编译与单测。
+#
+# 产出 baseline-prof.txt → 人工提交到 app/src/main/baseline-prof.txt。
+# 发布前代码大改后重跑一次即可；profile 的类名来自当次 R8 mapping，代码漂移后旧 profile 会逐步失配。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: baseline-profile
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate baseline profile
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # versionCode 取 git rev-list --count HEAD，浅克隆会得到 1
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      # 模拟器需要 KVM；runner 上的 kvm 设备默认非 root 不可写
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Compile generator test APK
+        # 先编译再来模拟器：配置/依赖/DSL 错误在这里就暴露，不用等 20 分钟开完机
+        run: ./gradlew :baselineprofile:assembleBenchmark --stacktrace
+
+      - name: Generate baseline profile on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace
+
+      - name: Upload generated profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-profile
+          # BaselineProfileRule 把文件写到设备 AdditionalTestOutput，Gradle 拉回到该目录
+          path: |
+            baselineprofile/build/outputs/**/*.txt
+            baselineprofile/build/reports/**
+            baselineprofile/build/outputs/androidTest-results/**
+          if-no-files-found: warn
+          retention-days: 30
