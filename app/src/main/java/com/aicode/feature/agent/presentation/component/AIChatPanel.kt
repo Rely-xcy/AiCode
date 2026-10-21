@@ -15,7 +15,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -739,15 +739,6 @@ internal fun splitLongContent(text: String): List<String> {
     return chunks
 }
 
-/** 滚动尾窗判定的四元组：比四个独立 LaunchedEffect key 更稳——
- *  后者每个都在组合期读，滚动/惯性一变就整屏重组。 */
-private data class ScrollSettleSignal(
-    val pointerDown: Boolean,
-    val userScrollGesture: Boolean,
-    val nestedFling: Boolean,
-    val scrollInProgress: Boolean,
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AIChatPanel(
@@ -915,12 +906,6 @@ fun AIChatPanel(
         if (kept.size != pendingUserMessages.size) pendingUserMessages = kept
     }
     val listState = rememberLazyListState()
-    // 滚动状态只喂给两个子组件的绘制期 alpha。包成派生 State 传给子组件，读取下沉到
-    // graphicsLayer 里：直接传 listState.isScrollInProgress 会在本函数体内求值，
-    // 滚动开始/结束各重组一次整个面板（含全部可见 item 的 Markdown）。
-    val scrollInProgressState = remember(listState) {
-        derivedStateOf { listState.isScrollInProgress }
-    }
     // 消息未就绪时的加载提示：本地读库通常几十毫秒，立刻显示反而闪一下，等一小会儿还没就绪才提示。
     var showMessagesLoading by remember(currentSessionId) { mutableStateOf(false) }
     LaunchedEffect(currentSessionId, messagesReady) {
@@ -944,20 +929,13 @@ fun AIChatPanel(
     // key = 分组 key（`toolgroup:<组内首条消息 id>`）或单条消息 id。
     val toolExpansionOverrides = viewModel.toolExpansionOverrides
     // 快照：读一次 map 让组合订阅到它的变化，同时给下面的 remember 一个可比较的 key。
-    // 再过一层 remember 把实例固定住：Map 在 Compose 里是不稳定类型，入参比较按引用走，
-    // 每次重组都新建实例等于告诉每个可见 item「你的入参变了」，跳过全部失效——
-    // 父级任何一次重组（离底按钮显示、悬浮层跟手减淡、贴底校准）都会让整屏 item 重跑。
-    // 用普通 Map 当作 remember 的 key（内容相等即复用旧实例），不依赖 SnapshotStateMap 自己的 equals。
-    val toolGroupRaw = toolExpansionOverrides.toMap()
-    val toolGroupOverrideSnapshot = remember(toolGroupRaw) { toolGroupRaw }
+    val toolGroupOverrideSnapshot = toolExpansionOverrides.toMap()
     // 整轮折叠的手动展开态，同款快照。
     val turnExpansionOverrides = viewModel.turnExpansionOverrides
-    val turnOverrideRaw = turnExpansionOverrides.toMap()
-    val turnOverrideSnapshot = remember(turnOverrideRaw) { turnOverrideRaw }
+    val turnOverrideSnapshot = turnExpansionOverrides.toMap()
     // 思考卡片的展开态，同款快照。
     val reasoningExpansionOverrides = viewModel.reasoningExpansionOverrides
-    val reasoningOverrideRaw = reasoningExpansionOverrides.toMap()
-    val reasoningOverrideSnapshot = remember(reasoningOverrideRaw) { reasoningOverrideRaw }
+    val reasoningOverrideSnapshot = reasoningExpansionOverrides.toMap()
     // 正在执行的工具 id 集合：只让集合内容参与 remember key，避免实时输出逐字刷新导致整表重建。
     val runningToolIds by remember { derivedStateOf { runningTool.mapTo(HashSet()) { it.messageId } } }
     val scope = rememberCoroutineScope()
@@ -1292,10 +1270,6 @@ fun AIChatPanel(
     // 的行 id」）。ViewModel 在本轮 AssistantText（有可见正文或思考）落库前登记该行主键
     // （currentSessionPendingAssistantRowId），这里只需判断它是否已出现在 messages 里。
     // 不再做前缀 / 双向包含猜同源，也不再依赖 4s 强制退休窗口。
-    // 不能套无 key 的 remember + derivedStateOf：messages 是组合期求值出来的普通值
-    // （messagesState.messages 见上），不是 State。lambda 一旦捕获它就固定在首次组合的那份
-    // 列表上，本轮助手行落库后 derived 也不会重算，assistantSettled 恒 false —— 底部思考气泡
-    // 永不退休，与消息里的完整思考重复显示（上面完整、下面残段）。
     val assistantSettled = isAssistantSettled(
         streamingText = streamingText,
         streamingReasoning = streamingReasoning,
@@ -1359,17 +1333,15 @@ fun AIChatPanel(
         active = streamingText != null,
         sessionKey = currentSessionId
     )
+    val typewriterRenderText = typewriter.text
     // 思考过程同样走打字机：与回复文本共用同一速率自适应逻辑。
     // 正文开始输出（streamingText 非空）即视为思考结束：思考打字机立即收尾，
     // 避免思考还没打完、正文已开始导致两者叠着慢慢打。
-    val typewriterReasoning = rememberTypewriterStreamingText(
+    val typewriterReasoningText = rememberTypewriterStreamingText(
         text = displayStreamingReasoning ?: "",
         active = streamingReasoning != null && streamingText == null,
         sessionKey = currentSessionId
-    )
-    // 两者的渲染文本都不在这里取。本函数是整块聊天面板，而打字机每 24ms 提交一次；
-    // 在这里读它的 State 等于每次提交都重组整个面板（含全部可见 item 的 Markdown 重解析），
-    // 低刷下单帧装不下就是能感知的顿挫。订阅点已下移到尾巴 item 内。
+    ).text
 
     // 自动滚动跟随
     // 两个状态都必须 saveable：窄窗打开编辑器 / 终端 / Git / 设置都是全屏路由，聊天页整棵组合
@@ -1461,20 +1433,11 @@ fun AIChatPanel(
         }
     }
 
-    // 这四个值原本直接当 LaunchedEffect 的 key：每个都在组合期读，滚动或惯性一开始就整屏
-    // 重组一次（快速连滑时每次都要重跑全部可见 item 的组合）。改成 effect 内观察四元组，
-    // collectLatest 保留「新事件到达即取消上一次 150ms 等待」的原语义。
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            ScrollSettleSignal(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress)
-        }.collectLatest { signal ->
-            if (!signal.pointerDown && signal.userScrollGesture &&
-                !signal.nestedFling && !signal.scrollInProgress
-            ) {
-                delay(150)
-                userScrollGesture = false
-                followBottom = isAtBottom
-            }
+    LaunchedEffect(pointerDown, userScrollGesture, nestedFling, listState.isScrollInProgress) {
+        if (!pointerDown && userScrollGesture && !nestedFling && !listState.isScrollInProgress) {
+            delay(150)
+            userScrollGesture = false
+            followBottom = isAtBottom
         }
     }
 
@@ -1689,12 +1652,7 @@ fun AIChatPanel(
     // 的兜底；卡片比一屏高时前者算出的目标被夹到 0，后者干脆把 item 顶到视口顶——两条路径都会让
     // 被点的那一行整条跳到顶部（概率性出现，取决于点的那一刻布局稳定到哪一帧）。这个跳动比
     // 「展开后底部被输入框挡一点」难接受得多，整段重定位逻辑去掉。
-    val onToolItemToggled: () -> Unit = remember { { followBottom = false } }
-
-    // 传给列表 item 的点击回调必须固定实例：LazyColumn 的 item 是 top-level 可跳过 composable，
-    // 每次重组新建 lambda 会让参数比较恒不相等，父级重组时可见 item 全部重跑（低刷单帧溢出即掉帧）。
-    val onRewindClick: (String) -> Unit = remember { { id: String -> viewModel.openRewindMenu(id) } }
-    val onMoreClick: (AgentUIMessage) -> Unit = remember { { message: AgentUIMessage -> messageForMenu = message } }
+    val onToolItemToggled: () -> Unit = { followBottom = false }
 
     // 顶部快到头时加载更多历史。绝不能把 firstVisibleItemIndex 作为组合期读取的 effect key：
     // fling 中 index 每跨一个 item 就变一次，会让整个 AIChatPanel 大函数随之重组、连带全部可见
@@ -1829,12 +1787,10 @@ fun AIChatPanel(
                                 showActions = member.id in actionableMessageIds,
                                 liveOutput = live,
                                 markdownCache = markdownCache,
-                                onRewindClick = onRewindClick,
-                                onMoreClick = onMoreClick,
+                                onRewindClick = { viewModel.openRewindMenu(it) },
+                                onMoreClick = { messageForMenu = it },
                                 toolExpandedOverride = toolGroupOverrideSnapshot[member.id],
-                                onToolExpandedChange = remember(member.id) {
-                                    { isExpanded: Boolean -> viewModel.setToolExpanded(member.id, isExpanded) }
-                                },
+                                onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
                                 onToolToggle = onToolItemToggled,
                                 // 分组展开时成员行内缩一级，与分组头区分层级
                                 contentPadding = ToolGroupMemberPadding,
@@ -1856,12 +1812,10 @@ fun AIChatPanel(
                     isChunkHeader = item.isChunkHeader,
                     isChunkFooter = item.isChunkFooter,
                     reasoningVisible = item.reasoningVisible,
-                    onRewindClick = onRewindClick,
-                    onMoreClick = onMoreClick,
+                    onRewindClick = { viewModel.openRewindMenu(it) },
+                    onMoreClick = { messageForMenu = it },
                     toolExpandedOverride = toolGroupOverrideSnapshot[message.id],
-                    onToolExpandedChange = remember(message.id) {
-                        { isExpanded: Boolean -> viewModel.setToolExpanded(message.id, isExpanded) }
-                    },
+                    onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(message.id, isExpanded) },
                     onToolToggle = onToolItemToggled,
                     reasoningDurationMs = reasoningDurations[message.id],
                     taskDurationMs = taskDurations[message.id],
@@ -2003,7 +1957,7 @@ fun AIChatPanel(
                                     val reasoningLive = reasoningTiming != null && reasoningTiming?.second == null &&
                                         !showStreaming && preparingTool == null
                                     ReasoningBubble(
-                                        text = typewriterReasoning.text(),
+                                        text = typewriterReasoningText,
                                         cache = markdownCache,
                                         showTimer = reasoningLive,
                                         durationMs = reasoningTiming?.let { (start, end) -> end?.minus(start) },
@@ -2015,7 +1969,7 @@ fun AIChatPanel(
                                 }
                                 when (tailKind) {
                                     TailKind.THINKING -> ThinkingBubble(label = thinkingLabel)
-                                    TailKind.STREAMING -> StreamingBubble(text = typewriter.text(), cache = markdownCache)
+                                    TailKind.STREAMING -> StreamingBubble(text = typewriterRenderText, cache = markdownCache)
                                     TailKind.COMPACTING -> CompactionProgressBubble(progress = compactionProgress)
                                     TailKind.RETRYING -> {
                                         val rs = retryState
@@ -2041,19 +1995,11 @@ fun AIChatPanel(
             } // 内容层结束
 
             // 悬浮层：错误气泡 / 面板 / 输入框（蒙版在 ChatInputBar 内部，跟随键盘上移）
-            // 只在绘制期生效的滚动淡出：改成 Animatable + effect 驱动、graphicsLayer 内读 value。
-            // 原来 targetValue 直接绑 listState.isScrollInProgress、再用 by 在组合期取值：滚动开始/
-            // 结束各重组一次整个面板，tween 200 的动画期间更是每帧重组一次（约 12 帧 × 2 次/滑动），
-            // 每次重组都要重跑全部可见 item 的组合与 Markdown，是快速滑动掉帧的主要来源之一。
-            val floatingPanelAlpha = remember { Animatable(1f) }
-            LaunchedEffect(listState) {
-                snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
-                    floatingPanelAlpha.animateTo(
-                        targetValue = if (scrolling) 0.4f else 1f,
-                        animationSpec = tween(200)
-                    )
-                }
-            }
+            val floatingPanelAlpha by animateFloatAsState(
+                targetValue = if (listState.isScrollInProgress) 0.4f else 1f,
+                animationSpec = tween(200),
+                label = "floating-panel-alpha"
+            )
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -2061,7 +2007,7 @@ fun AIChatPanel(
                     // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
                     .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
             ) {
-            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha.value }) {
+            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha }) {
                 StatusBanner(state = agentState)
             }
 
@@ -2070,7 +2016,7 @@ fun AIChatPanel(
             val lastUploadingCount = rememberLastNonNull(uploadingCount.takeIf { it > 0 })
             AnimatedVisibility(
                 visible = uploadingCount > 0,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2082,7 +2028,7 @@ fun AIChatPanel(
                 visible = pendingQuestion != null,
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .graphicsLayer { alpha = floatingPanelAlpha.value },
+                    .graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2100,7 +2046,7 @@ fun AIChatPanel(
             val planForPanel = rememberLastNonNull(planApproval)
             AnimatedVisibility(
                 visible = planApproval != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2119,7 +2065,7 @@ fun AIChatPanel(
             // 才知道自己插进去了（真实反馈过他因此以为没生效）。
             AnimatedVisibility(
                 visible = interjectionAck != null,
-                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha.value },
+                modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn(tween(140)) + expandVertically(tween(180)),
                 exit = fadeOut(tween(160)) + shrinkVertically(tween(180))
             ) {
@@ -2228,7 +2174,7 @@ fun AIChatPanel(
                 },
                 reportedTokenProgress = sessionContextUsage?.reportedProgress ?: 0f,
                 tokenUsageEstimated = sessionContextUsage?.isEstimated ?: false,
-                scrollInProgress = scrollInProgressState,
+                isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,
                 onModelSheetDismiss = onDismissModelSheetInOnboarding,
@@ -2262,7 +2208,7 @@ fun AIChatPanel(
                         onChoice = { choice -> viewModel.resolveToolPermission(request.id, choice) },
                         sessionTitle = pendingPermissionSessionTitle,
                         forceCollapse = dashboardCollapseActive,
-                        scrollInProgress = scrollInProgressState
+                        isScrolling = listState.isScrollInProgress
                     )
                 }
             }
