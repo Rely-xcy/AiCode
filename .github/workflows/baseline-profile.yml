@@ -47,6 +47,15 @@ jobs:
         # 先编译再来模拟器：配置/依赖/DSL 错误在这里就暴露，不用等 20 分钟开完机
         run: ./gradlew :baselineprofile:assembleUniversalBenchmark --stacktrace
 
+      - name: Verify profile is packaged
+        # AGP 只在非 debuggable 变体里把 baseline-prof.txt 编译成 assets/dexopt/baseline.prof，
+        # 而 ci.yml 只构建 debug，这条路径平时没有任何门禁。用 benchmark（release 型）APK 断言一次，
+        # 避免 profile 格式有问题要等到发版才炸。
+        run: |
+          apk=$(find app/build/outputs/apk/universal/benchmark -name "*.apk" | head -1)
+          echo "checking $apk"
+          unzip -l "$apk" | grep "assets/dexopt/baseline.prof"
+
       - name: Generate baseline profile on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
