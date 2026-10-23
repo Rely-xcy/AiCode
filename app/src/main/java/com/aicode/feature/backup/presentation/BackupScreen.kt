@@ -424,7 +424,11 @@ internal fun BackupScreen(
             onDismiss = { viewModel.reset() }
         )
         is BackupState.ImportSuccess -> ResultDialog(
-            title = stringResource(R.string.backup_import_done),
+            // 有本机解不开的密钥时标题不能只说「导入完成」：用户需要知道要去重填。
+            title = stringResource(
+                if (current.stats.undecryptableSecrets > 0) R.string.backup_import_done_secrets_need_refill
+                else R.string.backup_import_done
+            ),
             message = buildImportSummary(context, current.stats),
             onDismiss = { viewModel.reset() }
         )
@@ -930,30 +934,37 @@ private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) 
 private fun buildExportSummary(context: android.content.Context, stats: ExportStats): String = buildString {
     if (!stats.workspaceFilesRequested) {
         append(context.getString(R.string.backup_export_summary_no_workspaces))
-        return@buildString
-    }
-    append(
-        context.getString(
-            R.string.backup_export_stat_workspace_files,
-            stats.workspaceFiles,
-            stats.exportedWorkspaces
-        )
-    )
-    if (stats.skippedWorkspaces.isNotEmpty()) {
-        appendLine()
+    } else {
         append(
             context.getString(
-                R.string.backup_export_stat_skipped_workspaces,
-                stats.skippedWorkspaces.size,
-                formatSkippedWorkspaces(context, stats.skippedWorkspaces)
+                R.string.backup_export_stat_workspace_files,
+                stats.workspaceFiles,
+                stats.exportedWorkspaces
             )
         )
+        if (stats.skippedWorkspaces.isNotEmpty()) {
+            appendLine()
+            append(
+                context.getString(
+                    R.string.backup_export_stat_skipped_workspaces,
+                    stats.skippedWorkspaces.size,
+                    formatSkippedWorkspaces(context, stats.skippedWorkspaces)
+                )
+            )
+        }
+        // 远程工作区一个文件都没导出时，把「怎么才能拿到」写清楚：连接只是前提，仍需要重新导出一次。
+        if (stats.remoteWorkspaceMissing) {
+            appendLine()
+            appendLine()
+            append(context.getString(R.string.backup_export_remote_workspace_missing))
+        }
     }
-    // 远程工作区一个文件都没导出时，把「怎么才能拿到」写清楚：连接只是前提，仍需要重新导出一次。
-    if (stats.remoteWorkspaceMissing) {
+    // 解不开的密钥是按密文原样进的包：不说清的话，用户在新设备上只会看到一串解不开的密文。
+    // 这一段不能放进上面的工作区分支，不勾工作区文件时也同样要提。
+    if (stats.undecryptableSecrets > 0) {
         appendLine()
         appendLine()
-        append(context.getString(R.string.backup_export_remote_workspace_missing))
+        append(context.getString(R.string.backup_export_stat_undecryptable_secrets, stats.undecryptableSecrets))
     }
 }
 
@@ -986,9 +997,16 @@ private fun WorkspaceSkipReason.labelRes(): Int = when (this) {
 /** 摘要里最多逐个列出的跳过工作区数，其余折叠成「等 M 个」。 */
 private const val MAX_SKIPPED_WORKSPACE_NAMES = 3
 
-private fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
+internal fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
     appendLine(context.getString(R.string.backup_restored_data))
     append(buildRestoreStatsLines(context, stats))
+    // 密钥行不管有没有问题都要出现：否则用户分不清「全部可用」与「压根没检查过」。
+    // 放在成功摘要而不是 buildRestoreStatsLines 里，是为了不把「已全部恢复」带进部分失败的提示。
+    if (stats.undecryptableSecrets > 0) {
+        appendLine(context.getString(R.string.backup_stat_undecryptable_secrets, stats.undecryptableSecrets))
+    } else {
+        appendLine(context.getString(R.string.backup_stat_secrets_all_restored))
+    }
     // 跳过的工作区文件不计入已恢复数，单独一行明示：否则「工作区文件 0 个」看起来就像全丢了一样。
     // 只放在成功摘要里，不进 buildRestoreStatsLines——那行说明的是「已写入」的数据，跳过项不属于该口径。
     if (stats.skippedWorkspaceFiles > 0) {

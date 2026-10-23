@@ -543,6 +543,8 @@
     <string name="backup_export_skip_empty">没有文件</string>
     <string name="backup_export_skip_read_failed">读取失败</string>
     <string name="backup_export_remote_workspace_missing">远程工作区文件未包含：需要在远程模式下连接后导出</string>
+    <!-- 导出时本机解不开的敏感字段：密钥与设备绑定，只能按密文原样进包 -->
+    <string name="backup_export_stat_undecryptable_secrets">· %1$s 个密钥/敏感字段无法在本机解密，已按密文原样导出（换机后需重填）</string>
     <string name="backup_write_failed">写入失败：%1$s</string>
     <string name="backup_read_failed">读取备份文件失败</string>
     <string name="backup_export_title">导出备份</string>
@@ -557,6 +559,7 @@
     <string name="backup_import_btn">导入</string>
     <string name="backup_operation_failed">操作失败</string>
     <string name="backup_import_done">导入完成</string>    <string name="backup_actions">操作</string>
+    <string name="backup_import_done_secrets_need_refill">导入完成（有密钥需重填）</string>
     <string name="backup_select_data">选择导出数据</string>
     <string name="backup_data_remote">连接与同步</string>
     <string name="backup_data_chat_history">聊天记录</string>
@@ -588,6 +591,8 @@
     <string name="backup_stat_memory_files">· 记忆文件 %1$s 个</string>
     <string name="backup_stat_skipped_security">· 已跳过 %1$s 个安全相关条目（.git 的 hooks / config）</string>
     <string name="backup_stat_skipped_workspace_files">· 跳过的工作区文件 %1$s 个（目标工作区不可用，如远程未连接）</string>
+    <string name="backup_stat_undecryptable_secrets">· %1$s 个密钥/敏感字段无法在本机解密，需在设置里重新填写</string>
+    <string name="backup_stat_secrets_all_restored">· 密钥/敏感字段已全部恢复</string>
     <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
     <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
     <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>

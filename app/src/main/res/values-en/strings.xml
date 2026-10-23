@@ -543,6 +543,8 @@
     <string name="backup_export_skip_empty">no files</string>
     <string name="backup_export_skip_read_failed">read failed</string>
     <string name="backup_export_remote_workspace_missing">Remote workspace files were not included: connect in remote mode and export again</string>
+    <!-- Keys are bound to the device Keystore, so undecryptable ones can only travel as ciphertext -->
+    <string name="backup_export_stat_undecryptable_secrets">· %1$s keys/sensitive fields could not be decrypted on this device and were exported as ciphertext (re-entry needed on another device)</string>
     <string name="backup_write_failed">Write failed: %1$s</string>
     <string name="backup_read_failed">Failed to read backup file</string>
     <string name="backup_export_title">Export Backup</string>
@@ -557,6 +559,7 @@
     <string name="backup_import_btn">Import</string>
     <string name="backup_operation_failed">Operation failed</string>
     <string name="backup_import_done">Import complete</string>    <string name="backup_actions">Actions</string>
+    <string name="backup_import_done_secrets_need_refill">Import complete (some keys need re-entry)</string>
     <string name="backup_select_data">Select export data</string>
     <string name="backup_data_remote">Connections &amp; Sync</string>
     <string name="backup_data_chat_history">Chat History</string>
@@ -588,6 +591,8 @@
     <string name="backup_stat_memory_files">· Memory Files: %1$s</string>
     <string name="backup_stat_skipped_security">· Skipped %1$s security-sensitive entries (.git hooks/config)</string>
     <string name="backup_stat_skipped_workspace_files">· Skipped Workspace Files: %1$s (target workspace unavailable, e.g. remote not connected)</string>
+    <string name="backup_stat_undecryptable_secrets">· %1$s keys/sensitive fields could not be decrypted on this device; re-enter them in Settings</string>
+    <string name="backup_stat_secrets_all_restored">· All keys and sensitive fields restored</string>
     <string name="backup_stat_skill_files">· Skill Files: %1$s</string>
     <string name="backup_stat_subagent_files">· Subagent Files: %1$s</string>
     <string name="backup_stat_panel_scripts">· Panel Scripts: %1$s</string>

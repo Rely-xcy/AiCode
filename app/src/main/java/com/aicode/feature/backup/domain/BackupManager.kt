@@ -105,7 +105,12 @@ data class ExportStats(
     /** 导出时是否处于远程执行模式。 */
     val remoteMode: Boolean = false,
     /** 远程模式下是否已连上服务器；非远程模式恒为 false。 */
-    val remoteConnected: Boolean = false
+    val remoteConnected: Boolean = false,
+    /**
+     * 本次导出里「本机 Keystore 解不开、按密文原样写进备份」的敏感字段个数（API Key、代理密码、
+     * 自定义请求头等）。不为 0 时导出摘要必须明示：这些值只对原设备可用，换机导入后需要重填。
+     */
+    val undecryptableSecrets: Int = 0
 ) {
     /** 因远程相关原因被跳过的工作区数。 */
     val skippedRemoteWorkspaces: Int get() = skippedWorkspaces.count { it.reason.isRemote }
@@ -204,7 +209,13 @@ data class RestoreStats(
      * 或无法创建同名工作区）时，这些文件只能留在备份里。摘要据此如实提示，
      * 而不是让用户以为「工作区文件全恢复了」。
      */
-    val skippedWorkspaceFiles: Int = 0
+    val skippedWorkspaceFiles: Int = 0,
+    /**
+     * 已落库、但本机 Keystore 解不开的敏感字段个数：这些字段是备份里带过来的旧密文（原设备密钥），
+     * 在设置里显示为空，需要用户重新填写。导入摘要不管是否为 0 都要输出这一行，
+     * 否则用户无法区分「全部可用」与「根本没检查」。
+     */
+    val undecryptableSecrets: Int = 0
 ) {
     /** 是否已经写入了任何业务数据：失败提示据此区分「一条都没写」与「写了半套」。 */
     val hasWrittenData: Boolean
@@ -231,7 +242,8 @@ data class RestoreStats(
         memoryFiles = memoryFiles + other.memoryFiles,
         sessionBriefs = sessionBriefs + other.sessionBriefs,
         remoteModeRestored = remoteModeRestored || other.remoteModeRestored,
-        skippedWorkspaceFiles = skippedWorkspaceFiles + other.skippedWorkspaceFiles
+        skippedWorkspaceFiles = skippedWorkspaceFiles + other.skippedWorkspaceFiles,
+        undecryptableSecrets = undecryptableSecrets + other.undecryptableSecrets
     )
 }
 

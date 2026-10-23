@@ -216,7 +216,21 @@ data class ProviderDto(
     /** 自定义面板 (DIY) 脚本参数（JSON 编码）；null 表示旧备份无此字段，导入时回退为空。 */
     val scriptParams: String? = null,
     /** 多 Key 自动切换状态码（逗号分隔）；null 表示旧备份无此字段，导入时回退空串（即默认码表）。 */
-    val keySwitchStatusCodes: String? = null
+    val keySwitchStatusCodes: String? = null,
+    // 下面这组字段（单独代理 + 自定义请求头）在旧备份里不存在。全部用 null 表达「备份没带」，
+    // 导入时据此沿用本机同名 provider 的既有值：REPLACE 写入会把缺字段填成默认值，
+    // 等于一次导入静默抹掉用户配好的代理与请求头。
+    val proxyEnabled: Boolean? = null,
+    val proxyType: String? = null,
+    val proxyHost: String? = null,
+    val proxyPort: Int? = null,
+    val proxyUsername: String? = null,
+    /** 代理密码；库内加密存储，导出/导入与 apiKey 同一套密文语义。 */
+    val proxyPassword: String? = null,
+    /** 自定义请求头（JSON 编码的 Map）；库内加密存储。 */
+    val customHeaders: String? = null,
+    /** 已废弃的 UA 覆盖列（被 customHeaders 取代），仅为兼容旧备份保留。 */
+    val userAgent: String? = null
 )
 
 @Serializable

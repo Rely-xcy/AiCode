@@ -40,6 +40,7 @@ import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.RemoteMountDto
 import com.aicode.feature.backup.domain.RestoreStats
+import com.aicode.feature.backup.domain.SecretCipher
 import com.aicode.feature.backup.domain.SessionBriefDto
 import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
 import com.aicode.feature.backup.domain.TodoItemDto
@@ -72,7 +73,6 @@ import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
-import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.Workspace
 import com.aicode.feature.workspace.domain.model.WorkspaceType
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -140,6 +140,13 @@ class BackupManagerImpl @Inject constructor(
         prettyPrint = false
     }
 
+    /** 导入时敏感字段的加解密入口；与导出同一套语义，差别只在谁负责保留原密文。 */
+    private val secretCipher = SecretCipher(
+        isEncrypted = { KeystoreCipher.isEncryptedString(it) },
+        decrypt = { KeystoreCipher.tryDecryptString(it) },
+        encrypt = { KeystoreCipher.encryptString(it) }
+    )
+
     private fun currentSchemaVersion(): Int = AgentDatabase.SCHEMA_VERSION
 
     private fun appVersionName(): String = runCatching {
@@ -153,12 +160,14 @@ class BackupManagerImpl @Inject constructor(
             // 先算计划再写：metadata 里的工作区清单与写 tar 的循环共用同一份候选，
             // 也让「哪些工作区被跳过、为什么」能在写完之前就记录好（与文件变动解耦）。
             val plan = planWorkspaceBackup(options)
+            // 本机解不开的敏感字段要计数：导出摘要得能说清「这几个密钥只有原设备能用」。
+            val secrets = ExportSecretTally { KeystoreCipher.tryDecryptString(it) }
             val written = if (pw == null) {
-                writeTarGz(output, options, plan)
+                writeTarGz(output, options, plan, secrets)
             } else {
                 val temp = createTempFile()
                 try {
-                    val counts = FileOutputStream(temp).buffered().use { writeTarGz(it, options, plan) }
+                    val counts = FileOutputStream(temp).buffered().use { writeTarGz(it, options, plan, secrets) }
                     FileInputStream(temp).buffered().use { input ->
                         BackupCrypto.encryptStream(input, output, pw)
                     }
@@ -167,7 +176,7 @@ class BackupManagerImpl @Inject constructor(
                     temp.delete()
                 }
             }
-            val stats = plan.toExportStats(written)
+            val stats = plan.toExportStats(written, secrets.undecryptable)
             FileLogger.i(
                 TAG,
                 "导出完成：工作区文件 ${stats.workspaceFiles} 个，实写 ${stats.exportedWorkspaces}/${stats.candidateWorkspaces} 个工作区，" +
@@ -403,7 +412,8 @@ class BackupManagerImpl @Inject constructor(
     private suspend fun writeTarGz(
         output: OutputStream,
         options: BackupOptions,
-        workspacePlan: WorkspaceBackupPlan
+        workspacePlan: WorkspaceBackupPlan,
+        secrets: ExportSecretTally
     ): Map<String, Int> {
         // 工作区名 -> 实际写入的文件数：与第一遍的计划分开统计，摘要里「实际写入」以此为准。
         val writtenFiles = mutableMapOf<String, Int>()
@@ -420,7 +430,7 @@ class BackupManagerImpl @Inject constructor(
             GzipCompressorOutputStream(fos).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
-                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan))
+                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan, secrets))
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar, workspacePlan, writtenFiles)
                     }
@@ -474,12 +484,16 @@ class BackupManagerImpl @Inject constructor(
         return writtenFiles
     }
 
-    private suspend fun buildMetadata(options: BackupOptions, workspacePlan: WorkspaceBackupPlan): BackupMetadata = BackupMetadata(
+    private suspend fun buildMetadata(
+        options: BackupOptions,
+        workspacePlan: WorkspaceBackupPlan,
+        secrets: ExportSecretTally
+    ): BackupMetadata = BackupMetadata(
         schemaVersion = currentSchemaVersion(),
         appVersion = appVersionName(),
         createdAt = System.currentTimeMillis(),
-        providers = if (options.providers) aiProviderDao.getAllProvidersOnce().map { it.toDto() } else emptyList(),
-        remoteConnections = if (options.remoteConnections) remoteConnectionDao.getAllConnectionsOnce().map { it.toDto() } else emptyList(),
+        providers = if (options.providers) aiProviderDao.getAllProvidersOnce().map { it.toDto(secrets) } else emptyList(),
+        remoteConnections = if (options.remoteConnections) remoteConnectionDao.getAllConnectionsOnce().map { it.toDto(secrets) } else emptyList(),
         remoteMounts = if (options.remoteConnections) remoteConnectionDao.getAllMountsOnce().map { it.toDto() } else emptyList(),
         mcpServers = if (options.mcpServers) mcpConfigRepository.getGlobalServers() else emptyList(),
         globalPermissionRules = if (options.permissionRules) permissionRulesRepository.getGlobalRulesOnce() else emptyList(),
@@ -1054,12 +1068,23 @@ class BackupManagerImpl @Inject constructor(
         var stats = RestoreStats()
         try {
             if (meta.providers.isNotEmpty()) {
-                aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
-                stats += RestoreStats(providers = meta.providers.size)
+                // 先取本机现有行：旧备份缺的新字段（代理/请求头）要沿用它们——
+                // insertAllProviders 是 REPLACE，缺字段一律会被写成默认值。
+                val existing = aiProviderDao.getAllProvidersOnce().associateBy { it.id }
+                val mapped = meta.providers.map { it.toImportedEntity(existing[it.id], secretCipher) }
+                aiProviderDao.insertAllProviders(mapped.map { it.entity })
+                stats += RestoreStats(
+                    providers = meta.providers.size,
+                    undecryptableSecrets = mapped.sumOf { it.undecryptableSecrets }
+                )
             }
             if (meta.remoteConnections.isNotEmpty()) {
-                remoteConnectionDao.insertAllConnections(meta.remoteConnections.mapNotNull { it.toEntity() })
-                stats += RestoreStats(remoteConnections = meta.remoteConnections.size)
+                val mapped = meta.remoteConnections.map { it.toImportedEntity(secretCipher) }
+                remoteConnectionDao.insertAllConnections(mapped.mapNotNull { it.entity })
+                stats += RestoreStats(
+                    remoteConnections = meta.remoteConnections.size,
+                    undecryptableSecrets = mapped.sumOf { it.undecryptableSecrets }
+                )
             }
             if (meta.remoteMounts.isNotEmpty()) {
                 // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
@@ -1267,11 +1292,11 @@ class BackupManagerImpl @Inject constructor(
 
     // ── Entity ↔ DTO 转换 ──────────────────────────────────────
 
-    private fun AIProviderEntity.toDto() = ProviderDto(
+    private fun AIProviderEntity.toDto(secrets: ExportSecretTally) = ProviderDto(
         id = id,
         name = name,
         type = type,
-        apiKey = KeystoreCipher.decryptString(apiKey),
+        apiKey = secrets.export(apiKey),
         baseUrl = baseUrl,
         defaultModel = defaultModel,
         models = models,
@@ -1285,56 +1310,27 @@ class BackupManagerImpl @Inject constructor(
         dashboardRefreshInterval = dashboardRefreshInterval,
         sortOrder = sortOrder,
         multiKeyEnabled = multiKeyEnabled,
-        apiKeys = KeystoreCipher.decryptString(apiKeys),
+        apiKeys = secrets.export(apiKeys),
         keyRotationStrategy = keyRotationStrategy,
         keyFailoverThreshold = keyFailoverThreshold,
         keyCooldownMinutes = keyCooldownMinutes,
-        scriptParams = KeystoreCipher.decryptString(scriptParams),
-        keySwitchStatusCodes = keySwitchStatusCodes
+        scriptParams = secrets.export(scriptParams),
+        keySwitchStatusCodes = keySwitchStatusCodes,
+        proxyEnabled = proxyEnabled,
+        proxyType = proxyType,
+        proxyHost = proxyHost,
+        proxyPort = proxyPort,
+        proxyUsername = proxyUsername,
+        proxyPassword = secrets.export(proxyPassword),
+        customHeaders = secrets.export(customHeaders),
+        userAgent = userAgent
     )
 
-    private fun ProviderDto.toEntity() = AIProviderEntity(
-        id = id,
-        name = name,
-        type = type,
-        apiKey = KeystoreCipher.encryptString(apiKey),
-        baseUrl = baseUrl,
-        defaultModel = defaultModel,
-        models = models,
-        selectedModel = selectedModel,
-        isEnabled = isEnabled,
-        useFullUrl = useFullUrl,
-        useResponseApi = useResponseApi,
-        anthropicCacheBreakpoints = anthropicCacheBreakpoints ?: true,
-        openaiChatCacheKey = openaiChatCacheKey ?: false,
-        dashboardScriptPath = dashboardScriptPath ?: "",
-        dashboardRefreshInterval = dashboardRefreshInterval ?: 5,
-        sortOrder = sortOrder ?: 0,
-        multiKeyEnabled = multiKeyEnabled ?: false,
-        apiKeys = KeystoreCipher.encryptString(apiKeys ?: ""),
-        keyRotationStrategy = keyRotationStrategy ?: "SEQUENTIAL",
-        keyFailoverThreshold = keyFailoverThreshold ?: 2,
-        keyCooldownMinutes = keyCooldownMinutes ?: 5,
-        scriptParams = KeystoreCipher.encryptString(scriptParams ?: ""),
-        keySwitchStatusCodes = keySwitchStatusCodes ?: ""
-    )
-
-    private fun RemoteConnectionEntity.toDto() = RemoteConnectionDto(
+    private fun RemoteConnectionEntity.toDto(secrets: ExportSecretTally) = RemoteConnectionDto(
         id, name, protocol.name, host, port, username, authType,
-        KeystoreCipher.decryptString(authData), passphrase?.let { KeystoreCipher.decryptString(it) },
+        secrets.export(authData), passphrase?.let { secrets.export(it) },
         sortOrder
     )
-
-    /** 旧备份可能含已移除的协议（本地通道），此类记录跳过不恢复。 */
-    private fun RemoteConnectionDto.toEntity(): RemoteConnectionEntity? {
-        val parsed = runCatching { RemoteProtocol.valueOf(protocol) }.getOrNull() ?: return null
-        return RemoteConnectionEntity(
-            id, name, parsed, host, port, username, authType,
-            if (authType.equals("PASSWORD", ignoreCase = true)) KeystoreCipher.encryptString(authData) else authData,
-            passphrase?.let { KeystoreCipher.encryptString(it) },
-            sortOrder = sortOrder ?: 0
-        )
-    }
 
     private fun RemoteMountEntity.toDto() = RemoteMountDto(id, connectionId, remotePath, localMountPath, isActive, autoConnect)
     private fun RemoteMountDto.toEntity() = RemoteMountEntity(id, connectionId, remotePath, localMountPath, isActive, autoConnect)
@@ -1425,14 +1421,15 @@ private data class WorkspaceBackupPlan(
     val candidateWorkspaces: Int get() = planned.size + skipped.size
 
     /** 合成导出统计；[written] 为「工作区名 -> 实际写入文件数」（第二遍的实测值）。 */
-    fun toExportStats(written: Map<String, Int>) = ExportStats(
+    fun toExportStats(written: Map<String, Int>, undecryptableSecrets: Int) = ExportStats(
         workspaceFilesRequested = requested,
         candidateWorkspaces = candidateWorkspaces,
         exportedWorkspaces = written.count { it.value > 0 },
         workspaceFiles = written.values.sum(),
         skippedWorkspaces = skipped,
         remoteMode = remoteMode,
-        remoteConnected = remoteConnected
+        remoteConnected = remoteConnected,
+        undecryptableSecrets = undecryptableSecrets
     )
 }
 

@@ -65,20 +65,23 @@ object KeystoreCipher {
     fun isEncryptedBytes(bytes: ByteArray): Boolean =
         bytes.size >= BYTE_MAGIC.size + IV_LEN && BYTE_MAGIC.indices.all { bytes[it] == BYTE_MAGIC[it] }
 
-    fun decryptBytes(encrypted: ByteArray): ByteArray {
+    fun decryptBytes(encrypted: ByteArray): ByteArray = try {
+        decryptBytesOrThrow(encrypted)
+    } catch (e: GeneralSecurityException) {
+        // 密文与当前 Keystore 密钥不匹配（密钥丢失后按新密钥重建）或数据损坏。
+        // 返回空值而非抛出，避免单个坏字段把整条读取 Flow 带崩。
+        FileLogger.w(TAG, "解密失败：密文与当前 Keystore 密钥不匹配或已损坏", e)
+        ByteArray(0)
+    }
+
+    /** 解密失败时抛出，供需要区分「解不开」与「本来就是空」的调用方使用。 */
+    private fun decryptBytesOrThrow(encrypted: ByteArray): ByteArray {
         require(isEncryptedBytes(encrypted)) { "不是加密数据" }
         val iv = encrypted.copyOfRange(BYTE_MAGIC.size, BYTE_MAGIC.size + IV_LEN)
         val ciphertext = encrypted.copyOfRange(BYTE_MAGIC.size + IV_LEN, encrypted.size)
-        return try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
-            cipher.doFinal(ciphertext)
-        } catch (e: GeneralSecurityException) {
-            // 密文与当前 Keystore 密钥不匹配（密钥丢失后按新密钥重建）或数据损坏。
-            // 返回空值而非抛出，避免单个坏字段把整条读取 Flow 带崩。
-            FileLogger.w(TAG, "解密失败：密文与当前 Keystore 密钥不匹配或已损坏", e)
-            ByteArray(0)
-        }
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
+        return cipher.doFinal(ciphertext)
     }
 
     fun isEncryptedString(value: String?): Boolean = value != null && value.startsWith(STRING_PREFIX)
@@ -99,5 +102,19 @@ object KeystoreCipher {
             FileLogger.w(TAG, "解密失败：密文格式非法", e)
             ""
         }
+    }
+
+    /**
+     * 可判别的解密：非密文（旧明文）视为成功并返回原值；密文解不开时返回 failure。
+     *
+     * [decryptString] 解不开时返回空串，与「这个字段本来就是空」无法区分——备份导出若据此写入空串，
+     * 用户就永久丢了密钥且备份里没有任何痕迹。需要保留原值或统计「解不开」的调用方改用本方法。
+     */
+    fun tryDecryptString(value: String): Result<String> {
+        if (!isEncryptedString(value)) return Result.success(value)
+        return runCatching {
+            val body = Base64.getDecoder().decode(value.removePrefix(STRING_PREFIX))
+            String(decryptBytesOrThrow(body), Charsets.UTF_8)
+        }.onFailure { FileLogger.w(TAG, "解密失败：密文与当前 Keystore 密钥不匹配或已损坏", it) }
     }
 }
