@@ -91,12 +91,24 @@ interface LlmCallRecordDao {
     suspend fun deleteAll()
 
     /**
-     * 删除 [cutoff] 之前的调用明细，返回删除行数。
-     *
-     * 走 createdAt 索引：没有过期行时只是一次索引 seek，可以每次进设置页都跑。
+     * 清理 [cutoff] 之前只用于单次诊断的字段，保留所有聚合统计需要的数据。
+     * 已清理行不会再次命中，重复执行返回 0。
      */
-    @Query("DELETE FROM llm_call_records WHERE createdAt < :cutoff")
-    suspend fun deleteOlderThan(cutoff: Long): Int
+    @Query(
+        """
+        UPDATE llm_call_records
+        SET sessionId = NULL,
+            reasoningEffort = NULL,
+            errorMessage = NULL,
+            stopReason = NULL
+        WHERE createdAt < :cutoff
+          AND (sessionId IS NOT NULL
+               OR reasoningEffort IS NOT NULL
+               OR errorMessage IS NOT NULL
+               OR stopReason IS NOT NULL)
+        """
+    )
+    suspend fun compactDetailsBefore(cutoff: Long): Int
 
     /**
      * 按天聚合（本地时区：把 createdAt 平移 [tzOffsetMillis] 后再按 86400000 取整切天）。

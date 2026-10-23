@@ -462,6 +462,10 @@ fun SettingsScreen(
         }
     }
 
+    LaunchedEffect(section) {
+        if (section == SettingsSection.TokenStats) viewModel.compactOldCallDetails()
+    }
+
     // 首次（或公告内容更新后）进入「容器与镜像」页自动弹出使用说明；哈希比对在 ViewModel 完成。
     LaunchedEffect(section, containerAnnouncementOutdated) {
         if (section == SettingsSection.Container && containerAnnouncementOutdated && containerAnnouncementText.isNotBlank()) {

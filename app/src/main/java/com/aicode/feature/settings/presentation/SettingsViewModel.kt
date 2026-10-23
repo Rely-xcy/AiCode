@@ -455,10 +455,7 @@ class SettingsViewModel @Inject constructor(
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
 
-        /**
-         * 调用明细保留天数。这张表由每次模型调用追加、从不自减，无限增长会拖慢统计页的全表聚合，
-         * 也让库文件（含备份包）持续变大。90 天覆盖季度对比，再长对用户没有实际参考价值。
-         */
+        /** 90 天前只保留聚合所需字段，不删除调用统计行。 */
         const val CALL_RECORD_RETENTION_DAYS = 90L
         /** 背景透明度停止拖动后的落盘延迟。 */
         const val BACKGROUND_ALPHA_WRITE_DEBOUNCE_MS = 80L
@@ -1014,14 +1011,6 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
-        // 调用明细保留期清理：只有统计页会读这些行，放在这里执行让没进过统计页的用户
-        // 不为它付启动开销；语句本身走 createdAt 索引，无过期数据时仅一次 seek。
-        viewModelScope.launch {
-            val cutoff = System.currentTimeMillis() - CALL_RECORD_RETENTION_DAYS * 86_400_000L
-            runCatching { llmCallRecordDao.deleteOlderThan(cutoff) }
-                .onSuccess { if (it > 0) FileLogger.i(TAG, "清理过期调用记录 $it 条") }
-                .onFailure { FileLogger.w(TAG, "清理过期调用记录失败", it) }
-        }
         // 先同步拿本地目录（内存 → 磁盘缓存 → 内置 assets），保证首帧就有列表、断网也不为空
         containerImageCatalog.load()
         // 目录快照变化时同步刷新列表与源选项：启动预热从仓库拉到最新版本号后会在这里反映出来
@@ -2698,6 +2687,23 @@ class SettingsViewModel @Inject constructor(
     fun clearImageGenModel() {
         viewModelScope.launch {
             imageGenModelSettingsRepository.clear()
+        }
+    }
+
+    private var oldCallDetailsCompacted = false
+
+    /** 进入 Token 统计页时清理过期诊断字段；统计、费用与趋势所需字段永久保留。 */
+    fun compactOldCallDetails() {
+        if (oldCallDetailsCompacted) return
+        oldCallDetailsCompacted = true
+        viewModelScope.launch {
+            val cutoff = System.currentTimeMillis() - CALL_RECORD_RETENTION_DAYS * 86_400_000L
+            runCatching { llmCallRecordDao.compactDetailsBefore(cutoff) }
+                .onSuccess { if (it > 0) FileLogger.i(TAG, "清理过期调用明细 $it 条") }
+                .onFailure {
+                    oldCallDetailsCompacted = false
+                    FileLogger.w(TAG, "清理过期调用明细失败", it)
+                }
         }
     }
 
