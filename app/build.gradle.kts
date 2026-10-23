@@ -201,13 +201,24 @@ android {
             matchingFallbacks += "release"
         }
         // 仅供 :baselineprofile 采集冷启动 profile 使用（.github/workflows/baseline-profile.yml）。
-        // 必须是 release 型（非 debuggable）且与发布包同 R8 配置，否则采到的类名与方法在混淆后对不上，
-        // profile 等于白采集；CI 无 release keystore，故签名固定用 debug 以便装进模拟器。
+        //
+        // 两个变体的职责不同，不要合并：
+        // - profilegen：真正用来采集的变体。Android 官方要求采集时**关闭混淆与优化**，
+        //   生成的是未混淆规则，发布构建再由 R8 按 mapping 重写后才能对应到混淆后的代码；
+        //   在混淆产物上采集只能得到 La/a;->b() 这类短名，代码一变就失配。
+        // - benchmark：与发布包同 R8 配置，只用于验证「发布型构建确实把 profile 编进了 APK」。
+        // 两者都非 debuggable（debuggable 变体不参与 profile 编译），签名固定 debug，CI 无需 release keystore。
         create("benchmark") {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
             isDebuggable = false
+        }
+        create("profilegen") {
+            initWith(getByName("benchmark"))
+            // 关闭 R8 与资源压缩：采集必须是未混淆代码（shrinkResources 依赖 minify，必须同时关闭）。
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 

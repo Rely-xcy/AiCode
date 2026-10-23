@@ -10,7 +10,10 @@ import org.junit.Test
  * 采集冷启 baseline profile。
  *
  * 产物是一个 baseline-prof.txt（见 workflow 上传的 artifact），需要人工提交到
- * `app/src/main/baseline-prof.txt`，之后所有变体（含 beta 包）都会自动带进 APK。
+ * `app/src/main/baseline-prof.txt`，之后所有非 debuggable 变体（含 beta 包）都会自动带进 APK。
+ *
+ * 采集跑在 `profilegen` 变体上：该变体关闭了 R8 与资源压缩，因此规则里是未混淆的原始类名/方法名，
+ * 发布构建再由 R8 按 mapping 重写——在混淆产物上采集只能得到短名，代码一变就再也对不上。
  *
  * 只覆盖冷启动：首屏是工作台，后续页面（设置、文件树、终端）留待按需补充，
  * 因为多界面采集依赖控件结构，UI 一改就断，收益递减。
@@ -23,7 +26,7 @@ class BaselineProfileGenerator {
     @Test
     fun coldStartup() {
         rule.collect(
-            // benchmark 变体没有 applicationIdSuffix，即正式包名
+            // profilegen 变体没有 applicationIdSuffix，即正式包名
             packageName = TARGET_PACKAGE,
             includeInStartupProfile = true
         ) {

@@ -37,11 +37,17 @@ android {
     buildTypes {
         create("benchmark") {
             isDebuggable = false
-            // 解析 :app 的传递依赖时 fallback 取自发起解析的变体（就是本模块的 benchmark）：
-            // :terminal-emulator 等库模块没有 benchmark 变体，缺这一行会报
+            // 解析 :app 的传递依赖时 fallback 取自发起解析的变体（就是本模块的该 buildType）：
+            // :terminal-emulator 等库模块没有这些变体，缺这一行会报
             // "No matching variant of project :terminal-emulator"。
             matchingFallbacks += "release"
             // 自定义 buildType 不会自动继承 debug 签名，不签会 INSTALL_PARSE_FAILED_NO_CERTIFICATES
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        // 采集用变体：对应 :app 的 profilegen（非 debuggable、未混淆），与 benchmark 同配置。
+        create("profilegen") {
+            isDebuggable = false
+            matchingFallbacks += "release"
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -58,9 +64,10 @@ android {
 }
 
 androidComponents {
-    // 只保留 benchmark 变体，避免多构一个无用的 debug 测试 APK。
+    // 只保留两个有用途的变体：profilegen（采集）与 benchmark（验证发布型构建包含 profile），
+    // 避免多构无用的 debug 测试 APK。
     beforeVariants(selector().all()) { variant ->
-        variant.enable = variant.buildType == "benchmark"
+        variant.enable = variant.buildType == "benchmark" || variant.buildType == "profilegen"
     }
 }
 
