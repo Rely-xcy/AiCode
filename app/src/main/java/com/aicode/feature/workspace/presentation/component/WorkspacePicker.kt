@@ -308,7 +308,6 @@ private fun WorkspaceSelectionHost(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 /** 列表行：用 [rowKey] 作为 LazyColumn 的唯一键（不能用可能重复的显示名）。 */
 internal data class WorkspaceRowItem(val workspace: Workspace, val rowKey: String)
 
@@ -323,13 +322,14 @@ internal fun distinctWorkspaceRows(workspaces: List<Workspace>): List<WorkspaceR
     val seen = HashSet<String>()
     val out = ArrayList<WorkspaceRowItem>(workspaces.size)
     for (ws in workspaces) {
-        // 键用「路径 + 名称」：路径在一台设备上唯一，名称能在路径为空时兵分。
+        // 键用「路径 + 名称」：路径在一台设备上唯一，名称能在路径为空时兜底。
         val key = ws.path.ifBlank { ws.name } + "\u0000" + ws.name
         if (seen.add(key)) out += WorkspaceRowItem(ws, key)
     }
     return out
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkspaceSheet(
     workspaces: List<Workspace>,
