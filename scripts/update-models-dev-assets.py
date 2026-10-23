@@ -137,7 +137,8 @@ def main() -> int:
         return 1
 
     with open(ASSET_PATH, "w", encoding="utf-8") as f:
-        json.dump(merged, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+        f.write("\n")
     print(f"已更新 {ASSET_PATH}")
     for pid in providers:
         old = len(current.get(pid, {}).get("models", {}))
