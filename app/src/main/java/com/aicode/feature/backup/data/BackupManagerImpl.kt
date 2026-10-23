@@ -13,6 +13,7 @@ import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.data.local.entity.SessionBriefEntity
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
+import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -32,6 +33,7 @@ import com.aicode.feature.backup.domain.BackupOptions
 import com.aicode.feature.backup.domain.BackupSnapshot
 import com.aicode.feature.backup.domain.BackupSpace
 import com.aicode.feature.backup.domain.ChatSessionDto
+import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.ImportPreview
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.ProviderDto
@@ -42,6 +44,9 @@ import com.aicode.feature.backup.domain.SessionBriefDto
 import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
+import com.aicode.feature.backup.domain.WorkspaceSkip
+import com.aicode.feature.backup.domain.WorkspaceSkipReason
+import com.aicode.feature.backup.domain.classifyWorkspaceSkip
 import com.aicode.feature.backup.domain.shouldRestoreRemoteMode
 import com.aicode.feature.backup.domain.toMetadata
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
@@ -116,6 +121,8 @@ class BackupManagerImpl @Inject constructor(
     private val syncSettingsRepository: SyncSettingsRepository,
     private val executionModeRepository: ExecutionModeRepository,
     private val executionModeHolder: ExecutionModeHolder,
+    /** 仅用于导出统计判定「远程工作区是否已连接」，不做远程文件的真导出。 */
+    private val remoteSshConnection: RemoteSshConnection,
     private val workspaceRepository: WorkspaceRepository,
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
@@ -139,25 +146,35 @@ class BackupManagerImpl @Inject constructor(
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
     }.getOrDefault("")
 
-    override suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream) {
+    override suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream): ExportStats =
         withContext(Dispatchers.IO) {
             val pw = password?.takeIf { it.isNotEmpty() }
             ensureExportSpace(encrypted = pw != null, options = options)
-            if (pw == null) {
-                writeTarGz(output, options)
-                return@withContext
-            }
-            val temp = createTempFile()
-            try {
-                FileOutputStream(temp).buffered().use { writeTarGz(it, options) }
-                FileInputStream(temp).buffered().use { input ->
-                    BackupCrypto.encryptStream(input, output, pw)
+            // 先算计划再写：metadata 里的工作区清单与写 tar 的循环共用同一份候选，
+            // 也让「哪些工作区被跳过、为什么」能在写完之前就记录好（与文件变动解耦）。
+            val plan = planWorkspaceBackup(options)
+            val written = if (pw == null) {
+                writeTarGz(output, options, plan)
+            } else {
+                val temp = createTempFile()
+                try {
+                    val counts = FileOutputStream(temp).buffered().use { writeTarGz(it, options, plan) }
+                    FileInputStream(temp).buffered().use { input ->
+                        BackupCrypto.encryptStream(input, output, pw)
+                    }
+                    counts
+                } finally {
+                    temp.delete()
                 }
-            } finally {
-                temp.delete()
             }
+            val stats = plan.toExportStats(written)
+            FileLogger.i(
+                TAG,
+                "导出完成：工作区文件 ${stats.workspaceFiles} 个，实写 ${stats.exportedWorkspaces}/${stats.candidateWorkspaces} 个工作区，" +
+                    "跳过 ${stats.skippedWorkspaces.size} 个"
+            )
+            stats
         }
-    }
 
     override suspend fun prepareImport(input: InputStream, password: CharArray?): File = withContext(Dispatchers.IO) {
         val temp = createTempFile()
@@ -335,7 +352,7 @@ class BackupManagerImpl @Inject constructor(
     private fun estimateExportBytes(options: BackupOptions): Long {
         var total = databaseBytes()
         if (options.workspaceFiles) {
-            backupLocalWorkspaces().forEach { ws ->
+            workspaceCandidates().forEach { ws ->
                 walkWorkspaceFiles(ws) { file, _ -> total += file.length() }
             }
         }
@@ -383,7 +400,13 @@ class BackupManagerImpl @Inject constructor(
 
     // ── 导出辅助 ──────────────────────────────────────────────
 
-    private suspend fun writeTarGz(output: OutputStream, options: BackupOptions) {
+    private suspend fun writeTarGz(
+        output: OutputStream,
+        options: BackupOptions,
+        workspacePlan: WorkspaceBackupPlan
+    ): Map<String, Int> {
+        // 工作区名 -> 实际写入的文件数：与第一遍的计划分开统计，摘要里「实际写入」以此为准。
+        val writtenFiles = mutableMapOf<String, Int>()
         val stream = object : FilterOutputStream(output) {
             override fun write(bytes: ByteArray, offset: Int, length: Int) {
                 out.write(bytes, offset, length)
@@ -397,9 +420,9 @@ class BackupManagerImpl @Inject constructor(
             GzipCompressorOutputStream(fos).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
-                    writeMetadataEntry(tar, buildMetadata(options))
+                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan))
                     if (options.workspaceFiles) {
-                        writeWorkspaceEntries(tar)
+                        writeWorkspaceEntries(tar, workspacePlan, writtenFiles)
                     }
                     if (options.skillsAndAgents || options.panelScripts) {
                         writeAssetEntries(tar, options)
@@ -448,9 +471,10 @@ class BackupManagerImpl @Inject constructor(
                 }
             }
         }
+        return writtenFiles
     }
 
-    private suspend fun buildMetadata(options: BackupOptions): BackupMetadata = BackupMetadata(
+    private suspend fun buildMetadata(options: BackupOptions, workspacePlan: WorkspaceBackupPlan): BackupMetadata = BackupMetadata(
         schemaVersion = currentSchemaVersion(),
         appVersion = appVersionName(),
         createdAt = System.currentTimeMillis(),
@@ -486,7 +510,9 @@ class BackupManagerImpl @Inject constructor(
         // 执行模式跟「应用设置」同一个开关：它是应用设置的一部分，没勾就不带，
         // 避免用户明确只要聊天数据时却被一次导入切掉了整个执行环境（本地 ↔ 远程）。
         executionMode = if (options.appSettings) executionModeRepository.executionModeFlow.first().name else null,
-        workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList(),
+        // 只用计划里「真的数到了文件」的工作区：远程 / 宿主目录不在的被跳过项不进 metadata，
+        // 但也不会静默消失——它们进 [ExportStats.skippedWorkspaces] 由导出摘要明示。
+        workspaces = workspacePlan.planned.map { WorkspaceBackupMeta(it.workspace.name, it.fileCount) },
         // 没勾「应用设置」时上面那一整段字段全是默认值，与「用户就是这么设的」在数据上不可区分，
         // 所以单独记下这次带没带设置；导入侧据此决定要不要回写设置（见 restoreMeta）。
         appSettingsIncluded = options.appSettings,
@@ -539,23 +565,87 @@ class BackupManagerImpl @Inject constructor(
 
     // ── 工作区文件备份 ──────────────────────────────────────────
 
-    /** 仅备份内部本地工作区；外部本地工作区是用户设备上的目录，不属于 App 私有数据，不纳入备份。 */
-    private fun backupLocalWorkspaces(): List<Workspace> =
+    /**
+     * 备份候选工作区：只排除外部本地目录（用户设备上的原始目录，不属于 App 私有数据）。
+     *
+     * INTERNAL 与 REMOTE 都留在候选里：远程工作区不该在这里被静默掉（旧注释写着「仅备份内部本地工作区」，
+     * 但过滤条件一直只排 EXTERNAL_LOCAL）。留在候选里，才能被 [planWorkspaceBackup] 逐个记录「没导出」
+     * 及其原因，最终在导出摘要里明示。
+     */
+    private fun workspaceCandidates(): List<Workspace> =
         workspaceRepository.workspaces.value.filter { it.type != WorkspaceType.EXTERNAL_LOCAL }
 
-    /** 第一遍：统计每个本地工作区将备份的文件数（写 metadata 用）。 */
-    private fun collectWorkspaceMetas(): List<WorkspaceBackupMeta> =
-        backupLocalWorkspaces().mapNotNull { ws ->
-            var count = 0
-            walkWorkspaceFiles(ws) { _, _ -> count++ }
-            if (count > 0) WorkspaceBackupMeta(ws.name, count) else null
+    /**
+     * 第一遍：算出「即将备份的工作区」（能数到文件）与「被跳过的工作区及原因」。
+     *
+     * 这里只数文件，不持有文件列表，保持导入/导出全程流式；第二遍 [writeWorkspaceEntries]
+     * 再按同一份 [WorkspaceBackupPlan.planned] 真正写 tar。
+     */
+    private fun planWorkspaceBackup(options: BackupOptions): WorkspaceBackupPlan {
+        // 执行模式与远程连接状态只取一次快照：同一个包里所有工作区用同一个判定依据，
+        // 不会出现「前后几秒内连接状态变了，同一份备份里跳过原因不一致」。
+        val remoteMode = executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH
+        val remoteConnected = remoteMode && runCatching { remoteSshConnection.isConnected() }.getOrDefault(false)
+        if (!options.workspaceFiles) {
+            return WorkspaceBackupPlan(
+                requested = false,
+                planned = emptyList(),
+                skipped = emptyList(),
+                remoteMode = remoteMode,
+                remoteConnected = remoteConnected
+            )
         }
+        val planned = mutableListOf<PlannedWorkspace>()
+        val skipped = mutableListOf<WorkspaceSkip>()
+        workspaceCandidates().forEach { ws ->
+            val reason = classifyWorkspaceSkip(
+                type = ws.type,
+                hostDirExists = File(ws.path).isDirectory,
+                remoteConnected = remoteConnected
+            )
+            if (reason != null) {
+                skipped += WorkspaceSkip(ws.name, reason)
+                FileLogger.w(TAG, "导出跳过工作区：${ws.name}（$reason，path=${ws.path}）")
+                return@forEach
+            }
+            val counted = runCatching {
+                var files = 0
+                walkWorkspaceFiles(ws) { _, _ -> files++ }
+                files
+            }
+            val count = counted.getOrNull()
+            if (count == null) {
+                skipped += WorkspaceSkip(ws.name, WorkspaceSkipReason.READ_FAILED)
+                FileLogger.w(TAG, "导出跳过工作区：${ws.name}（遍历失败）", counted.exceptionOrNull())
+                return@forEach
+            }
+            if (count > 0) planned += PlannedWorkspace(ws, count)
+            else skipped += WorkspaceSkip(ws.name, WorkspaceSkipReason.EMPTY)
+        }
+        return WorkspaceBackupPlan(
+            requested = true,
+            planned = planned,
+            skipped = skipped,
+            remoteMode = remoteMode,
+            remoteConnected = remoteConnected
+        )
+    }
 
-    /** 第二遍：把各本地工作区文件写入 tar（`workspaces/<name>/<相对路径>`）。 */
-    private fun writeWorkspaceEntries(tar: TarArchiveOutputStream) {
-        backupLocalWorkspaces().forEach { ws ->
+    /**
+     * 第二遍：把计划里的工作区文件写入 tar（`workspaces/<name>/<相对路径>`），
+     * 并把「工作区名 -> 实际写入文件数」记到 [writtenFiles]（同一工作区零文件也算，由调用方判空）。
+     */
+    private fun writeWorkspaceEntries(
+        tar: TarArchiveOutputStream,
+        plan: WorkspaceBackupPlan,
+        writtenFiles: MutableMap<String, Int>
+    ) {
+        plan.planned.forEach { planned ->
+            val ws = planned.workspace
+            writtenFiles[ws.name] = 0
             walkWorkspaceFiles(ws) { file, parts ->
                 writeTarFileEntry(tar, "workspaces/${ws.name}/${parts.joinToString("/")}", file)
+                writtenFiles[ws.name] = (writtenFiles[ws.name] ?: 0) + 1
             }
         }
     }
@@ -1063,6 +1153,9 @@ class BackupManagerImpl @Inject constructor(
      * 还原单个工作区文件条目：`workspaces/<name>/<相对路径>`。
      * 仅处理勾选的工作区（[selectedWorkspaces] 非 null 时），且只允许写入内部工作区；本地无同名工作区时自动创建，
      * 避免新设备/重装后导入的工作区文件因找不到目标而丢失。
+     *
+     * 找不到可写的目标工作区时不再静默略过：计入 [RestoreStats.skippedWorkspaceFiles]，
+     * 由导入摘要明示「有多少工作区文件没落盘」，否则用户会以为工作区也全恢复了。
      */
     private suspend fun restoreWorkspaceEntry(
         tar: TarArchiveInputStream,
@@ -1073,12 +1166,19 @@ class BackupManagerImpl @Inject constructor(
         val segments = entryName.split("/", limit = 3)
         if (segments.size != 3) return RestoreStats()
         val wsName = segments[1]
+        // 用户主动取消勾选的不算「跳过」：那是选择，不是失败。
         if (selectedWorkspaces != null && wsName !in selectedWorkspaces) return RestoreStats()
 
-        val ws = resolveWorkspaceForRestore(wsName, restoreMapping) ?: return RestoreStats()
+        val ws = resolveWorkspaceForRestore(wsName, restoreMapping) ?: run {
+            FileLogger.w(TAG, "跳过工作区文件：$entryName（找不到也无法创建目标工作区，远程模式需先连接）")
+            return RestoreStats(skippedWorkspaceFiles = 1)
+        }
 
         val wsDir = File(ws.path).canonicalFile
-        val target = resolveWorkspaceRestoreTarget(wsDir, segments[2]) ?: return RestoreStats()
+        val target = resolveWorkspaceRestoreTarget(wsDir, segments[2]) ?: run {
+            FileLogger.w(TAG, "跳过工作区文件：$entryName（目标工作区目录不可用：${wsDir.path}）")
+            return RestoreStats(skippedWorkspaceFiles = 1)
+        }
         val relative = File(segments[2]).toPath().normalize().toString()
         val actualRelative = target.relativeTo(wsDir).invariantSeparatorsPath
         // Git 配置和 hooks 能定义容器内的执行入口；条目路径与实际目标都必须检查，
@@ -1302,6 +1402,38 @@ class BackupManagerImpl @Inject constructor(
         /** 资产目录遍历深度上限：够盖住技能目录里的多层子目录，同时挡住异常的深目录。 */
         const val ASSET_MAX_DEPTH = 8
     }
+}
+
+/** 计划里一个待写入的工作区及其文件数（第一遍数出来）。 */
+private data class PlannedWorkspace(val workspace: Workspace, val fileCount: Int)
+
+/**
+ * 工作区备份计划：一次导出里「候选 / 实际写入 / 跳过」的唯一口径。
+ *
+ * 第一遍（[BackupManagerImpl] 里的 planWorkspaceBackup）算出本对象，第二遍据此写 tar；
+ * 导出结束再用 [toExportStats] 把计划与「实际写入数」合成 [ExportStats] 给 UI。
+ * candidate = planned + skipped：所以「即将备份」与「实际写入」的差额总能逐条解释到具体工作区。
+ */
+private data class WorkspaceBackupPlan(
+    /** 用户是否勾了「工作区文件」；没勾时其余字段恒为空。 */
+    val requested: Boolean,
+    val planned: List<PlannedWorkspace>,
+    val skipped: List<WorkspaceSkip>,
+    val remoteMode: Boolean,
+    val remoteConnected: Boolean
+) {
+    val candidateWorkspaces: Int get() = planned.size + skipped.size
+
+    /** 合成导出统计；[written] 为「工作区名 -> 实际写入文件数」（第二遍的实测值）。 */
+    fun toExportStats(written: Map<String, Int>) = ExportStats(
+        workspaceFilesRequested = requested,
+        candidateWorkspaces = candidateWorkspaces,
+        exportedWorkspaces = written.count { it.value > 0 },
+        workspaceFiles = written.values.sum(),
+        skippedWorkspaces = skipped,
+        remoteMode = remoteMode,
+        remoteConnected = remoteConnected
+    )
 }
 
 /** 带内部缓冲的 jsonl 写入器：行缓冲满 64KB 时刷入 tar 流，避免逐行写系统调用。 */

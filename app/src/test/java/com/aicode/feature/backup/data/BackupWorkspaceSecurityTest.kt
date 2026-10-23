@@ -6,6 +6,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
+import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -20,6 +21,8 @@ import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
@@ -179,6 +182,8 @@ class BackupWorkspaceSecurityTest {
 
         assertEquals(1, stats.workspaceFiles)
         assertEquals(0, stats.skippedSecurityEntries)
+        // 越出工作区的条目现在会计入「跳过的工作区文件」：既不写入，也不会默不作声地消失
+        assertEquals(entries.size - 1, stats.skippedWorkspaceFiles)
         assertEquals("outside existing", existing.readText())
         assertFalse(File(outside, "new.txt").exists())
         assertEquals("restored", File(workspaceRoot, "safe.txt").readText())
@@ -252,6 +257,9 @@ class BackupWorkspaceSecurityTest {
         visionModelSettingsRepository = mockk<VisionModelSettingsRepository>(relaxed = true),
         compactionModelSettingsRepository = mockk<CompactionModelSettingsRepository>(relaxed = true),
         syncSettingsRepository = mockk<SyncSettingsRepository>(relaxed = true),
+        executionModeRepository = mockk<ExecutionModeRepository>(relaxed = true),
+        executionModeHolder = mockk<ExecutionModeHolder>(relaxed = true),
+        remoteSshConnection = mockk<RemoteSshConnection>(relaxed = true),
         workspaceRepository = workspaceRepository,
         fileAccess = mockk<FileAccessProvider>(relaxed = true),
         pathHomeResolver = mockk<PathHomeResolver>(relaxed = true),

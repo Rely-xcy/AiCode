@@ -37,7 +37,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,8 +62,11 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
+import com.aicode.feature.backup.domain.WorkspaceSkip
+import com.aicode.feature.backup.domain.WorkspaceSkipReason
 import com.aicode.feature.backup.domain.remote.BackupTarget
 import com.aicode.feature.backup.domain.remote.BackupTargetType
 import com.aicode.feature.settings.presentation.component.SettingsDivider
@@ -354,17 +356,14 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传完成提示
-    LaunchedEffect(networkState) {
-        val done = networkState as? NetworkBackupState.UploadDone
-        if (done != null) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.backup_net_upload_done, done.targetName),
-                Toast.LENGTH_SHORT
-            ).show()
-            viewModel.dismissNetworkState()
-        }
+    // 上传完成 → 与本地导出同一份摘要（含工作区文件数与被跳过的工作区）
+    val uploadDone = networkState as? NetworkBackupState.UploadDone
+    if (uploadDone != null) {
+        ResultDialog(
+            title = stringResource(R.string.backup_net_upload_done, uploadDone.targetName),
+            message = buildExportSummary(context, uploadDone.stats),
+            onDismiss = { viewModel.dismissNetworkState() }
+        )
     }
 
     if (networkState is NetworkBackupState.Working) {
@@ -408,19 +407,17 @@ internal fun BackupScreen(
         )
     }
 
-    // 导出完成 → 提示并复位
-    LaunchedEffect(state) {
-        if (state is BackupState.ExportDone) {
-            Toast.makeText(context, context.getString(R.string.backup_exported), Toast.LENGTH_SHORT).show()
-            viewModel.reset()
-        }
-    }
-
     if (state is BackupState.Working) {
         ProgressDialog()
     }
 
+    // 导出完成 → 弹摘要对话框（汇总 + 跳过的工作区），用户确认后复位
     when (val current = state) {
+        is BackupState.ExportDone -> ResultDialog(
+            title = stringResource(R.string.backup_exported),
+            message = buildExportSummary(context, current.stats),
+            onDismiss = { viewModel.reset() }
+        )
         is BackupState.Error -> ResultDialog(
             title = stringResource(R.string.backup_operation_failed),
             message = current.message,
@@ -926,9 +923,77 @@ private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) 
     )
 }
 
+/**
+ * 导出完成摘要：把「真的写进去了多少」与「哪些工作区被跳过、为什么」分开讲。
+ * 导出本身总是产出能拿到的部分（不会因为远程未连接而整包失败），所以这份摘要就是用户唯一的知情渠道。
+ */
+private fun buildExportSummary(context: android.content.Context, stats: ExportStats): String = buildString {
+    if (!stats.workspaceFilesRequested) {
+        append(context.getString(R.string.backup_export_summary_no_workspaces))
+        return@buildString
+    }
+    append(
+        context.getString(
+            R.string.backup_export_stat_workspace_files,
+            stats.workspaceFiles,
+            stats.exportedWorkspaces
+        )
+    )
+    if (stats.skippedWorkspaces.isNotEmpty()) {
+        appendLine()
+        append(
+            context.getString(
+                R.string.backup_export_stat_skipped_workspaces,
+                stats.skippedWorkspaces.size,
+                formatSkippedWorkspaces(context, stats.skippedWorkspaces)
+            )
+        )
+    }
+    // 远程工作区一个文件都没导出时，把「怎么才能拿到」写清楚：连接只是前提，仍需要重新导出一次。
+    if (stats.remoteWorkspaceMissing) {
+        appendLine()
+        appendLine()
+        append(context.getString(R.string.backup_export_remote_workspace_missing))
+    }
+}
+
+/** 跳过的工作区列表：每项「名字（原因）」，超过 [MAX_SKIPPED_WORKSPACE_NAMES] 个则截断为「…等 M 个」。 */
+private fun formatSkippedWorkspaces(context: android.content.Context, skipped: List<WorkspaceSkip>): String {
+    val separator = context.getString(R.string.backup_export_skipped_name_separator)
+    val shown = skipped.take(MAX_SKIPPED_WORKSPACE_NAMES).joinToString(separator) { skip ->
+        context.getString(
+            R.string.backup_export_skipped_workspace_item,
+            skip.name,
+            context.getString(skip.reason.labelRes())
+        )
+    }
+    return if (skipped.size > MAX_SKIPPED_WORKSPACE_NAMES) {
+        context.getString(R.string.backup_export_skipped_workspaces_more, shown, skipped.size)
+    } else {
+        shown
+    }
+}
+
+/** 跳过原因的文案资源：摘要只用这一处映射，新增原因时漏映射会直接编译失败。 */
+private fun WorkspaceSkipReason.labelRes(): Int = when (this) {
+    WorkspaceSkipReason.REMOTE_NOT_CONNECTED -> R.string.backup_export_skip_remote_not_connected
+    WorkspaceSkipReason.REMOTE_UNSUPPORTED -> R.string.backup_export_skip_remote_unsupported
+    WorkspaceSkipReason.HOST_DIR_MISSING -> R.string.backup_export_skip_host_dir_missing
+    WorkspaceSkipReason.EMPTY -> R.string.backup_export_skip_empty
+    WorkspaceSkipReason.READ_FAILED -> R.string.backup_export_skip_read_failed
+}
+
+/** 摘要里最多逐个列出的跳过工作区数，其余折叠成「等 M 个」。 */
+private const val MAX_SKIPPED_WORKSPACE_NAMES = 3
+
 private fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
     appendLine(context.getString(R.string.backup_restored_data))
     append(buildRestoreStatsLines(context, stats))
+    // 跳过的工作区文件不计入已恢复数，单独一行明示：否则「工作区文件 0 个」看起来就像全丢了一样。
+    // 只放在成功摘要里，不进 buildRestoreStatsLines——那行说明的是「已写入」的数据，跳过项不属于该口径。
+    if (stats.skippedWorkspaceFiles > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_workspace_files, stats.skippedWorkspaceFiles))
+    }
     // 远程相关的提醒只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
     // 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
     if (stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0) {

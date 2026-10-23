@@ -6,6 +6,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
+import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -19,6 +20,8 @@ import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
@@ -185,6 +188,9 @@ class BackupImportFormatGuardTest {
         visionModelSettingsRepository = mockk<VisionModelSettingsRepository>(relaxed = true),
         compactionModelSettingsRepository = mockk<CompactionModelSettingsRepository>(relaxed = true),
         syncSettingsRepository = mockk<SyncSettingsRepository>(relaxed = true),
+        executionModeRepository = mockk<ExecutionModeRepository>(relaxed = true),
+        executionModeHolder = mockk<ExecutionModeHolder>(relaxed = true),
+        remoteSshConnection = mockk<RemoteSshConnection>(relaxed = true),
         workspaceRepository = workspaceRepository,
         fileAccess = mockk<FileAccessProvider>(relaxed = true),
         pathHomeResolver = mockk<PathHomeResolver>(relaxed = true),

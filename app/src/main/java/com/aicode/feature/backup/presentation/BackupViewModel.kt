@@ -8,6 +8,7 @@ import com.aicode.feature.backup.data.BackupTargetRepository
 import com.aicode.feature.backup.domain.BackupDecryptionException
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.InsufficientSpaceException
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.RestoreStats
@@ -39,7 +40,12 @@ import javax.inject.Inject
 sealed class BackupState {
     data object Idle : BackupState()
     data object Working : BackupState()
-    data object ExportDone : BackupState()
+
+    /**
+     * 导出完成；带上统计，让完成提示能讲清「工作区文件导了多少、哪些工作区被跳过」。
+     * 旧实现只是个无参状态 + Toast，导致「导出成功但工作区文件一个没进包」看不出来。
+     */
+    data class ExportDone(val stats: ExportStats) : BackupState()
     data class ImportSuccess(val stats: RestoreStats) : BackupState()
     /** 导入预览完成，等待选择要恢复的工作区。 */
     data class WorkspaceSelection(
@@ -54,7 +60,7 @@ sealed class BackupState {
 sealed class NetworkBackupState {
     data object Idle : NetworkBackupState()
     data object Working : NetworkBackupState()
-    data class UploadDone(val targetName: String) : NetworkBackupState()
+    data class UploadDone(val targetName: String, val stats: ExportStats) : NetworkBackupState()
     data class RemoteList(
         val targetId: String,
         val targetName: String,
@@ -135,8 +141,8 @@ class BackupViewModel @Inject constructor(
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
             try {
-                backupManager.export(pw, options, output)
-                _state.value = BackupState.ExportDone
+                val stats = backupManager.export(pw, options, output)
+                _state.value = BackupState.ExportDone(stats)
             } catch (e: Exception) {
                 _state.value = BackupState.Error(describeBackupError(e))
             } finally {
@@ -178,15 +184,23 @@ class BackupViewModel @Inject constructor(
                     File.createTempFile("netbackup", ".tar.gz", context.cacheDir)
                 }
                 val file = temp
-                withContext(Dispatchers.IO) {
+                val exportStats = withContext(Dispatchers.IO) {
                     file.outputStream().buffered().use { backupManager.export(pw, _exportOptions.value, it) }
+                }
+                // 网络上传与本地导出的工作区口径一致：跳过明细也随上传结果回给 UI，避免云端备份看起来「都带上了」。
+                if (exportStats.skippedWorkspaces.isNotEmpty()) {
+                    FileLogger.w(
+                        TAG,
+                        "网络导出跳过工作区 ${exportStats.skippedWorkspaces.size} 个：" +
+                            exportStats.skippedWorkspaces.joinToString { "${it.name}(${it.reason})" }
+                    )
                 }
                 val name = "aicode-backup-${fileTimestamp()}.tar.gz"
                 val result = withContext(Dispatchers.IO) {
                     runCatching { targetRepository.storageFor(target).upload(name, file).getOrThrow() }
                 }
                 result
-                    .onSuccess { _networkState.value = NetworkBackupState.UploadDone(target.name) }
+                    .onSuccess { _networkState.value = NetworkBackupState.UploadDone(target.name, exportStats) }
                     .onFailure {
                         _networkState.value = NetworkBackupState.Error(describeBackupError(it))
                     }

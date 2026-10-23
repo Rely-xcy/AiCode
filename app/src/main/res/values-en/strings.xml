@@ -530,6 +530,19 @@
 
     <!-- Backup -->
     <string name="backup_exported">Backup exported</string>
+    <!-- Export summary: how many workspace files were written, which workspaces were skipped and why -->
+    <string name="backup_export_summary_no_workspaces">Workspace files were not selected, so this backup contains none.</string>
+    <string name="backup_export_stat_workspace_files">· Workspace Files: %1$s (%2$s workspaces)</string>
+    <string name="backup_export_stat_skipped_workspaces">· Skipped Workspaces: %1$s (%2$s)</string>
+    <string name="backup_export_skipped_workspace_item">%1$s (%2$s)</string>
+    <string name="backup_export_skipped_workspaces_more">%1$s and %2$s more</string>
+    <string name="backup_export_skipped_name_separator">", "</string>
+    <string name="backup_export_skip_remote_not_connected">remote not connected, files unreadable</string>
+    <string name="backup_export_skip_remote_unsupported">remote workspace files are not exported</string>
+    <string name="backup_export_skip_host_dir_missing">host directory missing</string>
+    <string name="backup_export_skip_empty">no files</string>
+    <string name="backup_export_skip_read_failed">read failed</string>
+    <string name="backup_export_remote_workspace_missing">Remote workspace files were not included: connect in remote mode and export again</string>
     <string name="backup_write_failed">Write failed: %1$s</string>
     <string name="backup_read_failed">Failed to read backup file</string>
     <string name="backup_export_title">Export Backup</string>
@@ -574,6 +587,7 @@
     <string name="backup_stat_workspace_files">· Workspace Files: %1$s</string>
     <string name="backup_stat_memory_files">· Memory Files: %1$s</string>
     <string name="backup_stat_skipped_security">· Skipped %1$s security-sensitive entries (.git hooks/config)</string>
+    <string name="backup_stat_skipped_workspace_files">· Skipped Workspace Files: %1$s (target workspace unavailable, e.g. remote not connected)</string>
     <string name="backup_stat_skill_files">· Skill Files: %1$s</string>
     <string name="backup_stat_subagent_files">· Subagent Files: %1$s</string>
     <string name="backup_stat_panel_scripts">· Panel Scripts: %1$s</string>

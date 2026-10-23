@@ -1,5 +1,6 @@
 package com.aicode.feature.backup.domain
 
+import com.aicode.feature.workspace.domain.model.WorkspaceType
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -15,8 +16,11 @@ interface BackupManager {
     /**
      * 流式生成备份写入 [output]（调用方负责打开与关闭输出流）。
      * password 为 null 或空时不加密，输出明文 tar.gz。
+     *
+     * @return 导出结果统计：实写了多少工作区 / 文件，以及哪些工作区被跳过（远程工作区、宿主目录不在、
+     *   未连接读不到）。导出照样产出能拿到的部分，调用方用这份统计在完成提示里明示「还差什么」。
      */
-    suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream)
+    suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream): ExportStats
 
     /**
      * 导出单个会话（无密码 tar.gz）：只含该会话 + 关联消息 + todo，可由 [import] 直接还原。
@@ -80,6 +84,87 @@ data class BackupOptions(
     val sessionBriefs: Boolean = false
 )
 
+/**
+ * 导出结果统计：把「即将备份的工作区」与「实际写进包里的工作区 / 文件数」分开，
+ * 并逐条记下被跳过的工作区及原因。UI 的完成提示据此讲清「哪些没带上、为什么」。
+ *
+ * 只统计「工作区文件」段：其余数据段是整表流式序列化，不存在部分跳过的情形；
+ * 因此 [workspaceFilesRequested] 为 false 时下面各项都没有意义，摘要也不该提工作区。
+ */
+data class ExportStats(
+    /** 用户是否勾了「工作区文件」。 */
+    val workspaceFilesRequested: Boolean = false,
+    /** 候选工作区数（已排除外部本地目录）。 */
+    val candidateWorkspaces: Int = 0,
+    /** 实际写入了至少一个文件的工作区数。 */
+    val exportedWorkspaces: Int = 0,
+    /** 实际写入 tar 的工作区文件条目数。 */
+    val workspaceFiles: Int = 0,
+    /** 被跳过的工作区明细（名字 + 原因），顺序与工作区列表一致。 */
+    val skippedWorkspaces: List<WorkspaceSkip> = emptyList(),
+    /** 导出时是否处于远程执行模式。 */
+    val remoteMode: Boolean = false,
+    /** 远程模式下是否已连上服务器；非远程模式恒为 false。 */
+    val remoteConnected: Boolean = false
+) {
+    /** 因远程相关原因被跳过的工作区数。 */
+    val skippedRemoteWorkspaces: Int get() = skippedWorkspaces.count { it.reason.isRemote }
+
+    /**
+     * 是否要明示「远程工作区文件未包含」：这次勾了工作区文件却一个都没导出，且原因是远程——
+     * 要么有远程工作区被跳过，要么远程模式下压根没连上（连工作区列表都读不出来）。
+     */
+    val remoteWorkspaceMissing: Boolean
+        get() = workspaceFilesRequested && workspaceFiles == 0 &&
+            (skippedRemoteWorkspaces > 0 || (remoteMode && !remoteConnected))
+}
+
+/** 一个被跳过的工作区：名字 + 原因，供导出摘要逐条列出。 */
+data class WorkspaceSkip(val name: String, val reason: WorkspaceSkipReason)
+
+/** 导出时跳过某个工作区的原因。 */
+enum class WorkspaceSkipReason {
+    /** 远程工作区且当前未连接服务器：文件读不到。 */
+    REMOTE_NOT_CONNECTED,
+
+    /** 远程工作区但已连接：本次不做远程文件的真导出（远程工作区只做可见性提示）。 */
+    REMOTE_UNSUPPORTED,
+
+    /** 内部工作区的宿主目录不存在（被删除 / 被移走 / 尚未落盘）。 */
+    HOST_DIR_MISSING,
+
+    /** 目录在但一个文件都没有（含被 .gitignore / 同步忽略清单全部排除的情形）。 */
+    EMPTY,
+
+    /** 遍历时抛异常（权限 / IO 错误），拿不到文件列表。 */
+    READ_FAILED;
+
+    /** 是否与远程工作区有关：导出摘要据此给出「需要在远程模式下连接后导出」的提示。 */
+    val isRemote: Boolean get() = this == REMOTE_NOT_CONNECTED || this == REMOTE_UNSUPPORTED
+}
+
+/**
+ * 判定一个候选工作区该不该跳过；返回 null 表示可以正常备份。
+ *
+ * 纯函数：输入只有工作区类型、宿主目录是否存在、远程是否已连接，单测可直接覆盖
+ * 「远程未连接 / 远程已连接 / 目录不存在 / 正常」四种情形，不必搭 Room 或真实文件系统。
+ *
+ * 外部本地工作区在收集候选时就被排除（用户设备上的原始目录不属于 App 私有数据，不纳入备份），
+ * 这里返回 null 只是让判定式对三种类型都成立，实际不会走到该分支。
+ */
+fun classifyWorkspaceSkip(
+    type: WorkspaceType,
+    hostDirExists: Boolean,
+    remoteConnected: Boolean
+): WorkspaceSkipReason? = when (type) {
+    WorkspaceType.REMOTE ->
+        if (remoteConnected) WorkspaceSkipReason.REMOTE_UNSUPPORTED else WorkspaceSkipReason.REMOTE_NOT_CONNECTED
+
+    WorkspaceType.INTERNAL -> if (hostDirExists) null else WorkspaceSkipReason.HOST_DIR_MISSING
+
+    WorkspaceType.EXTERNAL_LOCAL -> null
+}
+
 data class RestoreStats(
     val providers: Int = 0,
     val remoteConnections: Int = 0,
@@ -113,7 +198,13 @@ data class RestoreStats(
      * 本次导入是否真的把执行模式从本地切回了远程（[com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH]）。
      * 本机原本就在远程时不计（没发生切换）；为 true 时导入摘要才多一句「远程聊天记录只在远程模式下显示」。
      */
-    val remoteModeRestored: Boolean = false
+    val remoteModeRestored: Boolean = false,
+    /**
+     * 导入时跳过的工作区文件数：目标工作区解析不出来（远程模式未连接、工作区目录不可用、
+     * 或无法创建同名工作区）时，这些文件只能留在备份里。摘要据此如实提示，
+     * 而不是让用户以为「工作区文件全恢复了」。
+     */
+    val skippedWorkspaceFiles: Int = 0
 ) {
     /** 是否已经写入了任何业务数据：失败提示据此区分「一条都没写」与「写了半套」。 */
     val hasWrittenData: Boolean
@@ -139,7 +230,8 @@ data class RestoreStats(
         skillsAgentsConfigRestored = skillsAgentsConfigRestored || other.skillsAgentsConfigRestored,
         memoryFiles = memoryFiles + other.memoryFiles,
         sessionBriefs = sessionBriefs + other.sessionBriefs,
-        remoteModeRestored = remoteModeRestored || other.remoteModeRestored
+        remoteModeRestored = remoteModeRestored || other.remoteModeRestored,
+        skippedWorkspaceFiles = skippedWorkspaceFiles + other.skippedWorkspaceFiles
     )
 }
 
