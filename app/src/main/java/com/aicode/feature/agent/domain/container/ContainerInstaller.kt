@@ -690,12 +690,12 @@ class ContainerInstaller @Inject constructor(
                     return
                 }
                 if (outFile.exists()) outFile.delete()
-                runCatching { Os.link(target.absolutePath, outFile.absolutePath) }
-                    .onFailure {
-                        // 退化为复制，保证文件存在
-                        FileLogger.w(TAG, "hardlink 失败 ${entry.name} -> ${entry.linkName}，改为复制: ${it.message}")
-                        runCatching { target.copyTo(outFile, overwrite = true) }
-                    }
+                val linkResult = runCatching { Os.link(target.absolutePath, outFile.absolutePath) }
+                if (linkResult.isFailure || !outFile.exists()) {
+                    // 退化为复制，保证文件存在；部分运行时的 link 可能不抛错但也不创建目标。
+                    FileLogger.w(TAG, "hardlink 失败 ${entry.name} -> ${entry.linkName}，改为复制: ${linkResult.exceptionOrNull()?.message.orEmpty()}")
+                    runCatching { target.copyTo(outFile, overwrite = true) }
+                }
             }
 
             entry.isFile -> {
