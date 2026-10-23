@@ -119,6 +119,9 @@ class RootCommandGuardTest {
         assertFalse(RootCommandGuard.isAllowlisted("cp /sdcard/a /sdcard/b"))
         assertFalse(RootCommandGuard.isAllowlisted("chmod 777 /sdcard/x"))
         assertFalse(RootCommandGuard.isAllowlisted("reboot"))
+        assertFalse(RootCommandGuard.isAllowlisted("toybox touch /sdcard/root-audit-sentinel"))
+        assertFalse(RootCommandGuard.isAllowlisted("toybox kill 1234"))
+        assertFalse(RootCommandGuard.isAllowlisted("toybox cat /proc/meminfo"))
         assertFalse(RootCommandGuard.isAllowlisted(""))
         // settings 只放只读子命令
         assertFalse(RootCommandGuard.isAllowlisted("settings put global airplane_mode_on 1"))

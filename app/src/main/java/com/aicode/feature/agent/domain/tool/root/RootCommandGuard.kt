@@ -60,7 +60,7 @@ object RootCommandGuard {
         // 应用信息与控制（不改系统分区）
         "pm", "am", "monkey",
         // 其它只读工具
-        "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum", "toybox"
+        "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum"
     )
 
     /** 只允许读的 `settings` 子命令；写子命令一律不在默认白名单。 */

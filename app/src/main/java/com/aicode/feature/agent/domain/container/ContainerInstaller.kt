@@ -664,13 +664,8 @@ class ContainerInstaller @Inject constructor(
         tarIn: TarArchiveInputStream,
         entry: TarArchiveEntry
     ) {
-        val outFile = File(destDir, entry.name)
-
-        // 防 zip-slip：确保解压目标落在 destDir 内
-        val canonicalRoot = destDir.canonicalPath
-        if (!outFile.canonicalPath.startsWith(canonicalRoot + File.separator) &&
-            outFile.canonicalPath != canonicalRoot
-        ) {
+        val outFile = containedArchiveFile(destDir, entry.name)
+        if (outFile == null) {
             FileLogger.w(TAG, "跳过越界条目: ${entry.name}")
             return
         }
@@ -689,7 +684,11 @@ class ContainerInstaller @Inject constructor(
             entry.isLink -> {
                 // 硬链接：linkName 指向 tar 内已解压的另一文件
                 outFile.parentFile?.mkdirs()
-                val target = File(destDir, entry.linkName)
+                val target = containedArchiveFile(destDir, entry.linkName)
+                if (target == null) {
+                    FileLogger.w(TAG, "跳过越界 hardlink: ${entry.name} -> ${entry.linkName}")
+                    return
+                }
                 if (outFile.exists()) outFile.delete()
                 runCatching { Os.link(target.absolutePath, outFile.absolutePath) }
                     .onFailure {
@@ -707,6 +706,12 @@ class ContainerInstaller @Inject constructor(
 
             else -> FileLogger.d(TAG, "忽略不支持的条目类型: ${entry.name}")
         }
+    }
+
+    private fun containedArchiveFile(destDir: File, entryName: String): File? {
+        val root = destDir.canonicalFile
+        val target = File(destDir, entryName).canonicalFile
+        return target.takeIf { it == root || it.path.startsWith(root.path + File.separator) }
     }
 
     /** 按 tar entry 的 mode 设置可执行位（owner 有 x 位则对所有人开放执行） */
