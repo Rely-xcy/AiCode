@@ -1084,8 +1084,11 @@ class BackupManagerImpl @Inject constructor(
     ): Workspace? {
         restoreMapping[wsName]?.let { return it }
         val reservedNames = restoreMapping.values.map { it.name }.toSet()
+        // 只认 INTERNAL 会把远程工作区排除在外：远程模式下工作区来自服务器目录（类型 REMOTE），
+        // 备份里的会话永远匹配不上，全员落到「当前工作区」——这正是「先连上再导入才正常」的根因。
+        // 外部本地目录仍不并入：同名而内容不同时并错目录会让 AI 的 cwd / 项目级配置绑到错位置。
         val existing = workspaceRepository.workspaces.value.firstOrNull {
-            it.name == wsName && it.type == WorkspaceType.INTERNAL && it.name !in reservedNames
+            it.name == wsName && it.type != WorkspaceType.EXTERNAL_LOCAL && it.name !in reservedNames
         }
         val resolved = existing ?: run {
             val occupied = workspaceRepository.workspaces.value.map { it.name }.toSet() + reservedNames
