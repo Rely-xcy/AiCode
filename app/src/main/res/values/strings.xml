@@ -1696,6 +1696,7 @@
     <string name="ssh_login_key_content_label">私钥内容</string>
     <string name="ssh_login_key_passphrase_placeholder">私钥未加密则留空</string>
     <string name="ssh_login_key_toggle_content">显示或隐藏私钥内容</string>
+    <string name="ssh_host_key_confirm_hint">主机密钥未确认，请先在「连接配置」页测试连通性完成确认</string>
     <string name="ssh_host_key_confirm_title">确认 SSH 主机密钥</string>
     <string name="ssh_host_key_changed_title">SSH 主机密钥已变化</string>
     <string name="ssh_host_key_trust">信任并连接</string>

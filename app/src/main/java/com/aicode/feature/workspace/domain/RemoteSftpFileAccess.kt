@@ -1,10 +1,12 @@
 package com.aicode.feature.workspace.domain
 
+import android.content.Context
+import com.aicode.R
+import dagger.hilt.android.qualifiers.ApplicationContext
 import androidx.annotation.VisibleForTesting
 import com.aicode.core.util.BoundedLineReader
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
-import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.friendlySshError
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.WorkspacePathMapper.Companion.CONTAINER_ROOT
@@ -58,7 +60,8 @@ class RemoteOutputTooLargeException(message: String) : IOException(message)
  */
 class RemoteSftpFileAccess @Inject constructor(
     private val connection: RemoteSshConnection,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    @param:ApplicationContext private val context: Context
 ) : FileAccessProvider {
 
     /** 取一条可用的 SFTP 通道。默认走共享连接；测试可经下方次构造换成桩。 */
@@ -76,9 +79,10 @@ class RemoteSftpFileAccess @Inject constructor(
     internal constructor(
         connection: RemoteSshConnection,
         workspaceRepository: WorkspaceRepository,
+        context: Context,
         sftpProvider: suspend () -> SFTPClient,
         invalidateChannel: suspend () -> Unit
-    ) : this(connection, workspaceRepository) {
+    ) : this(connection, workspaceRepository, context) {
         this.sftpProvider = sftpProvider
         this.invalidateChannel = invalidateChannel
     }
@@ -110,7 +114,7 @@ class RemoteSftpFileAccess @Inject constructor(
      */
     private fun hostKeyPendingHint(): String? {
         val cfg = connection.config ?: return null
-        return connection.pendingHostKey(cfg.host, cfg.port)?.let { SSH_HOST_KEY_CONFIRM_HINT }
+        return connection.pendingHostKey(cfg.host, cfg.port)?.let { context.getString(R.string.ssh_host_key_confirm_hint) }
     }
 
     /**

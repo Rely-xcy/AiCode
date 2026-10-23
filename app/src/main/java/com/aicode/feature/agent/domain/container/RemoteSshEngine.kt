@@ -1,5 +1,8 @@
 package com.aicode.feature.agent.domain.container
 
+import android.content.Context
+import com.aicode.R
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.core.util.BoundedLineReader
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LINE_TRUNCATED_NOTE
@@ -43,7 +46,8 @@ private const val TAG = "RemoteSshEngine"
  * - [defaultShell]：/bin/bash（远程服务器通常有 bash）。
  */
 class RemoteSshEngine @Inject constructor(
-    private val connection: RemoteSshConnection
+    private val connection: RemoteSshConnection,
+    @param:ApplicationContext private val context: Context
 ) : CommandEngine {
 
     private val _initProgress = MutableStateFlow<ContainerInitState>(ContainerInitState.Idle)
@@ -250,7 +254,7 @@ class RemoteSshEngine @Inject constructor(
      */
     private fun hostKeyPendingHint(): String? {
         val cfg = connection.config ?: return null
-        return connection.pendingHostKey(cfg.host, cfg.port)?.let { SSH_HOST_KEY_CONFIRM_HINT }
+        return connection.pendingHostKey(cfg.host, cfg.port)?.let { context.getString(R.string.ssh_host_key_confirm_hint) }
     }
 
     /** 拼接 cd 到 projectPath 再执行 command 的完整命令；projectPath 为 null 则直接执行。
@@ -262,6 +266,6 @@ class RemoteSshEngine @Inject constructor(
     private fun buildCdCommand(command: String, projectPath: String?): String {
         val prefix = "export GIT_CONFIG_GLOBAL=\"\$HOME/.aicode/gitconfig\"; "
         if (projectPath == null) return prefix + command
-        return prefix + "cd ~/workspace 2>/dev/null || cd '$projectPath' 2>/dev/null; $command"
+        return prefix + buildRemoteWorkspaceCdCommand(projectPath) + " && $command"
     }
 }

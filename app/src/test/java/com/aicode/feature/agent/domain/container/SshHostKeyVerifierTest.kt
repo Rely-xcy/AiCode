@@ -63,12 +63,12 @@ class SshHostKeyVerifierTest {
         } catch (e: SshHostKeyPendingException) {
             // expected
         }
-        val pending = verifier.consumePending()
+        val pending = verifier.consumePending("example.com", 22)
         assertEquals("example.com", pending?.host)
         assertEquals(22, pending?.port)
         assertTrue(pending?.fingerprint?.startsWith("SHA256:") == true)
         // 已消费，第二次取不到
-        assertTrue(verifier.consumePending() == null)
+        assertTrue(verifier.consumePending("example.com", 22) == null)
     }
 
     @Test
@@ -109,6 +109,37 @@ class SshHostKeyVerifierTest {
         store.save("example.com", 22, sshHostKeyFingerprint(key))
         val e = pendingException(verifier, "example.com", 2222, key)
         assertTrue(!e.changed)
+    }
+
+    @Test
+    fun pending_details_are_isolated_across_hosts_and_ports() {
+        val verifier = SshHostKeyVerifier(InMemorySshHostKeyStore())
+        val first = pendingException(verifier, "first.example", 22, rsaPublicKey())
+        val second = pendingException(verifier, "second.example", 22, rsaPublicKey())
+        val otherPort = pendingException(verifier, "first.example", 2222, rsaPublicKey())
+
+        assertEquals(first, verifier.pendingFor("first.example", 22))
+        assertEquals(second, verifier.consumePending("second.example", 22))
+        assertTrue(verifier.pendingFor("second.example", 22) == null)
+        assertEquals(first, verifier.pendingFor("first.example", 22))
+        assertEquals(otherPort, verifier.consumePending("first.example", 2222))
+        assertEquals(first, verifier.consumePending("first.example", 22))
+    }
+
+    @Test
+    fun successful_verification_only_clears_its_own_pending_details() {
+        val store = InMemorySshHostKeyStore()
+        val verifier = SshHostKeyVerifier(store)
+        val firstKey = rsaPublicKey()
+        pendingException(verifier, "first.example", 22, firstKey)
+        val second = pendingException(verifier, "second.example", 22, rsaPublicKey())
+
+        store.save("first.example", 22, sshHostKeyFingerprint(firstKey))
+        assertTrue(verifier.verify("first.example", 22, firstKey))
+        assertTrue(verifier.pendingFor("first.example", 22) == null)
+        assertEquals(second, verifier.pendingFor("second.example", 22))
+        assertTrue(verifier.consumePending("unrelated.example", 22) == null)
+        assertEquals(second, verifier.consumePending("second.example", 22))
     }
 
     @Test

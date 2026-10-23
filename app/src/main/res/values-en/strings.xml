@@ -1696,6 +1696,7 @@
     <string name="ssh_login_key_content_label">Private key</string>
     <string name="ssh_login_key_passphrase_placeholder">Leave blank if the key is not encrypted</string>
     <string name="ssh_login_key_toggle_content">Show or hide the private key</string>
+    <string name="ssh_host_key_confirm_hint">Host key not confirmed. Test the connection in Connection Configuration to confirm it first.</string>
     <string name="ssh_host_key_confirm_title">Confirm SSH Host Key</string>
     <string name="ssh_host_key_changed_title">SSH Host Key Changed</string>
     <string name="ssh_host_key_trust">Trust and connect</string>

@@ -164,6 +164,7 @@ class RemoteSftpFileAccessCancelTest {
             fileAccess = RemoteSftpFileAccess(
                 connection = connection,
                 workspaceRepository = workspaceRepository,
+                context = mockk(relaxed = true),
                 sftpProvider = { sftp },
                 invalidateChannel = { invalidateCount.incrementAndGet() }
             )

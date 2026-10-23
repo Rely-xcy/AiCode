@@ -4,6 +4,7 @@ import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
+import com.aicode.feature.agent.domain.container.buildRemoteWorkspaceCdCommand
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
@@ -138,10 +139,12 @@ class RemoteTerminalSessionManager @Inject constructor(
         termSession.updateSize(DEFAULT_COLUMNS, DEFAULT_ROWS)
         // shell 登录后默认在 home，先 cd 到当前工作区，与命令执行链路（RemoteSshEngine.buildCdCommand）保持一致：
         // 优先 ~/workspace 符号链接，失败回退到真实工作区路径。
-        termSession.write("cd ~/workspace 2>/dev/null || cd '${wsPath.trimEnd('/')}' 2>/dev/null\n")
-        if (command != null) {
+        val workspaceCommand = buildRemoteWorkspaceCdCommand(wsPath)
+        if (command == null) {
+            termSession.write("$workspaceCommand || exit\n")
+        } else {
             val init = command + (if (notify) "" else "; exec /bin/sh")
-            termSession.write(init + "\n")
+            termSession.write("$workspaceCommand && $init\n")
         }
         val tab = TerminalTab(
             id = id,

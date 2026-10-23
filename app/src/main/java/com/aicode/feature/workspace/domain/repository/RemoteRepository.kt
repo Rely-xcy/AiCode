@@ -1,5 +1,8 @@
 package com.aicode.feature.workspace.domain.repository
 
+import android.content.Context
+import com.aicode.R
+import dagger.hilt.android.qualifiers.ApplicationContext
 import androidx.room.withTransaction
 import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
@@ -8,7 +11,6 @@ import com.aicode.core.watch.WatchFilter
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.SshHostKeyStore
-import com.aicode.feature.agent.domain.container.SSH_HOST_KEY_CONFIRM_HINT
 import com.aicode.feature.agent.domain.container.SshHostKeyVerifier
 import com.aicode.feature.agent.domain.container.SshLoginKeyStore
 import com.aicode.feature.agent.domain.container.SshPrivateKeyStore
@@ -57,7 +59,8 @@ class RemoteRepository @Inject constructor(
     private val loginKeyStore: SshLoginKeyStore,
     private val fileChangeHub: FileChangeHub,
     private val containerInstaller: ContainerInstaller,
-    private val agentDatabase: AgentDatabase
+    private val agentDatabase: AgentDatabase,
+    @param:ApplicationContext private val context: Context
 ) {
     /** 每个挂载的同步指纹索引，用于跳过未变文件；落在 app 私有的 `aicode/sync-index/` 下。 */
     private val syncIndexStore = SyncIndexStore(File(containerInstaller.aicodeDir, "sync-index"))
@@ -229,6 +232,7 @@ class RemoteRepository @Inject constructor(
     }
 
     suspend fun connectMount(mountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        var endpoint: Pair<String, Int>? = null
         try {
             // 已存在旧连接时先清理，避免重复/并发连接泄漏 engine
             activeEngines[mountId]?.shutdown()
@@ -241,6 +245,7 @@ class RemoteRepository @Inject constructor(
             
             val conn = connEntity.toDomainModel()
             val mount = mountEntity.toDomainModel(conn)
+            if (conn.protocol == RemoteProtocol.SFTP) endpoint = conn.host to conn.port
 
             val client = when (conn.protocol) {
                 RemoteProtocol.SFTP -> SftpSyncClient(hostKeyVerifier, privateKeyStore)
@@ -270,9 +275,9 @@ class RemoteRepository @Inject constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             // 挂载连接不弹确认：提示用户先去连接配置页测试连通性完成确认（文案与执行模式路径共用）
-            val pending = hostKeyVerifier.consumePending()
+            val pending = endpoint?.let { (host, port) -> hostKeyVerifier.consumePending(host, port) }
             if (pending != null) {
-                Result.failure(Exception(SSH_HOST_KEY_CONFIRM_HINT))
+                Result.failure(Exception(context.getString(R.string.ssh_host_key_confirm_hint), e))
             } else {
                 Result.failure(Exception(friendlySshError(e), e))
             }
@@ -386,7 +391,7 @@ class RemoteRepository @Inject constructor(
             client.disconnect()
             Result.success(Unit)
         } catch (e: Exception) {
-            val pending = hostKeyVerifier.consumePending()
+            val pending = if (protocol == RemoteProtocol.SFTP) hostKeyVerifier.consumePending(host, port) else null
             if (pending != null) {
                 throw HostKeyConfirmationRequiredException(
                     pending.host, pending.port, pending.keyType, pending.fingerprint, pending.changed

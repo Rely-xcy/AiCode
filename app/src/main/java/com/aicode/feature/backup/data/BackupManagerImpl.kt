@@ -1029,17 +1029,24 @@ class BackupManagerImpl @Inject constructor(
 
         val ws = resolveWorkspaceForRestore(wsName, restoreMapping) ?: return RestoreStats()
 
-        val wsDir = File(ws.path)
-        if (!isPathInsideWorkspace(wsDir, segments[2])) return RestoreStats()
-        val relative = segments[2]
-        // `.git/hooks/*` 会在容器内以 root 执行（App 的 git 走 LinuxContainerEngine），
-        // `.git/config` 能用 core.hooksPath / filter.clean 定义任意命令——从备份里静默还原它们，
-        // 等于让一份来源不可信的备份在本机容器里拿到执行入口。其余 `.git/`（对象/引用/历史）照常恢复。
-        if (relative.startsWith(".git/hooks/") || relative == ".git/config") {
+        val wsDir = File(ws.path).canonicalFile
+        val target = resolveWorkspaceRestoreTarget(wsDir, segments[2]) ?: return RestoreStats()
+        val relative = File(segments[2]).toPath().normalize().toString()
+        val actualRelative = target.relativeTo(wsDir).invariantSeparatorsPath
+        // Git 配置和 hooks 能定义容器内的执行入口；条目路径与实际目标都必须检查，
+        // 否则符号链接既能把普通文件映射到敏感位置，也能把敏感位置映射到普通目录。
+        val securityEntry = listOf(relative, actualRelative).any { path ->
+            val parts = path.split('/')
+            parts.indices.any { index ->
+                parts[index] == ".git" && index + 1 < parts.size &&
+                    (parts[index + 1] == "hooks" ||
+                        (parts[index + 1] == "config" && index + 2 == parts.size))
+            }
+        }
+        if (securityEntry) {
             FileLogger.w(TAG, "跳过备份里的安全相关条目：${wsName}/$relative")
             return RestoreStats(skippedSecurityEntries = 1)
         }
-        val target = File(wsDir, relative)
         target.parentFile?.mkdirs()
         FileOutputStream(target).use { out -> tar.copyTo(out) }
         FileLogger.i(TAG, "恢复工作区文件：${ws.name}/${segments[2]}")
@@ -1097,12 +1104,12 @@ class BackupManagerImpl @Inject constructor(
             ?: workspaceRepository.workspaces.value.firstOrNull { it.available }?.path
             ?: ""
 
-    /** 防路径穿越：工作区必须是本地目录，且相对路径规范化后仍位于其内。 */
-    private fun isPathInsideWorkspace(wsDir: File, relPath: String): Boolean {
-        if (!wsDir.isDirectory) return false
+    /** 防路径穿越：检查实际目标仍在工作区内，并让写入复用已检查的目标。 */
+    private fun resolveWorkspaceRestoreTarget(wsDir: File, relPath: String): File? {
+        if (!wsDir.isDirectory) return null
         val root = wsDir.canonicalPath
-        val target = File(wsDir, relPath).canonicalPath
-        return target == root || target.startsWith(root + File.separator)
+        val target = File(wsDir, relPath).canonicalFile
+        return target.takeIf { it.path == root || it.path.startsWith(root + File.separator) }
     }
 
     private fun createTempFile(): File = File.createTempFile("backup", ".tmp", context.cacheDir)

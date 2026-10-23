@@ -5,6 +5,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -48,14 +49,6 @@ fun sshHostKeyFingerprint(key: PublicKey): String {
     return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
 }
 
-/**
- * 主机密钥尚未确认时给用户的引导文案。
- *
- * 「连接配置」页的测试连通性、挂载/同步路径与执行模式路径共用这一句：主机密钥只能在该页保存，
- * 三处提示若各说各话，用户不知道该去哪里确认。
- */
-const val SSH_HOST_KEY_CONFIRM_HINT = "主机密钥未确认，请先在「连接配置」页测试连通性完成确认"
-
 /** 主机密钥需要用户确认（首次连接或已保存指纹变化）。changed=false 首次，true 指纹变化。 */
 class SshHostKeyPendingException(
     val host: String,
@@ -68,41 +61,30 @@ class SshHostKeyPendingException(
 class SshHostKeyVerifier @Inject constructor(
     private val store: SshHostKeyStore
 ) : net.schmizz.sshj.transport.verification.HostKeyVerifier {
-    /** 最近一次校验失败（待确认）详情；sshj 会把 verify 抛出的异常包装成 TransportException，
-     *  连接层无法按异常类型捕获，故通过此字段传递。consumePending 读取后清空。 */
-    @Volatile
-    private var pending: SshHostKeyPendingException? = null
+    // sshj 会包装校验异常，连接层需另外取详情；并发主机不能共用一个待确认槽位。
+    private val pending = ConcurrentHashMap<Pair<String, Int>, SshHostKeyPendingException>()
 
-    fun consumePending(): SshHostKeyPendingException? {
-        val p = pending
-        pending = null
-        return p
-    }
+    fun consumePending(host: String, port: Int): SshHostKeyPendingException? =
+        pending.remove(host to port)
 
-    /**
-     * 只读查看与 [host]:[port] 匹配的待确认详情，**不清空** pending。
-     *
-     * 供执行模式在连接失败时判断「是不是主机密钥没确认」（那次失败是我们自己抛的，必须报出来），
-     * 同时不把待确认详情从挂载/测试连通性路径手里抢走：pending 是单例上的单个字段，
-     * 两条路径并发时消费式读取会让其中一条拿不到详情、只报一堆 sshj 英文。
-     */
     fun pendingFor(host: String, port: Int): SshHostKeyPendingException? =
-        pending?.takeIf { it.host == host && it.port == port }
+        pending[host to port]
 
     override fun findExistingAlgorithms(hostname: String, port: Int): MutableList<String> = mutableListOf()
 
     override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
-        pending = null
+        val endpoint = hostname to port
+        pending.remove(endpoint)
         val fingerprint = sshHostKeyFingerprint(key)
         val saved = store.get(hostname, port)
         if (saved == null) {
             val e = SshHostKeyPendingException(hostname, port, key.algorithm, fingerprint, changed = false)
-            pending = e
+            pending[endpoint] = e
             throw e
         }
         if (saved != fingerprint) {
             val e = SshHostKeyPendingException(hostname, port, key.algorithm, fingerprint, changed = true)
-            pending = e
+            pending[endpoint] = e
             throw e
         }
         return true

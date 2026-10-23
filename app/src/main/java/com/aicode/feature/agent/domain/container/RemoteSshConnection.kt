@@ -42,9 +42,6 @@ private const val SSH_CONNECT_TIMEOUT_MS = 10_000
  */
 private const val SSH_RECONNECT_TIMEOUT_MS = 15_000L
 
-/** 写入远程私有文件（git 凭据等）时的权限位：默认 umask 022 会落成 0644，同机其他用户可读。 */
-private const val PRIVATE_FILE_MODE = "600"
-
 /**
  * 共享的 SSH 连接管理器：持有两条独立的 sshj [SSHClient]——exec 通道供 [RemoteSshEngine] 执行命令，
  * SFTP 通道供 [RemoteSftpFileAccess] 读写文件。两者隔离，SFTP 的 Buffer 溢出不会拖垮命令通道。
@@ -305,11 +302,8 @@ class RemoteSshConnection @Inject constructor(
      * （见 WorkspaceRepository.scanRemoteWorkspaceRoot）：这种「已是真实目录就跳过」的判断很容易
      * 在两处写上两遍而漂移，一旦写错会把 `~/workspace` 变成自引用链接、毁掉整个工作区。
      */
-    fun workspaceSymlinkCommand(workspacePath: String): String {
-        val ws = workspacePath.trimEnd('/')
-        return "if [ -d ~/workspace ] && [ ! -L ~/workspace ]; then echo skip; " +
-            "else ln -sfn '$ws' ~/workspace 2>/dev/null; echo done; fi"
-    }
+    fun workspaceSymlinkCommand(workspacePath: String): String =
+        buildRemoteWorkspaceSymlinkCommand(workspacePath)
 
     /**
      * 把内置文档同步到远程 ~/.aicode/docs/，让远程模式下 AI 也能像本地模式一样
@@ -329,16 +323,10 @@ class RemoteSshConnection @Inject constructor(
                 val subDirs = docs.keys.mapNotNull { key ->
                     key.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
                 }.distinct()
-                val mkdirArgs = (listOf(destDir) + subDirs.map { "$destDir/$it" }).joinToString(" ") { "'$it'" }
-                val prepSession = client.startSession()
-                prepSession.exec("mkdir -p $mkdirArgs; find '$destDir' -type f -name '*.md' -delete").join()
-                prepSession.close()
+                executeRemoteCommand(client, buildRemoteDocsPreparationCommand(destDir, subDirs))
                 for ((name, content) in docs) {
                     val dest = "$destDir/$name"
-                    val escaped = content.replace("\\", "\\\\").replace("'", "'\\\"'\"'")
-                    val session = client.startSession()
-                    session.exec("printf %s '$escaped' > '$dest'").join()
-                    session.close()
+                    executeRemoteCommand(client, buildRemoteFileWriteCommand(dest, content))
                 }
                 FileLogger.i(TAG, "已同步 ${docs.size} 个文档到远程 $destDir")
             }.onFailure { FileLogger.w(TAG, "同步文档到远程失败", it) }
@@ -362,16 +350,11 @@ class RemoteSshConnection @Inject constructor(
         val destDir = home.trimEnd('/') + "/.aicode/" + destSubdir.trim('/')
         withContext(Dispatchers.IO) {
             runCatching {
-                val mk = client.startSession()
-                mk.exec("mkdir -p '$destDir'").join()
-                mk.close()
+                executeRemoteCommand(client, "mkdir -p -- ${remoteShellQuote(destDir)}")
                 for ((name, bytes) in files) {
                     val dest = "$destDir/$name"
                     val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                    val chmod = if (executable) " chmod +x '$dest';" else ""
-                    val session = client.startSession()
-                    session.exec("if [ ! -e '$dest' ]; then printf %s '$b64' | base64 -d > '$dest';$chmod fi").join()
-                    session.close()
+                    executeRemoteCommand(client, buildRemoteBuiltinFileCommand(dest, b64, executable))
                 }
                 FileLogger.i(TAG, "已释放 ${files.size} 个内置文件到远程 $destDir")
             }.onFailure { FileLogger.w(TAG, "释放内置文件到远程失败: $destSubdir", it) }
@@ -396,9 +379,7 @@ class RemoteSshConnection @Inject constructor(
         val wsRoot = workspaceRoot.trimEnd('/').ifEmpty { return }
         withContext(Dispatchers.IO) {
             runCatching {
-                val mkdirSession = client.startSession()
-                mkdirSession.exec("mkdir -p '$aicodeDir'").join()
-                mkdirSession.close()
+                executeRemoteCommand(client, "mkdir -p -- ${remoteShellQuote(aicodeDir)}")
 
                 val creds = credentials.joinToString("\n") { c ->
                     "https://${enc(c.username)}:${enc(c.token)}@${c.host}"
@@ -410,23 +391,10 @@ class RemoteSshConnection @Inject constructor(
                 containerInstaller.extractCredentialHelper()
                 val helperScript = java.io.File(containerInstaller.aicodeDir, "git-credential-aicode").readText()
                 writeRemoteFile(client, "$aicodeDir/git-credential-aicode", helperScript)
-                val chmodSession = client.startSession()
-                chmodSession.exec("chmod +x '$aicodeDir/git-credential-aicode'").join()
-                chmodSession.close()
+                executeRemoteCommand(client, "chmod +x -- ${remoteShellQuote("$aicodeDir/git-credential-aicode")}")
 
-                val gitconfig = buildString {
-                    append("[include]\n")
-                    append("    path = ~/.gitconfig\n")
-                    append("[includeIf \"gitdir:$wsRoot/\"]\n")
-                    append("    path = ~/.aicode/gitconfig.credential\n")
-                }
-                writeRemoteFile(client, "$aicodeDir/gitconfig", gitconfig)
-
-                val credentialConfig = buildString {
-                    append("[credential]\n")
-                    append("    helper = !AICODE_CRED_NO_PROMPT=1 $aicodeDir/git-credential-aicode\n")
-                }
-                writeRemoteFile(client, "$aicodeDir/gitconfig.credential", credentialConfig)
+                writeRemoteFile(client, "$aicodeDir/gitconfig", buildRemoteGitConfig(wsRoot))
+                writeRemoteFile(client, "$aicodeDir/gitconfig.credential", buildRemoteCredentialConfig(aicodeDir))
                 FileLogger.i(TAG, "已注入 git 凭据到远程 $aicodeDir（限定 $wsRoot/）")
             }.onFailure { FileLogger.w(TAG, "注入 git 凭据到远程失败", it) }
         }
@@ -442,33 +410,27 @@ class RemoteSshConnection @Inject constructor(
         val aicodeDir = home.trimEnd('/') + "/.aicode"
         withContext(Dispatchers.IO) {
             runCatching {
-                val session = client.startSession()
-                session.exec("rm -f '$aicodeDir/gitconfig' '$aicodeDir/gitconfig.credential' '$aicodeDir/git-credentials' '$aicodeDir/git-credential-aicode' 2>/dev/null; echo done").join()
-                session.close()
+                executeRemoteCommand(client, buildRemoteRemoveCredentialCommand(aicodeDir))
                 FileLogger.i(TAG, "已撤销远程 git 凭据注入")
             }.onFailure { FileLogger.w(TAG, "撤销远程 git 凭据注入失败", it) }
         }
     }
 
-    /**
-     * exec + printf 写一个文本文件到远程（content 为原文，内部转义单引号/反斜杠）。
-     *
-     * 写入后强制 chmod [PRIVATE_FILE_MODE]：本方法的调用方全是 App 管理的配置与凭据文件
-     * （`~/.aicode/git-credentials` 等），服务器默认 umask 022 会落成 0644，同一台机器上的其它用户
-     * 可以直接读走 token。不要用它写需要更宽权限的文件。
-     */
     private suspend fun writeRemoteFile(client: SSHClient, dest: String, content: String) {
-        if (content.isEmpty()) {
-            // 空内容直接 truncate，避免 printf %s '' 的引号歧义
-            val session = client.startSession()
-            session.exec("printf '' > '$dest' && chmod $PRIVATE_FILE_MODE '$dest'").join()
-            session.close()
-            return
-        }
-        val escaped = content.replace("\\", "\\\\").replace("'", "'\\\"'\"'")
+        executeRemoteCommand(client, buildRemoteFileWriteCommand(dest, content, privateFile = true))
+    }
+
+    private fun executeRemoteCommand(client: SSHClient, command: String) {
         val session = client.startSession()
-        session.exec("printf %s '$escaped' > '$dest' && chmod $PRIVATE_FILE_MODE '$dest'").join()
-        session.close()
+        try {
+            val cmd = session.exec(command)
+            cmd.outputStream.close()
+            cmd.join()
+            cmd.close()
+            check(cmd.exitStatus == 0) { "Remote SSH command failed (exitStatus=${cmd.exitStatus})" }
+        } finally {
+            session.close()
+        }
     }
 
     private fun enc(part: String): String = java.net.URLEncoder.encode(part, "UTF-8")

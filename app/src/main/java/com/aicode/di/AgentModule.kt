@@ -356,8 +356,9 @@ object AgentModule {
     @Singleton
     fun provideRemoteSftpFileAccess(
         connection: RemoteSshConnection,
-        workspaceRepository: WorkspaceRepository
-    ): RemoteSftpFileAccess = RemoteSftpFileAccess(connection, workspaceRepository)
+        workspaceRepository: WorkspaceRepository,
+        @ApplicationContext context: Context
+    ): RemoteSftpFileAccess = RemoteSftpFileAccess(connection, workspaceRepository, context)
 
     @Provides
     @Singleton
