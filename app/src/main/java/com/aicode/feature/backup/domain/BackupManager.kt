@@ -17,6 +17,9 @@ interface BackupManager {
      * 流式生成备份写入 [output]（调用方负责打开与关闭输出流）。
      * password 为 null 或空时不加密，输出明文 tar.gz。
      *
+     * 勾选了 [BackupOptions.loginSecrets] 却没有口令时直接抛 [IllegalArgumentException]：
+     * 静默降级成「不含凭据」会让用户以为凭据已经在包里（见 [LoginSecretsPasswordRequiredException]）。
+     *
      * @return 导出结果统计：实写了多少工作区 / 文件，以及哪些工作区被跳过（远程工作区、宿主目录不在、
      *   未连接读不到）。导出照样产出能拿到的部分，调用方用这份统计在完成提示里明示「还差什么」。
      */
@@ -81,7 +84,13 @@ data class BackupOptions(
     /** 长期记忆目录：全局 `~/.aicode/memory/` 与当前工作区的 `.aicode/memory/`。默认关。 */
     val memoryFiles: Boolean = false,
     /** 会话工作状态（`session_briefs` 表）。默认关。 */
-    val sessionBriefs: Boolean = false
+    val sessionBriefs: Boolean = false,
+    /**
+     * 登录凭据：git 令牌、SSH 私钥文件与登录口令、网络备份目标密钥、MCP 授权令牌。默认关。
+     *
+     * 勾选后**必须**提供非空口令：这些值能直接用于登录，不允许写进明文备份里。
+     */
+    val loginSecrets: Boolean = false
 )
 
 /**
@@ -200,6 +209,16 @@ data class RestoreStats(
     /** 本次导入回写的会话工作状态条数。 */
     val sessionBriefs: Int = 0,
     /**
+     * 本次导入实际还原的登录凭据项数：git 凭据、SSH 登录密钥、SSH 私钥文件、网络备份目标、MCP 授权令牌。
+     * 备份没带 `secrets/` 段时为 0，摘要也就不该提凭据。
+     */
+    val loginSecrets: Int = 0,
+    /**
+     * 备份里带了、但没能还原的登录凭据项数（写盘失败、条目格式不认识）。
+     * 单独计数而不是只记日志：静默跳过会让用户以为凭据完整回来了。
+     */
+    val skippedLoginSecrets: Int = 0,
+    /**
      * 本次导入是否真的把执行模式从本地切回了远程（[com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH]）。
      * 本机原本就在远程时不计（没发生切换）；为 true 时导入摘要才多一句「远程聊天记录只在远程模式下显示」。
      */
@@ -221,7 +240,7 @@ data class RestoreStats(
     val hasWrittenData: Boolean
         get() = providers + remoteConnections + remoteMounts + chatSessions + agentMessages +
             todoItems + mcpServers + globalPermissionRules + workspaceFiles + skillFiles +
-            subagentFiles + panelScriptFiles + memoryFiles + sessionBriefs > 0
+            subagentFiles + panelScriptFiles + memoryFiles + sessionBriefs + loginSecrets > 0
 
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
@@ -243,9 +262,21 @@ data class RestoreStats(
         sessionBriefs = sessionBriefs + other.sessionBriefs,
         remoteModeRestored = remoteModeRestored || other.remoteModeRestored,
         skippedWorkspaceFiles = skippedWorkspaceFiles + other.skippedWorkspaceFiles,
-        undecryptableSecrets = undecryptableSecrets + other.undecryptableSecrets
+        undecryptableSecrets = undecryptableSecrets + other.undecryptableSecrets,
+        loginSecrets = loginSecrets + other.loginSecrets,
+        skippedLoginSecrets = skippedLoginSecrets + other.skippedLoginSecrets
     )
 }
+
+/**
+ * 勾了「包含登录凭据」却没给口令。
+ *
+ * 单独成类型而不是复用通用 [IllegalArgumentException]：导出入口要把它与「IO 失败」「空间不足」分开，
+ * 好给出「去设置导出密码」这种可操作的提示，而不是一句泛泛的失败。
+ */
+class LoginSecretsPasswordRequiredException : IllegalArgumentException(
+    "勾选包含登录凭据时必须设置导出口令"
+)
 
 /**
  * 恢复中途失败：携带已经写入的统计，供 UI 如实提示「部分数据已写入」而不是假装成功。

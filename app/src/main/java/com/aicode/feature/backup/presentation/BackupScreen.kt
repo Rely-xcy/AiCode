@@ -239,11 +239,14 @@ internal fun BackupScreen(
         }
     }
 
-    // 导出：输口令（可留空）
+    // 导出：输口令；勾了「包含登录凭据」时口令必填，留空不允许确认
     if (pendingAction == PendingAction.ExportPassword) {
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(
+                if (exportOptions.loginSecrets) R.string.backup_password_hint_with_secrets
+                else R.string.backup_password_hint
+            ),
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,
             onPasswordChange = { password = it },
@@ -257,7 +260,8 @@ internal fun BackupScreen(
             onDismiss = {
                 password = ""
                 pendingAction = null
-            }
+            },
+            required = exportOptions.loginSecrets
         )
     }
 
@@ -317,7 +321,10 @@ internal fun BackupScreen(
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(
+                if (exportOptions.loginSecrets) R.string.backup_password_hint_with_secrets
+                else R.string.backup_password_hint
+            ),
             confirmText = stringResource(R.string.backup_net_upload),
             password = uploadPassword,
             onPasswordChange = { uploadPassword = it },
@@ -331,7 +338,8 @@ internal fun BackupScreen(
                     viewModel.uploadToTarget(t, pw)
                 }
             },
-            onDismiss = { uploadTarget = null; uploadPassword = "" }
+            onDismiss = { uploadTarget = null; uploadPassword = "" },
+            required = exportOptions.loginSecrets
         )
     }
 
@@ -554,6 +562,23 @@ private fun LocalBackupTab(
                     )
                 }
             )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_login_secrets),
+                subtitle = stringResource(
+                    if (exportOptions.loginSecrets) R.string.backup_data_login_secrets_hint_on
+                    else R.string.backup_data_login_secrets_hint_off
+                ),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.loginSecrets,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(loginSecrets = it)) }
+                    )
+                }
+            )
+            if (exportOptions.loginSecrets) {
+                SecretPasswordHint()
+            }
         }
 
         SettingsGroupHeader(text = stringResource(R.string.backup_actions))
@@ -763,6 +788,31 @@ private fun WorkspaceBackupHint() {
     }
 }
 
+/**
+ * 勾了「包含登录凭据」后的必读提示：导出入口会强制要求口令，这里提前讲清楚，
+ * 免得用户在口令弹窗里才发现无法导出。
+ */
+@Composable
+private fun SecretPasswordHint() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+    ) {
+        Icon(
+            imageVector = FeatherIcons.AlertCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        Text(
+            text = stringResource(R.string.backup_data_login_secrets_password_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+}
+
 @Composable
 private fun WorkspaceRestoreDialog(
     workspaces: List<WorkspaceBackupMeta>,
@@ -845,7 +895,9 @@ private fun PasswordDialog(
     password: String,
     onPasswordChange: (String) -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** 口令必填（备份要带登录凭据时）：留空不允许确认，并就地说明原因。 */
+    required: Boolean = false
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -861,15 +913,29 @@ private fun PasswordDialog(
                 AppTextField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    label = stringResource(R.string.backup_password_label),
+                    label = stringResource(
+                        if (required) R.string.backup_password_label_required else R.string.backup_password_label
+                    ),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = dialogTextFieldColors()
                 )
+                if (required && password.isBlank()) {
+                    Spacer(Modifier.height(Spacing.sm))
+                    Text(
+                        text = stringResource(R.string.backup_secrets_password_required),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !required || password.isNotBlank()) {
+                Text(confirmText)
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } }
     )
 }
@@ -1012,6 +1078,10 @@ internal fun buildImportSummary(context: android.content.Context, stats: Restore
     if (stats.skippedWorkspaceFiles > 0) {
         appendLine(context.getString(R.string.backup_stat_skipped_workspace_files, stats.skippedWorkspaceFiles))
     }
+    // 凭据没还原只能靠这一行说清：写盘失败或条目认不出时不会报错，静默跳过就等于骗用户。
+    if (stats.skippedLoginSecrets > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_login_secrets, stats.skippedLoginSecrets))
+    }
     // 远程相关的提醒只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
     // 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
     if (stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0) {
@@ -1037,6 +1107,7 @@ internal fun buildRestoreStatsLines(context: android.content.Context, stats: Res
     if (stats.skillFiles > 0) appendLine(context.getString(R.string.backup_stat_skill_files, stats.skillFiles))
     if (stats.subagentFiles > 0) appendLine(context.getString(R.string.backup_stat_subagent_files, stats.subagentFiles))
     if (stats.panelScriptFiles > 0) appendLine(context.getString(R.string.backup_stat_panel_scripts, stats.panelScriptFiles))
+    if (stats.loginSecrets > 0) appendLine(context.getString(R.string.backup_stat_login_secrets, stats.loginSecrets))
     if (stats.skippedSecurityEntries > 0) {
         appendLine(context.getString(R.string.backup_stat_skipped_security, stats.skippedSecurityEntries))
     }

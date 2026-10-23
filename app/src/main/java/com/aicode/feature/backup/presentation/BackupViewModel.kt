@@ -10,6 +10,7 @@ import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupOptions
 import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.InsufficientSpaceException
+import com.aicode.feature.backup.domain.LoginSecretsPasswordRequiredException
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
@@ -118,6 +119,7 @@ class BackupViewModel @Inject constructor(
             .putBoolean(KEY_PANEL_SCRIPTS, options.panelScripts)
             .putBoolean(KEY_MEMORY_FILES, options.memoryFiles)
             .putBoolean(KEY_SESSION_BRIEFS, options.sessionBriefs)
+            .putBoolean(KEY_LOGIN_SECRETS, options.loginSecrets)
             .apply()
     }
 
@@ -132,7 +134,8 @@ class BackupViewModel @Inject constructor(
         skillsAndAgents = prefs.getBoolean(KEY_SKILLS_AGENTS, true),
         panelScripts = prefs.getBoolean(KEY_PANEL_SCRIPTS, true),
         memoryFiles = prefs.getBoolean(KEY_MEMORY_FILES, false),
-        sessionBriefs = prefs.getBoolean(KEY_SESSION_BRIEFS, false)
+        sessionBriefs = prefs.getBoolean(KEY_SESSION_BRIEFS, false),
+        loginSecrets = prefs.getBoolean(KEY_LOGIN_SECRETS, false)
     )
 
     /** 流式导出到 [output]（调用方打开，本方法负责关闭）。 */
@@ -140,6 +143,13 @@ class BackupViewModel @Inject constructor(
         _state.value = BackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
+            // 勾了登录凭据却没口令：直接拒绝并说清原因。绝不能静默改成「不含凭据」再导出，
+            // 那样用户会以为凭据已经在包里。BackupManager 也会再拦一次（见其 export 契约）。
+            if (options.loginSecrets && pw == null) {
+                _state.value = BackupState.Error(context.getString(R.string.backup_secrets_password_required))
+                runCatching { output.close() }
+                return@launch
+            }
             try {
                 val stats = backupManager.export(pw, options, output)
                 _state.value = BackupState.ExportDone(stats)
@@ -446,6 +456,8 @@ class BackupViewModel @Inject constructor(
             }
         }
         is BackupDecryptionException -> e.message ?: context.getString(R.string.backup_wrong_password)
+        // 网络上传入口也走同一份选项：勾了凭据却没口令时给出可操作的提示，而不是一句泛泛的失败。
+        is LoginSecretsPasswordRequiredException -> context.getString(R.string.backup_secrets_password_required)
         else -> buildString {
             append(e.message ?: e::class.simpleName ?: context.getString(R.string.backup_import_failed))
             // 诊断期附上 cause 链（最多两层），方便定位真实异常
@@ -492,5 +504,6 @@ class BackupViewModel @Inject constructor(
         private const val KEY_PANEL_SCRIPTS = "panel_scripts"
         private const val KEY_MEMORY_FILES = "memory_files"
         private const val KEY_SESSION_BRIEFS = "session_briefs"
+        private const val KEY_LOGIN_SECRETS = "login_secrets"
     }
 }

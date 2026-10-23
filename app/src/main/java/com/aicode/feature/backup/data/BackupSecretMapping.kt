@@ -31,6 +31,14 @@ internal class ExportSecretTally(private val decrypt: (String) -> Result<String>
         if (value.undecryptable) undecryptable++
         return value.value
     }
+
+    /**
+     * 记一次「解不开」。字节型凭据（SSH 私钥文件）由 [exportSecretBytes] 自行判断并按原密文写出，
+     * 计数仍汇到这里，让导出摘要的「解不开」口径只此一处。
+     */
+    fun noteUndecryptable() {
+        undecryptable++
+    }
 }
 
 /** 一个 provider 的导入结果：[entity] 落库，[undecryptableSecrets] 为其中本机解不开、需重填的字段数。 */

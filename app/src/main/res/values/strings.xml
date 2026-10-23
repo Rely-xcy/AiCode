@@ -553,6 +553,8 @@
     <string name="backup_import_subtitle">从备份文件还原数据</string>
     <string name="backup_set_password">设置导出口令</string>
     <string name="backup_password_hint">留空则不加密，输出明文 tar.gz；填写则用口令加密（AES-GCM）</string>
+    <string name="backup_password_hint_with_secrets">本次备份包含登录凭据，必须设置口令加密；留空无法导出</string>
+    <string name="backup_secrets_password_required">已勾选包含登录凭据，请先设置导出口令</string>
     <string name="backup_export_btn">导出</string>
     <string name="backup_password_input">输入备份口令</string>
     <string name="backup_password_optional_hint">若备份未加密可留空</string>
@@ -571,10 +573,15 @@
     <string name="backup_data_memory_hint">全局与当前工作区的记忆目录；默认不导出</string>
     <string name="backup_data_session_briefs">会话工作状态</string>
     <string name="backup_data_session_briefs_hint">会话摘要与当前进展；默认不导出</string>
+    <string name="backup_data_login_secrets">包含登录凭据</string>
+    <string name="backup_data_login_secrets_hint_off">不包含 git 令牌、SSH 私钥与登录口令、网络备份目标密钥等</string>
+    <string name="backup_data_login_secrets_hint_on">备份文件将包含可用于登录的凭据，请自行妥善保管</string>
+    <string name="backup_data_login_secrets_password_hint">已勾选包含登录凭据：导出时必须设置口令，留空将无法导出</string>
     <string name="backup_data_skills_agents">技能与子代理</string>
     <string name="backup_data_panel_scripts">面板脚本</string>
     <string name="backup_workspace_git_hint">工作区文件建议通过 Git 提交备份，导出备份仅作备用</string>
     <string name="backup_password_label">口令（可选）</string>
+    <string name="backup_password_label_required">口令（必填）</string>
     <string name="backup_processing">处理中</string>
     <string name="backup_processing_data">正在处理数据…</string>
     <string name="backup_restored_data">已还原数据：</string>
@@ -596,6 +603,8 @@
     <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
     <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
     <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>
+    <string name="backup_stat_login_secrets">· 登录凭据 %1$s 项</string>
+    <string name="backup_stat_skipped_login_secrets">· 跳过 %1$s 项登录凭据（写入失败或格式不识别），需在设置里重新填写</string>
     <string name="backup_skills_agents_config_covered">技能与子代理的启停状态已覆盖</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
     <string name="backup_restore_remote_hint">提示：远程聊天记录只在远程模式下显示，连上 SSH 后才能看到。</string>

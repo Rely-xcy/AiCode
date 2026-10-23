@@ -14,8 +14,10 @@ import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionConfigRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.backup.domain.AvailableSpaceProvider
 import com.aicode.feature.backup.domain.BackupMetadata
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
@@ -199,6 +201,9 @@ class BackupImportFormatGuardTest {
         skillConfigRepository = mockk<SkillConfigRepository>(relaxed = true),
         agentDefinitionConfigRepository = mockk<AgentDefinitionConfigRepository>(relaxed = true),
         sessionBriefDao = mockk<SessionBriefDao>(relaxed = true),
+        credentialRepository = mockk<CredentialRepository>(relaxed = true),
+        backupTargetDao = mockk<BackupTargetDao>(relaxed = true),
+        mcpOAuthFile = File(context.filesDir, "aicode/mcp-oauth.json"),
         availableSpace = object : AvailableSpaceProvider {
             override fun availableBytes(dir: File): Long = Long.MAX_VALUE
         }

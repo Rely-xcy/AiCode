@@ -14,10 +14,12 @@ import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionConfigRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.backup.domain.AvailableSpaceProvider
 import com.aicode.feature.backup.domain.BackupOptions
 import com.aicode.feature.backup.domain.InsufficientSpaceException
 import com.aicode.feature.backup.domain.PartialRestoreException
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
@@ -216,6 +218,9 @@ class BackupMemoryAndBriefsTest {
         skillConfigRepository = mockk<SkillConfigRepository>(relaxed = true),
         agentDefinitionConfigRepository = mockk<AgentDefinitionConfigRepository>(relaxed = true),
         sessionBriefDao = sessionBriefDao,
+        credentialRepository = mockk<CredentialRepository>(relaxed = true),
+        backupTargetDao = mockk<BackupTargetDao>(relaxed = true),
+        mcpOAuthFile = File(context.filesDir, "aicode/mcp-oauth.json"),
         availableSpace = availableSpace
     )
 

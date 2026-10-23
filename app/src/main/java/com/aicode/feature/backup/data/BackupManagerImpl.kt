@@ -23,6 +23,7 @@ import com.aicode.feature.agent.domain.skill.SkillScope
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionConfigRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
+import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.backup.domain.AgentMessageDto
 import com.aicode.feature.backup.domain.AvailableSpaceProvider
 import com.aicode.feature.backup.domain.BackupCrypto
@@ -32,9 +33,12 @@ import com.aicode.feature.backup.domain.BackupMetadata
 import com.aicode.feature.backup.domain.BackupOptions
 import com.aicode.feature.backup.domain.BackupSnapshot
 import com.aicode.feature.backup.domain.BackupSpace
+import com.aicode.feature.backup.domain.BackupTargetDto
 import com.aicode.feature.backup.domain.ChatSessionDto
 import com.aicode.feature.backup.domain.ExportStats
+import com.aicode.feature.backup.domain.GitCredentialDto
 import com.aicode.feature.backup.domain.ImportPreview
+import com.aicode.feature.backup.domain.LoginSecretsPasswordRequiredException
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
@@ -43,6 +47,7 @@ import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.SecretCipher
 import com.aicode.feature.backup.domain.SessionBriefDto
 import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
+import com.aicode.feature.backup.domain.SshLoginKeysDto
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.WorkspaceSkip
@@ -50,6 +55,8 @@ import com.aicode.feature.backup.domain.WorkspaceSkipReason
 import com.aicode.feature.backup.domain.classifyWorkspaceSkip
 import com.aicode.feature.backup.domain.shouldRestoreRemoteMode
 import com.aicode.feature.backup.domain.toMetadata
+import com.aicode.feature.credentials.domain.model.GitCredential
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
@@ -95,6 +102,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import javax.inject.Inject
+import javax.inject.Named
 import javax.inject.Singleton
 
 @Singleton
@@ -131,6 +139,12 @@ class BackupManagerImpl @Inject constructor(
     private val skillConfigRepository: SkillConfigRepository,
     private val agentDefinitionConfigRepository: AgentDefinitionConfigRepository,
     private val sessionBriefDao: SessionBriefDao,
+    /** 登录凭据段的读写入口（凭据段仅在 [BackupOptions.loginSecrets] 时才出现）。 */
+    private val credentialRepository: CredentialRepository,
+    /** 网络备份目标：要保留「本机解不开」的原密文，所以直接读实体而不是走会解密的仓储。 */
+    private val backupTargetDao: BackupTargetDao,
+    /** MCP 授权令牌文件；与 McpTokenStore 用同一个限定符，不在这里另抄一份路径。 */
+    @param:Named("mcpOAuthFile") private val mcpOAuthFile: File,
     private val availableSpace: AvailableSpaceProvider
 ) : BackupManager {
 
@@ -156,6 +170,9 @@ class BackupManagerImpl @Inject constructor(
     override suspend fun export(password: CharArray?, options: BackupOptions, output: OutputStream): ExportStats =
         withContext(Dispatchers.IO) {
             val pw = password?.takeIf { it.isNotEmpty() }
+            // 凭据段只允许进加密备份。判在写任何字节之前：不能先写半包再报错，
+            // 也不能静默降级成「不含凭据」——那样用户会以为凭据已经在包里了。
+            if (options.loginSecrets && pw == null) throw LoginSecretsPasswordRequiredException()
             ensureExportSpace(encrypted = pw != null, options = options)
             // 先算计划再写：metadata 里的工作区清单与写 tar 的循环共用同一份候选，
             // 也让「哪些工作区被跳过、为什么」能在写完之前就记录好（与文件变动解耦）。
@@ -431,6 +448,9 @@ class BackupManagerImpl @Inject constructor(
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
                     writeMetadataEntry(tar, buildMetadata(options, workspacePlan, secrets))
+                    if (options.loginSecrets) {
+                        writeLoginSecretEntries(tar, secrets)
+                    }
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar, workspacePlan, writtenFiles)
                     }
@@ -871,6 +891,206 @@ class BackupManagerImpl @Inject constructor(
         return "${root.root.trimEnd('/')}/$rel"
     }
 
+    // ── 登录凭据段（secrets/）────────────────────────────────
+
+    /** SSH 私钥文件（App 私有目录，平铺一层）。 */
+    private fun sshKeyFiles(): List<File> =
+        File(context.filesDir, SSH_KEYS_DIR).listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
+
+    private fun sshLoginPrefs() = context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * 把五类登录凭据写成 `secrets/` 条目。
+     *
+     * 调用方已保证本次导出带口令（见 [export]）：这些值能直接用于登录，不允许落到明文包里。
+     * 与其它段一致，本机解不开的敏感值按原密文导出并计数，不写成空值。
+     */
+    private suspend fun writeLoginSecretEntries(tar: TarArchiveOutputStream, secrets: ExportSecretTally) {
+        writeJsonlFileEntry(tar, FILE_SECRET_GIT_CREDENTIALS) { writer ->
+            // 走仓储读解码后的值：git-credentials 是 base64 再整体反转的混淆格式，解析规则只该有一处。
+            credentialRepository.getAll().first().forEach { cred ->
+                writer.writeLine(
+                    json.encodeToString(
+                        GitCredentialDto.serializer(),
+                        GitCredentialDto(host = cred.host, username = cred.username, token = cred.token)
+                    )
+                )
+            }
+        }
+        writeJsonlFileEntry(tar, FILE_SECRET_BACKUP_TARGETS) { writer ->
+            backupTargetDao.getAllOnce().forEach { entity ->
+                writer.writeLine(json.encodeToString(BackupTargetDto.serializer(), entity.toExportDto(secrets)))
+            }
+        }
+        // 口令列在 SharedPreferences 里是 Keystore 密文，而公开接口只返回解密后的值（解不开时是空串）：
+        // 按字段搬运会把口令从备份里抹掉，所以按原文搬运，只对口令列做「解得开就写明文」。
+        val rawPrefs = sshLoginPrefs().all.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap()
+        writeTarEntry(
+            tar,
+            FILE_SECRET_SSH_LOGIN_KEYS,
+            json.encodeToString(
+                SshLoginKeysDto.serializer(),
+                SshLoginKeysDto(exportSshLoginPrefs(rawPrefs, secrets::export))
+            ).toByteArray(Charsets.UTF_8)
+        )
+        sshKeyFiles().forEach { file ->
+            val bytes = runCatching { file.readBytes() }.getOrElse { e ->
+                FileLogger.w(TAG, "读取 SSH 私钥失败，跳过：${file.name}（${e.message}）")
+                return@forEach
+            }
+            val exported = exportSecretBytes(bytes, KeystoreCipher::isEncryptedBytes, decryptSecretBytesOrNull)
+            if (exported.undecryptable) secrets.noteUndecryptable()
+            writeTarEntry(tar, "$SECRET_SSH_KEYS_PREFIX${file.name}", exported.bytes)
+        }
+        // MCP 授权令牌与 git-credentials 同一种混淆文件，直接整份搬运；本机没有就是没有，不算解不开。
+        runCatching { mcpOAuthFile.takeIf { it.isFile }?.readBytes() }.getOrNull()?.let { bytes ->
+            writeTarEntry(tar, FILE_SECRET_MCP_OAUTH, bytes)
+        }
+    }
+
+    /** 字节密文的解密入口：KeystoreCipher 把解不开吞成空数组，这里换成「null 表示解不开」。 */
+    private val decryptSecretBytesOrNull: (ByteArray) -> ByteArray? = { bytes ->
+        KeystoreCipher.decryptBytes(bytes).takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 还原一个 `secrets/` 条目；计数逐个上报而不是最后一次性返回：批量中途失败时，
+     * 「已还原多少」必须与已落盘的数据对得上（与其它 jsonl 段同一口径）。
+     * 认不出的条目跳过：更新版本加的新凭据类型不该让整次导入失败。
+     */
+    private suspend fun restoreLoginSecretEntry(
+        tar: TarArchiveInputStream,
+        entry: TarArchiveEntry,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        when {
+            entry.name == FILE_SECRET_GIT_CREDENTIALS -> restoreGitCredentials(tar, onRestored)
+            entry.name == FILE_SECRET_BACKUP_TARGETS -> restoreBackupTargets(tar, onRestored)
+            entry.name == FILE_SECRET_SSH_LOGIN_KEYS -> restoreSshLoginKeys(tar, onRestored)
+            entry.name == FILE_SECRET_MCP_OAUTH -> restoreMcpOAuthToken(tar, onRestored)
+            entry.name.startsWith(SECRET_SSH_KEYS_PREFIX) -> restoreSshKeyFile(tar, entry, onRestored)
+            else -> {
+                FileLogger.w(TAG, "跳过无法识别的凭据条目：${entry.name}")
+                onRestored(RestoreStats(skippedLoginSecrets = 1))
+            }
+        }
+    }
+
+    /** 逐条写回 git 凭据：仓储按 host 覆盖同名项，重复导入不会产生重复行。 */
+    private suspend fun restoreGitCredentials(
+        tar: TarArchiveInputStream,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        var restored = 0
+        restoreJsonl(tar, GitCredentialDto.serializer()) { dtos ->
+            dtos.forEach { dto ->
+                credentialRepository.save(
+                    GitCredential(id = dto.host, host = dto.host, username = dto.username, token = dto.token)
+                )
+                onRestored(RestoreStats(loginSecrets = 1))
+                restored++
+            }
+        }
+        FileLogger.i(TAG, "恢复 git 凭据 $restored 条")
+    }
+
+    /** 还原网络备份目标（含 WebDAV 密码、S3 SecretKey / SessionToken）。 */
+    private suspend fun restoreBackupTargets(
+        tar: TarArchiveInputStream,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        var restored = 0
+        restoreJsonl(tar, BackupTargetDto.serializer()) { dtos ->
+            dtos.forEach { dto ->
+                val mapped = dto.toImportedEntity(secretCipher)
+                val entity = mapped.entity
+                if (entity == null) {
+                    FileLogger.w(TAG, "跳过类型不认识的备份目标：${dto.id}（${dto.type}）")
+                    onRestored(RestoreStats(skippedLoginSecrets = 1))
+                    return@forEach
+                }
+                backupTargetDao.upsert(entity)
+                onRestored(RestoreStats(loginSecrets = 1, undecryptableSecrets = mapped.undecryptableSecrets))
+                restored++
+            }
+        }
+        FileLogger.i(TAG, "恢复网络备份目标 $restored 个")
+    }
+
+    /** 还原 SSH 登录密钥条目；只覆盖备份里出现过的键，本机多出来的条目不动。 */
+    private fun restoreSshLoginKeys(tar: TarArchiveInputStream, onRestored: (RestoreStats) -> Unit) {
+        val plain = tar.readBytes()
+        val dto = runCatching {
+            json.decodeFromString(SshLoginKeysDto.serializer(), String(plain, Charsets.UTF_8))
+        }.getOrElse { e ->
+            FileLogger.w(TAG, "解析 SSH 登录密钥条目失败，跳过：${e.message}")
+            onRestored(RestoreStats(skippedLoginSecrets = 1))
+            return
+        }
+        if (dto.entries.isEmpty()) return
+        val imported = importSshLoginPrefs(dto.entries, secretCipher)
+        val editor = sshLoginPrefs().edit()
+        imported.entries.forEach { (key, value) -> editor.putString(key, value) }
+        editor.apply()
+        FileLogger.i(TAG, "恢复 SSH 登录密钥 ${imported.keyCount} 个")
+        onRestored(RestoreStats(loginSecrets = imported.keyCount, undecryptableSecrets = imported.undecryptableSecrets))
+    }
+
+    /** 还原单个 SSH 私钥文件；明文重新加密落盘，已是密文的原样落盘并计数。 */
+    private fun restoreSshKeyFile(
+        tar: TarArchiveInputStream,
+        entry: TarArchiveEntry,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        val name = entry.name.removePrefix(SECRET_SSH_KEYS_PREFIX)
+        // 私钥目录是平铺的一层：带路径分隔符的条目会把文件写到目录外，一律跳过。
+        if (name.isEmpty() || name.contains('/') || name.contains('\\') || name == "." || name == "..") {
+            FileLogger.w(TAG, "跳过非法私钥条目：${entry.name}")
+            onRestored(RestoreStats(skippedLoginSecrets = 1))
+            return
+        }
+        val imported = importSecretBytes(
+            tar.readBytes(),
+            KeystoreCipher::isEncryptedBytes,
+            decryptSecretBytesOrNull,
+            KeystoreCipher::encryptBytes
+        )
+        val target = File(File(context.filesDir, SSH_KEYS_DIR), name)
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.writeBytes(imported.bytes)
+        }.fold(
+            onSuccess = {
+                FileLogger.i(TAG, "恢复 SSH 私钥：$name")
+                onRestored(
+                    RestoreStats(loginSecrets = 1, undecryptableSecrets = if (imported.undecryptable) 1 else 0)
+                )
+            },
+            onFailure = { e ->
+                FileLogger.w(TAG, "写入 SSH 私钥失败，跳过：$name（${e.message}）")
+                onRestored(RestoreStats(skippedLoginSecrets = 1))
+            }
+        )
+    }
+
+    /** 还原 MCP 授权令牌。McpTokenStore 把内容缓存在内存里，本机已加载过时它读到的是导入前的值。 */
+    private fun restoreMcpOAuthToken(tar: TarArchiveInputStream, onRestored: (RestoreStats) -> Unit) {
+        val bytes = tar.readBytes()
+        runCatching {
+            mcpOAuthFile.parentFile?.mkdirs()
+            mcpOAuthFile.writeBytes(bytes)
+        }.fold(
+            onSuccess = {
+                FileLogger.i(TAG, "恢复 MCP 授权令牌：${mcpOAuthFile.name}")
+                onRestored(RestoreStats(loginSecrets = 1))
+            },
+            onFailure = { e ->
+                FileLogger.w(TAG, "写入 MCP 授权令牌失败，跳过：${mcpOAuthFile.name}（${e.message}）")
+                onRestored(RestoreStats(skippedLoginSecrets = 1))
+            }
+        )
+    }
+
     // ── 导入辅助 ──────────────────────────────────────────────
 
     private suspend fun restoreFromTar(tar: TarArchiveInputStream, selectedWorkspaces: Set<String>?): RestoreStats {
@@ -948,6 +1168,8 @@ class BackupManagerImpl @Inject constructor(
                                 stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
                             entry.name.startsWith(ASSET_PREFIX) -> stats += restoreAssetEntry(tar, entry)
                             entry.name.startsWith(MEMORY_PREFIX) -> stats += restoreMemoryEntry(tar, entry)
+                            entry.name.startsWith(SECRET_PREFIX) ->
+                                restoreLoginSecretEntry(tar, entry) { stats += it }
                         }
                     }
                 }
@@ -1397,6 +1619,20 @@ class BackupManagerImpl @Inject constructor(
 
         /** 资产目录遍历深度上限：够盖住技能目录里的多层子目录，同时挡住异常的深目录。 */
         const val ASSET_MAX_DEPTH = 8
+
+        /**
+         * 登录凭据条目前缀：只在勾选「包含登录凭据」且带口令的备份里出现。
+         * 旧版本 App 读到本段会当未知条目跳过（TarArchiveInputStream.nextEntry 会丢弃当前条目剩余数据）。
+         */
+        const val SECRET_PREFIX = "secrets/"
+        const val FILE_SECRET_GIT_CREDENTIALS = "${SECRET_PREFIX}git-credentials.jsonl"
+        const val FILE_SECRET_BACKUP_TARGETS = "${SECRET_PREFIX}backup-targets.jsonl"
+        const val FILE_SECRET_SSH_LOGIN_KEYS = "${SECRET_PREFIX}ssh-login-keys.json"
+        const val FILE_SECRET_MCP_OAUTH = "${SECRET_PREFIX}mcp-oauth.json"
+        const val SECRET_SSH_KEYS_PREFIX = "${SECRET_PREFIX}ssh-keys/"
+
+        /** SSH 私钥目录：与 RemoteServerViewModel 写入、SecretEncryptionMigrator 迁移用的是同一处。 */
+        const val SSH_KEYS_DIR = "ssh_keys"
     }
 }
 

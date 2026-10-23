@@ -52,4 +52,11 @@ class BackupImportSummaryTest {
         assertTrue(summary.contains(context.getString(R.string.backup_stat_undecryptable_secrets, 3)))
         assertFalse(summary.contains(context.getString(R.string.backup_stat_secrets_all_restored)))
     }
+
+    @Test
+    fun `还原了登录凭据时统计行列出凭据项数`() {
+        val lines = buildRestoreStatsLines(context, RestoreStats(providers = 1, loginSecrets = 4))
+
+        assertTrue(lines.contains(context.getString(R.string.backup_stat_login_secrets, 4)))
+    }
 }
