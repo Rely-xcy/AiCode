@@ -251,7 +251,13 @@ class BackupManagerImpl @Inject constructor(
                     val tar = source.tar
                     var workspaces: List<WorkspaceBackupMeta> = emptyList()
                     var uncompressedBytes = 0L
+                    var metadataSeen = false
                     var entry = tar.nextEntry
+                    // 与 restoreFromTar 同一判据：预览说“能导入”就必须真的能导入。
+                    val first = entry?.name
+                    if (first != FILE_METADATA && first != FILE_LEGACY_SNAPSHOT) {
+                        error("不是有效的 AiCode 备份文件：缺少 metadata.json")
+                    }
                     while (entry != null) {
                         // 把整个 tar 走完：一是拿到全部条目的声明大小做恢复前空间预检，
                         // 二是让 gzip 的完整性校验（尾部 CRC）在写入任何数据之前先跑一遍。
@@ -261,8 +267,12 @@ class BackupManagerImpl @Inject constructor(
                             val metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
                             checkVersion(metadata.schemaVersion)
                             workspaces = metadata.workspaces
+                            metadataSeen = true
                         }
                         entry = tar.nextEntry
+                    }
+                    if (!metadataSeen && first != FILE_LEGACY_SNAPSHOT) {
+                        error("不是有效的 AiCode 备份文件：缺少 metadata.json")
                     }
                     ImportPreview(workspaces, uncompressedBytes)
                 }
@@ -756,6 +766,11 @@ class BackupManagerImpl @Inject constructor(
         var stats = RestoreStats()
         try {
             var entry = tar.nextEntry
+            // 先校验格式再动数据：metadata 缺失或排在后面时，已写入的会话与文件会留在本机，
+            // 用户只得到一个失败提示，残留却不回滚。本应用导出恒把 metadata 写在第一条。
+            if (entry == null || (entry.name != FILE_METADATA && entry.name != FILE_LEGACY_SNAPSHOT)) {
+                error("不是有效的 AiCode 备份文件：缺少 metadata.json")
+            }
             while (entry != null) {
                 when (entry.name) {
                     FILE_LEGACY_SNAPSHOT -> {
@@ -765,9 +780,15 @@ class BackupManagerImpl @Inject constructor(
                         return restoreLegacy(snapshot)
                     }
                     FILE_METADATA -> {
-                        val plain = tar.readBytes()
-                        metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
-                        checkVersion(metadata.schemaVersion)
+                        if (metadata == null) {
+                            val plain = tar.readBytes()
+                            metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
+                            checkVersion(metadata.schemaVersion)
+                        } else {
+                            // 重复的 metadata 一律忽略：版本与格式只认第一条，后续条目不得改写已核实的结论。
+                            tar.readBytes()
+                            FileLogger.w(TAG, "忽略备份里的重复 metadata.json")
+                        }
                     }
                     FILE_SESSIONS -> {
                         val count = restoreJsonl(tar, ChatSessionDto.serializer()) { dtos ->
