@@ -150,7 +150,7 @@ class RemoteShellCommandsTest {
     @Test
     fun gitConfigAndCredentialHelperPreserveLiteralPaths() {
         assumeTrue(runShell("command -v git").exit == 0)
-        val dir = File(root, hostileName).apply { mkdirs() }
+        val dir = File(root, "space 'quote' \\ \$(touch injected) \"double\"").apply { mkdirs() }
         val config = File(root, "config").apply { writeText(buildRemoteGitConfig(dir.path)) }
         val key = "includeIf.gitdir:${dir.path}/.path"
         val parsed = runShell("git config --file ${remoteShellQuote(config.path)} --get ${remoteShellQuote(key)}")
