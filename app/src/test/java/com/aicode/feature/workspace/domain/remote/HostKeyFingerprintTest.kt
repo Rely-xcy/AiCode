@@ -49,7 +49,7 @@ class HostKeyFingerprintTest {
 
     @Test
     fun conversionIsIdempotent() {
-        val once = hostKeyFingerprintForDisplay(blob(githubEd25519Blob))
+        val once = hostKeyFingerprintForDisplay(githubEd25519Blob)
         assertEquals(once, hostKeyFingerprintForDisplay(once))
     }
 
