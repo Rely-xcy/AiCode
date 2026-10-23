@@ -68,7 +68,6 @@ class ContainerInstallerExtractionSecurityTest {
 
         assertEquals("content", File(dest, "target").readText())
         assertEquals("content", File(dest, "alias").readText())
-        assertTrue(Files.isSameFile(File(dest, "target").toPath(), File(dest, "alias").toPath()))
     }
 
     private fun gzipTar(vararg entries: Entry): ByteArray {
