@@ -42,12 +42,16 @@ import com.aicode.feature.backup.domain.SessionBriefDto
 import com.aicode.feature.backup.domain.SkillsAgentsConfigDto
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
+import com.aicode.feature.backup.domain.shouldRestoreRemoteMode
 import com.aicode.feature.backup.domain.toMetadata
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionMode
+import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
@@ -110,6 +114,8 @@ class BackupManagerImpl @Inject constructor(
     private val visionModelSettingsRepository: VisionModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
+    private val executionModeRepository: ExecutionModeRepository,
+    private val executionModeHolder: ExecutionModeHolder,
     private val workspaceRepository: WorkspaceRepository,
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
@@ -477,6 +483,9 @@ class BackupManagerImpl @Inject constructor(
         compactionProviderId = if (options.appSettings) compactionModelSettingsRepository.getCompactionProviderId() else "",
         compactionModel = if (options.appSettings) compactionModelSettingsRepository.getCompactionModel() else "",
         syncSettings = if (options.appSettings) syncSettingsRepository.snapshot() else null,
+        // 执行模式跟「应用设置」同一个开关：它是应用设置的一部分，没勾就不带，
+        // 避免用户明确只要聊天数据时却被一次导入切掉了整个执行环境（本地 ↔ 远程）。
+        executionMode = if (options.appSettings) executionModeRepository.executionModeFlow.first().name else null,
         workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList(),
         // 没勾「应用设置」时上面那一整段字段全是默认值，与「用户就是这么设的」在数据上不可区分，
         // 所以单独记下这次带没带设置；导入侧据此决定要不要回写设置（见 restoreMeta）。
@@ -940,13 +949,16 @@ class BackupManagerImpl @Inject constructor(
      * （单会话导出、或导出时没勾应用设置）变成一次「静默重置」——保活/屏幕常亮/提示音被关、
      * 超时与压缩阈值回到默认，而导入摘要还写着「已覆盖」。小表不靠这个标志：
      * 它们以「列表非空」为写入条件，空列表本就不写。
+     *
+     * 执行模式（[BackupMetadata.executionMode]）也在这个方法里回写，但只看字段本身：字段有值就说明
+     * 导出时确实带了模式，备份是 REMOTE_SSH 就把模式切回去（只切模式，不发起 SSH 连接）。
      */
     private suspend fun restoreMeta(meta: BackupMetadata): RestoreStats {
         FileLogger.i(
             TAG,
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null} " +
-                "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null}"
+                "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null} executionMode=${meta.executionMode}"
         )
         // 逐段计数：中途失败时 partialStats 要能说清哪些段已写入、各多少条。
         var stats = RestoreStats()
@@ -1008,6 +1020,21 @@ class BackupManagerImpl @Inject constructor(
                 meta.syncSettings?.let { syncSettingsRepository.restore(it) }
                 // 设置是一整段回写的，全部写完才算“已覆盖”；中途失败不计，避免摘要说已恢复实际没有。
                 stats += RestoreStats(settingsRestored = true)
+            }
+            // 执行模式放到最后：它一改就会触发工作区列表重载（WorkspaceViewModel 监听 mode），
+            // 前面的文件段、设置段已经在本地/旧的执行环境里写完，别再插到中间去改变后续写入的落点。
+            // 只切模式，不发起连接：连接交给用户手动建立，导入摘要里也会提示这一点。
+            // 切模式失败不影响导入结果（数据已经落库），只记日志并保持当前模式。
+            if (shouldRestoreRemoteMode(meta)) {
+                val alreadyRemote = executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH
+                val applied = runCatching {
+                    executionModeRepository.setExecutionMode(ExecutionMode.REMOTE_SSH)
+                    executionModeHolder.setMode(ExecutionMode.REMOTE_SSH)
+                }
+                    .onSuccess { FileLogger.i(TAG, "导入后已把执行模式切回远程，等用户自行连接") }
+                    .onFailure { FileLogger.w(TAG, "导入后切回远程模式失败，保持当前模式", it) }
+                    .isSuccess
+                if (applied && !alreadyRemote) stats += RestoreStats(remoteModeRestored = true)
             }
             return stats
         } catch (e: PartialRestoreException) {

@@ -108,7 +108,12 @@ data class RestoreStats(
     /** 本次导入写入的记忆文件数（全局 + 项目两级）。 */
     val memoryFiles: Int = 0,
     /** 本次导入回写的会话工作状态条数。 */
-    val sessionBriefs: Int = 0
+    val sessionBriefs: Int = 0,
+    /**
+     * 本次导入是否真的把执行模式从本地切回了远程（[com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH]）。
+     * 本机原本就在远程时不计（没发生切换）；为 true 时导入摘要才多一句「远程聊天记录只在远程模式下显示」。
+     */
+    val remoteModeRestored: Boolean = false
 ) {
     /** 是否已经写入了任何业务数据：失败提示据此区分「一条都没写」与「写了半套」。 */
     val hasWrittenData: Boolean
@@ -133,7 +138,8 @@ data class RestoreStats(
         panelScriptFiles = panelScriptFiles + other.panelScriptFiles,
         skillsAgentsConfigRestored = skillsAgentsConfigRestored || other.skillsAgentsConfigRestored,
         memoryFiles = memoryFiles + other.memoryFiles,
-        sessionBriefs = sessionBriefs + other.sessionBriefs
+        sessionBriefs = sessionBriefs + other.sessionBriefs,
+        remoteModeRestored = remoteModeRestored || other.remoteModeRestored
     )
 }
 

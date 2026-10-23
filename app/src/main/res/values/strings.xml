@@ -579,6 +579,7 @@
     <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>
     <string name="backup_skills_agents_config_covered">技能与子代理的启停状态已覆盖</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
+    <string name="backup_restore_remote_hint">提示：远程聊天记录只在远程模式下显示，连上 SSH 后才能看到。</string>
     <string name="backup_restore_workspaces_title">恢复工作区</string>
     <string name="backup_restore_workspaces_warning">将直接覆盖本地同名工作区中的文件，且无法撤销，请谨慎勾选</string>
     <string name="backup_restore_workspaces_select_all">全选</string>

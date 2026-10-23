@@ -579,6 +579,7 @@
     <string name="backup_stat_panel_scripts">· Panel Scripts: %1$s</string>
     <string name="backup_skills_agents_config_covered">Skill and subagent enable states covered</string>
     <string name="backup_settings_covered">Theme, keepalive, logging, vision, and sync preferences covered</string>
+    <string name="backup_restore_remote_hint">Note: remote chat history only shows in remote mode; connect over SSH to see it.</string>
     <string name="backup_restore_workspaces_title">Restore workspaces</string>
     <string name="backup_restore_workspaces_warning">Files in local workspaces with the same name will be overwritten and cannot be undone. Select carefully.</string>
     <string name="backup_restore_workspaces_select_all">Select all</string>

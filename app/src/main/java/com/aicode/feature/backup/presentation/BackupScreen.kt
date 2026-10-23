@@ -929,6 +929,12 @@ private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) 
 private fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
     appendLine(context.getString(R.string.backup_restored_data))
     append(buildRestoreStatsLines(context, stats))
+    // 远程相关的提醒只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
+    // 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
+    if (stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0) {
+        appendLine()
+        appendLine(context.getString(R.string.backup_restore_remote_hint))
+    }
     append(context.getString(R.string.backup_settings_covered))
 }
 

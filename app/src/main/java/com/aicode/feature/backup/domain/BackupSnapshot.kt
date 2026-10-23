@@ -95,6 +95,15 @@ data class BackupMetadata(
     val compactionProviderId: String = "",
     val compactionModel: String = "",
     val syncSettings: SyncSettingsSnapshot? = null,
+    /**
+     * 导出时的执行模式原文（[com.aicode.feature.settings.data.repository.ExecutionMode] 的 name）。
+     *
+     * null 表示这份备份没带（本字段出现之前的旧备份，或导出时没勾「应用设置」）。
+     * 导入侧据此决定要不要切回远程模式：远程模式的会话只在远程工作区可见，不还原模式时
+     * 用户在新设备上会以为「聊天记录全丢了」（见 [shouldRestoreRemoteMode]）。
+     * 只能取枚举名做字符串，别把枚举直接序列化进备份——旧版本 App 读到未知枚举值会整包解析失败。
+     */
+    val executionMode: String? = null,
     val workspaces: List<WorkspaceBackupMeta> = emptyList(),
     /**
      * 这份备份是否带了「应用设置」段。
