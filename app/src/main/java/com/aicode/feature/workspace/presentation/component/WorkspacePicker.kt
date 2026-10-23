@@ -309,6 +309,27 @@ private fun WorkspaceSelectionHost(
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+/** 列表行：用 [rowKey] 作为 LazyColumn 的唯一键（不能用可能重复的显示名）。 */
+internal data class WorkspaceRowItem(val workspace: Workspace, val rowKey: String)
+
+/**
+ * 给工作区列表生成唯一行键。
+ *
+ * 名称不能当键：外部目录名无法转成合法名时会回退成 `default`，两个这样的工作区同时存在
+ * 就会生成重复 key，LazyColumn 直接抛 IllegalArgumentException。这里改用路径作键，
+ * 并对完全相同的条目去重（同一路径同一名字只留一行）。
+ */
+internal fun distinctWorkspaceRows(workspaces: List<Workspace>): List<WorkspaceRowItem> {
+    val seen = HashSet<String>()
+    val out = ArrayList<WorkspaceRowItem>(workspaces.size)
+    for (ws in workspaces) {
+        // 键用「路径 + 名称」：路径在一台设备上唯一，名称能在路径为空时兵分。
+        val key = ws.path.ifBlank { ws.name } + "\u0000" + ws.name
+        if (seen.add(key)) out += WorkspaceRowItem(ws, key)
+    }
+    return out
+}
+
 @Composable
 private fun WorkspaceSheet(
     workspaces: List<Workspace>,
@@ -369,17 +390,20 @@ private fun WorkspaceSheet(
                     modifier = Modifier.padding(vertical = Spacing.md)
                 )
             } else {
+                // 列表 key 不能用显示名：工作区名可以是 default（外部目录名不可用时的兜底），
+                // 两个同名工作区同时存在时 LazyColumn 会直接抛 "Key already used" 崩掉。
+                val rows = remember(workspaces) { distinctWorkspaceRows(workspaces) }
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 320.dp),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    items(workspaces, key = { it.name }) { ws ->
+                    items(rows, key = { it.rowKey }) { row ->
                         WorkspaceRow(
-                            workspace = ws,
-                            selected = ws.name == current?.name,
-                            canDelete = workspaces.size > 1,
-                            onClick = { onSelect(ws) },
-                            onDelete = { pendingDelete = ws }
+                            workspace = row.workspace,
+                            selected = row.workspace.name == current?.name,
+                            canDelete = rows.size > 1,
+                            onClick = { onSelect(row.workspace) },
+                            onDelete = { pendingDelete = row.workspace }
                         )
                     }
                 }
