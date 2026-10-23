@@ -20,7 +20,11 @@ object AgentDefinitionParser {
             FileLogger.w(TAG, "读取子代理定义失败: $filePath", it)
             return null
         }
+        return parseText(text, filePath)
+    }
 
+    /** 解析已读到的文本（远端批量读取、导入等场景）；[filePath] 用于回显与缺 name 时的兼底名。 */
+    fun parseText(text: String, filePath: String): AgentDefinition? {
         val (frontmatter, body) = splitAndParseFrontmatter(text)
         val prompt = body.trim()
         if (prompt.isEmpty()) return null

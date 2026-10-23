@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.container.BulkFileSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,8 +21,17 @@ class AgentDefinitionRepository @Inject constructor(
     private val projectSource: ProjectDirectoryAgentSource,
     private val configRepository: AgentDefinitionConfigRepository,
     private val fileAccess: FileAccessProvider,
-    private val listOrderStore: ListOrderStore
+    private val listOrderStore: ListOrderStore,
+    private val bulk: BulkFileSource
 ) {
+    /** 不启用远程批量读取缓存的构造（单测与无远端场景）。 */
+    internal constructor(
+        globalSource: GlobalDirectoryAgentSource,
+        projectSource: ProjectDirectoryAgentSource,
+        configRepository: AgentDefinitionConfigRepository,
+        fileAccess: FileAccessProvider,
+        listOrderStore: ListOrderStore
+    ) : this(globalSource, projectSource, configRepository, fileAccess, listOrderStore, BulkFileSource.Disabled)
     /**
      * 全部定义（含来源作用域），未过滤禁用。
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
@@ -118,6 +128,7 @@ class AgentDefinitionRepository @Inject constructor(
                     FileLogger.w(TAG, "重命名后删除旧定义失败: $existingFile")
                 }
             }
+            bulk.invalidate()
             null
         } catch (e: Exception) {
             FileLogger.e(TAG, "保存子代理定义失败: $name", e)
@@ -133,7 +144,9 @@ class AgentDefinitionRepository @Inject constructor(
         val filePath = entry.definition.filePath ?: return false
         val provider = fileAccess
         if (!provider.isFile(filePath)) return false
-        return runCatching { provider.delete(filePath); true }.getOrDefault(false)
+        val deleted = runCatching { provider.delete(filePath); true }.getOrDefault(false)
+        if (deleted) bulk.invalidate()
+        return deleted
     }
 
     /** 指定作用域的定义目录（容器路径）。 */

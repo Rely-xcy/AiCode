@@ -63,7 +63,8 @@ class SystemPromptProvider @Inject constructor(
             val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
             val cached = cachedByKey[key]
             if (cached != null) return cached.ifEmpty { null }
-            val skills = try { skillRepository.listSkills() } catch (e: Exception) { return null }
+            // 读失败（null）不进缓存：否则一次远程断线就会让本会话一直以为「没有技能」。
+            val skills = try { skillRepository.listSkillsOrNull() } catch (e: Exception) { null } ?: return null
             if (skills.isEmpty()) {
                 cachedByKey[key] = ""
                 return null

@@ -13,26 +13,33 @@ object SkillParser {
     /**
      * 解析一个 skill 目录；无 SKILL.md / CLAUDE.md 或无 name 时视为非法，返回 null。
      * 目录经 [provider] 以容器路径读取，本地/远程统一。
+     *
+     * [fileName] 由扫描阶段已知时传入，省掉再列一次目录的往返；为 null 时才去列目录按
+     * SKILL.md → CLAUDE.md 的顺序挑。
      */
-    fun parse(provider: FileAccessProvider, dirPath: String): Skill? {
+    fun parse(provider: FileAccessProvider, dirPath: String, fileName: String? = null): Skill? {
         val dir = dirPath.trimEnd('/')
         // 优先 SKILL.md，其次 CLAUDE.md（兼容只用 CLAUDE.md 的技能）；名称匹配忽略大小写
-        val fileName = runCatching {
-            provider.listFiles(dir).map { it.name }
-        }.getOrElse {
-            FileLogger.w(TAG, "列出技能目录失败: $dir", it)
-            return null
-        }.let { names ->
-            names.firstOrNull { it.equals(SKILL_FILE, ignoreCase = true) }
-                ?: names.firstOrNull { it.equals(CLAUDE_FILE, ignoreCase = true) }
-        } ?: return null
+        val name = fileName ?: resolveInstructionFileName(provider, dir) ?: return null
 
-        val text = runCatching { provider.readFile("$dir/$fileName") }.getOrElse {
-            FileLogger.w(TAG, "读取 Skill 文件失败: $dir/$fileName", it)
+        val text = runCatching { provider.readFile("$dir/$name") }.getOrElse {
+            FileLogger.w(TAG, "读取 Skill 文件失败: $dir/$name", it)
             return null
         }
 
         return parseText(text, dir.substringAfterLast('/').ifBlank { dir }).copy(dirPath = dir)
+    }
+
+    /** 列出目录后按 SKILL.md → CLAUDE.md 的顺序挑指令文件；列目录失败按「没有指令文件」处理。 */
+    private fun resolveInstructionFileName(provider: FileAccessProvider, dir: String): String? {
+        val names = runCatching {
+            provider.listFiles(dir).map { it.name }
+        }.getOrElse {
+            FileLogger.w(TAG, "列出技能目录失败: $dir", it)
+            return null
+        }
+        return names.firstOrNull { it.equals(SKILL_FILE, ignoreCase = true) }
+            ?: names.firstOrNull { it.equals(CLAUDE_FILE, ignoreCase = true) }
     }
 
     /**

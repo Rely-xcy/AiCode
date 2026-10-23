@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.skill
 
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.container.BulkFileSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import java.io.InputStream
 import javax.inject.Inject
@@ -20,26 +21,59 @@ class SkillRepository @Inject constructor(
     private val projectDirectorySkillSource: ProjectDirectorySkillSource,
     private val skillConfigRepository: SkillConfigRepository,
     private val fileAccess: FileAccessProvider,
-    private val listOrderStore: ListOrderStore
+    private val listOrderStore: ListOrderStore,
+    private val bulk: BulkFileSource
 ) {
+    /** 不启用远程批量读取缓存的构造（单测与无远端场景）。 */
+    internal constructor(
+        globalDirectorySkillSource: GlobalDirectorySkillSource,
+        projectDirectorySkillSource: ProjectDirectorySkillSource,
+        skillConfigRepository: SkillConfigRepository,
+        fileAccess: FileAccessProvider,
+        listOrderStore: ListOrderStore
+    ) : this(
+        globalDirectorySkillSource,
+        projectDirectorySkillSource,
+        skillConfigRepository,
+        fileAccess,
+        listOrderStore,
+        BulkFileSource.Disabled
+    )
     /**
      * 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
      */
-    fun listAllSkills(): List<SkillEntry> {
-        val merged = mergeAll(globalDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
-        return listOrderStore.sort(
+    fun listAllSkills(): List<SkillEntry> =
+        sortEntries(mergeAll(globalDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills()))
+
+    /**
+     * 同 [listAllSkills]，但任一来源读取失败时返回 null：注入系统提示词的调用方据此避免把一次
+     * 读失败缓存成「本会话没有技能」。
+     */
+    fun listAllSkillsOrNull(): List<SkillEntry>? {
+        val global = globalDirectorySkillSource.listSkillsOrNull() ?: return null
+        val project = projectDirectorySkillSource.listSkillsOrNull() ?: return null
+        return sortEntries(mergeAll(global, project))
+    }
+
+    /** 启用的技能列表（注入系统提示词用），禁用技能被过滤。 */
+    fun listSkills(): List<Skill> =
+        filterDisabled(listAllSkills(), skillConfigRepository.disabledNames()).map { it.skill }
+
+    /** 同 [listSkills]，但任一来源读取失败时返回 null（读失败不该被当成「没有技能」缓存下来）。 */
+    fun listSkillsOrNull(): List<Skill>? =
+        listAllSkillsOrNull()?.let { entries ->
+            filterDisabled(entries, skillConfigRepository.disabledNames()).map { it.skill }
+        }
+
+    private fun sortEntries(merged: List<SkillEntry>): List<SkillEntry> =
+        listOrderStore.sort(
             merged.filter { it.scope == SkillScope.GLOBAL },
             ListOrderStore.KEY_SKILLS_GLOBAL
         ) { it.skill.name } + listOrderStore.sort(
             merged.filter { it.scope == SkillScope.PROJECT },
             ListOrderStore.KEY_SKILLS_PROJECT
         ) { it.skill.name }
-    }
-
-    /** 启用的技能列表（注入系统提示词用），禁用技能被过滤。 */
-    fun listSkills(): List<Skill> =
-        filterDisabled(listAllSkills(), skillConfigRepository.disabledNames()).map { it.skill }
 
     /** 当前被禁用的技能名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = skillConfigRepository.disabledNames()
@@ -97,6 +131,7 @@ class SkillRepository @Inject constructor(
             provider.mkdirs(dir)
             val target = instructionFile(provider, dir) ?: "${dir.trimEnd('/')}/$INSTRUCTION_FILE"
             provider.writeFile(target, text, overwrite = true)
+            bulk.invalidate()
             null
         } catch (e: Exception) {
             FileLogger.e(TAG, "保存技能失败: $name", e)
@@ -118,10 +153,12 @@ class SkillRepository @Inject constructor(
      */
     fun importMarkdown(text: String, fallbackName: String, scope: SkillScope): SkillImportReport =
         SkillImporter.importMarkdown(fileAccess, skillsRoot(scope), existingNamesIn(scope), text, fallbackName)
+            .also { bulk.invalidate() }
 
     /** 从 zip 输入流导入技能（可含多个技能目录）到指定作用域。 */
     fun importZip(input: InputStream, fallbackName: String, scope: SkillScope): SkillImportReport =
         SkillImporter.importArchive(fileAccess, skillsRoot(scope), existingNamesIn(scope), input, fallbackName)
+            .also { bulk.invalidate() }
 
     /** 指定作用域下已有技能名（小写），供导入查重。 */
     private fun existingNamesIn(scope: SkillScope): Set<String> =
@@ -133,7 +170,9 @@ class SkillRepository @Inject constructor(
             it.skill.name.equals(name, ignoreCase = true) && it.scope == scope
         } ?: return false
         val dirPath = entry.skill.dirPath ?: return false
-        return safeDeleteSkillDir(fileAccess, dirPath)
+        val deleted = safeDeleteSkillDir(fileAccess, dirPath)
+        if (deleted) bulk.invalidate()
+        return deleted
     }
 
     companion object {
