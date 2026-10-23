@@ -28,7 +28,8 @@ class ManageMcpTool @Inject constructor(
     }
 
     /**
-     * 列出服务器：只给名称、地址、键名与开关状态，headers / env 的**值**一律不回显。
+     * 列出服务器：只给名称、安全端点（仅 scheme/host/port）、键名与开关状态；
+     * stdio 的命令与参数、headers / env 的**值**、URL 的 userinfo / 路径 / query / fragment 一律不回显。
      *
      * 该动作走 READ_AGENT_CONFIG 免弹窗，所以输出本身就是「无人工确认也能进上下文」的内容，
      * 凭据不值得也不需要出现在这里。
@@ -37,12 +38,9 @@ class ManageMcpTool @Inject constructor(
         if (servers.isEmpty()) return "（没有已配置的 MCP server）"
         return servers.joinToString("\n") { server ->
             val target = if (server.isStdio) {
-                buildString {
-                    append("stdio ").append(server.command.orEmpty())
-                    if (server.args.isNotEmpty()) append(' ').append(server.args.joinToString(" "))
-                }
+                "stdio（命令与参数已隐藏）"
             } else {
-                server.url.orEmpty()
+                safeHttpEndpoint(server.url)
             }
             buildString {
                 append("- ").append(server.name)
@@ -60,6 +58,14 @@ class ManageMcpTool @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun safeHttpEndpoint(raw: String?): String {
+        val uri = runCatching { java.net.URI(raw.orEmpty()) }.getOrNull() ?: return "HTTP（地址已隐藏）"
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return "HTTP（地址已隐藏）"
+        return runCatching {
+            java.net.URI(uri.scheme, null, uri.host, uri.port, null, null, null).toASCIIString()
+        }.getOrDefault("HTTP（地址已隐藏）")
     }
 
     override val name = "manageMcp"
