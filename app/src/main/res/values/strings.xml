@@ -1717,8 +1717,8 @@
     <string name="ssh_host_key_trust">信任并连接</string>
     <string name="ssh_host_key_reject">拒绝</string>
     <string name="ssh_host_key_empty">暂无已保存的主机指纹</string>
-    <string name="ssh_host_key_fingerprint_value">指纹：%1$s</string>
-    <string name="ssh_host_key_detail">已保存的服务器主机指纹：\n%1$s</string>
+    <string name="ssh_host_key_fingerprint_value">SHA256 指纹：%1$s</string>
+    <string name="ssh_host_key_detail">已保存的服务器主机 SHA256 指纹：\n%1$s</string>
 
     <!-- Remote Sync -->
     <string name="sync_save_settings">保存设置</string>

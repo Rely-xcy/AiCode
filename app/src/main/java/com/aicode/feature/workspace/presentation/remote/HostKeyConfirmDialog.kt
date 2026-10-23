@@ -7,6 +7,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.aicode.R
+import com.aicode.feature.workspace.domain.remote.hostKeyFingerprintForDisplay
 
 /**
  * SSH 主机密钥确认弹窗（首次连接或已保存指纹变化）。
@@ -42,7 +43,7 @@ fun HostKeyConfirmDialog(
         text = {
             Text(
                 "${pendingHostKey.host}:${pendingHostKey.port}\n${pendingHostKey.keyType}\n" +
-                    stringResource(R.string.ssh_host_key_fingerprint_value, pendingHostKey.fingerprint)
+                    stringResource(R.string.ssh_host_key_fingerprint_value, hostKeyFingerprintForDisplay(pendingHostKey.fingerprint))
             )
         },
         confirmButton = {

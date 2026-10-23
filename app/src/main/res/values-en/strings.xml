@@ -1717,8 +1717,8 @@
     <string name="ssh_host_key_trust">Trust and connect</string>
     <string name="ssh_host_key_reject">Reject</string>
     <string name="ssh_host_key_empty">No saved host fingerprints</string>
-    <string name="ssh_host_key_fingerprint_value">Fingerprint: %1$s</string>
-    <string name="ssh_host_key_detail">Saved server host fingerprint:\n%1$s</string>
+    <string name="ssh_host_key_fingerprint_value">SHA256 fingerprint: %1$s</string>
+    <string name="ssh_host_key_detail">Saved server host SHA256 fingerprint:\n%1$s</string>
 
     <!-- Remote Sync -->
     <string name="sync_save_settings">Save Settings</string>
