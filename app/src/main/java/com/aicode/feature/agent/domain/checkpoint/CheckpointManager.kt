@@ -207,9 +207,8 @@ class CheckpointManager @Inject constructor(
                     fileLock.withLock(displayPath) {
                         fileAccess.writeFile(snapshot.filePath, snapshotContent, overwrite = true)
                     }
-                    // 回滚是一次「外部写入」：所有会话手上的版本都过期了
-                    fileAccess.fingerprint(snapshot.filePath)
-                        ?.let { versions.recordExternal(displayPath, it) }
+                    // 回滚是一次外部写入：所有已有会话必须重新读取后才能覆盖。
+                    versions.markExternalChange(displayPath)
                     restoredFileCount++
                     FileLogger.i(TAG, "还原覆盖: cp=${cp.id} path=$displayPath")
                 } else if (snapshot.changeType == "CREATE") {

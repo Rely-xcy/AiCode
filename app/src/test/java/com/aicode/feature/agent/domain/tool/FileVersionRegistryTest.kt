@@ -1,11 +1,12 @@
 package com.aicode.feature.agent.domain.tool
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * [FileVersionRegistry]：按会话分桶、LRU 上限、外部写入广播。
+ * [FileVersionRegistry]：按会话分桶、LRU 上限、外部改动失效。
  */
 class FileVersionRegistryTest {
 
@@ -63,18 +64,27 @@ class FileVersionRegistryTest {
     }
 
     @Test
-    fun recordExternal_updatesEveryExistingSession() {
-        registry.record("s1", "k", "old")
-        registry.record("s2", "k", "old")
-        registry.recordExternal("k", "new")
-        assertEquals("new", registry.get("s1", "k"))
-        assertEquals("new", registry.get("s2", "k"))
+    fun externalChange_invalidatesExistingBaselinesUntilEachSessionReadsAgain() {
+        registry.record("s1", "k", "v1")
+        registry.record("s2", "k", "v1")
+
+        registry.markExternalChange("k")
+
+        assertNotEquals("v2", registry.get("s1", "k"))
+        assertNotEquals("v2", registry.get("s2", "k"))
+        registry.record("s1", "k", "v2")
+        assertEquals("v2", registry.get("s1", "k"))
+        assertNotEquals("v2", registry.get("s2", "k"))
     }
 
     @Test
-    fun recordExternal_doesNotCreateSessionBuckets() {
-        registry.recordExternal("k", "v")
-        assertEquals("没有会话时不应凭空建桶", 0, registry.trackedSessionCount())
+    fun externalChange_doesNotCreateSessionBucketsOrEntries() {
+        registry.markExternalChange("k")
+        registry.record("s1", "other", "v1")
+        registry.markExternalChange("k")
+        assertEquals(1, registry.trackedSessionCount())
+        assertEquals(1, registry.trackedEntryCount("s1"))
+        assertNull(registry.get("s1", "k"))
     }
 
     @Test

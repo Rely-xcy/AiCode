@@ -109,10 +109,6 @@ class CodeEditorViewModel @Inject constructor(
                 ).also {
                     // 记下磁盘指纹：保存前据此判断「编辑器打开后文件是否被 AI/其他会话改过」。
                     loadedFingerprint = runCatching { fileAccess.fingerprint(path) }.getOrNull()
-                    // 同时登记给并发保护：用户保存后，所有 AI 会话手上的版本都算过期。
-                    loadedFingerprint?.let { fp ->
-                        versions.recordExternal(fileAccess.toDisplayPath(path), fp)
-                    }
                 }
             }.getOrElse { e ->
                 FileLogger.w(TAG, "打开文件失败: $path", e)
@@ -183,9 +179,7 @@ class CodeEditorViewModel @Inject constructor(
                 onSuccess = {
                     // 更新基线，否则紧接着的第二次保存会被自己上一次的写入判成冲突。
                     loadedFingerprint = runCatching { fileAccess.fingerprint(path) }.getOrNull()
-                    loadedFingerprint?.let { fp ->
-                        versions.recordExternal(fileAccess.toDisplayPath(path), fp)
-                    }
+                    versions.markExternalChange(fileAccess.toDisplayPath(path))
                     SaveResult.Success
                 },
                 onFailure = { e ->

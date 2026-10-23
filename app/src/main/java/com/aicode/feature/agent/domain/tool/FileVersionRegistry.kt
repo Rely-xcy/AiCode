@@ -65,17 +65,13 @@ class FileVersionRegistry @Inject constructor() {
         synchronized(map) { return map[key] }
     }
 
-    /**
-     * 登记一次**不属于任何 AI 会话**的写入（典型是编辑器保存）。
-     *
-     * 这里刻意不按会话分桶：编辑器是用户本人的操作，用户改完文件后，**所有**会话手上的
-     * 版本都已过期，因此每个已存在的会话桶都要更新。只记在"通配桶"里会漏判——写前校验查的是
-     * 自己会话的桶。
-     */
-    fun recordExternal(key: String, fingerprint: String) {
+    /** 外部写入后，已有会话必须重新读取该文件才能建立新的写入基线。 */
+    fun markExternalChange(key: String) {
         if (key.isEmpty()) return
         for (map in sessions.values) {
-            synchronized(map) { map[key] = fingerprint }
+            synchronized(map) {
+                if (map.containsKey(key)) map[key] = EXTERNAL_CHANGE
+            }
         }
     }
 
@@ -108,6 +104,8 @@ class FileVersionRegistry @Inject constructor() {
         }
 
     private companion object {
+        const val EXTERNAL_CHANGE = "<external-change>"
+
         /**
          * 单会话最多保留的「路径 → 指纹」条数。512 条足够覆盖一次任务实际会回改的文件数；
          * 超出的部分按 LRU 淘汰，最坏后果是那部分文件退化成「没读过就写」的放行语义，
