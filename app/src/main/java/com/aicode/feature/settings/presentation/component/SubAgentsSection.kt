@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,8 +67,12 @@ internal fun SubAgentsSection(
     onDelete: (SubAgentUiEntry) -> Unit,
     onOpenDetail: (SubAgentUiEntry) -> Unit
 ) {
-    val projectAgents = entries.filter { it.scope == AgentDefinitionScope.PROJECT }
-    val globalAgents = entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
+    // 只在数据变化时分组，避免每次重组都产生两份新 List。
+    val (projectAgents, globalAgents) = remember(entries) {
+        val project = entries.filter { it.scope == AgentDefinitionScope.PROJECT }
+        val global = entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
+        project to global
+    }
 
     if (entries.isEmpty()) {
         Box(
@@ -162,7 +167,8 @@ internal fun SubAgentsSection(
             } else {
                 itemsIndexed(
                     items = projectAgents,
-                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.PROJECT, entry.name) }
+                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.PROJECT, entry.name) },
+                    contentType = { _, _ -> "agent-row" }
                 ) { index, entry ->
                     ReorderableCardRow(
                         state = reorderableState,
@@ -201,7 +207,8 @@ internal fun SubAgentsSection(
             } else {
                 itemsIndexed(
                     items = globalAgents,
-                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.GLOBAL, entry.name) }
+                    key = { _, entry -> subAgentItemKey(AgentDefinitionScope.GLOBAL, entry.name) },
+                    contentType = { _, _ -> "agent-row" }
                 ) { index, entry ->
                     ReorderableCardRow(
                         state = reorderableState,
@@ -231,13 +238,10 @@ private fun SubAgentRow(
     onClick: () -> Unit,
     dragModifier: Modifier = Modifier
 ) {
-    val rowBackground = MaterialTheme.semanticColors.cardSurface
-
     SwipeToDeleteRow(onDelete = onDelete, onClick = onClick) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(rowBackground)
                 .then(dragModifier)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically

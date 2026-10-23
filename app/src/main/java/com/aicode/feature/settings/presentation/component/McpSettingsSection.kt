@@ -23,7 +23,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +49,7 @@ import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Terminal
 import com.aicode.R
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -113,6 +118,22 @@ internal fun McpSection(
         return
     }
 
+    var searchQuery by remember { mutableStateOf("") }
+    val searchVisible = entries.size >= 3
+    // 条目被删到搜索框收起时清掉条件：否则会停在无入口可清的筛选态，
+    // 叠加分区状态保位后还会被带到下次进页。
+    LaunchedEffect(searchVisible) {
+        if (!searchVisible) searchQuery = ""
+    }
+    val filteredEntries = remember(entries, searchQuery) {
+        if (searchQuery.isBlank()) entries
+        else entries.filter { entry ->
+            entry.server.name.contains(searchQuery, ignoreCase = true) ||
+                entry.server.url?.contains(searchQuery, ignoreCase = true) == true ||
+                entry.server.command?.contains(searchQuery, ignoreCase = true) == true
+        }
+    }
+
     val statusByName = remember(statuses) { statuses.associateBy { it.name } }
     val settingsViewModel = rememberSettingsViewModel()
     val lazyListState = rememberLazyListState()
@@ -139,25 +160,66 @@ internal fun McpSection(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = Spacing.xl)
     ) {
-        itemsIndexed(
-            items = entries,
-            key = { _, entry -> mcpItemKey(entry) }
-        ) { index, entry ->
-            ReorderableCardRow(
-                state = reorderableState,
-                key = mcpItemKey(entry),
-                isFirst = index == 0,
-                isLast = index == entries.lastIndex,
-                dragLabel = "mcpServerDrag"
-            ) { dragModifier ->
-                McpServerRow(
-                    server = entry.server,
-                    scope = entry.scope,
-                    status = statusByName[entry.server.name],
-                    onClick = { onEdit(entry) },
-                    onDelete = { onDelete(entry.server.name, entry.scope) },
-                    dragModifier = dragModifier
+        if (searchVisible) {
+            item(key = "mcp_search", contentType = "search") {
+                ModelSearchField(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = stringResource(R.string.mcp_search_placeholder),
+                    modifier = Modifier.padding(bottom = Spacing.xs)
                 )
+            }
+        }
+
+        if (filteredEntries.isEmpty()) {
+            item(key = "mcp_search_empty", contentType = "empty") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
+                        Icon(
+                            FeatherIcons.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            text = stringResource(R.string.mcp_search_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        } else {
+            itemsIndexed(
+                items = filteredEntries,
+                key = { _, entry -> mcpItemKey(entry) },
+                contentType = { _, _ -> "mcp-row" }
+            ) { index, entry ->
+                ReorderableCardRow(
+                    state = reorderableState,
+                    key = mcpItemKey(entry),
+                    isFirst = index == 0,
+                    isLast = index == filteredEntries.lastIndex,
+                    dragLabel = "mcpServerDrag"
+                ) { dragModifier ->
+                    McpServerRow(
+                        server = entry.server,
+                        scope = entry.scope,
+                        status = statusByName[entry.server.name],
+                        onClick = { onEdit(entry) },
+                        onDelete = { onDelete(entry.server.name, entry.scope) },
+                        // 筛选后的相邻行在全量顺序里未必相邻，拖拽落点无法回推真实序号，筛选态下不给拖拽手柄。
+                        dragModifier = if (searchQuery.isBlank()) dragModifier else Modifier
+                    )
+                }
             }
         }
     }

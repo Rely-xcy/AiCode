@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -484,6 +485,9 @@ fun SettingsScreen(
     // 滚动位置必须提到 AnimatedContent 之外持有：菜单页作为分区分支被切走时会被 dispose，
     // 内部 rememberScrollState 一并丢弃，从二级页返回就跳回顶部。
     val menuScrollState = rememberScrollState()
+    // 同理：一级页与详情页整块内容被 AnimatedContent 切走后内部状态一并丢失，从下一级返回会跳回顶部。
+    // 这里按分区名（详情页带条目身份）接住内部 rememberSaveable 状态。
+    val sectionStateHolder = rememberSaveableStateHolder()
     val menuBody: @Composable () -> Unit = {
         SettingsMenu(
             scrollState = menuScrollState,
@@ -692,6 +696,14 @@ fun SettingsScreen(
                 )
 
             else -> {
+            // 详情页要带条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
+            val stateKey: String = when (current) {
+                SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
+                SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
+                SettingsSection.PromptDetail -> "PromptDetail:${selectedPrompt?.number ?: 0}"
+                else -> current.name
+            }
+            sectionStateHolder.SaveableStateProvider(stateKey) {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
@@ -1280,6 +1292,7 @@ fun SettingsScreen(
             }
         }
     }
+        } // SaveableStateProvider 结束
         } // else 分支结束（storageViewModel 作用域）
         } // 详情区 when 结束
         } // AnimatedContent 结束

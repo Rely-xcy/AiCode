@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,8 +67,10 @@ internal fun SkillsSection(
     onDelete: (SkillUiEntry) -> Unit,
     onOpenDetail: (SkillUiEntry) -> Unit
 ) {
-    val projectSkills = entries.filter { it.scope == SkillScope.PROJECT }
-    val globalSkills = entries.filter { it.scope == SkillScope.GLOBAL }
+    // 只在数据变化时分组，避免每次重组都产生两份新 List。
+    val (projectSkills, globalSkills) = remember(entries) {
+        entries.filter { it.scope == SkillScope.PROJECT } to entries.filter { it.scope == SkillScope.GLOBAL }
+    }
 
     if (entries.isEmpty()) {
         Box(
@@ -161,7 +164,8 @@ internal fun SkillsSection(
             } else {
                 itemsIndexed(
                     items = projectSkills,
-                    key = { _, entry -> skillItemKey(SkillScope.PROJECT, entry.name) }
+                    key = { _, entry -> skillItemKey(SkillScope.PROJECT, entry.name) },
+                    contentType = { _, _ -> "skill-row" }
                 ) { index, entry ->
                     ReorderableCardRow(
                         state = reorderableState,
@@ -200,7 +204,8 @@ internal fun SkillsSection(
             } else {
                 itemsIndexed(
                     items = globalSkills,
-                    key = { _, entry -> skillItemKey(SkillScope.GLOBAL, entry.name) }
+                    key = { _, entry -> skillItemKey(SkillScope.GLOBAL, entry.name) },
+                    contentType = { _, _ -> "skill-row" }
                 ) { index, entry ->
                     ReorderableCardRow(
                         state = reorderableState,
@@ -230,13 +235,10 @@ private fun SkillRow(
     onClick: () -> Unit,
     dragModifier: Modifier = Modifier
 ) {
-    val rowBackground = MaterialTheme.semanticColors.cardSurface
-
     SwipeToDeleteRow(onDelete = onDelete, onClick = onClick) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(rowBackground)
                 .then(dragModifier)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
