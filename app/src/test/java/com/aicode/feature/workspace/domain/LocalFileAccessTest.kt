@@ -1,7 +1,11 @@
 package com.aicode.feature.workspace.domain
 
+import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -13,13 +17,16 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.charset.Charset
+import java.nio.file.FileSystemLoopException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import kotlin.io.FileAlreadyExistsException
 import kotlin.io.NoSuchFileException
 
 /**
  * LocalFileAccess：以真实临时目录（TemporaryFolder）为宿主的 java.io.File 文件操作。
- * pathMapper 是 mockk：toHostFile 一律映射到 tmp 根下（路径字符串原样拼进临时目录），
- * toContainerPath 原样返回，聚焦文件行为本身。
+ * pathMapper 是 mockk：toHostFile / resolveFile 一律映射到 tmp 根下（路径字符串原样拼进临时目录），
+ * toContainerPath 原样返回，聚焦文件行为本身；链接用例改用真实 mapper（见 linkedAccess）。
  */
 class LocalFileAccessTest {
 
@@ -31,7 +38,178 @@ class LocalFileAccessTest {
     private fun newAccess(): LocalFileAccess {
         every { pathMapper.toHostFile(any()) } answers { File(tmp.root, firstArg<String>()) }
         every { pathMapper.toContainerPath(any()) } answers { firstArg<String>() }
+        every { pathMapper.resolveFile(any(), any()) } answers { File(tmp.root, firstArg<String>()) }
+        every { pathMapper.resolveHostFile(any(), any()) } answers { firstArg<File>() }
         return LocalFileAccess(pathMapper)
+    }
+
+    /**
+     * 真实 [WorkspacePathMapper]：链接解析必须走生产实现，mock 掉 mapper 就测不到。
+     * 容器 home 固定 /root，工作区指向临时目录，于是容器路径 `~/workspace/…` 就是 tmp.root/…。
+     */
+    private fun linkedAccess(): LocalFileAccess {
+        val workspace: WorkspaceRepository = mockk()
+        val installer: ContainerInstaller = mockk()
+        val settings: ContainerSettingsRepository = mockk()
+        val home: PathHomeResolver = mockk()
+        every { workspace.currentPathOrNull() } returns tmp.root.absolutePath
+        every { installer.aicodeDir } returns File(tmp.root, "global")
+        every { installer.rootfsDirFor(any()) } returns File(tmp.root, "rootfs")
+        every { settings.activeProfileIdFlow } returns emptyFlow()
+        every { home.home() } returns "/root"
+        every { home.expandHome(any()) } answers {
+            val p = firstArg<String>()
+            if (p.startsWith("~/")) "/root/" + p.removePrefix("~/") else p
+        }
+        return LocalFileAccess(WorkspacePathMapper(workspace, installer, settings, home))
+    }
+
+    // ---------- 容器符号链接 ----------
+
+    @Test
+    fun absoluteDirectoryLink_readsWritesAndListsTarget() {
+        val access = linkedAccess()
+        val target = tmp.newFolder("target")
+        File(target, "probe.txt").writeText("original")
+        val link = File(tmp.root, "link").toPath()
+        Files.createSymbolicLink(link, File("/root/workspace/target").toPath())
+
+        assertEquals("original", access.readFile("link/probe.txt"))
+        access.writeFile("link/probe.txt", "changed", overwrite = true)
+
+        assertEquals("changed", File(target, "probe.txt").readText())
+        assertTrue("写链接必须保留链接本身", Files.isSymbolicLink(link))
+        assertEquals(listOf("probe.txt"), access.listFiles("link").map { it.name })
+    }
+
+    @Test
+    fun relativeDirectoryLink_resolvesAgainstLinkParent() {
+        val access = linkedAccess()
+        val target = tmp.newFolder("target")
+        File(target, "probe.txt").writeText("relative")
+        Files.createSymbolicLink(File(tmp.root, "link").toPath(), File("target").toPath())
+
+        assertEquals("relative", access.readFile("link/probe.txt"))
+        assertTrue(access.isDirectory("link"))
+    }
+
+    @Test
+    fun absoluteFileLink_atomicWriteUpdatesTargetKeepsLinkAndNoTempFile() {
+        val access = linkedAccess()
+        val target = tmp.newFile("target.txt").apply { writeText("original") }
+        val link = File(tmp.root, "link.txt").toPath()
+        val linkTarget = File("/root/workspace/target.txt").toPath()
+        Files.createSymbolicLink(link, linkTarget)
+
+        access.writeFile("link.txt", "updated", overwrite = true)
+
+        assertEquals("updated", target.readText())
+        assertTrue(Files.isSymbolicLink(link))
+        assertEquals(linkTarget, Files.readSymbolicLink(link))
+        val leftovers = tmp.root.listFiles().orEmpty().map { it.name }.filter { it.startsWith(".aicode-tmp-") }
+        assertEquals(emptyList<String>(), leftovers)
+    }
+
+    @Test
+    fun deleteRecursively_directoryLink_preservesTargetContents() {
+        val access = linkedAccess()
+        val target = tmp.newFolder("target")
+        File(target, "keep.txt").writeText("keep")
+        val link = File(tmp.root, "link").toPath()
+        Files.createSymbolicLink(link, File("target").toPath())
+
+        access.deleteRecursively("link")
+
+        assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS))
+        assertEquals("keep", File(target, "keep.txt").readText())
+    }
+
+    @Test
+    fun deleteRecursively_nestedDirectoryLink_preservesTargetContents() {
+        val access = linkedAccess()
+        val target = tmp.newFolder("target")
+        File(target, "keep.txt").writeText("keep")
+        val directory = tmp.newFolder("remove")
+        Files.createSymbolicLink(File(directory, "link").toPath(), File("target").toPath())
+
+        access.deleteRecursively("remove")
+
+        assertFalse(directory.exists())
+        assertEquals("keep", File(target, "keep.txt").readText())
+    }
+
+    @Test
+    fun delete_linkOnly_keepsTargetFile() {
+        val access = linkedAccess()
+        val target = tmp.newFile("target.txt").apply { writeText("keep") }
+        val link = File(tmp.root, "link.txt").toPath()
+        Files.createSymbolicLink(link, File("target.txt").toPath())
+
+        access.delete("link.txt")
+
+        assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS))
+        assertEquals("keep", target.readText())
+    }
+
+    @Test
+    fun renameAndMove_link_preserveLinkAndTarget() {
+        val access = linkedAccess()
+        val target = tmp.newFile("target.txt").apply { writeText("keep") }
+        val linkTarget = File("/root/workspace/target.txt").toPath()
+        Files.createSymbolicLink(File(tmp.root, "link").toPath(), linkTarget)
+
+        access.rename("link", "renamed")
+        access.move("renamed", "moved", overwrite = false)
+
+        assertEquals(linkTarget, Files.readSymbolicLink(File(tmp.root, "moved").toPath()))
+        assertEquals("keep", target.readText())
+        assertEquals("keep", access.readFile("moved"))
+    }
+
+    @Test
+    fun danglingLink_canBeRenamedAndDeleted() {
+        val access = linkedAccess()
+        Files.createSymbolicLink(File(tmp.root, "link").toPath(), File("/missing").toPath())
+
+        access.rename("link", "renamed")
+        access.delete("renamed")
+
+        assertFalse(Files.exists(File(tmp.root, "renamed").toPath(), LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
+    fun listing_linkCycle_returnsAndReadingReportsLoop() {
+        val access = linkedAccess()
+        Files.createSymbolicLink(File(tmp.root, "a").toPath(), File("b").toPath())
+        Files.createSymbolicLink(File(tmp.root, "b").toPath(), File("a").toPath())
+
+        assertEquals(setOf("a", "b"), access.listFiles(".").map { it.name }.toSet())
+        assertTrue(
+            "递归遍历遇到链接环必须返回，不能挂死",
+            access.listFilesRecursive(".", maxDepth = 8).isEmpty()
+        )
+        assertThrows(FileSystemLoopException::class.java) { access.readFile("a") }
+    }
+
+    @Test
+    fun recursiveListing_directoryLinkToAncestor_stopsAtAncestor() {
+        val access = linkedAccess()
+        val directory = tmp.newFolder("directory")
+        File(directory, "probe.txt").writeText("test")
+        Files.createSymbolicLink(File(directory, "back").toPath(), File("/root/workspace").toPath())
+
+        assertEquals(listOf("directory/probe.txt"), access.listFilesRecursive(".", maxDepth = 8))
+    }
+
+    @Test
+    fun linkToHostAbsolutePath_readsContainerPathInsteadOfHostFile() {
+        val access = linkedAccess()
+        val outside = tmp.newFolder("outside")
+        File(outside, "secret.txt").writeText("host-only")
+        Files.createSymbolicLink(File(tmp.root, "leak").toPath(), outside.toPath())
+
+        // 链接文本按容器路径解释，宿主绝对路径落到 rootfs 内，读不到宿主的真实文件
+        assertThrows(NoSuchFileException::class.java) { access.readFile("leak/secret.txt") }
     }
 
     // ---------- readFile / writeFile ----------
