@@ -65,6 +65,7 @@ import com.aicode.feature.settings.data.remote.UpdateCheckResult
 import com.aicode.feature.settings.data.remote.UpdateCheckService
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
+import com.aicode.feature.settings.domain.disconnectQuietly
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
@@ -2422,6 +2423,10 @@ class SettingsViewModel @Inject constructor(
             ExecutionMode.LOCAL_PROOT -> {
                 executionModeRepository.setExecutionMode(ExecutionMode.LOCAL_PROOT)
                 executionModeHolder.setMode(ExecutionMode.LOCAL_PROOT)
+                // 只改模式不会让远程连接停下：模式一变，AIEditorApp 那边的重连监督与前台保活
+                // 都不再成立，但已建立的 transport 与 30s keepalive 会一直跑。断开必须自己发，
+                // 且放在模式落定之后——先断开的话，还没被停掉的重连监督会把它重新连回来。
+                remoteSshConnection.disconnectQuietly()
             }
 
             ExecutionMode.REMOTE_SSH -> {

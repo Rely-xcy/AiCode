@@ -16,17 +16,23 @@ import com.aicode.core.util.FileLogger
 import com.aicode.core.util.TombstoneParser
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.mcp.McpManager
+import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.remote.ModelMetadataService
+import com.aicode.feature.settings.domain.RemoteSupervisorGate
+import com.aicode.feature.settings.domain.disconnectQuietly
 import com.aicode.feature.terminal.domain.KeepaliveWorker
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -237,6 +243,9 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** 远程重连监督的运行作用域：切回本地模式时整体取消（连接层没有独立的 stop 入口）。 */
+    private var remoteSupervisorScope: CoroutineScope? = null
+
     override fun onCreate() {
         if (isCrashProcess(this)) {
             // 崩溃错误页运行在独立 :crash 进程中。
@@ -314,14 +323,24 @@ class AIEditorApp : Application(), Configuration.Provider {
             val mode = executionModeRepository.executionModeFlow.first()
             executionModeHolder.setMode(mode)
         }
-        // SSH 连接监督常驻（config 为空时空转）：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
-        appScope.launch {
-            remoteSshConnection.startSupervisor(appScope) {
-                runCatching { workspaceRepository.initialize() }
-                    .onFailure { FileLogger.w(TAG, "SSH 重连后重新加载工作区失败", it) }
-                syncDocsToRemote()
-                releaseBuiltinAssetsToRemote()
+        // SSH 连接监督只在远程模式下运行：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
+        // 监督循环本身不看执行模式（见 RemoteSupervisorGate），所以由这里按模式启停：切回本地后
+        // 必须停掉，否则断开也会被它按指数退避重新连回来。
+        val remoteSupervisorGate = RemoteSupervisorGate(
+            start = {
+                val scope = CoroutineScope(appScope.coroutineContext + Job(appScope.coroutineContext[Job]))
+                remoteSupervisorScope = scope
+                remoteSshConnection.startSupervisor(scope) { onRemoteReconnected() }
+            },
+            stop = {
+                remoteSupervisorScope?.cancel()
+                remoteSupervisorScope = null
+                // 取消可能落在「重连刚好成功」之后：那条 transport 已经没人会关，补断一次（幂等）。
+                remoteSshConnection.disconnectQuietly()
             }
+        )
+        appScope.launch {
+            executionModeHolder.mode.collect { mode -> remoteSupervisorGate.onMode(mode) }
         }
         // 当前激活 profile 的连接配置变化（编辑连接/编辑 profile/切 profile/切模式）即重连，改连接即时生效。
         appScope.launch {
@@ -329,7 +348,7 @@ class AIEditorApp : Application(), Configuration.Provider {
                 activeRemoteConnectionResolver.activeConfigFlow,
                 executionModeHolder.mode
             ) { config, mode -> config to mode }.collect { (config, mode) ->
-                if (mode != com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH) return@collect
+                if (mode != ExecutionMode.REMOTE_SSH) return@collect
                 if (config == null || config == remoteSshConnection.config) return@collect
                 runCatching {
                     remoteSshConnection.connect(config)
@@ -359,26 +378,35 @@ class AIEditorApp : Application(), Configuration.Provider {
             }
         }
         // 网络恢复或切换链路时立即重连 SSH，不等 supervisor 轮询（并带动远端工作区刷新）。
+        // 同样只在远程模式下：否则切回本地后一次网络抖动就会把连接重新建立起来。
         appScope.launch {
             networkConnectivityObserver.recovered.collect {
+                if (executionModeHolder.currentMode() != ExecutionMode.REMOTE_SSH) return@collect
                 runCatching { remoteSshConnection.tryReconnectIfDisconnected() }
                     .onFailure { FileLogger.w(TAG, "网络恢复后重连 SSH 失败", it) }
             }
         }
         // 远程 SSH 连接期间维持前台服务：否则远程模式下的空闲会话切后台会被冻结、连接被切断。
         // 用会话计数（而非用户常驻开关）表达，连接断开即释放，不影响用户对保活开关的选择。
+        // 还必须当前是远程模式：切回本地后连接即使还残留（或正在断开），也不该继续占着前台服务。
         appScope.launch {
             var held = false
-            remoteSshConnection.connectionState.collect { state ->
-                val connected = state == com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED
-                if (connected && !held) {
-                    TerminalKeepaliveService.startSession(this@AIEditorApp)
-                    held = true
-                } else if (!connected && held) {
-                    TerminalKeepaliveService.stopSession(this@AIEditorApp)
-                    held = false
-                }
+            combine(
+                remoteSshConnection.connectionState,
+                executionModeHolder.mode
+            ) { state, mode ->
+                state == ConnectionState.CONNECTED && mode == ExecutionMode.REMOTE_SSH
             }
+                .distinctUntilChanged()
+                .collect { shouldHold ->
+                    if (shouldHold && !held) {
+                        TerminalKeepaliveService.startSession(this@AIEditorApp)
+                        held = true
+                    } else if (!shouldHold && held) {
+                        TerminalKeepaliveService.stopSession(this@AIEditorApp)
+                        held = false
+                    }
+                }
         }
         // 连接已配置的 MCP server，把其工具注册进 ToolRegistry（内部自有 scope，失败不影响启动）。
         mcpManager.start()
@@ -421,6 +449,17 @@ class AIEditorApp : Application(), Configuration.Provider {
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
             .build()
+
+    /**
+     * SSH 重连成功后的收尾：重载工作区，并把内置文档与资源重同步到远端。
+     * 工作区重载失败不影响后面的同步（下次重连还会再试）。
+     */
+    private suspend fun onRemoteReconnected() {
+        runCatching { workspaceRepository.initialize() }
+            .onFailure { FileLogger.w(TAG, "SSH 重连后重新加载工作区失败", it) }
+        syncDocsToRemote()
+        releaseBuiltinAssetsToRemote()
+    }
 
     /**
      * 读取 assets/docs 下所有内置文档（含 guide/ advanced/ 等分类子目录），通过 SSH exec 同步到远程 ~/.aicode/docs/。
