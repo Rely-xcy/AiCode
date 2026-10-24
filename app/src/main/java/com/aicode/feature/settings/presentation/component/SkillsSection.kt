@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,7 +49,9 @@ import com.aicode.feature.settings.presentation.SkillUiEntry
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.X
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
@@ -57,6 +60,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  *
  * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 删除。
  * 全选覆盖两组（含折叠起来的组），避免「点了全选却漏掉折叠里的」。
+ *
+ * 列表上方的搜索框只过滤已经加载到内存的 [entries]（名称 / 描述 / 正文），不重新扫盘；
+ * 搜索词由 SettingsScreen 的页面级状态持有，进详情页返回、旋屏后不丢。
  */
 
 /** 列表 item key 前缀：既标识身份，也用来判定分组，跨组拖拽会被拦下。 */
@@ -74,6 +80,8 @@ private fun skillItemKey(scope: SkillScope, name: String): String =
 internal fun SkillsSection(
     projectName: String?,
     entries: List<SkillUiEntry>,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     selection: ListSelectionState,
     deletingInProgress: Boolean,
     onDelete: (SkillUiEntry) -> Unit,
@@ -81,14 +89,32 @@ internal fun SkillsSection(
     onBatchDelete: (List<SkillUiEntry>) -> Unit,
     onBatchSetEnabled: (List<SkillUiEntry>, Boolean) -> Unit
 ) {
+    // 搜索只在已加载的 [entries] 上做字符串匹配：技能是从磁盘解析出来的，
+    // 每敲一个字重扫一次盘会直接把输入卡住。
+    // 匹配名称 + 描述 + 正文：记忆页用的是名称 + 正文，技能多一个用户可写的「描述」，
+    // 而列表行展示的正是描述，搜得到才对得上眼前看到的东西；触发词与 required_tools 不参与，
+    // 那两个是给引擎判断是否注入用的内部字段，按工具名搜技能只会搜出一堆无关结果。
+    val keyword = searchQuery.trim()
+    val visibleSkills = remember(entries, keyword) {
+        if (keyword.isEmpty()) {
+            entries
+        } else {
+            entries.filter { entry ->
+                entry.name.contains(keyword, ignoreCase = true) ||
+                    entry.description.contains(keyword, ignoreCase = true) ||
+                    entry.instructions.contains(keyword, ignoreCase = true)
+            }
+        }
+    }
     // 只在数据变化时分组，避免每次重组都产生两份新 List。
-    val (projectSkills, globalSkills) = remember(entries) {
-        entries.filter { it.scope == SkillScope.PROJECT } to entries.filter { it.scope == SkillScope.GLOBAL }
+    val (projectSkills, globalSkills) = remember(visibleSkills) {
+        visibleSkills.filter { it.scope == SkillScope.PROJECT } to visibleSkills.filter { it.scope == SkillScope.GLOBAL }
     }
 
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
-    val allKeys = remember(entries) { entries.map { skillSelectionKey(it) } }
-    val keyToEntry = remember(entries) { entries.associateBy { skillSelectionKey(it) } }
+    // 多选与拖拽都只能作用在当前可见（过滤后）的条目上：否则「全选」会把搜不到的条目也选上。
+    val allKeys = remember(visibleSkills) { visibleSkills.map { skillSelectionKey(it) } }
+    val keyToEntry = remember(visibleSkills) { visibleSkills.associateBy { skillSelectionKey(it) } }
 
     // 列表刷新后剔除已消失的选中项；全空了就退出多选。
     LaunchedEffect(allKeys, selection.isActive) {
@@ -159,6 +185,30 @@ internal fun SkillsSection(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // 搜索框固定在列表上方、不跟内容滚走：技能一多，翻到下面还想换关键词时不必先滚回顶部。
+        // 搜索词因为是页面级状态（见 SettingsScreen），进详情页返回后仍在。
+        ModelSearchField(
+            query = searchQuery,
+            onQueryChange = onSearchQueryChange,
+            placeholder = stringResource(R.string.skills_search_hint),
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            trailing = if (searchQuery.isEmpty()) null else {
+                {
+                    IconButton(
+                        onClick = { onSearchQueryChange("") },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.X,
+                            contentDescription = stringResource(R.string.common_clear),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.semanticColors.subtleText
+                        )
+                    }
+                }
+            }
+        )
+
         if (selection.isActive) {
             val enabled = selection.selectedCount > 0
             SelectionActionBar(
@@ -199,102 +249,108 @@ internal fun SkillsSection(
             )
         }
 
-        LazyColumn(
-            state = lazyListState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.xl)
-        ) {
-            // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
-            // 同组内的行不加间距，才能保持「一组连成一块卡片」。
-            item(key = SKILL_HEADER_PROJECT_KEY) {
-                Box(modifier = Modifier.animateItem().padding(bottom = Spacing.sm)) {
-                    CollapsibleGroupHeader(
-                        text = if (projectName != null) {
-                            stringResource(R.string.perm_current_project, projectName)
-                        } else {
-                            stringResource(R.string.perm_current_project_none)
-                        },
-                        expanded = projectExpanded,
-                        onToggle = { projectExpanded = !projectExpanded }
-                    )
-                }
-            }
-            if (projectExpanded) {
-                if (projectSkills.isEmpty()) {
-                    item(key = SKILL_EMPTY_PROJECT_KEY) {
-                        SettingsGroup(modifier = Modifier.animateItem()) {
-                            SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
-                        }
-                    }
-                } else {
-                    itemsIndexed(
-                        items = projectSkills,
-                        key = { _, entry -> skillItemKey(SkillScope.PROJECT, entry.name) },
-                        contentType = { _, _ -> "skill-row" }
-                    ) { index, entry ->
-                        ReorderableCardRow(
-                            state = reorderableState,
-                            key = skillItemKey(SkillScope.PROJECT, entry.name),
-                            isFirst = index == 0,
-                            isLast = index == projectSkills.lastIndex,
-                            dragLabel = "skillProjectDrag"
-                        ) { dragModifier ->
-                            SkillRow(
-                                entry = entry,
-                                onDelete = { onDelete(entry) },
-                                onClick = { onOpenDetail(entry) },
-                                // 多选态下不给拖拽手柄：否则长按整行会拉走拖拽，与「整行点击即勾选」抢手势。
-                                dragModifier = if (selection.isActive) Modifier else dragModifier,
-                                selectionMode = selection.isActive,
-                                selected = selection.isSelected(skillSelectionKey(entry)),
-                                onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
-                            )
-                        }
+        // 筛不到时不渲染两个「暂无技能」空分组卡片：那会被读成「这一组本来就没有技能」，
+        // 用与记忆页同一套轻提示说明是搜索条件的问题。
+        if (visibleSkills.isEmpty()) {
+            SkillSearchEmptyState(modifier = Modifier.weight(1f))
+        } else {
+            LazyColumn(
+                state = lazyListState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.xl)
+            ) {
+                // 分组标题/卡片之间的间距原本由 Column 的 spacedBy(sm) 提供，换成 LazyColumn 后按项补回来，
+                // 同组内的行不加间距，才能保持「一组连成一块卡片」。
+                item(key = SKILL_HEADER_PROJECT_KEY) {
+                    Box(modifier = Modifier.animateItem().padding(bottom = Spacing.sm)) {
+                        CollapsibleGroupHeader(
+                            text = if (projectName != null) {
+                                stringResource(R.string.perm_current_project, projectName)
+                            } else {
+                                stringResource(R.string.perm_current_project_none)
+                            },
+                            expanded = projectExpanded,
+                            onToggle = { projectExpanded = !projectExpanded }
+                        )
                     }
                 }
-            }
+                if (projectExpanded) {
+                    if (projectSkills.isEmpty()) {
+                        item(key = SKILL_EMPTY_PROJECT_KEY) {
+                            SettingsGroup(modifier = Modifier.animateItem()) {
+                                SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
+                            }
+                        }
+                    } else {
+                        itemsIndexed(
+                            items = projectSkills,
+                            key = { _, entry -> skillItemKey(SkillScope.PROJECT, entry.name) },
+                            contentType = { _, _ -> "skill-row" }
+                        ) { index, entry ->
+                            ReorderableCardRow(
+                                state = reorderableState,
+                                key = skillItemKey(SkillScope.PROJECT, entry.name),
+                                isFirst = index == 0,
+                                isLast = index == projectSkills.lastIndex,
+                                dragLabel = "skillProjectDrag"
+                            ) { dragModifier ->
+                                SkillRow(
+                                    entry = entry,
+                                    onDelete = { onDelete(entry) },
+                                    onClick = { onOpenDetail(entry) },
+                                    // 多选态下不给拖拽手柄：否则长按整行会拉走拖拽，与「整行点击即勾选」抢手势。
+                                    dragModifier = if (selection.isActive) Modifier else dragModifier,
+                                    selectionMode = selection.isActive,
+                                    selected = selection.isSelected(skillSelectionKey(entry)),
+                                    onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
+                                )
+                            }
+                        }
+                    }
+                }
 
-            item(key = SKILL_HEADER_GLOBAL_KEY) {
-                Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
-                    CollapsibleGroupHeader(
-                        text = stringResource(R.string.perm_global),
-                        expanded = globalExpanded,
-                        onToggle = { globalExpanded = !globalExpanded }
-                    )
-                }
-            }
-            if (globalExpanded) {
-                if (globalSkills.isEmpty()) {
-                    item(key = SKILL_EMPTY_GLOBAL_KEY) {
-                        SettingsGroup(modifier = Modifier.animateItem()) {
-                            SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
-                        }
+                item(key = SKILL_HEADER_GLOBAL_KEY) {
+                    Box(modifier = Modifier.animateItem().padding(top = Spacing.sm, bottom = Spacing.sm)) {
+                        CollapsibleGroupHeader(
+                            text = stringResource(R.string.perm_global),
+                            expanded = globalExpanded,
+                            onToggle = { globalExpanded = !globalExpanded }
+                        )
                     }
-                } else {
-                    itemsIndexed(
-                        items = globalSkills,
-                        key = { _, entry -> skillItemKey(SkillScope.GLOBAL, entry.name) },
-                        contentType = { _, _ -> "skill-row" }
-                    ) { index, entry ->
-                        ReorderableCardRow(
-                            state = reorderableState,
-                            key = skillItemKey(SkillScope.GLOBAL, entry.name),
-                            isFirst = index == 0,
-                            isLast = index == globalSkills.lastIndex,
-                            dragLabel = "skillGlobalDrag"
-                        ) { dragModifier ->
-                            SkillRow(
-                                entry = entry,
-                                onDelete = { onDelete(entry) },
-                                onClick = { onOpenDetail(entry) },
-                                dragModifier = if (selection.isActive) Modifier else dragModifier,
-                                selectionMode = selection.isActive,
-                                selected = selection.isSelected(skillSelectionKey(entry)),
-                                onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
-                            )
+                }
+                if (globalExpanded) {
+                    if (globalSkills.isEmpty()) {
+                        item(key = SKILL_EMPTY_GLOBAL_KEY) {
+                            SettingsGroup(modifier = Modifier.animateItem()) {
+                                SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
+                            }
+                        }
+                    } else {
+                        itemsIndexed(
+                            items = globalSkills,
+                            key = { _, entry -> skillItemKey(SkillScope.GLOBAL, entry.name) },
+                            contentType = { _, _ -> "skill-row" }
+                        ) { index, entry ->
+                            ReorderableCardRow(
+                                state = reorderableState,
+                                key = skillItemKey(SkillScope.GLOBAL, entry.name),
+                                isFirst = index == 0,
+                                isLast = index == globalSkills.lastIndex,
+                                dragLabel = "skillGlobalDrag"
+                            ) { dragModifier ->
+                                SkillRow(
+                                    entry = entry,
+                                    onDelete = { onDelete(entry) },
+                                    onClick = { onOpenDetail(entry) },
+                                    dragModifier = if (selection.isActive) Modifier else dragModifier,
+                                    selectionMode = selection.isActive,
+                                    selected = selection.isSelected(skillSelectionKey(entry)),
+                                    onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
+                                )
+                            }
                         }
                     }
                 }
@@ -412,4 +468,32 @@ private fun SkillEmptyHint(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
     )
+}
+
+/**
+ * 搜索无结果：与记忆页的搜索空态同一套轻提示（小号半透明图标 + 一行灰字），
+ * 不摆「还没有安装技能」那套大图标 + 标题——筛不到不等于没装，摆同一套视觉会让人以为技能丢了。
+ */
+@Composable
+private fun SkillSearchEmptyState(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        Icon(
+            imageVector = FeatherIcons.Search,
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        )
+        Text(
+            text = stringResource(R.string.skills_search_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
 }

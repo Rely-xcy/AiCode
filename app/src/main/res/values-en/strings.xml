@@ -1409,6 +1409,8 @@
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>
     <string name="skills_empty_hint">Tap + in the top bar to create or import one.</string>
+    <string name="skills_search_hint">Search skill names, descriptions, or content…</string>
+    <string name="skills_search_empty">No matching skills found</string>
     <string name="skills_no_project_skills">No skills for the current project</string>
     <string name="skills_no_global_skills">No global skills</string>
     <string name="skills_enable">Enable</string>

@@ -37,6 +37,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -72,6 +74,9 @@ import kotlinx.coroutines.launch
  * @param selected 多选模式下该行是否勾选。
  * @param onToggleSelect 多选模式下整行点击 / 勾选框点击的回调。
  * @param selectable false 时该行在多选模式下不可勾选（勾选框置灰，如不可编辑的提示词片段）。
+ * @param contentShape 表层内容的裁剪形状。滑开时表层整体左移，圆角必须长在这一层上才算数——
+ *   只把圆角写在外层静止容器上时，滑开过程中露出的仍是这层的直角切边，看着像卡片被切掉一角。
+ *   默认 [RectangleShape]（不裁剪），既有调用点的外观与渲染路径完全不变。
  * @param content 表层行内容；背景由本组件提供，内边距由调用方内容自带（与既有各页用法一致）。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -86,6 +91,7 @@ fun SwipeToDeleteRow(
     selected: Boolean = false,
     onToggleSelect: () -> Unit = {},
     selectable: Boolean = true,
+    contentShape: Shape = RectangleShape,
     content: @Composable () -> Unit
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
@@ -189,6 +195,9 @@ fun SwipeToDeleteRow(
             modifier = Modifier
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
                 .fillMaxWidth()
+                // 裁剪层必须贴在这一层：它跟着 offset 一起位移，滑开时条目的切边才是圆角。
+                // 默认 RectangleShape 时不挂裁剪层，其余调用点的渲染路径与改造前一致。
+                .then(if (contentShape == RectangleShape) Modifier else Modifier.clip(contentShape))
                 .background(rowBackground)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(

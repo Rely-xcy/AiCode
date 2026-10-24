@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -372,6 +373,10 @@ fun SettingsScreen(
     }
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
+    // 技能页搜索词：SkillsSection 每次进分区都会重建，放它内部的 remember 会丢输入，
+    // 放页面级 rememberSaveable 才能在进详情页返回、旋屏后仍保留。
+    // 过滤只作用于已经加载到内存的列表（见 SkillsSection），不会因为敲字重扫盘。
+    var skillSearchQuery by rememberSaveable { mutableStateOf("") }
 
     // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
@@ -716,23 +721,45 @@ fun SettingsScreen(
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 记忆页的顶栏搜索框与页面内容必须读写同一份搜索词 / 列表状态，回同一个 VM：
+            // 与存储页一样在 Scaffold 之前取一次，内容区再取同一实例。
+            // 仍然只在这一分区创建，不会每次进设置页都扫一遍记忆目录。
+            val memorySectionViewModel: com.aicode.feature.settings.presentation.MemoryViewModel? =
+                if (current == SettingsSection.Memory) androidx.hilt.navigation.compose.hiltViewModel() else null
             Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = if (current == SettingsSection.SkillDetail) {
-                            selectedSkill?.name ?: stringResource(current.titleRes)
-                        } else if (current == SettingsSection.SubAgentDetail) {
-                            selectedSubAgent?.name ?: stringResource(current.titleRes)
-                        } else if (expanded && current == SettingsSection.Menu) {
-                            // 大屏左栏顶部已经写着「设置」，右栏空态不再重复
-                            ""
-                        } else {
-                            stringResource(current.titleRes)
-                        }
-                    )
+                    val memoryVm = memorySectionViewModel
+                    if (current == SettingsSection.Memory && memoryVm != null) {
+                        // 搜索框移进顶栏：与右侧「+」同一行。输入词与过滤结果都来自同一个 VM，
+                        // 清空按钮与无结果提示沿用原实现，不在这里另存一份状态。
+                        // 首次读盘期间（loading）也算「可能有东西可搜」：否则有记忆的用户进来时，
+                        // 搜索框会在列表回来的一瞬才从顶栏长出来。
+                        val memoryQuery by memoryVm.searchQuery.collectAsStateWithLifecycle()
+                        val memoryHits by memoryVm.visibleMemories.collectAsStateWithLifecycle()
+                        val memoryLoading by memoryVm.loading.collectAsStateWithLifecycle()
+                        MemoryTopBarTitle(
+                            title = stringResource(current.titleRes),
+                            query = memoryQuery,
+                            onQueryChange = memoryVm::setSearchQuery,
+                            showSearch = memoryLoading || memoryQuery.isNotBlank() || memoryHits.isNotEmpty()
+                        )
+                    } else {
+                        Text(
+                            text = if (current == SettingsSection.SkillDetail) {
+                                selectedSkill?.name ?: stringResource(current.titleRes)
+                            } else if (current == SettingsSection.SubAgentDetail) {
+                                selectedSubAgent?.name ?: stringResource(current.titleRes)
+                            } else if (expanded && current == SettingsSection.Menu) {
+                                // 大屏左栏顶部已经写着「设置」，右栏空态不再重复
+                                ""
+                            } else {
+                                stringResource(current.titleRes)
+                            }
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = settingsPageBackground(),
@@ -1047,6 +1074,8 @@ fun SettingsScreen(
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
+                    searchQuery = skillSearchQuery,
+                    onSearchQueryChange = { skillSearchQuery = it },
                     selection = selectionFor(SettingsSection.Skills),
                     deletingInProgress = skillDeleting.isNotEmpty(),
                     onDelete = { skillToDelete = it },
@@ -1108,9 +1137,10 @@ fun SettingsScreen(
                 }
                 SettingsSection.PromptEditor -> Unit
                 SettingsSection.Memory -> {
-                    // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
+                    // 用 Scaffold 之前取好的那一个实例：顶栏搜索框与这里必须读写同一份状态。
+                    // 仍然只在这一分区创建，不会每次进设置页都扫一遍记忆目录。
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
-                        androidx.hilt.navigation.compose.hiltViewModel()
+                        requireNotNull(memorySectionViewModel) { "Memory section without ViewModel" }
                     val memories by memoryViewModel.visibleMemories.collectAsStateWithLifecycle()
                     // 搜索词只过滤已加载的列表，不会触发重扫（见 MemoryViewModel.visibleMemories）
                     val memorySearchQuery by memoryViewModel.searchQuery.collectAsStateWithLifecycle()
@@ -1143,7 +1173,6 @@ fun SettingsScreen(
                     MemorySection(
                         memories = memories,
                         searchQuery = memorySearchQuery,
-                        onSearchQueryChange = memoryViewModel::setSearchQuery,
                         loading = memoryLoading,
                         shortTerm = shortTerm,
                         activeMemoryEnabled = activeMemory,

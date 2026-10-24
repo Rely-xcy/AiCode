@@ -75,8 +75,9 @@ import java.util.Locale
  * 列表排在最前、两张设置/状态卡沉底，是按使用频率排的：列表才是用户来这一页要看的东西，
  * 设置与只读状态放前面会把列表挤到首屏折线以下。
  *
- * 列表顶部带搜索框：记忆一多就只能靠滚动找人。搜索词与过滤结果都放 ViewModel，
- * 这里只负责把过滤后的列表画出来。
+ * 搜索框在顶栏与「+」并排（见 [MemoryTopBarTitle]）：记忆一多就只能靠滚动找人，
+ * 而搜索框留在内容区顶部会随列表一起滚走，翻两屏想换关键词还得先滚回顶部。
+ * 搜索词与过滤结果都放 ViewModel，这里只负责把过滤后的列表画出来。
  *
  * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
  * 混成一张清单会让人以为上下文也会被存下来。
@@ -91,7 +92,6 @@ import java.util.Locale
 internal fun MemorySection(
     memories: List<Memory>,
     searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
     loading: Boolean,
     shortTerm: SessionShortTermState?,
     activeMemoryEnabled: Boolean,
@@ -116,30 +116,9 @@ internal fun MemorySection(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
-        // 一条记忆都没有时不给搜索框：没东西可搜，只会让空态顶上多一块空白。
-        // 搜不到时一定要保留它，否则用户没有入口清空条件，页面看着就像记忆全没了。
-        if (searchQuery.isNotBlank() || memories.isNotEmpty()) {
-            ModelSearchField(
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                placeholder = stringResource(R.string.memory_search_hint),
-                trailing = if (searchQuery.isEmpty()) null else {
-                    {
-                        IconButton(
-                            onClick = { onSearchQueryChange("") },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.X,
-                                contentDescription = stringResource(R.string.common_clear),
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.semanticColors.subtleText
-                            )
-                        }
-                    }
-                }
-            )
-        }
+        // 搜索框已移到顶栏（见 SettingsScreen 的 title 与 [MemoryTopBarTitle]），
+        // 只在「有记忆可搜」或「正在搜」时出现，与下面的空态口径一致：
+        // 一条记忆都没有时不给搜索入口，搜不到时一定保留入口，否则用户没法清空条件。
 
         // 空态跟技能页 / MCP 页一样直接排在页内，不套卡片：一张没有分组标题的卡片贴在顶栏下
         // 既没有归属，也跟下面带标题的卡片不是一套节奏。
@@ -337,6 +316,57 @@ internal fun MemorySection(
     }
 }
 
+/**
+ * 记忆页顶栏标题行：左边标题、右边搜索框，右侧紧接顶栏现有的「+」按钮。
+ *
+ * 搜索框靠 `weight(1f)` 吃剩余宽度，不写固定宽度：顶栏宽度先被返回键、标题和「+」占掉，
+ * 写死宽度在窄屏上会把「+」挤出屏幕，或者让标题被压成一列竖排字。
+ *
+ * @param showSearch 没有可搜内容且没在搜索时不显示输入框：空页面上摆一个搜不到东西的框只会误导。
+ */
+@Composable
+internal fun MemoryTopBarTitle(
+    title: String,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    showSearch: Boolean
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (showSearch) {
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            ModelSearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                placeholder = stringResource(R.string.memory_search_hint),
+                modifier = Modifier.weight(1f),
+                trailing = if (query.isEmpty()) null else {
+                    {
+                        IconButton(
+                            onClick = { onQueryChange("") },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.common_clear),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.semanticColors.subtleText
+                            )
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
 /** 短期卡片右侧取值：右对齐单行，配色与设置页其它取值行一致。 */
 @Composable
 private fun SessionValueText(text: String) {
@@ -467,7 +497,14 @@ private fun MemoryRow(
 ) {
     val rowBackground = MaterialTheme.semanticColors.cardSurface
 
-    SwipeToDeleteRow(onDelete = onDelete, onClick = onOpenDetail, onLongClick = onLongClick) {
+    SwipeToDeleteRow(
+        onDelete = onDelete,
+        onClick = onOpenDetail,
+        onLongClick = onLongClick,
+        // 圆角跟着滑动位移：记忆行在分组卡片里，卡片是 14dp 圆角，
+        // 滑开时露出的是行自己的切边，不在这里裁圆角就是一条直角。
+        contentShape = RoundedCornerShape(Radius.lg)
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

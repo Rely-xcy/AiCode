@@ -1409,6 +1409,8 @@
     <!-- Skills Settings -->
     <string name="skills_empty">还没有安装技能</string>
     <string name="skills_empty_hint">点右上角「+」新建或导入</string>
+    <string name="skills_search_hint">搜索技能名称、描述或正文…</string>
+    <string name="skills_search_empty">未找到匹配的技能</string>
     <string name="skills_no_project_skills">当前项目暂无技能</string>
     <string name="skills_no_global_skills">暂无全局技能</string>
     <string name="skills_enable">是否启用</string>
