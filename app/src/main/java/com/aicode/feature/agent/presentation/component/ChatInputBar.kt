@@ -453,14 +453,14 @@ internal fun ChatInputBar(
                 )
             }
 
-            // 常驻占位：清单从无到有会让输入框上方的浮动层高度涨一截，列表底部留白跟着变，
-            // 正在看的那段对话就被顶上去。空清单时由组件内部留同高占位，出现/消失都不再改列表测量。
-            TodoDashboardBar(
-                items = todoItems,
-                sessionId = sessionId,
-                forceCollapse = forceCollapseDashboard,
-                onExpandedChange = onTodoExpandedChange
-            )
+            if (todoItems.isNotEmpty()) {
+                TodoDashboardBar(
+                    items = todoItems,
+                    sessionId = sessionId,
+                    forceCollapse = forceCollapseDashboard,
+                    onExpandedChange = onTodoExpandedChange
+                )
+            }
 
             if (activeProvider != null && activeProvider.dashboardScriptPath.isNotBlank()) {
                 ProviderDashboardBar(

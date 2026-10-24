@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -52,15 +51,8 @@ import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 
 /**
- * 收起态的高度（含内边距）。空清单占位与真面板都按它定高：这面板由 agent 在对话中途自动创建，
- * 若它出现的那一刻才开始占高，输入框上方的浮动层会变高，列表底部留白随之变大，
- * 正在看的那段对话就被整体顶上去一截。
- */
-private val COLLAPSED_SLOT_HEIGHT = 44.dp
-
-/**
  * 位于输入框上方的待办任务常驻面板：
- * - 收起高度固定：空清单时留同高占位，面板出现/消失不改变输入框上方的浮动层高度；
+ * - 仅在当前会话有待办项时显示；
  * - 支持折叠为单行紧凑摘要与展开查看完整列表；
  * - 记住各会话的展开/折叠状态；
  * - 弹窗/键盘叠加时支持联动强制收起。
@@ -73,11 +65,7 @@ fun TodoDashboardBar(
     forceCollapse: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {}
 ) {
-    // 空清单只留高度，不含任何内容与点击语义（见文件级 COLLAPSED_SLOT_HEIGHT 的注释）。
-    if (items.isEmpty()) {
-        Spacer(Modifier.fillMaxWidth().height(COLLAPSED_SLOT_HEIGHT + Spacing.xs))
-        return
-    }
+    if (items.isEmpty()) return
 
     // 按会话隔离记忆展开状态，新会话默认收起
     var isExpanded by rememberSaveable(sessionId) { mutableStateOf(false) }
@@ -97,8 +85,7 @@ fun TodoDashboardBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = Spacing.xs)
-            .defaultMinSize(minHeight = COLLAPSED_SLOT_HEIGHT),
+            .padding(bottom = Spacing.xs),
         shape = RoundedCornerShape(Radius.lg),
         color = cardBgColor,
         border = BorderStroke(1.dp, borderColor)
