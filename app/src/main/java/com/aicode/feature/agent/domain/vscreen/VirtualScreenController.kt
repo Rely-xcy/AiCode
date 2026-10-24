@@ -53,7 +53,8 @@ class VirtualScreenController @Inject constructor(
     suspend fun screenshot(outputDir: String): Result<String> {
         val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
         val dir = File(outputDir).apply { mkdirs() }
-        val target = File(dir, "vscreen-${screen.displayId}-${System.currentTimeMillis()}.png")
+        // 名字由 ScreenshotStore 统一生成：清理逻辑只认同一份规则，两边各写一套迟早失配。
+        val target = screenshotStore.newScreenshotFile(dir, screen.displayId, System.currentTimeMillis())
         // 帧从屏自己的 Surface（ImageReader）读：screencap -d 只认 HWC 注册的 display，
         // 对 App 自建的屏会「命令成功但写出 0 字节」（真机验证结论 2026-10-15）。
         manager.captureFrame(target).getOrElse { return Result.failure(it) }

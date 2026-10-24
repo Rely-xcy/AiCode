@@ -1,17 +1,13 @@
 package com.aicode.feature.agent.domain.vscreen
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.os.SystemClock
-import android.view.Surface
 import com.aicode.core.util.FileLogger
-import dagger.hilt.android.qualifiers.ApplicationContext
+import com.aicode.di.ApplicationScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import java.io.File
-import java.io.FileOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,24 +15,19 @@ import javax.inject.Singleton
  * 虚拟屏生命周期：创建 / 查询 / 销毁，并持有「当前屏」这一份全局状态。
  *
  * 同一时刻只允许一块屏（设计 §4.3）：单屏足够，多屏只会让焦点与资源管理复杂化。
+ * 因此建屏走 [lock] 串行：并发进来两次只会有一块屏被真正建出来，后来者如实被告知「已有屏」。
  *
- * **建屏走本进程的 [DisplayManager.createVirtualDisplay] API**——真机验证结论（2026-10-14，
- * MIUI 14 / Android 13）：shell 侧没有任何「创建虚拟屏」的命令（AOSP 的 `cmd display` 没有
- * `create-virtual-display`），原方案的 `cmd display create-virtual-display` 是臆造命令、
- * 真机必失败。API 建屏不需要 root：App 作为屏的 owner 天然有权限。
+ * 存活上限由**定时器主动收尾**，不靠下一次工具调用时的惰性检查：AI 不再调用工具时，
+ * 惰性检查永远不会发生，那块屏会一直合成、目标 app 一直跑，用户看不见也在耗电。
  *
- * **取帧走屏自带的 [ImageReader] Surface**——真机验证结论（2026-10-15）：`screencap -d` 只认
- * SurfaceFlinger/HWC 注册的 display（App 自建的 PUBLIC 屏不在其列，命令成功但写出 0 字节）；
- * 帧从自己的 Surface 读则完全绕开系统限制，且无障碍树在 MIUI 上看不到虚拟屏窗口，取帧
- * 是唯一可用的观察通道。
- *
- * root 通道仍保留，但只负责**屏上操作**：`am start --display`、`input -d`、`logcat`——
- * 这些命令真机已验证有效（见 [VirtualScreenController]）。
+ * 设备侧动作（建屏、取帧、释放）在 [VirtualScreenBackend] 里，本类只管状态与时限。
  */
 @Singleton
 class VirtualScreenManager @Inject constructor(
-    private val rootShell: RootShell,
-    @ApplicationContext private val appContext: Context
+    private val backend: VirtualScreenBackend,
+    private val guard: VirtualScreenGuard,
+    private val clock: VscreenClock,
+    @param:ApplicationScope private val scope: CoroutineScope
 ) {
 
     /** 一块存活的虚拟屏。 */
@@ -44,17 +35,30 @@ class VirtualScreenManager @Inject constructor(
         val displayId: Int,
         val sessionId: String,
         val packageName: String,
-        val createdAtMs: Long = System.currentTimeMillis(),
-        /** 存活上限到期时间戳（含）：到点后下一次工具调用会把它自动销毁。 */
-        val expiresAtMs: Long = createdAtMs + DEFAULT_LIFETIME_MS
+        /** 建屏时刻（来自 [VscreenClock] 的单调时钟），只用于日志与寿命换算，不是墙钟日期。 */
+        val createdAtMs: Long,
+        /** 存活上限到期时间戳（含）：到点由定时器自动销毁。 */
+        val expiresAtMs: Long
     )
+
+    /**
+     * 建屏 / 销毁的互斥闸。
+     *
+     * 「有没有屏」的判断与「把屏记下来」必须落在同一把锁里，否则并发两次 start 会各建一块、
+     * 后写者覆盖前者，被覆盖的那块屏从此没人能释放（持续合成直到进程退出）。
+     */
+    private val lock = Mutex()
 
     @Volatile
     var current: Screen? = null
         private set
 
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
+    @Volatile
+    private var surface: VirtualScreenSurface? = null
+
+    /** 到点自动销毁的定时任务；销毁或换屏时必须取消，否则旧计时器会把新屏收掉。 */
+    @Volatile
+    private var expiryJob: Job? = null
 
     /** 是否存在存活中的屏（工具侧做会话授权与并发判定用）。 */
     val hasScreen: Boolean get() = current != null
@@ -63,6 +67,7 @@ class VirtualScreenManager @Inject constructor(
      * 创建虚拟屏并在其上启动目标 app。
      *
      * 参数全部显式传入（阶段 0 demo 也走同一条路径，不硬编码包名/尺寸）。
+     * 已有屏但已过期或被系统回收时不报「已有屏」，而是先把它收掉再建新的——那种屏留着没有意义。
      */
     suspend fun start(
         sessionId: String,
@@ -73,149 +78,92 @@ class VirtualScreenManager @Inject constructor(
         density: Int,
         lifetimeMs: Long = DEFAULT_LIFETIME_MS
     ): Result<Screen> {
-        if (current != null) {
-            return Result.failure(IllegalStateException("已有虚拟屏在运行（displayId=${current?.displayId}），先 vscreen_stop 再开新的。"))
-        }
-        if (!rootShell.isAvailable()) {
-            return Result.failure(IllegalStateException("root 通道不可用：${rootShell.unavailableReason()}"))
+        VscreenScreenSpec.violation(width, height, density)?.let { reason ->
+            return Result.failure(IllegalArgumentException(reason))
         }
 
-        // 取帧用 ImageReader：maxImages 给足（取一帧只需 2：acquireLatestImage 内部会丢弃旧帧），
-        // 格式 RGBA_8888 可直接转 Bitmap 存 PNG。
-        val reader = try {
-            ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, IMAGE_READER_MAX_IMAGES)
-        } catch (e: Exception) {
-            return Result.failure(IllegalStateException("创建取帧器失败：${e.message}", e))
-        }
-
-        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
-            ?: run {
-                reader.close()
-                return Result.failure(IllegalStateException("取不到 DisplayManager，无法创建虚拟屏。"))
-            }
-        val name = "aicode-vscreen-${System.currentTimeMillis()}"
-        val display: VirtualDisplay? = try {
-            // 不带 TRUSTED（需系统权限 ADD_TRUSTED_DISPLAY，普通 app 拿不到，会被 CTS 确认的
-            // SecurityException 拒）：PUBLIC + OWN_CONTENT_ONLY 即可让第三方 Activity 落屏。
-            dm.createVirtualDisplay(
-                name,
-                width,
-                height,
-                density,
-                reader.surface,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
-            )
-        } catch (e: Exception) {
-            reader.close()
-            return Result.failure(IllegalStateException("创建虚拟屏失败：${e.message}", e))
-        }
-        // displayId 从 display 对象拿；createVirtualDisplay 返回 null 仅在极端异常时。
-        val displayId = display?.display?.displayId
-            ?: run {
-                display?.release()
-                reader.close()
-                return Result.failure(IllegalStateException("创建虚拟屏返回空 display。"))
+        // 锁要跨挂起点持有（建屏过程里有 root 启动命令）：只有整段串行，stop 才一定看到真实状态，
+        // 建屏窗口内的 stop 才不会被静默忽略。
+        lock.lock()
+        try {
+            val existing = current
+            if (existing != null) {
+                if (!isStale(existing)) {
+                    return Result.failure(
+                        IllegalStateException("已有虚拟屏在运行（displayId=${existing.displayId}），先 vscreen_stop 再开新的。")
+                    )
+                }
+                destroyLocked("建屏前发现已过期或已被系统回收", revokeSession = true)
             }
 
-        val launch = rootShell.run(launchCommand(displayId, packageName, activity), LAUNCH_TIMEOUT_MS)
-        if (!launch.ok) {
-            // 启动失败就把刚建的屏收拾掉，不留半成品。
-            display.release()
-            reader.close()
-            return Result.failure(
-                IllegalStateException(
-                    "在虚拟屏上启动 $packageName 失败（exit=${launch.exitCode}）。原始输出：${launch.output.trim().take(400)}"
-                )
+            val opened = backend.open(width, height, density, packageName, activity).getOrElse { return Result.failure(it) }
+            val now = clock.nowMs()
+            val screen = Screen(
+                displayId = opened.displayId,
+                sessionId = sessionId,
+                packageName = packageName,
+                createdAtMs = now,
+                expiresAtMs = now + lifetimeMs.coerceAtLeast(MIN_LIFETIME_MS)
             )
+            surface = opened
+            current = screen
+            armExpiry(screen)
+            FileLogger.i(
+                TAG,
+                "虚拟屏已就绪：displayId=${opened.displayId}，目标=$packageName，${width}x$height @${density}dpi，" +
+                    "存活上限 ${lifetimeMinutes(screen)} 分钟"
+            )
+            return Result.success(screen)
+        } finally {
+            lock.unlock()
         }
-
-        val screen = Screen(
-            displayId = displayId,
-            sessionId = sessionId,
-            packageName = packageName,
-            expiresAtMs = System.currentTimeMillis() + lifetimeMs.coerceAtLeast(MIN_LIFETIME_MS)
-        )
-        virtualDisplay = display
-        imageReader = reader
-        current = screen
-        FileLogger.i(TAG, "虚拟屏已就绪：displayId=$displayId，目标=$packageName")
-        return Result.success(screen)
     }
 
     /** 销毁当前屏。没有屏时返回失败（调用方据此提示「本来就没开」）。 */
     suspend fun stop(): Result<Unit> {
-        val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
-        virtualDisplay?.release()
-        virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
-        current = null
-        FileLogger.i(TAG, "虚拟屏已销毁：displayId=${screen.displayId}")
-        return Result.success(Unit)
-    }
-
-    /**
-     * 从屏的 Surface 取一帧，编码成 PNG 落到 [target]。
-     *
-     * `acquireLatestImage` 会自动丢弃积压的旧帧拿最新一帧；拿不到（屏还没画出第一帧）
-     * 短暂重试几轮——建屏到 app 首帧有几百毫秒的间隙。
-     */
-    fun captureFrame(target: File, maxWaitMs: Long = CAPTURE_WAIT_MS): Result<Unit> {
-        val reader = imageReader
-            ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏，先调用 vscreen_start 创建。"))
-        val deadline = System.nanoTime() + maxWaitMs * 1_000_000L
-        var image: android.media.Image? = null
-        while (image == null && System.nanoTime() < deadline) {
-            image = reader.acquireLatestImage()
-            if (image == null) {
-                SystemClock.sleep(CAPTURE_RETRY_INTERVAL_MS)
-            }
-        }
-        val frame = image
-            ?: return Result.failure(IllegalStateException("等待 ${maxWaitMs}ms 仍未取到帧（屏可能没有内容）。"))
+        lock.lock()
         try {
-            val bitmap = Bitmap.wrapHardwareBuffer(frame.hardwareBuffer ?: return Result.failure(
-                IllegalStateException("帧缺少 hardwareBuffer。")
-            ), null)
-                ?: return Result.failure(IllegalStateException("帧缓冲转 Bitmap 失败。"))
-            val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                ?: return Result.failure(IllegalStateException("Bitmap 拷贝失败。"))
-            FileOutputStream(target).use { out ->
-                if (!software.compress(Bitmap.CompressFormat.PNG, 100, out)) {
-                    return Result.failure(IllegalStateException("PNG 编码失败：${target.absolutePath}"))
-                }
-            }
+            if (current == null) return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
+            destroyLocked("调用方请求销毁", revokeSession = true)
             return Result.success(Unit)
-        } catch (e: Exception) {
-            return Result.failure(IllegalStateException("取帧失败：${e.message}", e))
         } finally {
-            frame.close()
+            lock.unlock()
         }
     }
 
+    /** 从屏的 Surface 取一帧，编码成 PNG 落到 [target]。 */
+    fun captureFrame(target: File, maxWaitMs: Long = CAPTURE_WAIT_MS): Result<Unit> {
+        val active = surface
+            ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏，先调用 vscreen_start 创建。"))
+        return active.captureFrame(target, maxWaitMs)
+    }
+
     /**
-     * 取当前屏并做存活检查：超过存活上限就地销毁（懒检查）。
+     * 取当前屏并做存活检查：到点或已被系统回收就地销毁。
      *
-     * 用惰性检查而不是后台定时器：忘了 stop 的兜底只需在「下一次真要用屏」时生效，
-     * 后台计时器反而要额外管生命周期与线程。
+     * 定时器已经负责到点销毁，这里是第二道闸：进程被冻结时 delay 不推进、屏被系统回收时
+     * 定时器也不会知道，真正要用屏（注入、取帧、读控件树）前仍要确认一次。
      */
     suspend fun ensureAlive(): Result<Screen> {
-        val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
-        if (System.currentTimeMillis() > screen.expiresAtMs) {
-            val minutes = (screen.expiresAtMs - screen.createdAtMs) / 60_000
-            stop()
-            return Result.failure(
-                IllegalStateException("虚拟屏已超过存活上限（${minutes}分钟）被自动销毁，需要时重新 vscreen_start。")
-            )
+        lock.lock()
+        try {
+            val screen = current ?: return Result.failure(IllegalStateException("当前没有存活的虚拟屏。"))
+            if (clock.nowMs() >= screen.expiresAtMs) {
+                val minutes = lifetimeMinutes(screen)
+                destroyLocked("已超过存活上限", revokeSession = true)
+                return Result.failure(
+                    IllegalStateException("虚拟屏已超过存活上限（${minutes}分钟）被自动销毁，需要时重新 vscreen_start。")
+                )
+            }
+            // 屏可能被系统回收（内存紧张）：display 对象还活着但 displayId 已无效时，视为不存在。
+            if (surface?.isValid != true) {
+                destroyLocked("display 已被系统回收", revokeSession = true)
+                return Result.failure(IllegalStateException("虚拟屏已被系统回收（display 不再有效），需要时重新 vscreen_start。"))
+            }
+            return Result.success(screen)
+        } finally {
+            lock.unlock()
         }
-        // 屏可能被系统回收（内存紧张）：display 对象还活着但 displayId 已无效时，视为不存在。
-        val display = virtualDisplay?.display
-        if (display == null || !display.isValid) {
-            stop()
-            return Result.failure(IllegalStateException("虚拟屏已被系统回收（display 不再有效），需要时重新 vscreen_start。"))
-        }
-        return Result.success(screen)
     }
 
     /** 取当前屏，没有时返回失败并给出可照做的提示。 */
@@ -223,20 +171,61 @@ class VirtualScreenManager @Inject constructor(
         current?.let { Result.success(it) }
             ?: Result.failure(IllegalStateException("当前没有存活的虚拟屏，先调用 vscreen_start 创建。"))
 
-    private fun launchCommand(displayId: Int, packageName: String, activity: String?): String =
-        if (activity != null) {
-            "am start --display $displayId -n ${VscreenShellArgs.component("$packageName/$activity")}"
-        } else {
-            "am start --display $displayId -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${VscreenShellArgs.component(packageName)}"
+    /** 到点自动销毁：屏的生命周期必须自己收尾，不能指望下一次工具调用替它检查。 */
+    private fun armExpiry(screen: Screen) {
+        expiryJob?.cancel()
+        expiryJob = scope.launch {
+            // 用时钟算剩余时间再 delay：进程被冻结时 delay 不推进（没人跑协程），醒来后循环会把
+            // 剩余时间重算一遍，而不是按最初那个时长直接销毁。
+            while (true) {
+                val remaining = screen.expiresAtMs - clock.nowMs()
+                if (remaining <= 0) break
+                delay(remaining)
+            }
+            expire(screen)
         }
+    }
+
+    private suspend fun expire(screen: Screen) {
+        lock.lock()
+        try {
+            // 期间可能已被 stop、或已被换成了另一块屏：只收拾当时记下来的那一块。
+            if (current !== screen) return
+            destroyLocked("已到存活上限", revokeSession = true)
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /**
+     * 释放屏并把状态清空。调用方必须已持有 [lock]；释放是同步操作，这里不会挂起。
+     *
+     * revokeSession：屏没了必须同时收回它的会话授权。否则授权会活过屏，下一次 vscreen_start
+     * 就绕过了那道唯一的 ASK 点。
+     */
+    private fun destroyLocked(reason: String, revokeSession: Boolean) {
+        val dying = current ?: return
+        expiryJob?.cancel()
+        expiryJob = null
+        current = null
+        val releasing = surface
+        surface = null
+        // 释放失败也要把状态清干净：留着 current 会让上层以为屏还在，之后每次都报「已有屏」。
+        runCatching { releasing?.release() }.onFailure { FileLogger.w(TAG, "释放虚拟屏资源失败：${it.message}", it) }
+        if (revokeSession) guard.revoke(dying.sessionId)
+        FileLogger.i(TAG, "虚拟屏已销毁（$reason）：displayId=${dying.displayId}")
+    }
+
+    private fun isStale(screen: Screen): Boolean =
+        clock.nowMs() >= screen.expiresAtMs || surface?.isValid != true
+
+    private fun lifetimeMinutes(screen: Screen): Long =
+        (screen.expiresAtMs - screen.createdAtMs) / 60_000L
 
     private companion object {
         const val TAG = "VirtualScreenManager"
 
-        const val LAUNCH_TIMEOUT_MS = 20_000L
-        const val IMAGE_READER_MAX_IMAGES = 3
         const val CAPTURE_WAIT_MS = 3_000L
-        const val CAPTURE_RETRY_INTERVAL_MS = 50L
 
         /** 单屏默认存活上限（30 分钟）：忘 stop 的兜底，可由任务参数放宽。 */
         const val DEFAULT_LIFETIME_MS = 30 * 60 * 1000L

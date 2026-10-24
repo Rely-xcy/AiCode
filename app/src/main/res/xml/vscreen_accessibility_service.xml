@@ -2,6 +2,9 @@
 <!--
   虚拟屏读屏服务配置：
   - canRetrieveWindowContent：读窗口节点（按 displayId 过滤后只导出虚拟屏那一块）；
+  - canTakeScreenshot：无障碍按屏截图的能力声明；缺它时 takeScreenshot() 会同步抛
+    SecurityException（不走失败回调）。只声明能力、不扩权：真正截图仍要求用户在本服务已启用，
+    且低版本系统忽略该属性；
   - flagRetrieveInteractiveWindows：拿到非当前焦点窗口，虚拟屏内容才在列表里；
   - 不申请 canPerformGestures / canRequestFilterKeyEvents：注入走 root 的 input -d，
     本服务只读，避免扩大权限面。
@@ -11,5 +14,6 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/vscreen_accessibility_service_desc"
     android:notificationTimeout="100" />
