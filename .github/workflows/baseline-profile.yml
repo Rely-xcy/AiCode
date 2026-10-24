@@ -43,6 +43,20 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Export Room schema
+        # 强制重跑 KSP：构建缓存会跳过 schema 生成，导致声明的 schema 版本在仓库里缺失。
+        # 放在采集之前且 always 上传，这样即使后续采集失败也能拿到 schema。
+        if: always()
+        run: ./gradlew :app:kspUniversalDebugKotlin --rerun-tasks
+
+      - name: Upload Room schema
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schema-export
+          path: app/schemas/**
+          if-no-files-found: warn
+
       - name: Compile generator test APK
         # 先编译再来模拟器：配置/依赖/DSL 错误在这里就暴露，不用等 20 分钟开完机。
         # 三个 APK 都要显式列出：profilegen 用于采集（未混淆），benchmark 仅用于下一步断言
