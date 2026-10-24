@@ -2056,4 +2056,35 @@
     <string name="browser_ua_custom_dialog_title">Custom User-Agent</string>
     <string name="browser_ua_custom_input_hint">Enter full User-Agent string</string>
     <string name="browser_ua_applied_toast">User-Agent updated, page reloaded</string>
+
+    <!-- Tool descriptions and result copy: read by the model, follows the UI language -->
+    <string name="common_tool_missing_argument">Missing parameter: %1$s.</string>
+    <string name="plan_mode_invalid_action">Invalid action: %1$s. Supported values: enter or exit.</string>
+    <string name="plan_mode_already_active">Already in PLAN mode.</string>
+    <string name="plan_mode_not_active">Cannot exit PLAN: the session is not in PLAN mode.</string>
+    <string name="plan_mode_session_required">No session is associated with this request. Cannot switch modes.</string>
+    <string name="plan_mode_session_missing">Session not found. Cannot switch modes.</string>
+    <string name="plan_mode_goal_active">A goal is running autonomously. Entering or exiting PLAN is unavailable; plan and advance the goal from inside the loop.</string>
+    <string name="plan_mode_entered">Entered PLAN mode.</string>
+    <string name="plan_mode_exited">Exited PLAN and restored %1$s mode.</string>
+    <string name="plan_mode_enter_action">Enter PLAN mode</string>
+    <string name="plan_mode_exit_action">Exit PLAN mode</string>
+    <string name="plan_mode_reason_unspecified">No reason provided</string>
+    <string name="plan_mode_request_title">Switch planning mode</string>
+    <string name="plan_mode_request_summary">Request to %1$s</string>
+    <string name="plan_mode_request_details">Action: %1$s\n\nReason: %2$s</string>
+    <string name="tool_output_saved_hint">Full output saved to %1$s. Use readFile to read it in sections.</string>
+    <string name="tool_output_unsaved_hint">Saving the full output failed. Only the beginning and end are available; try again with a smaller output range.</string>
+    <string name="tool_output_omitted">\n\n[Omitted %1$d characters from the middle. %2$s]\n\n</string>
+    <string name="tool_browser_screenshot_failed">A screenshot is currently unavailable. Try again later, or use getText/getHtml to read the page.</string>
+    <string name="tool_browser_condition_met">Condition met.</string>
+    <string name="tool_browser_wait_timeout">Timed out before the condition was met.</string>
+    <string name="tool_vision_images_attached">Attached %1$d images for direct viewing and analysis.</string>
+    <string name="tool_vision_focus">Focus: %1$s</string>
+    <string name="tool_vision_empty_response">The vision model returned no analysis.</string>
+    <string name="tool_vision_default_single">Describe the key information in the image, including legible text, elements, and layout. Note anything unclear.</string>
+    <string name="tool_vision_default_multiple">Describe the key information in each of these %1$d images in order, then compare their similarities and differences. Note anything unclear.</string>
+    <string name="tool_mcp_stdio_added">Added local MCP server %2$s in %1$s. The configuration takes effect in the next session. If the command needs a runtime such as Node or Python, install it with the command tool after the user confirms.</string>
+    <string name="tool_mcp_invalid_name">server_name may contain only ASCII letters, digits, underscores, and hyphens (current: %1$s). Server names are joined into mcp__&lt;server_name&gt;__&lt;tool&gt; for the model, so they must follow tool naming rules.</string>
+    <string name="tool_memory_saved">Saved memory “%1$s” in the %2$s scope. It appears in your memory index from the next turn.</string>
 </resources>

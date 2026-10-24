@@ -79,7 +79,7 @@ class TerminalSessionTool @Inject constructor(
 
     override val name = "terminal"
     override val description =
-        "管理常驻后台终端会话（启动命令、发输入/快捷键、读输出、关闭标签）。会自行结束且需等结果的任务用 start + notify=true：命令结束后系统主动唤醒 AI 并送达退出码与末尾输出，无需轮询或 sleep 等待。中断前台进程用 key=ctrl+c。"
+        "启动和管理当前执行环境（本地容器或远程 SSH）的持续终端会话，适合耗时任务（构建、安装依赖）、常驻服务或需要多次输入的交互命令。支持发送输入、快捷键和读取输出；会自行结束且需等待结果的任务用 start + notify=true，常驻或交互式任务按需 read/send/key。中断前台进程用 key=ctrl+c。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
 
@@ -108,7 +108,7 @@ class TerminalSessionTool @Inject constructor(
         "command" to ToolParameter(
             name = "command",
             type = ParameterType.STRING,
-            description = "start 必填：要在后台运行的 shell 命令，如 'npm run dev'",
+            description = "start 必填：在终端会话中启动的 Shell 命令，如构建命令或 npm run dev。",
             required = false
         ),
         "title" to ToolParameter(
@@ -120,7 +120,7 @@ class TerminalSessionTool @Inject constructor(
         "notify" to ToolParameter(
             name = "notify",
             type = ParameterType.BOOLEAN,
-            description = "start 可选：命令结束后是否主动唤醒 AI。true：命令退出时系统推送一条通知（含退出码与末尾输出）唤醒 AI 继续下一轮，AI 正忙则随本轮工具结果搭车送达，无需轮询或 sleep 等待；适合编译/测试等会自行结束的任务（start 只捕获约 5 秒初始输出，其余输出由结束通知带回）。false（默认）：不唤醒，需自行 read 取输出。",
+            description = "start 可选：耗时但会自行结束、且需要结果的任务设为 true，结束后通知 AI 并附退出码与末尾输出，无需轮询或 sleep 等待。start 只捕获约 5 秒初始输出。默认 false；常驻服务或交互式任务按需用 read 查看输出。",
             required = false
         ),
         "tab_id" to ToolParameter(
@@ -151,7 +151,7 @@ class TerminalSessionTool @Inject constructor(
         "elevate" to ToolParameter(
             name = "elevate",
             type = ParameterType.BOOLEAN,
-            description = "提权重试：start/send 的命令因内置安全防护（灾难性删除等）被拒且确有必要时，置为 true 重试，会弹窗请用户一次性授权（不可记忆）。PLAN 模式下无效。",
+            description = "start/send 的命令被安全防护拒绝且确需执行时，设为 true 重试，通过弹窗申请用户单次授权，不保存为长期规则。PLAN 模式不支持。",
             required = false
         )
     )

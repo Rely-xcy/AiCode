@@ -34,7 +34,7 @@ class SearchCodeTool @Inject constructor(
     }
 
     override val name = "search"
-    override val description = "使用 ripgrep（rg）搜索文本内容。例：args=\"-n \\\"fun main\\\" ~/workspace/app\"。支持追加 `| head [-n N]` 截断输出。"
+    override val description = "使用 ripgrep（rg）搜索文本内容。"
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
     override val useWhen =
@@ -48,7 +48,7 @@ class SearchCodeTool @Inject constructor(
         "args" to ToolParameter(
             name = "args",
             type = ParameterType.STRING,
-            description = "ripgrep 参数。不填无效。常用：-i -F -e -g --hidden --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令（grep/sort/wc 等）不支持。",
+            description = "ripgrep 参数，如 -n \"fun main\" ~/workspace/app。不填无效。常用：-i -F -e -g --hidden --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令（grep/sort/wc 等）不支持。",
             required = true
         )
     )

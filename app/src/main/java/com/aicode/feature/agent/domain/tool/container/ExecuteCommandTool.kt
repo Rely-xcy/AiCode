@@ -48,7 +48,7 @@ class ExecuteCommandTool @Inject constructor(
     }
 
     override val name = "Bash"
-    override val description = "在当前执行环境（本地容器或远程 SSH）中执行一次性 Shell 命令，同步返回输出。耗时或常驻任务（安装依赖、启动服务等）请改用 `terminal`，不要用 `&` 挂后台。"
+    override val description = "在当前执行环境（本地容器或远程 SSH）中执行短时、一次性的 Shell 命令，等待命令结束后返回输出，适合状态查询、快速检查等临时操作。耗时任务、常驻服务或需要持续交互的命令用 terminal；不要用 & 在本工具中挂后台。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
     override val useWhen =
@@ -68,13 +68,13 @@ class ExecuteCommandTool @Inject constructor(
         "timeout" to ToolParameter(
             name = "timeout",
             type = ParameterType.INTEGER,
-            description = "命令最长执行时间（秒），超时将被强制终止。默认 $DEFAULT_TIMEOUT_SECONDS 秒，上限 $MAX_TIMEOUT_SECONDS 秒。耗时命令（如安装依赖）可适当调大。",
+            description = "命令最长执行时间（秒），超时将被强制终止。默认 $DEFAULT_TIMEOUT_SECONDS 秒，上限 $MAX_TIMEOUT_SECONDS 秒。",
             required = false
         ),
         "elevate" to ToolParameter(
             name = "elevate",
             type = ParameterType.BOOLEAN,
-            description = "提权重试：命令因内置安全防护（灾难性删除等）被拒且确有必要时，置为 true 重试，会弹窗请用户一次性授权（不可记忆）。PLAN 模式下无效。",
+            description = "命令被安全防护拒绝且确需执行时，设为 true 重试，通过弹窗申请用户单次授权，不保存为长期规则。PLAN 模式不支持。",
             required = false
         )
     )

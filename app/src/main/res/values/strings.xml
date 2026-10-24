@@ -2055,4 +2055,35 @@
     <string name="browser_ua_custom_dialog_title">自定义 User-Agent</string>
     <string name="browser_ua_custom_input_hint">输入完整的 User-Agent 字符串</string>
     <string name="browser_ua_applied_toast">已切换浏览器标识并刷新页面</string>
+
+    <!-- 工具说明与结果文案：AI 侧读取，随界面语言切换 -->
+    <string name="common_tool_missing_argument">缺少参数：%1$s。</string>
+    <string name="plan_mode_invalid_action">无效的 action：%1$s。支持 enter 或 exit。</string>
+    <string name="plan_mode_already_active">当前已处于 PLAN（计划）模式。</string>
+    <string name="plan_mode_not_active">当前不在 PLAN 模式，无法退出。</string>
+    <string name="plan_mode_session_required">未关联会话，无法切换模式。</string>
+    <string name="plan_mode_session_missing">会话不存在，无法切换模式。</string>
+    <string name="plan_mode_goal_active">目标正在自主运行，暂不支持进入或退出 PLAN 模式。请在循环内部控制规划并直接推进目标。</string>
+    <string name="plan_mode_entered">已进入 PLAN（计划）模式。</string>
+    <string name="plan_mode_exited">已退出 PLAN，恢复为 %1$s 模式。</string>
+    <string name="plan_mode_enter_action">进入 PLAN 模式</string>
+    <string name="plan_mode_exit_action">退出 PLAN 模式</string>
+    <string name="plan_mode_reason_unspecified">未提供理由</string>
+    <string name="plan_mode_request_title">切换计划模式</string>
+    <string name="plan_mode_request_summary">申请%1$s</string>
+    <string name="plan_mode_request_details">操作：%1$s\n\n理由：%2$s</string>
+    <string name="tool_output_saved_hint">完整内容已保存到 %1$s，可用 readFile 分段读取。</string>
+    <string name="tool_output_unsaved_hint">完整内容保存失败；当前仅保留开头和结尾，可缩小输出范围后重试。</string>
+    <string name="tool_output_omitted">\n\n[已省略中间 %1$d 个字符。%2$s]\n\n</string>
+    <string name="tool_browser_screenshot_failed">暂时无法截图。可稍后重试，或用 getText/getHtml 读取页面内容。</string>
+    <string name="tool_browser_condition_met">条件已满足。</string>
+    <string name="tool_browser_wait_timeout">等待超时，条件尚未满足。</string>
+    <string name="tool_vision_images_attached">已附加 %1$d 张图片，可直接查看和分析。</string>
+    <string name="tool_vision_focus">关注点：%1$s</string>
+    <string name="tool_vision_empty_response">识图模型未返回分析内容。</string>
+    <string name="tool_vision_default_single">请描述图片中的关键信息，包括可辨认的文字、元素和布局。不清楚的内容请注明。</string>
+    <string name="tool_vision_default_multiple">请按顺序描述这 %1$d 张图片中的关键信息，再比较它们的相同点与差异。不清楚的内容请注明。</string>
+    <string name="tool_mcp_stdio_added">已添加 %1$s 本地 MCP server：%2$s，配置将在下一次会话生效。若命令依赖 Node/Python 等运行时，请通过命令工具在用户确认后安装。</string>
+    <string name="tool_mcp_invalid_name">server_name 只能含 ASCII 字母、数字、下划线与连字符（当前：%1$s）。server 名称会拼成 mcp__&lt;server_name&gt;__&lt;tool&gt; 送给模型，必须符合工具命名规范。</string>
+    <string name="tool_memory_saved">已保存记忆「%1$s」到 %2$s 作用域，下一轮起会出现在你的记忆清单里。</string>
 </resources>

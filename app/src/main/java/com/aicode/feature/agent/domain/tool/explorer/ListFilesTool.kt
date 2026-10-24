@@ -36,7 +36,7 @@ class ListFilesTool @Inject constructor(
     }
 
     override val name = "list"
-    override val description = "按 ls 风格列出文件和目录。例：args=\"-la ~/workspace/app\"。支持追加 `| head [-n N]` 截断输出。"
+    override val description = "按 ls 风格列出文件和目录。"
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
     override val useWhen =
@@ -50,7 +50,7 @@ class ListFilesTool @Inject constructor(
         "args" to ToolParameter(
             name = "args",
             type = ParameterType.STRING,
-            description = "ls 风格参数。不填等同 ~/workspace。支持 -a -A -l -R -d -1 -h -r -t -S -v -f --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令不支持。",
+            description = "ls 风格参数，如 -la ~/workspace/app。不填等同 ~/workspace。支持 -a -A -l -R -d -1 -h -r -t -S -v -f --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令不支持。",
             required = false
         )
     )

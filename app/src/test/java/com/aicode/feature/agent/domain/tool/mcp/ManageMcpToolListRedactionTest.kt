@@ -43,7 +43,7 @@ class ManageMcpToolListRedactionTest {
         val repository = mockk<McpConfigRepository>()
         coEvery { repository.getGlobalServers() } returns servers
 
-        val result = ManageMcpTool(repository).execute(mapOf("action" to JsonPrimitive("list")))
+        val result = ManageMcpTool(repository, mockk()).execute(mapOf("action" to JsonPrimitive("list")))
 
         assertTrue(result is ToolResult.Success)
         val output = (result as ToolResult.Success).data.jsonPrimitive.content
@@ -64,7 +64,7 @@ class ManageMcpToolListRedactionTest {
             McpServerConfig(name = "file", url = "file:///tmp/sentinel")
         )
 
-        val result = ManageMcpTool(repository).execute(mapOf("action" to JsonPrimitive("list")))
+        val result = ManageMcpTool(repository, mockk()).execute(mapOf("action" to JsonPrimitive("list")))
         val output = (result as ToolResult.Success).data.jsonPrimitive.content
 
         assertFalse(output.contains("sentinel"))

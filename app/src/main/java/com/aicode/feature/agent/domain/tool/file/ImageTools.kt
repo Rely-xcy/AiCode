@@ -1,8 +1,10 @@
 package com.aicode.feature.agent.domain.tool.file
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
@@ -32,6 +34,7 @@ import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -46,8 +49,8 @@ import java.util.UUID
 import javax.inject.Inject
 
 /**
- * 多轮会话式识图工具：第一次传 images（1~5 张）由识图模型一次性分析/对比，返回 vision_id 与文本结果；
- * 之后传 vision_id + prompt 在同一识图会话内继续追问（识图模型记得图片与之前的问答）。
+ * 当前聊天模型支持视觉时直接附加图片；否则创建识图会话，返回分析文本与 vision_id。
+ * 返回 vision_id 后可用 id + prompt 继续追问。
  * 会话请求体落盘在 ~/.aicode/vision-sessions/（见 [VisionSessionStore]）。
  * 识图模型不校验视觉能力，调用失败时把错误信息原样作为工具结果返回。
  */
@@ -63,16 +66,17 @@ class ViewImageTool @Inject constructor(
     private val llmCallRecordDao: LlmCallRecordDao,
     private val openAIApi: OpenAIApi,
     private val anthropicApi: AnthropicApi,
-    private val geminiApi: GeminiApi
+    private val geminiApi: GeminiApi,
+    @param:ApplicationContext private val appContext: Context
 ) : AbstractContextualTool() {
     override val name = "viewImage"
-    override val description = "查看本地图片并交给识图模型分析，返回分析结果与 vision_id。传 images 发起识图（可多张对比），传 id 继续同一识图会话追问。"
+    override val description = "查看当前执行环境中的图片。聊天模型支持视觉时直接附加图片；否则调用识图模型，返回分析内容与 vision_id。仅在收到 vision_id 后使用 id 继续追问。"
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
     override val parameters = mapOf(
         "images" to ToolParameter(
             name = "images",
             type = ParameterType.ARRAY,
-            description = "图片路径列表，1~5 张；与 id 二选一，首次识图必传。路径为 ~/workspace/... 或容器绝对路径。",
+            description = "图片路径列表，1~5 张，与 id 二选一。支持工作区相对路径、~/workspace/... 或当前执行环境的绝对路径。",
             required = false,
             itemsSchema = mapOf("type" to "string")
         ),
@@ -85,13 +89,13 @@ class ViewImageTool @Inject constructor(
         "prompt" to ToolParameter(
             name = "prompt",
             type = ParameterType.STRING,
-            description = "可选提问或关注点；为空时默认描述图片内容。",
+            description = "提问或关注点。传 images 时可选，默认描述图片；传 id 追问时必填。",
             required = false
         ),
         "detail" to ToolParameter(
             name = "detail",
             type = ParameterType.STRING,
-            description = "清晰度：high（默认，大图压缩到最长边 1536）；original（原样直传，多张大图可能超限失败）；low（压缩到最长边 512 省 token）。",
+            description = "清晰度：high（默认）与 original 均优先保留不超过 4 MiB 的 JPEG/PNG/WebP/GIF，其他图片转为最长边不超过 1536 的 JPEG；low 转为最长边不超过 512 的 JPEG。",
             required = false,
             enum = listOf("low", "high", "original")
         )
@@ -138,8 +142,13 @@ class ViewImageTool @Inject constructor(
                 is EncodeOutcome.Fail -> return ToolResult.Error(r.message, r.code)
             }
         }
-        val promptNotice = if (prompt.isNotBlank()) "（关注点/提问：$prompt）" else ""
-        val content = "已将 ${encoded.size} 张图片加载至当前对话上下文$promptNotice，可直接查看并分析。"
+        val content = buildString {
+            append(appContext.getString(R.string.tool_vision_images_attached, encoded.size))
+            if (prompt.isNotBlank()) {
+                append('\n')
+                append(appContext.getString(R.string.tool_vision_focus, prompt))
+            }
+        }
         return ToolResult.Success(
             data = JsonObject(
                 mapOf(
@@ -154,7 +163,6 @@ class ViewImageTool @Inject constructor(
     }
 
     private suspend fun createSession(images: List<String>, prompt: String, detail: String, sessionId: String?): ToolResult {
-        // 按 detail 档位逐张编码：original 全部原样；high 小图原样、大图压缩；low 全部压缩。
         val encoded = mutableListOf<AgentImage>()
         for (path in images) {
             when (val r = encodeImage(path, detail)) {
@@ -171,7 +179,7 @@ class ViewImageTool @Inject constructor(
             visionSessionStore.save(id, messages)
             val provider = resolveVisionProvider(sessionId)
             val response = callVisionProvider(provider, messages, sessionId)
-            val content = response.content.ifBlank { "（识图模型未返回内容）" }
+            val content = response.content.ifBlank { appContext.getString(R.string.tool_vision_empty_response) }
             visionSessionStore.save(id, messages + AgentMessage.AssistantMessage(content = content))
             successResult(id, content)
         } catch (e: CancellationException) {
@@ -193,7 +201,7 @@ class ViewImageTool @Inject constructor(
         return try {
             val provider = resolveVisionProvider(sessionId)
             val response = callVisionProvider(provider, messages, sessionId)
-            val content = response.content.ifBlank { "（识图模型未返回内容）" }
+            val content = response.content.ifBlank { appContext.getString(R.string.tool_vision_empty_response) }
             visionSessionStore.save(id, messages + AgentMessage.AssistantMessage(content = content))
             successResult(id, content)
         } catch (e: CancellationException) {
@@ -272,9 +280,9 @@ class ViewImageTool @Inject constructor(
     }
 
     private fun defaultPrompt(count: Int): String = if (count == 1) {
-        "请详细描述这张图片的内容，包括其中出现的文字、元素、布局、颜色等关键信息。"
+        appContext.getString(R.string.tool_vision_default_single)
     } else {
-        "请依次分析并对比这 $count 张图片：先分别描述每张图片的内容（包括文字、元素、布局、颜色等关键信息），再指出它们之间的相同点与差异。"
+        appContext.getString(R.string.tool_vision_default_multiple, count)
     }
 
     /**

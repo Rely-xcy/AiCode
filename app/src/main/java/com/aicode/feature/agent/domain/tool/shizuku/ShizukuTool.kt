@@ -42,9 +42,8 @@ class ShizukuTool @Inject constructor(
 
     override val name = "Shizuku"
 
-    override val description =
-        "通过 Shizuku 在宿主 Android 系统上执行命令，用于辅助调试宿主系统（`pm`/`am`/`cmd` 等系统命令）。" +
-            "需用户已安装并授权 Shizuku，且每次调用都会弹窗确认。"
+    override val description = "通过 Shizuku 在宿主 Android 系统上执行 pm/am/cmd 等命令，用于辅助调试。" +
+            "需已安装、运行并授权 Shizuku；默认每次调用需用户确认。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
