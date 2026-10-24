@@ -88,7 +88,9 @@ jobs:
         # 采集必须得到未混淆规则（形如 com/aicode/...），发布时再由 R8 按 mapping 重写。
         # 若这里拿到的仍是 La/a; 这类短名，说明采集变体又被混淆了，这份 profile 代码一变就失配。
         run: |
-          profile=$(find baselineprofile/build/outputs -name "*.txt" | head -1)
+          # 只认采集器写出的那份：*startup-prof.txt。早先按 *.txt 取第一个会命中 aapt/logcat
+          # 这些测试日志，路径里还带空格，导致误判「仍被混淆」。
+          profile=$(find baselineprofile/build/outputs -name "*startup-prof.txt" | head -1)
           test -n "$profile" || { echo "未找到采集结果"; exit 1; }
           echo "checking $profile"
           grep -q "com/aicode" "$profile" || { echo "采集结果里没有原始类名，采集变体仍被混淆"; exit 1; }
