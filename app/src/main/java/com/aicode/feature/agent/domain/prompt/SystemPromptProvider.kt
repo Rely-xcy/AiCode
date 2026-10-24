@@ -15,6 +15,7 @@ import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.renderToolGuide
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -41,7 +42,8 @@ class SystemPromptProvider @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val toolRegistry: ToolRegistry,
-    private val executionModeHolder: ExecutionModeHolder
+    private val executionModeHolder: ExecutionModeHolder,
+    private val fileAccess: FileAccessProvider
 ) {
     // 抽象独立的 Source
     interface PromptSource {
@@ -161,56 +163,10 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /**
-     * 项目规则缓存：缓存与签名必须**整体替换**——分两步写（先内容再签名）时，并发调用可能读到
-     * 「A 工作区的规则 + B 工作区的签名」。项目规则是模型必须遵守的硬约束，串味比性能问题严重。
+     * 项目规则：经 [ProjectRuleReader] 以容器路径读取（远程模式即服务器上的文件）。
+     * 这里不再维护第二个 Source 缓存：Reader 自带「路径 + mtime」签名缓存与失败不缓存语义。
      */
-    private data class RuleCache(val signature: String, val rules: ProjectRules)
-
-    private inner class ProjectRuleSource {
-        @Volatile private var ruleCache: RuleCache? = null
-
-        /**
-         * 同时读取全局规则（`~/.aicode`）与工作区规则（项目根目录）：各自 `AGENTS.md` 优先、`CLAUDE.md` 兜底。
-         * 任一来源为空则该项为 null；两处文件签名（路径 + mtime）未变时复用缓存。
-         */
-        fun build(ctx: AgentContext): ProjectRules? {
-            val global = resolveRuleFile(containerInstaller.aicodeDir)
-            val project = ctx.projectRoot.takeIf { it.isNotBlank() }?.let { resolveRuleFile(File(it)) }
-            if (global == null && project == null) return null
-
-            val signature = buildString {
-                append(global?.first?.absolutePath).append(':').append(global?.first?.lastModified() ?: 0)
-                append('|')
-                append(project?.first?.absolutePath).append(':').append(project?.first?.lastModified() ?: 0)
-            }
-            ruleCache?.let { if (it.signature == signature) return it.rules }
-
-            val rules = ProjectRules(
-                global = global?.first?.let { readRule(it) },
-                project = project?.first?.let { readRule(it) }
-            )
-            ruleCache = RuleCache(signature, rules)
-            return rules
-        }
-
-        private fun resolveRuleFile(dir: File): Pair<File, String>? {
-            val agents = File(dir, AGENTS_FILE)
-            if (agents.isFile && agents.canRead()) return agents to AGENTS_FILE
-            val claude = File(dir, CLAUDE_FILE)
-            if (claude.isFile && claude.canRead()) return claude to CLAUDE_FILE
-            return null
-        }
-
-        private fun readRule(file: File): String? {
-            val text = try { file.readText() } catch (e: Exception) { return null }
-            if (text.isBlank()) return null
-            return if (text.length > MAX_AGENTS_CHARS) {
-                (text.take(MAX_AGENTS_CHARS) + "\n…（规则过长，已截断）").trim()
-            } else {
-                text.trim()
-            }
-        }
-    }
+    private val projectRuleReader = ProjectRuleReader(fileAccess)
 
     private inner class WorkspaceSource : PromptSource {
         override fun build(ctx: AgentContext): String =
@@ -234,7 +190,7 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /** 项目规则正文拆分为全局（`~/.aicode`）与工作区两组，供 `{{AICODE_PROJECT_RULES_GLOBAL}}` / `{{AICODE_PROJECT_RULES_PROJECT}}` 变量使用。 */
-    private data class ProjectRules(val global: String?, val project: String?)
+    private fun projectRulesFor(ctx: AgentContext): ProjectRules? = projectRuleReader.read(ctx.projectRoot.isNotBlank())
 
     /**
      * 子代理固定纪律段（角色行 + 硬规则）：走 [AgentEngine.subAgentRules]，与 [EngineFragmentSource] 分开，
@@ -270,7 +226,6 @@ class SystemPromptProvider @Inject constructor(
     private val subAgentRulesSource = SubAgentRulesSource()
 
     private val activeSkillsSource = ActiveSkillsSource()
-    private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
     private val environmentSource = EnvironmentSource()
 
@@ -299,7 +254,7 @@ class SystemPromptProvider @Inject constructor(
         // 变量取同一模块的分组结果——同一轮里读盘与命中记账只发生一次。
         val memoryContent = engineFragmentSource.build(agentContext)
         val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
-        val projectRules = projectRuleSource.build(agentContext)
+        val projectRules = projectRulesFor(agentContext)
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
         val toolsContent = toolListSource.build(agentContext)
@@ -349,7 +304,7 @@ class SystemPromptProvider @Inject constructor(
             return ""
         }
         val memories = agentEngine.memoryListGroups(engineContextOf(ctx))
-        val projectRules = projectRuleSource.build(ctx)
+        val projectRules = projectRulesFor(ctx)
         val toolsContent = toolListSource.build(ctx)
         return renderVariables(
             content,
@@ -398,7 +353,8 @@ class SystemPromptProvider @Inject constructor(
         // 用它判会永远为真。（主代理 build() 把运行期内容全放在片段变量位上，没有这条追加路径。）
         val rawPrompt = definition.prompt
         val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
-        val projectRules = projectRuleSource.build(agentContext)
+        // 一次读取为本段与下方 PROJECT_RULES 追加路径共用：子代理提示词重组时不再多读一遍文件。
+        val projectRules = projectRulesFor(agentContext)
         val toolsContent = toolListSource.build(agentContext)
         append(
             renderVariables(
@@ -440,8 +396,7 @@ class SystemPromptProvider @Inject constructor(
             PROJECT_RULES_GLOBAL_VAR !in rawPrompt &&
             PROJECT_RULES_PROJECT_VAR !in rawPrompt
         ) {
-            val rules = projectRuleSource.build(agentContext)
-            listOfNotNull(rules?.global, rules?.project).takeIf { it.isNotEmpty() }?.let { parts ->
+            listOfNotNull(projectRules?.global, projectRules?.project).takeIf { it.isNotEmpty() }?.let { parts ->
                 append("\n\n")
                 append(parts.joinToString("\n\n"))
             }
@@ -551,11 +506,8 @@ class SystemPromptProvider @Inject constructor(
 
     private companion object {
         const val TAG = "SystemPromptProvider"
-        const val AGENTS_FILE = "AGENTS.md"
-        const val CLAUDE_FILE = "CLAUDE.md"
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
         const val SUBAGENT_CONTEXT_FILE = "agent/subagent-context.md"
-        const val MAX_AGENTS_CHARS = 32_000
         /** 会话级缓存 key 数量上限：超过后整体清空，仅防长期累积；正常会话数远小于此。 */
         const val SOURCE_CACHE_LIMIT = 32
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")

@@ -124,6 +124,12 @@ class RemoteSftpFileAccess @Inject constructor(
     private fun <T> withSftp(block: suspend (SFTPClient) -> T): T = runBlocking {
         withContext(Dispatchers.IO) {
             sftpMutex.withLock {
+                // 断连时直接失败：sftp() 一旦被调用就会新建一条 SSH transport，connect 最坏等满
+                // 10s 超时（文件树一次展开十来个目录就是一两分钟的假死）。isConnected 只是读字段，零 IO。
+                if (!connection.isConnected()) {
+                    val e = IllegalStateException("SSH 未连接")
+                    throw IOException(friendlySshError(e), e)
+                }
                 val sftp = try {
                     sftpProvider()
                 } catch (e: Exception) {

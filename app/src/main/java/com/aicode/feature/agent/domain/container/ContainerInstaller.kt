@@ -4,6 +4,10 @@ import android.content.Context
 import android.system.Os
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.InputStream
+import java.io.RandomAccessFile
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -20,6 +24,24 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * 采样窗口：头、居中、尾各读这么多字节参与指纹（合计不超过 384KB）。
+ * 全文件哈希在 [ContainerInstaller.isInstalledFor] 这条高频路径上代价太高（镜像几百 MB）。
+ */
+private const val SAMPLE_CHUNK_BYTES = 128 * 1024
+
+/**
+ * 内容流不支持跳过时，最多丢弃这么多字节去够采样点；再多就放弃采样（指纹返回 null）。
+ * 宁可不判断，也不能为了算指纹把几百 MB 镜像整读一遍。
+ */
+private const val SAMPLE_MAX_DISCARD_BYTES = 8L * 1024 * 1024
+
+/** 指纹取 SHA-256 前 16 字节（32 位 hex）：足够区分不同内容，又能让标记文件保持短小。 */
+private const val FINGERPRINT_BYTES = 16
+
+/** 进程内指纹缓存条数上限：每个容器一条，超出后整表清空（容器数本来就只有个位数）。 */
+private const val FINGERPRINT_CACHE_LIMIT = 32
 
 /**
  * 负责把打进 assets 的 Alpine rootfs 与 PRoot 二进制安装到 App 私有目录。
@@ -250,6 +272,12 @@ class ContainerInstaller @Inject constructor(
 
         /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
         private const val DELETE_PROGRESS_STEP = 2000
+
+        /**
+         * 自定义镜像标记的旧值（旧版本只写这个字面量，不含源文件指纹）。
+         * 仍要认它，否则升级后所有自定义容器都会被当成未安装而整体重装。
+         */
+        private const val LEGACY_CUSTOM_MARKER = "custom"
     }
 
     /** assets 内的架构特定目录 */
@@ -401,13 +429,121 @@ class ContainerInstaller @Inject constructor(
     private fun customInstalledMarker(profile: ContainerProfile): File =
         File(rootfsDirFor(profile), ".installed_custom")
 
-    /** 按 [profile] 判断是否已安装就绪：内置走现有版本校验，自定义本地看目录与标记，远程 SSH 恒就绪。 */
+    /** 采样指纹的进程内缓存：(源 uri, 大小, 修改时间) → 指纹；元数据没变就不重复读文件。 */
+    private val fingerprintCache = ConcurrentHashMap<String, String>()
+
+    /** 源文件的静态元数据；[modifiedAt] 为 null 表示对方没报修改时间。 */
+    private data class SourceMeta(val size: Long, val modifiedAt: Long?)
+
+    /**
+     * 自定义镜像标记的内容：`custom:<源文件指纹>`；指纹取不到时退回旧值 `custom`。
+     */
+    private fun customMarkerContent(fingerprint: String?): String =
+        if (fingerprint.isNullOrBlank()) LEGACY_CUSTOM_MARKER else "$LEGACY_CUSTOM_MARKER:$fingerprint"
+
+    /**
+     * 源文件的大小与修改时间；拿不到大小（定位尾部采样点就靠它）当「不知道」返回 null。
+     * 修改时间拿不到时该字段为 null，调用方据此关掉缓存（没它分不出「元数据是否变过」）。
+     */
+    private fun sourceMeta(uri: android.net.Uri): SourceMeta? {
+        if (uri.scheme == null || uri.scheme == "file") {
+            val file = uri.path?.let { File(it) } ?: return null
+            if (!file.isFile) return null
+            return SourceMeta(file.length(), file.lastModified().takeIf { it > 0L })
+        }
+        return runCatching {
+            val columns = arrayOf(
+                android.provider.OpenableColumns.SIZE,
+                android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            )
+            context.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val size = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    .takeIf { it >= 0 }?.let { cursor.getLong(it) } ?: return@use null
+                val modified = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                    .takeIf { it >= 0 }?.let { cursor.getLong(it) }?.takeIf { it > 0L }
+                SourceMeta(size, modified)
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * 导入镜像文件的采样指纹，取不到返回 null。
+     *
+     * [isInstalledFor] 每条命令、每次进容器都要问一次，而算一次采样指纹要读 ≤384KB，所以按
+     * (uri, 大小, 修改时间) 缓存：元数据没变就复用。代价是同大小又同修改时间被换掉内容在同一进程
+     * 里识别不到——重启后缓存为空即能发现，不会永久漏装。
+     */
+    private fun importedRootfsFingerprint(profile: ContainerProfile): String? {
+        val src = profile.rootfsSource as? RootfsSource.LocalFile ?: return null
+        val uri = runCatching { android.net.Uri.parse(src.uri) }.getOrNull() ?: return null
+        val meta = sourceMeta(uri) ?: return null
+        val cacheKey = meta.modifiedAt?.let { "$uri|${meta.size}|$it" }
+        if (cacheKey != null) fingerprintCache[cacheKey]?.let { return it }
+        val fingerprint = digestOf(uri, meta) ?: return null
+        if (cacheKey != null) {
+            if (fingerprintCache.size >= FINGERPRINT_CACHE_LIMIT) fingerprintCache.clear()
+            fingerprintCache[cacheKey] = fingerprint
+        }
+        return fingerprint
+    }
+
+    /** 按 uri 类型选读取方式：本地文件可随机定位，content:// 只能顺序读、靠 skip 定位。 */
+    private fun digestOf(uri: android.net.Uri, meta: SourceMeta): String? =
+        if (uri.scheme == null || uri.scheme == "file") {
+            uri.path?.let { sampledFileFingerprint(File(it)) }
+        } else {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { sampledStreamFingerprint(it, meta.size) }
+            }.getOrNull()
+        }
+
+    /** 按 [profile] 判断是否已安装就绪：内置走现有版本校验，自定义本地看目录+标记+源文件指纹，远程 SSH 恒就绪。 */
     fun isInstalledFor(profile: ContainerProfile): Boolean =
         when {
             profile.isBuiltin -> isInstalled()
             profile.rootfsSource is RootfsSource.RemoteSsh -> true
-            else -> rootfsDirFor(profile).isDirectory && customInstalledMarker(profile).exists()
+            else -> isCustomRootfsInstalled(profile)
         }
+
+    /**
+     * 自定义镜像是否已装好：除目录与标记外，还要求标记里的源文件指纹与当前导入文件一致。
+     *
+     * 同一个文件被新内容覆盖（重新下拉/替换后复用同一个 profile）时标记仍在，只看「标记存在」
+     * 会一直认为已安装，容器里跑的永远是旧 rootfs。指纹对不上就当成未安装，下次进容器重解压。
+     *
+     * 两种情况刻意不触发重装：
+     *  - 标记是旧格式（`custom` 或 `custom:<大小>:<修改时间>`）：老用户容器里可能已经装了一堆工具，
+     *    重装会把它清空，所以只把采样指纹补记进去，此后内容再变就能识别；
+     *  - 当前指纹取不到（文件已删/provider 不报元数据）：判断不了就不动。
+     */
+    private fun isCustomRootfsInstalled(profile: ContainerProfile): Boolean {
+        if (!rootfsDirFor(profile).isDirectory) return false
+        val marker = customInstalledMarker(profile)
+        if (!marker.exists()) return false
+        val recorded = runCatching { marker.readText().trim() }.getOrNull() ?: return false
+        if (isLegacyCustomMarker(recorded)) {
+            val current = importedRootfsFingerprint(profile)
+            if (!current.isNullOrBlank()) {
+                runCatching { marker.writeText(customMarkerContent(current)) }
+            }
+            return true
+        }
+        val current = importedRootfsFingerprint(profile) ?: return true
+        if (recorded == customMarkerContent(current)) return true
+        FileLogger.w(TAG, "导入镜像源文件内容已变化，下次进容器将重解压：${profile.id}")
+        return false
+    }
+
+    /**
+     * 旧标记没有采样指纹：`custom`（最早）或 `custom:<大小>:<修改时间>`（上一版）。
+     * 两者都判断不了内容是否变过；升级后第一次判定时静默换成采样指纹，不重装。
+     * 以 payload 里有无冒号区分：采样指纹是纯 hex，不会含冒号。
+     */
+    private fun isLegacyCustomMarker(recorded: String): Boolean =
+        recorded == LEGACY_CUSTOM_MARKER ||
+            (recorded.startsWith("$LEGACY_CUSTOM_MARKER:") &&
+                ':' in recorded.removePrefix("$LEGACY_CUSTOM_MARKER:"))
 
     /**
      * 按 [profile] 解压安装 rootfs。内置走 assets 全流程（rootfs/resolv/apk 源）；自定义本地镜像只解压
@@ -454,7 +590,7 @@ class ContainerInstaller @Inject constructor(
         configureResolvConf(dest)
         prootTmpDirFor(profile).mkdirs()
         repairRootfsCompatibility(dest)
-        customInstalledMarker(profile).writeText("custom")
+        customInstalledMarker(profile).writeText(customMarkerContent(importedRootfsFingerprint(profile)))
         FileLogger.i(TAG, "自定义容器 rootfs 安装完成：${profile.id}")
     }
 
@@ -745,5 +881,92 @@ class ContainerInstaller @Inject constructor(
         conf.delete()
         conf.writeText("nameserver 223.5.5.5\nnameserver 223.6.6.6\n")
         FileLogger.i(TAG, "已写入容器 DNS 配置：${conf.absolutePath}")
+    }
+}
+
+/**
+ * 采样位置：头、居中、尾各 [SAMPLE_CHUNK_BYTES]。
+ *
+ * 文件比窗口短时三段都退化为 `[0, size)`（摘要仍确定，只是退化成近全文件哈希）。选这三处是因为
+ * tar.gz 的 gzip 头、中段文件数据与尾部结束标记分居两头一尾，同名镜像被新内容覆盖时很难三处全不变。
+ */
+internal fun sampledSegments(size: Long): List<Pair<Long, Int>> {
+    if (size <= 0L) return emptyList()
+    val length = minOf(size, SAMPLE_CHUNK_BYTES.toLong()).toInt()
+    val lastOffset = (size - SAMPLE_CHUNK_BYTES).coerceAtLeast(0L)
+    return listOf(0L to length, lastOffset / 2 to length, lastOffset to length)
+}
+
+/**
+ * 把 [segments] 指向的字节按顺序拼起来做 SHA-256，取前 [FINGERPRINT_BYTES] 字节的 hex。
+ * [read] 返回 null 表示这一段读不到（文件被截断/流不支持跳过），整体当作「不知道」返回 null。
+ */
+internal fun sampledDigest(
+    segments: List<Pair<Long, Int>>,
+    read: (offset: Long, length: Int) -> ByteArray?
+): String? {
+    val digest = MessageDigest.getInstance("SHA-256")
+    for ((offset, length) in segments) {
+        val bytes = read(offset, length) ?: return null
+        digest.update(bytes)
+    }
+    return digest.digest().take(FINGERPRINT_BYTES).joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * 本地文件的采样指纹。`internal` 是为了让单测能直接构造标记值，生产只经
+ * [ContainerInstaller.importedRootfsFingerprint] 使用。
+ */
+internal fun sampledFileFingerprint(file: File): String? {
+    if (!file.isFile) return null
+    return runCatching {
+        RandomAccessFile(file, "r").use { raf ->
+            sampledDigest(sampledSegments(raf.length())) { offset, length -> readAt(raf, offset, length) }
+        }
+    }.getOrNull()
+}
+
+/** 从 [offset] 起读 [length] 字节；遇到文件尾就返回实际读到的部分。 */
+private fun readAt(raf: RandomAccessFile, offset: Long, length: Int): ByteArray? = runCatching {
+    raf.seek(offset)
+    val buffer = ByteArray(length)
+    var read = 0
+    while (read < length) {
+        val n = raf.read(buffer, read, length - read)
+        if (n < 0) break
+        read += n
+    }
+    buffer.copyOf(read)
+}.getOrNull()
+
+/**
+ * content:// 的采样指纹：流只能顺序读，靠 `skip` 定位采样点；不支持 skip 就逐字节丢弃，
+ * 但丢弃总量超过 [SAMPLE_MAX_DISCARD_BYTES] 就放弃（返回 null），不为了算指纹把整个镜像读一遍。
+ */
+internal fun sampledStreamFingerprint(input: InputStream, size: Long): String? {
+    if (size <= 0L) return null
+    var position = 0L
+    var discarded = 0L
+    return sampledDigest(sampledSegments(size)) { offset, length ->
+        while (position < offset) {
+            val skipped = runCatching { input.skip(offset - position) }.getOrDefault(0L)
+            if (skipped > 0L) {
+                position += skipped
+                continue
+            }
+            if (input.read() < 0) return@sampledDigest null
+            position++
+            discarded++
+            if (discarded > SAMPLE_MAX_DISCARD_BYTES) return@sampledDigest null
+        }
+        val buffer = ByteArray(length)
+        var read = 0
+        while (read < length) {
+            val n = input.read(buffer, read, length - read)
+            if (n < 0) break
+            read += n
+        }
+        position += read
+        buffer.copyOf(read)
     }
 }

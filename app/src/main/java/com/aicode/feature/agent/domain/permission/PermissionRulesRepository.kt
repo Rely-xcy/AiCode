@@ -9,6 +9,7 @@ import com.aicode.core.watch.touches
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
+import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -53,9 +55,14 @@ import javax.inject.Singleton
  *
  * 读取语义：「确认没有规则」与「读不到规则」严格区分（文件不存在 = 确认没有；工作区未落定或
  * 解析失败 = 读不到），后者不得当成「这一层没有规则」——项目级与全局级都适用，
- * 见 [loadEffectiveForCurrentProject]。
+ * 见 [loadEffectiveForCurrentProject]。软链接解析失败不算「读不到」：词法路径本身仍是一个确定的
+ * 观察点，是否真有规则由 [resolveLinkOrSelf] 退回后的路径决定。
  *
  * 并发模式参考 [McpConfigRepository]：Mutex 保护文件 IO + MutableStateFlow 缓存。
+ *
+ * 读写都先经 [WorkspacePathMapper.resolveHostFile] 解析容器软链接：项目授权配置常被放在链接
+ * 目录里（`.aicode` 指向团队共享配置），按词法路径判断会漏读整层规则。解析失败（链接成环、
+ * 工作区未落定）一律退回原词法路径——权限判断宁可读到旧的，也不能因为一个坏链接整体失效。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -63,7 +70,8 @@ class PermissionRulesRepository @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val workspaceRepository: WorkspaceRepository,
     private val projectAicodeRoot: ProjectAicodeRoot,
-    private val fileChangeHub: FileChangeHub
+    private val fileChangeHub: FileChangeHub,
+    private val pathMapper: WorkspacePathMapper
 ) {
     private companion object {
         const val TAG = "PermissionRules"
@@ -161,9 +169,10 @@ class PermissionRulesRepository @Inject constructor(
 
     private suspend fun loadFromFile(file: File): LoadedRules =
         withContext(Dispatchers.IO) {
-            if (!file.isFile) return@withContext LoadedRules(emptyList(), confirmed = true)
+            val resolved = resolveLinkOrSelf(file)
+            if (!resolved.isFile) return@withContext LoadedRules(emptyList(), confirmed = true)
             runCatching {
-                JSON.decodeFromString<PermissionFile>(file.readText()).toRuleList()
+                JSON.decodeFromString<PermissionFile>(resolved.readText()).toRuleList()
             }.fold(
                 onSuccess = { LoadedRules(it, confirmed = true) },
                 onFailure = {
@@ -174,9 +183,26 @@ class PermissionRulesRepository @Inject constructor(
         }
 
     private fun writeToFile(file: File, rules: List<PermissionRule>) {
-        file.parentFile?.mkdirs()
-        file.writeText(JSON.encodeToString(PermissionFile.serializer(), rules.toPermissionFile()))
+        // 写到链接指向的真实文件上，而不是把链接本身替换成普通文件（那会让用户的链接配置失效）。
+        val resolved = resolveLinkOrSelf(file)
+        val parent = resolved.parentFile
+        if (parent != null && !parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+            throw IOException("无法创建权限配置目录：${parent.absolutePath}")
+        }
+        resolved.writeText(JSON.encodeToString(PermissionFile.serializer(), rules.toPermissionFile()))
     }
+
+    /**
+     * 解析 [file] 路径上的容器软链接；解析失败退回原文件。
+     *
+     * 失败原因（链接成环、工作区未落定、越界目标）都只影响「这一次读到的是不是最新配置」，
+     * 不能升级成「权限层读不到」——那会让所有需要授权的调用降级成一次性询问。
+     */
+    private fun resolveLinkOrSelf(file: File): File =
+        runCatching { pathMapper.resolveHostFile(file) }.getOrElse { e ->
+            FileLogger.w(TAG, "解析 ${file.path} 的软链接失败，按原路径处理: ${e.message}")
+            file
+        }
 
     // ── 公共 API ────────────────────────────────────────────────
 
