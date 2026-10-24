@@ -1944,12 +1944,8 @@ fun AIChatPanel(
                             }
                         }
                     }
-                    // 预热不产生 UI、也不参与布局：只为把「滑入视口才解析」提前到后台。
-                    MarkdownParseWarmer(
-                        queue = markdownWarmQueue,
-                        cache = markdownCache,
-                        resetKey = currentSessionId
-                    )
+                    // 预热会占用主线程做 MarkdownPreprocessor 预处理，长会话里逐条空转同样拖帧；
+                    // 24 版 beta 实测卡顿，停用。保留缓存容量（200）来减少回翻时的重新解析。
                 }
             }
             } // 内容层结束

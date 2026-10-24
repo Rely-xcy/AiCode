@@ -248,7 +248,10 @@ internal fun MarkdownContent(
                 loading = loading,
                 lazyScroll = lazyScroll,
                 streaming = streaming,
-                immediate = !streaming,
+                // 定稿消息不做同步解析：Markdown 解析跑在主线程，一屏多条定稿消息同时未命中缓存时
+                // 会把帧时间拉爆（beta d6774463 实测严重卡顿）。这里回到异步路径，靠缓存容量兜住
+                // 「回翻时集体重新解析」，代价是首次进入视口仍有一次高度变化。
+                immediate = false,
                 mdColors = mdColors,
                 mdTypography = mdTypography,
                 mdPadding = mdPadding,
