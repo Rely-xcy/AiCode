@@ -41,6 +41,13 @@ data class McpServerStatus(
     enum class State { CONNECTING, CONNECTED, NEEDS_AUTH, FAILED, DISABLED }
 }
 
+/**
+ * 授权结果：Result 成功即授权成功，[connected] 单独描述随后的重连，
+ * 因为「拿到令牌」与「拿到令牌后连得上」是两件事，UI 不能把后者当成必然。
+ * [connected] 为 null 表示两次重连都没观察到连接状态（配置已被删等），按未知处理。
+ */
+data class McpAuthorizeResult(val connected: Boolean?)
+
 // reloadMutex 串行化重连，避免设置页连点导致并发注册/反注册竞态。
 @Singleton
 class McpManager @Inject constructor(
@@ -325,17 +332,19 @@ class McpManager @Inject constructor(
     /**
      * 触发某个 server 的 OAuth 授权；成功后立即重连使其工具可用。
      * 授权前因无令牌而失败的连接不会自己恢复，所以这里连一次，没连上再补一次（失败只记日志）。
+     * 重连成败随结果一起返回：授权成功但连不上时调用方不能再显示「已连接」。
      */
-    suspend fun authorize(name: String): Result<Unit> {
+    suspend fun authorize(name: String): Result<McpAuthorizeResult> {
         val cfg = configRepository.getEffectiveServers().firstOrNull { it.name == name }
             ?: return Result.failure(McpOAuthException("未找到 MCP server: $name"))
         return runCatching {
             oauthManager.authorize(cfg)
-            retryConnectAfterAuthorize(name) {
-                reloadServer(name)
-                statusOf(name)
-            }
-            Unit
+            McpAuthorizeResult(
+                retryConnectAfterAuthorize(name) {
+                    reloadServer(name)
+                    statusOf(name)
+                }
+            )
         }
     }
 
@@ -376,16 +385,20 @@ class McpManager @Inject constructor(
  * 授权成功后重连：首次没连上再补一次，两次都没连上只记日志（授权本身已成功，不因此报授权失败）。
  * [attempt] 返回本次尝试后的连接状态。授权流程要开系统浏览器，真机路径在单测里跑不起来，
  * 所以把重试次数与判定抽成这个函数，用假连接验证。
+ * 返回 true=已连接、false=观察到了失败状态、null=两次都没拿到状态（未知，不能当成已连接）。
  */
 internal suspend fun retryConnectAfterAuthorize(
     serverName: String,
     attempt: suspend () -> McpServerStatus.State?
-): Boolean {
+): Boolean? {
+    var observedFailure = false
     val first = attempt()
     if (first == McpServerStatus.State.CONNECTED) return true
+    if (first != null) observedFailure = true
     FileLogger.w(TAG, "[$serverName] 授权后首次重连未成功（${first ?: "未连接"}），自动重试一次")
     val second = attempt()
     if (second == McpServerStatus.State.CONNECTED) return true
+    if (second != null) observedFailure = true
     FileLogger.w(TAG, "[$serverName] 授权后重试仍未连上（${second ?: "未连接"}），需用户手动重连")
-    return false
+    return if (observedFailure) false else null
 }

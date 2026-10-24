@@ -1290,6 +1290,8 @@
     <string name="mcp_auth_status_unauthorized">Not signed in</string>
     <string name="mcp_auth_status_authorizing">Authorizing</string>
     <string name="mcp_auth_success">Authorized and connected</string>
+    <string name="mcp_auth_success_not_connected">Authorized, but failed to connect. Retry later</string>
+    <string name="mcp_auth_success_only">Authorized</string>
     <string name="mcp_search_placeholder">Search MCP servers…</string>
     <string name="mcp_search_empty">No matching MCP servers found</string>
     <string name="mcp_tools_search">Search tool name or description…</string>

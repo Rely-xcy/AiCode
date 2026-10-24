@@ -205,19 +205,25 @@ internal fun McpAuthFields(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
 
+                            // 授权成功但没连上：文案与徽标按警告态走，不能沿用成功态声称「已连接」。
+                            val connectFailed = state.success && state.connected == false
                             val statusBg = when {
                                 state.inProgress -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                connectFailed -> MaterialTheme.semanticColors.warningContainer
                                 isAuthorized -> MaterialTheme.semanticColors.successContainer
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
                             val statusFg = when {
                                 state.inProgress -> MaterialTheme.colorScheme.primary
+                                connectFailed -> MaterialTheme.semanticColors.onWarningContainer
                                 isAuthorized -> MaterialTheme.semanticColors.onSuccessContainer
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             val statusLabel = when {
                                 state.inProgress -> stringResource(R.string.mcp_auth_status_authorizing)
-                                state.success -> stringResource(R.string.mcp_auth_success)
+                                connectFailed -> stringResource(R.string.mcp_auth_success_not_connected)
+                                state.success && state.connected == true -> stringResource(R.string.mcp_auth_success)
+                                state.success -> stringResource(R.string.mcp_auth_success_only)
                                 isAuthorized -> stringResource(R.string.mcp_auth_status_authorized)
                                 else -> stringResource(R.string.mcp_auth_status_unauthorized)
                             }
@@ -235,6 +241,14 @@ internal fun McpAuthFields(
                                             modifier = Modifier.size(12.dp),
                                             strokeWidth = 1.8.dp,
                                             color = statusFg
+                                        )
+                                    }
+                                    connectFailed -> {
+                                        Icon(
+                                            imageVector = FeatherIcons.AlertCircle,
+                                            contentDescription = null,
+                                            tint = statusFg,
+                                            modifier = Modifier.size(12.dp)
                                         )
                                     }
                                     isAuthorized -> {

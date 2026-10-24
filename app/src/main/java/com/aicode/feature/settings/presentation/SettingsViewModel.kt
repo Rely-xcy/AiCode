@@ -31,7 +31,6 @@ import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
-import com.aicode.feature.agent.domain.mcp.auth.McpOAuthCancelledException
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -169,7 +168,10 @@ data class McpAuthUiState(
     val serverName: String? = null,
     val inProgress: Boolean = false,
     val error: String? = null,
-    val success: Boolean = false
+    val success: Boolean = false,
+    // 授权后的重连结果：true 已连接、false 未连上、null 未尝试或拿不到结果；
+    // 只有 true 才可以宣称「已连接」。
+    val connected: Boolean? = null
 )
 
 data class McpImportUiState(
@@ -1545,11 +1547,7 @@ class SettingsViewModel @Inject constructor(
             }
             _mcpAuthState.value = McpAuthUiState(serverName = config.name, inProgress = true)
             val result = mcpManager.authorize(config.name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = config.name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = config.name, error = result.exceptionOrNull()?.message)
-            }
+            _mcpAuthState.value = mcpAuthUiState(config.name, result)
         }
     }
 
@@ -1666,11 +1664,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _mcpAuthState.value = McpAuthUiState(serverName = name, inProgress = true)
             val result = mcpManager.authorize(name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = name, error = result.exceptionOrNull()?.message)
-            }
+            _mcpAuthState.value = mcpAuthUiState(name, result)
         }
     }
 
