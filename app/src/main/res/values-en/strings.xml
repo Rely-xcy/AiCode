@@ -1597,6 +1597,28 @@
     <string name="provider_models_batch_delete">Delete</string>
     <string name="provider_models_batch_delete_title">Delete Models</string>
     <string name="provider_models_batch_delete_confirm">Are you sure you want to delete the selected %1$d models?</string>
+    <!-- Batch operations (multi-select mode): shared labels reused across pages -->
+    <string name="common_select_mode">Select</string>
+    <string name="common_select_all">Select All</string>
+    <string name="common_deselect_all">Deselect All</string>
+    <string name="common_selected_count">%1$d selected</string>
+    <string name="common_batch_delete">Delete</string>
+    <string name="common_batch_enable">Enable</string>
+    <string name="common_batch_disable">Disable</string>
+    <string name="common_batch_reconnect">Reconnect</string>
+    <string name="common_batch_deleting">Deleting…</string>
+    <string name="providers_batch_delete_title">Delete Providers</string>
+    <string name="providers_batch_delete_confirm">Delete the selected %1$d providers? This cannot be undone.</string>
+    <string name="mcp_batch_delete_title">Delete MCP Servers</string>
+    <string name="mcp_batch_delete_confirm">Delete the selected %1$d MCP servers?</string>
+    <string name="skills_batch_delete_title">Delete Skills</string>
+    <string name="skills_batch_delete_confirm">Delete the selected %1$d skill directories? This cannot be undone.</string>
+    <string name="subagents_batch_delete_title">Delete Subagents</string>
+    <string name="subagents_batch_delete_confirm">Delete the selected %1$d subagent definition files? This cannot be undone.</string>
+    <string name="prompts_batch_delete_title">Delete Prompts</string>
+    <string name="prompts_batch_delete_confirm">Delete the selected %1$d custom prompt fragments? Their numbers will fall back to the next source.</string>
+    <string name="container_download_batch_delete_title">Delete Downloaded Images</string>
+    <string name="container_download_batch_delete_confirm">Delete the selected %1$d image files? Imported containers will no longer be able to unpack them.</string>
     <string name="provider_model_name">Model Name</string>    <string name="provider_model_already_added">This model has already been added</string>
     <string name="provider_edit_model">Edit Model</string>
     <string name="provider_model_section_price">Pricing</string>

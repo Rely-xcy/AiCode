@@ -1597,6 +1597,28 @@
     <string name="provider_models_batch_delete">删除</string>
     <string name="provider_models_batch_delete_title">删除模型</string>
     <string name="provider_models_batch_delete_confirm">确定删除选中的 %1$d 个模型吗？</string>
+    <!-- 列表批量操作（多选模式）：通用文案，跨页面复用 -->
+    <string name="common_select_mode">多选</string>
+    <string name="common_select_all">全选</string>
+    <string name="common_deselect_all">取消全选</string>
+    <string name="common_selected_count">已选 %1$d 项</string>
+    <string name="common_batch_delete">删除</string>
+    <string name="common_batch_enable">启用</string>
+    <string name="common_batch_disable">停用</string>
+    <string name="common_batch_reconnect">重连</string>
+    <string name="common_batch_deleting">正在删除…</string>
+    <string name="providers_batch_delete_title">删除提供商</string>
+    <string name="providers_batch_delete_confirm">确定删除选中的 %1$d 个提供商吗？此操作不可恢复。</string>
+    <string name="mcp_batch_delete_title">删除 MCP 服务器</string>
+    <string name="mcp_batch_delete_confirm">确定删除选中的 %1$d 个 MCP 服务器吗？</string>
+    <string name="skills_batch_delete_title">删除技能</string>
+    <string name="skills_batch_delete_confirm">将删除选中的 %1$d 个技能目录，此操作不可恢复。确定删除？</string>
+    <string name="subagents_batch_delete_title">删除子代理</string>
+    <string name="subagents_batch_delete_confirm">将删除选中的 %1$d 个子代理定义文件，此操作不可恢复。确定删除？</string>
+    <string name="prompts_batch_delete_title">删除提示词</string>
+    <string name="prompts_batch_delete_confirm">确定删除选中的 %1$d 条自定义提示词吗？对应编号将回落到下一层来源。</string>
+    <string name="container_download_batch_delete_title">删除已下载镜像</string>
+    <string name="container_download_batch_delete_confirm">删除选中的 %1$d 个镜像文件？已导入的容器将无法再解压。</string>
     <string name="provider_model_name">模型名称</string>    <string name="provider_model_already_added">该模型已添加</string>
     <string name="provider_edit_model">编辑模型</string>
     <string name="provider_model_section_price">价格</string>

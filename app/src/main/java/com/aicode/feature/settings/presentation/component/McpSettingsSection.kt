@@ -40,6 +40,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionButton
+import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -49,14 +54,19 @@ import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.Trash2
 import com.aicode.R
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * MCP 二级页：与提供商/默认模型一致的 iOS 分组列表。
  * 白色分组卡片内每台 server 一行，两行布局（名称+状态 / 类型+摘要），支持左滑删除、长按整行拖拽排序。
+ *
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 重连 / 删除。
+ * 多选模式下全选只作用于**当前搜索筛选结果**，与列表里看到的条目一致。
  */
 
 /** 列表 item key 前缀：既标识身份，也用来判定分组（全局 / 项目），跨组拖拽会被拦下。 */
@@ -74,12 +84,21 @@ internal fun McpSection(
     entries: List<McpServerEntry>,
     statuses: List<McpServerStatus>,
     reloading: Boolean,
+    selection: ListSelectionState,
     onReload: () -> Unit,
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
-    onDelete: (String, McpScope) -> Unit
+    onDelete: (String, McpScope) -> Unit,
+    onBatchDelete: (List<Pair<String, McpScope>>) -> Unit,
+    onBatchSetEnabled: (List<Pair<String, McpScope>>, Boolean) -> Unit,
+    onBatchReconnect: (List<String>) -> Unit
 ) {
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+
     if (entries.isEmpty()) {
+        LaunchedEffect(selection.isActive) {
+            if (selection.isActive) selection.exit()
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -135,6 +154,20 @@ internal fun McpSection(
     }
 
     val statusByName = remember(statuses) { statuses.associateBy { it.name } }
+
+    val visibleKeys = remember(filteredEntries) {
+        filteredEntries.map { mcpSelectionKey(it.server.name, it.scope) }
+    }
+    // key -> (名称, 作用域)，批量操作时把选中集合还原成目标列表；搜索筛掉的条目自然不在表里。
+    val keyToTarget = remember(filteredEntries) {
+        filteredEntries.associate {
+            mcpSelectionKey(it.server.name, it.scope) to (it.server.name to it.scope)
+        }
+    }
+    // 搜索条件变化后，被筛掉的条目要从选中集合里剔除；否则批量删除会误伤看不见的 server。
+    LaunchedEffect(visibleKeys) { selection.retainOnly(visibleKeys.toSet()) }
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == visibleKeys.size
+
     val settingsViewModel = rememberSettingsViewModel()
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -153,77 +186,138 @@ internal fun McpSection(
         viewModel.reorderMcpServers(scope, moved, target)
     }
 
-    LazyColumn(
-        state = lazyListState,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl)
-    ) {
-        if (searchVisible) {
-            item(key = "mcp_search", contentType = "search") {
-                ModelSearchField(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    placeholder = stringResource(R.string.mcp_search_placeholder),
-                    modifier = Modifier.padding(bottom = Spacing.xs)
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(visibleKeys)
+                },
+                onExit = { selection.exit() }
+            ) {
+                val enabled = selection.selectedCount > 0
+                val targets = selection.selectedKeys.mapNotNull { keyToTarget[it] }
+                SelectionActionButton(
+                    text = stringResource(R.string.common_batch_enable),
+                    enabled = enabled,
+                    onClick = { onBatchSetEnabled(targets, true) }
+                )
+                SelectionActionButton(
+                    text = stringResource(R.string.common_batch_disable),
+                    enabled = enabled,
+                    onClick = { onBatchSetEnabled(targets, false) }
+                )
+                SelectionActionIconButton(
+                    icon = FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.common_batch_reconnect),
+                    enabled = enabled,
+                    onClick = { onBatchReconnect(targets.map { it.first }) }
+                )
+                SelectionActionIconButton(
+                    icon = FeatherIcons.Trash2,
+                    contentDescription = stringResource(R.string.common_batch_delete),
+                    enabled = enabled,
+                    onClick = { showBatchDeleteConfirm = true },
+                    tint = MaterialTheme.colorScheme.error
                 )
             }
         }
 
-        if (filteredEntries.isEmpty()) {
-            item(key = "mcp_search_empty", contentType = "empty") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        LazyColumn(
+            state = lazyListState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            if (searchVisible) {
+                item(key = "mcp_search", contentType = "search") {
+                    ModelSearchField(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = stringResource(R.string.mcp_search_placeholder),
+                        modifier = Modifier.padding(bottom = Spacing.xs)
+                    )
+                }
+            }
+
+            if (filteredEntries.isEmpty()) {
+                item(key = "mcp_search_empty", contentType = "empty") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            FeatherIcons.Search,
-                            contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Text(
-                            text = stringResource(R.string.mcp_search_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        ) {
+                            Icon(
+                                FeatherIcons.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Text(
+                                text = stringResource(R.string.mcp_search_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                itemsIndexed(
+                    items = filteredEntries,
+                    key = { _, entry -> mcpItemKey(entry) },
+                    contentType = { _, _ -> "mcp-row" }
+                ) { index, entry ->
+                    ReorderableCardRow(
+                        state = reorderableState,
+                        key = mcpItemKey(entry),
+                        isFirst = index == 0,
+                        isLast = index == filteredEntries.lastIndex,
+                        dragLabel = "mcpServerDrag"
+                    ) { dragModifier ->
+                        McpServerRow(
+                            server = entry.server,
+                            scope = entry.scope,
+                            status = statusByName[entry.server.name],
+                            onClick = { onEdit(entry) },
+                            onDelete = { onDelete(entry.server.name, entry.scope) },
+                            // 筛选后的相邻行在全量顺序里未必相邻，拖拽落点无法回推真实序号，筛选态下不给拖拽手柄；
+                            // 多选态同理：整行点击已改为勾选，再挂拖拽会抢手势。
+                            dragModifier = if (searchQuery.isBlank() && !selection.isActive) dragModifier else Modifier,
+                            selectionMode = selection.isActive,
+                            selected = selection.isSelected(mcpSelectionKey(entry.server.name, entry.scope)),
+                            onToggleSelect = { selection.toggle(mcpSelectionKey(entry.server.name, entry.scope)) }
                         )
                     }
                 }
             }
-        } else {
-            itemsIndexed(
-                items = filteredEntries,
-                key = { _, entry -> mcpItemKey(entry) },
-                contentType = { _, _ -> "mcp-row" }
-            ) { index, entry ->
-                ReorderableCardRow(
-                    state = reorderableState,
-                    key = mcpItemKey(entry),
-                    isFirst = index == 0,
-                    isLast = index == filteredEntries.lastIndex,
-                    dragLabel = "mcpServerDrag"
-                ) { dragModifier ->
-                    McpServerRow(
-                        server = entry.server,
-                        scope = entry.scope,
-                        status = statusByName[entry.server.name],
-                        onClick = { onEdit(entry) },
-                        onDelete = { onDelete(entry.server.name, entry.scope) },
-                        // 筛选后的相邻行在全量顺序里未必相邻，拖拽落点无法回推真实序号，筛选态下不给拖拽手柄。
-                        dragModifier = if (searchQuery.isBlank()) dragModifier else Modifier
-                    )
-                }
-            }
         }
     }
+
+    if (showBatchDeleteConfirm) {
+        val targets = selection.selectedKeys.mapNotNull { keyToTarget[it] }
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.mcp_batch_delete_title),
+            message = stringResource(R.string.mcp_batch_delete_confirm, targets.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(targets)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
+    }
 }
+
+/** 多选 key：同名 server 可同时存在于全局层与项目层，必须带作用域前缀。 */
+private fun mcpSelectionKey(name: String, scope: McpScope): String = "${scope.name}:$name"
 
 /**
  * 单个 MCP server 行：分组内白底行，图标 + 名称/状态 + 类型/摘要 + 右箭头，左滑删除。
@@ -235,7 +329,10 @@ internal fun McpServerRow(
     status: McpServerStatus?,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    dragModifier: Modifier = Modifier
+    dragModifier: Modifier = Modifier,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val isConnected = server.enabled && status?.state == McpServerStatus.State.CONNECTED
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
@@ -275,7 +372,10 @@ internal fun McpServerRow(
 
     SwipeToDeleteRow(
         onDelete = onDelete,
-        onClick = onClick
+        onClick = onClick,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect
     ) {
         Row(
             modifier = Modifier

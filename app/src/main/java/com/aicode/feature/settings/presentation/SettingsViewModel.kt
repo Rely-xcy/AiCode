@@ -747,9 +747,12 @@ class SettingsViewModel @Inject constructor(
     private val _skillImportState = MutableStateFlow<SkillImportState>(SkillImportState.Idle)
     val skillImportState: StateFlow<SkillImportState> = _skillImportState.asStateFlow()
 
-    /** 正在删除的技能名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
-    private val _skillDeleting = MutableStateFlow<String?>(null)
-    val skillDeleting: StateFlow<String?> = _skillDeleting.asStateFlow()
+    /**
+     * 正在删除的技能名集合（空集合表示没有删除在进行）。
+     * 用集合而非单个名字：批量删除时逐条删除、逐条移除，UI 可据此显示进度并保持弹窗转圈。
+     */
+    private val _skillDeleting = MutableStateFlow<Set<String>>(emptySet())
+    val skillDeleting: StateFlow<Set<String>> = _skillDeleting.asStateFlow()
 
     private val _subAgents = MutableStateFlow<List<SubAgentUiEntry>>(emptyList())
     val subAgents: StateFlow<List<SubAgentUiEntry>> = _subAgents.asStateFlow()
@@ -757,9 +760,9 @@ class SettingsViewModel @Inject constructor(
     private val _subAgentSaveState = MutableStateFlow<SubAgentSaveState>(SubAgentSaveState.Idle)
     val subAgentSaveState: StateFlow<SubAgentSaveState> = _subAgentSaveState.asStateFlow()
 
-    /** 正在删除的子代理名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
-    private val _subAgentDeleting = MutableStateFlow<String?>(null)
-    val subAgentDeleting: StateFlow<String?> = _subAgentDeleting.asStateFlow()
+    /** 正在删除的子代理名集合（空集合表示没有删除在进行，语义同 [skillDeleting]）。 */
+    private val _subAgentDeleting = MutableStateFlow<Set<String>>(emptySet())
+    val subAgentDeleting: StateFlow<Set<String>> = _subAgentDeleting.asStateFlow()
 
     val mcpStatuses: StateFlow<List<McpServerStatus>> = mcpManager.statuses
 
@@ -1590,6 +1593,73 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 批量删除 MCP server（列表多选批量操作）。
+     * 配置按作用域分组写：同作用域只读一次、写一次；写文件不能逐条做，否则 N 条就是 N 次全量重写。
+     * 断开连接仍逐条走 [McpManager.removeServer]（它自带 reloadMutex），不另开批量入口。
+     */
+    fun deleteMcpServers(targets: List<Pair<String, McpScope>>) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+                val updated = base.filterNot { it.name in nameSet }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    written = mcpConfigRepository.setProjectServers(updated) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            _mcpReloading.value = true
+            try {
+                targets.map { it.first }.distinct().forEach { mcpManager.removeServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 批量启用 / 停用 MCP server：配置按作用域分组各写一次，再逐个重连（停用的会落到 DISABLED 状态）。 */
+    fun setMcpServersEnabled(targets: List<Pair<String, McpScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+                val updated = base.map { if (it.name in nameSet) it.copy(enabled = enabled) else it }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    written = mcpConfigRepository.setProjectServers(updated) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            _mcpReloading.value = true
+            try {
+                targets.map { it.first }.distinct().forEach { mcpManager.reloadServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 批量重连 MCP server（多选后一次性刷新连接状态）。 */
+    fun reconnectMcpServers(names: Collection<String>) {
+        if (names.isEmpty()) return
+        viewModelScope.launch {
+            _mcpReloading.value = true
+            try {
+                names.distinct().forEach { mcpManager.reloadServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
     /** 触发某个 server 的 OAuth 授权，结果（含失败原因）写入 [mcpAuthState] 供编辑弹窗展示。 */
     fun authorizeMcpServer(name: String) {
         if (_mcpAuthState.value.inProgress) return
@@ -1712,19 +1782,45 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用技能（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSkillsEnabled(targets: List<Pair<String, SkillScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) ->
+                    written = skillRepository.setSkillDisabled(name, !enabled, scope) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            refreshSkills()
+        }
+    }
+
     /**
      * 删除指定作用域的技能（删除其目录，不可恢复），完成后刷新列表。
      * 删除本体在 IO 线程跑（远程模式经 SFTP 递归删，不能在主线程）；期间 [skillDeleting] 置名供 UI 转圈。
      */
-    fun deleteSkill(name: String, scope: SkillScope) {
-        if (_skillDeleting.value != null) return
-        _skillDeleting.value = name
+    fun deleteSkill(name: String, scope: SkillScope) = deleteSkills(listOf(name to scope))
+
+    /**
+     * 批量删除技能（列表多选批量操作）。逐条串行删除，每删完一条从 [skillDeleting] 集合里移出；
+     * 远程模式下 SFTP 递归删除较慢，串行可避免把连接压满，界面也能看出删到哪了。
+     */
+    fun deleteSkills(targets: List<Pair<String, SkillScope>>) {
+        if (targets.isEmpty() || _skillDeleting.value.isNotEmpty()) return
+        _skillDeleting.value = targets.map { it.first }.toSet()
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { skillRepository.deleteSkill(name, scope) }
+                withContext(Dispatchers.IO) {
+                    targets.forEach { (name, scope) ->
+                        skillRepository.deleteSkill(name, scope)
+                        _skillDeleting.value = _skillDeleting.value - name
+                    }
+                }
                 refreshSkills()
             } finally {
-                _skillDeleting.value = null
+                _skillDeleting.value = emptySet()
             }
         }
     }
@@ -1854,6 +1950,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用子代理（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSubAgentsEnabled(targets: List<Pair<String, AgentDefinitionScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) ->
+                    written = agentDefinitionRepository.setDisabled(name, !enabled, scope) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            refreshSubAgents()
+        }
+    }
+
     /**
      * 保存子代理定义。[originalName] 为编辑前的名称，新建时为 null；
      * 结果转成 [subAgentSaveState]，编辑页据此退回列表或就地报错。
@@ -1885,15 +1996,24 @@ class SettingsViewModel @Inject constructor(
     /** 当前已注册的全部工具名（含 MCP 动态工具），供编辑页勾选工具白名单与黑名单。 */
     fun availableToolNames(): List<String> = toolRegistry.getAvailableTools().map { it.name }
 
-    fun deleteSubAgent(name: String, scope: AgentDefinitionScope) {
-        if (_subAgentDeleting.value != null) return
-        _subAgentDeleting.value = name
+    /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
+    fun deleteSubAgent(name: String, scope: AgentDefinitionScope) = deleteSubAgents(listOf(name to scope))
+
+    /** 批量删除子代理（列表多选批量操作）。语义同 [deleteSkills]：串行删、逐条报进度。 */
+    fun deleteSubAgents(targets: List<Pair<String, AgentDefinitionScope>>) {
+        if (targets.isEmpty() || _subAgentDeleting.value.isNotEmpty()) return
+        _subAgentDeleting.value = targets.map { it.first }.toSet()
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { agentDefinitionRepository.delete(name, scope) }
+                withContext(Dispatchers.IO) {
+                    targets.forEach { (name, scope) ->
+                        agentDefinitionRepository.delete(name, scope)
+                        _subAgentDeleting.value = _subAgentDeleting.value - name
+                    }
+                }
                 refreshSubAgents()
             } finally {
-                _subAgentDeleting.value = null
+                _subAgentDeleting.value = emptySet()
             }
         }
     }
@@ -2664,17 +2784,29 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 删除已下载的镜像：清记录 + 删下载文件（仅限 rootfs_images 目录，防误删）；若正在下载该条目先取消。 */
-    fun deleteDownloadedImage(entryId: String) {
-        val record = _downloadedImages.value[entryId] ?: return
-        if ((_containerImageDownload.value as? ContainerImageDownloadUiState.Downloading)?.entryId == entryId) {
+    fun deleteDownloadedImage(entryId: String) = deleteDownloadedImages(setOf(entryId))
+
+    /**
+     * 批量删除已下载镜像（列表多选批量操作）。逐条清记录 + 删文件；
+     * 正在下载的条目若在选中集合里，先取消下载再删。
+     */
+    fun deleteDownloadedImages(entryIds: Set<String>) {
+        if (entryIds.isEmpty()) return
+        val downloadingEntryId = (_containerImageDownload.value as? ContainerImageDownloadUiState.Downloading)?.entryId
+        if (downloadingEntryId != null && downloadingEntryId in entryIds) {
             cancelContainerImageDownload()
         }
         viewModelScope.launch {
-            runCatching {
-                val file = java.io.File(Uri.parse(record.fileUri).path ?: return@runCatching)
-                if (file.parentFile?.name == "rootfs_images") file.delete()
+            withContext(Dispatchers.IO) {
+                entryIds.forEach { entryId ->
+                    val record = _downloadedImages.value[entryId] ?: return@forEach
+                    runCatching {
+                        val file = java.io.File(Uri.parse(record.fileUri).path ?: return@runCatching)
+                        if (file.parentFile?.name == "rootfs_images") file.delete()
+                    }
+                    containerSettingsRepository.removeDownloadedImage(entryId)
+                }
             }
-            containerSettingsRepository.removeDownloadedImage(entryId)
         }
     }
 
@@ -2851,6 +2983,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用提供商（列表多选批量操作）。 */
+    fun setProvidersEnabled(ids: Collection<String>, isEnabled: Boolean) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.setProvidersEnabled(ids, isEnabled)
+        }
+    }
+
     fun saveProvider(provider: AIProviderConfig) {
         viewModelScope.launch {
             val removedModels = (repository.getProviderById(provider.id)?.models ?: emptyList())
@@ -2900,6 +3040,14 @@ class SettingsViewModel @Inject constructor(
     fun deleteProvider(id: String) {
         viewModelScope.launch {
             repository.deleteProvider(id)
+        }
+    }
+
+    /** 批量删除提供商（列表多选批量操作）。Room 单事务提交，删完 Flow 自动刷新列表。 */
+    fun deleteProviders(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.deleteProviders(ids)
         }
     }
 

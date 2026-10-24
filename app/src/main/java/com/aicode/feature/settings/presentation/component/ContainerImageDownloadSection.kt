@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +53,10 @@ import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerImageEol
@@ -64,6 +69,7 @@ import com.aicode.feature.settings.presentation.ContainerImageDownloadUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.HardDrive
+import compose.icons.feathericons.Trash2
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -99,16 +105,35 @@ internal fun ContainerImageDownloadSection(
     downloadedImages: Map<String, DownloadedImageRecord>,
     sourceUnavailableIds: Set<String>,
     selectedSourceName: String,
+    selection: ListSelectionState,
     onDownload: (ContainerImageEntry) -> Unit,
     onCancel: () -> Unit,
     onImport: (String, String) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onBatchDelete: (Set<String>) -> Unit
 ) {
     val context = LocalContext.current
     var detailEntry by remember { mutableStateOf<ContainerImageEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<ContainerImageEntry?>(null) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     // 只显示当前源下可用的镜像；切源后列表自动过滤
     val visibleCatalog = catalog.filter { it.id !in sourceUnavailableIds }
+    // 只有「已下载且文件在」的条目能删，也就只有它们参与多选。
+    val downloadableIds = remember(visibleCatalog, downloadedImages) {
+        visibleCatalog.filter { entry ->
+            downloadedImages[entry.id]?.let { record ->
+                File(Uri.parse(record.fileUri).path ?: "").exists()
+            } == true
+        }.map { it.id }
+    }
+
+    // 删完 / 换源后剔除已消失的选中项；没有可删条目就退出多选。
+    LaunchedEffect(downloadableIds, selection.isActive) {
+        selection.retainOnly(downloadableIds.toSet())
+        if (selection.isActive && downloadableIds.isEmpty()) selection.exit()
+    }
+
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == downloadableIds.size
 
     Column(
         modifier = Modifier
@@ -117,6 +142,25 @@ internal fun ContainerImageDownloadSection(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = Spacing.xl)
     ) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(downloadableIds)
+                },
+                onExit = { selection.exit() }
+            ) {
+                SelectionActionIconButton(
+                    icon = FeatherIcons.Trash2,
+                    contentDescription = stringResource(R.string.common_batch_delete),
+                    enabled = selection.selectedCount > 0,
+                    onClick = { showBatchDeleteConfirm = true },
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
         SettingsGroupHeader(text = stringResource(R.string.container_download_image))
         if (visibleCatalog.isEmpty()) {
             SettingsGroup {
@@ -145,11 +189,28 @@ internal fun ContainerImageDownloadSection(
                         state = state,
                         isDownloaded = record != null && fileExists,
                         onOpenDetail = { detailEntry = entry },
-                        onDelete = { deleteEntry = entry }
+                        onDelete = { deleteEntry = entry },
+                        selectionMode = selection.isActive,
+                        selected = selection.isSelected(entry.id),
+                        onToggleSelect = { selection.toggle(entry.id) }
                     )
                 }
             }
         }
+    }
+
+    if (showBatchDeleteConfirm) {
+        val targets = selection.selectedKeys.toSet()
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.container_download_batch_delete_title),
+            message = stringResource(R.string.container_download_batch_delete_confirm, targets.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(targets)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
     }
 
     detailEntry?.let { entry ->
@@ -248,7 +309,10 @@ private fun DownloadImageRow(
     state: ContainerImageDownloadUiState,
     isDownloaded: Boolean,
     onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
 
@@ -257,7 +321,11 @@ private fun DownloadImageRow(
     SwipeToDeleteRow(
         onDelete = onDelete,
         onClick = onOpenDetail,
-        deleteEnabled = isDownloaded
+        deleteEnabled = isDownloaded,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect,
+        selectable = isDownloaded
     ) {
         Row(
             modifier = Modifier

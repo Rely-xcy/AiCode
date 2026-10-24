@@ -48,6 +48,10 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
@@ -57,6 +61,7 @@ import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Plus
+import compose.icons.feathericons.Trash2
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -73,15 +78,38 @@ internal data class PromptEditTarget(val number: Int? = null)
  *
  * 每行一张卡片（图标 + 编号·名称 + 摘要 + 来源徽章），长按行内容可拖拽调整顺序，
  * 点击进入详情预览（右上角再进编辑），来源可写时左滑删除（删的就是该行标的那一层）。
+ *
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：只有可编辑（非内置来源）的片段能勾选，
+ * 批量删除后对应编号回落到下一层来源。
  */
 @Composable
 internal fun PromptsSection(
     state: PromptsUiState,
+    selection: ListSelectionState,
     onOpenFragment: (PromptFragment) -> Unit,
     onDeleteFragment: (Int, PromptFragmentSource) -> Unit,
     onReorder: (List<PromptFragment>) -> Unit,
-    onToggleBuiltinDisabled: (Boolean) -> Unit
+    onToggleBuiltinDisabled: (Boolean) -> Unit,
+    onBatchDeleteFragments: (List<Pair<Int, PromptFragmentSource>>) -> Unit
 ) {
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    // 内置来源的片段删不了，也就不参与多选：勾选框置灰、全选也不会选中它们。
+    val selectableKeys = remember(state.fragments) {
+        state.fragments.filter { it.editable }.map { it.number.toString() }
+    }
+    // 删除要指明删哪一层，因此每个 key 还要能还原成「编号 + 来源」。
+    val keyToTarget = remember(state.fragments) {
+        state.fragments.associate { it.number.toString() to (it.number to it.source) }
+    }
+
+    // 删除 / 重置后列表变化：剔除已消失的编号，全空了就退出多选。
+    LaunchedEffect(selectableKeys, selection.isActive) {
+        selection.retainOnly(selectableKeys.toSet())
+        if (selection.isActive && selectableKeys.isEmpty()) selection.exit()
+    }
+
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == selectableKeys.size
+
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsGroup(
             modifier = Modifier
@@ -98,6 +126,25 @@ internal fun PromptsSection(
             )
         }
 
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(selectableKeys)
+                },
+                onExit = { selection.exit() }
+            ) {
+                SelectionActionIconButton(
+                    icon = FeatherIcons.Trash2,
+                    contentDescription = stringResource(R.string.common_batch_delete),
+                    enabled = selection.selectedCount > 0,
+                    onClick = { showBatchDeleteConfirm = true },
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
         if (state.fragments.isEmpty()) {
             Text(
                 text = stringResource(R.string.prompts_empty),
@@ -108,11 +155,26 @@ internal fun PromptsSection(
         } else {
             PromptList(
                 fragments = state.fragments,
+                selection = selection,
                 onOpenFragment = onOpenFragment,
                 onDeleteFragment = onDeleteFragment,
                 onReorder = onReorder
             )
         }
+    }
+
+    if (showBatchDeleteConfirm) {
+        val targets = selection.selectedKeys.mapNotNull { keyToTarget[it] }
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.prompts_batch_delete_title),
+            message = stringResource(R.string.prompts_batch_delete_confirm, targets.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDeleteFragments(targets)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
     }
 }
 
@@ -123,6 +185,7 @@ internal fun PromptsSection(
 @Composable
 private fun PromptList(
     fragments: List<PromptFragment>,
+    selection: ListSelectionState,
     onOpenFragment: (PromptFragment) -> Unit,
     onDeleteFragment: (Int, PromptFragmentSource) -> Unit,
     onReorder: (List<PromptFragment>) -> Unit
@@ -180,21 +243,29 @@ private fun PromptList(
                         onClick = { onOpenFragment(fragment) },
                         onDelete = { onDeleteFragment(fragment.number, fragment.source) },
                         deleteEnabled = fragment.editable,
-                        dragModifier = Modifier.longPressDraggableHandle(
-                            onDragStarted = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                            },
-                            onDragStopped = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                // 立即重编号（槽化），与落盘后的编号一致，避免 key 变化引起列表跳动
-                                val numbers = localFragments.map { it.number }.sorted()
-                                val renumbered = localFragments.mapIndexed { index, item ->
-                                    item.copy(number = numbers[index])
+                        selectionMode = selection.isActive,
+                        selected = selection.isSelected(fragment.number.toString()),
+                        onToggleSelect = { selection.toggle(fragment.number.toString()) },
+                        // 多选态不给拖拽手柄：整行点击已改为勾选，再挂长按拖拽会抢手势。
+                        dragModifier = if (selection.isActive) {
+                            Modifier
+                        } else {
+                            Modifier.longPressDraggableHandle(
+                                onDragStarted = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                },
+                                onDragStopped = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                    // 立即重编号（槽化），与落盘后的编号一致，避免 key 变化引起列表跳动
+                                    val numbers = localFragments.map { it.number }.sorted()
+                                    val renumbered = localFragments.mapIndexed { index, item ->
+                                        item.copy(number = numbers[index])
+                                    }
+                                    localFragments = renumbered
+                                    onReorder(renumbered)
                                 }
-                                localFragments = renumbered
-                                onReorder(renumbered)
-                            }
-                        )
+                            )
+                        }
                     )
                 }
             }
@@ -246,7 +317,10 @@ private fun PromptRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     deleteEnabled: Boolean,
-    dragModifier: Modifier
+    dragModifier: Modifier,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val sortDescription = stringResource(R.string.prompts_sort_long_press)
     val row: @Composable () -> Unit = {
@@ -309,7 +383,15 @@ private fun PromptRow(
         }
     }
 
-    SwipeToDeleteRow(onDelete = onDelete, onClick = onClick, deleteEnabled = deleteEnabled) { row() }
+    SwipeToDeleteRow(
+        onDelete = onDelete,
+        onClick = onClick,
+        deleteEnabled = deleteEnabled,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect,
+        selectable = deleteEnabled
+    ) { row() }
 }
 
 /** 来源徽章：一眼看出该编号的内容来自哪一层。 */

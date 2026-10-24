@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -31,8 +32,15 @@ interface AIProviderDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProvider(provider: AIProviderEntity)
 
+    @Update
+    suspend fun updateProvider(provider: AIProviderEntity)
+
     @Query("DELETE FROM ai_providers WHERE id = :id")
     suspend fun deleteProvider(id: String)
+
+    /** 批量删除（多选批量操作）：一次事务内清掉多条，避免逐条往返。 */
+    @Query("DELETE FROM ai_providers WHERE id IN (:ids)")
+    suspend fun deleteProviders(ids: Collection<String>)
 
     @Query("UPDATE ai_providers SET selectedModel = :model WHERE id = :id")
     suspend fun setSelectedModel(id: String, model: String)
@@ -42,4 +50,7 @@ interface AIProviderDao {
 
     @Query("UPDATE ai_providers SET isEnabled = :isEnabled WHERE id = :id")
     suspend fun setProviderEnabled(id: String, isEnabled: Boolean)
+
+    @Query("UPDATE ai_providers SET isEnabled = :isEnabled WHERE id IN (:ids)")
+    suspend fun setProvidersEnabled(ids: Collection<String>, isEnabled: Boolean)
 }
