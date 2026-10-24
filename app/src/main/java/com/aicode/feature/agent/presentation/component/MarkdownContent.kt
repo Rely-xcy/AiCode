@@ -76,7 +76,11 @@ import kotlinx.coroutines.withContext
 private val CodeFontFamily = FontFamily(Font(R.font.jetbrains_mono_nl))
 
 internal class MarkdownRenderCache(
-    private val maxEntries: Int = 80
+    // 200 条：一屏可见约 8-12 条（超长正文按 2000 字符分块后条目更多），上下翻十几屏就到了两百上下。
+    // 容量只决定「滑入视口要不要再解析一次」的成本：未命中也不再改布局（见 MarkdownLiveBlock 的
+    // immediate），所以安全阈值远比以前宽。取 200 是沿用 28814c99 的实测结论（80 条时多屏回翻会集体
+    // 失效、集体重解析）；该值后来在 36c49854 被改回 80，但那次提交没给理由。
+    private val maxEntries: Int = 200
 ) {
     private val parsedStates = object : LinkedHashMap<String, MarkdownParseState.Success>(
         maxEntries,
@@ -244,6 +248,7 @@ internal fun MarkdownContent(
                 loading = loading,
                 lazyScroll = lazyScroll,
                 streaming = streaming,
+                immediate = !streaming,
                 mdColors = mdColors,
                 mdTypography = mdTypography,
                 mdPadding = mdPadding,
@@ -252,6 +257,48 @@ internal fun MarkdownContent(
                 mathTransformer = mathTransformer,
             )
         }
+    }
+}
+
+/**
+ * 后台预热：把已定稿的正文按顺序逐条解析进 [cache]，不产生 UI、不参与布局。
+ *
+ * 未命中缓存时定稿消息走同步解析（[MarkdownLiveBlock] 的 `immediate`），换来「首帧即终态高度」；
+ * 而同步解析跑在主线程。预热把这份工作挤到 Dispatchers.Default：会话打开后先把最近窗口的正文
+ * 解析好，主线程只在「还没轮到那条」时才付费。
+ *
+ * 串行推进：一次只挂一个解析状态机，完一条再喂下一条，会话里有几百条消息也不会挂几百个。
+ * 队列会随消息增长重建，所以已是缓存的直接跳过；进度按 [resetKey]（会话 id）保留。
+ */
+@Composable
+internal fun MarkdownParseWarmer(
+    queue: List<String>,
+    cache: MarkdownRenderCache,
+    resetKey: Any?,
+) {
+    // 进度按会话保存：队列随消息增长会重建，从头再走一遍虽然会跳过已缓存的，但每条都要一次重组，
+    // 长会话里就是几百次空转。换会话才归零。
+    var index by remember(resetKey) { mutableStateOf(0) }
+    if (index >= queue.size) return
+    val raw = queue[index]
+    // 预处理放主线程：MarkdownPreprocessor 的结果缓存是普通 LinkedHashMap（非线程安全），
+    // 渲染路径就在主线程调它；异线程调会与主线程竞争。解析（真正的大头）仍然在后台。
+    val text = remember(raw) { MarkdownPreprocessor.process(raw) }
+    if (text.isEmpty()) {
+        LaunchedEffect(text) { index++ }
+        return
+    }
+    if (cache.get(text) != null) {
+        LaunchedEffect(text) { index++ }
+        return
+    }
+    // retainState = false：换文本就回 Loading，跟 state 变化推进队列。
+    val state = rememberMarkdownState(content = text, retainState = false)
+    val current by state.state.collectAsState()
+    LaunchedEffect(current) {
+        val settled = current
+        if (settled is MarkdownParseState.Success) cache.put(settled)
+        if (settled !is MarkdownParseState.Loading) index++
     }
 }
 
@@ -477,6 +524,17 @@ private fun MarkdownLiveBlock(
     loading: (@Composable () -> Unit)?,
     lazyScroll: Boolean,
     streaming: Boolean,
+    /**
+     * 首帧是否同步解析。
+     *
+     * 定稿消息传 true：占位（裸文本）与排版后的高度差得远——表格、代码块、图片都会换行高，
+     * 先按占位排一版再换回去，就是「消息滑入视口时内容整体位移一下」。同步解析让第一帧就是
+     * 终态高度，代价是这个 item 首次出现时解析跑在主线程上；预热（MarkdownParseWarmer）会
+     * 把大部分未命中提前吃掉，真正落到这里的很少。
+     *
+     * 流式文本必须传 false：它每帧都在变，同步解析等于每帧卡主线程。
+     */
+    immediate: Boolean,
     mdColors: MarkdownColors,
     mdTypography: MarkdownTypography,
     mdPadding: MarkdownPadding,
@@ -484,7 +542,7 @@ private fun MarkdownLiveBlock(
     highlightsBuilder: Highlights.Builder,
     mathTransformer: ImageTransformer,
 ) {
-    val mdState = rememberMarkdownState(content = processed, retainState = true)
+    val mdState = rememberMarkdownState(content = processed, retainState = true, immediate = immediate)
     val parseState by mdState.state.collectAsState()
     val currentState = parseState
     val parsedState: MarkdownParseState = when {
