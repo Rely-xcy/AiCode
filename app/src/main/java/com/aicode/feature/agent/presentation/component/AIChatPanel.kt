@@ -954,27 +954,18 @@ fun AIChatPanel(
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
     val isBusy = agentState is AgentUIState.Streaming
-    // 本轮用户行是否已经进了加载窗口：VM 在发送前置工作（重建历史、落库、检查点）之前就把状态翻成
-    // Streaming 并登记了锚点（见 AIAgentViewModel.executeAgentRequestStream），那一小段里界面上还没有本轮
-    // 的任何消息。按「轮」计算的界面要等这一行落库再算：否则上一轮已收工的内容会被重新当成正在跑——
-    // 折叠头展开成「执行中」、耗时与用量消失、操作行被藏、停止按钮提前可点，行数一涨一落还带着视口跳。
-    // 尾巴上的思考气泡不受它影响，仍旧只看 isBusy：那里正是「发送后立刻有反馈」的部分。
-    // 消息未就绪时没有轮可算，直接按旧的忙碌口径走。
-    val runningTurnRowLoaded = !messagesReady || runningTurnAnchorId == null ||
-        messages.any { it.id == runningTurnAnchorId }
-    val turnRunning = isBusy && runningTurnRowLoaded
     // 拆块 + 工具分组：超长助手消息展开成多条有界 item（单条滚动轴、外观连续），
     // 连续的工具调用折成一个「N 次工具调用」分组；chatItems 的顺序即 LazyColumn item 顺序。
     // 提到这里（而不是 LazyColumn 分支内）是因为 isFarFromBottom 的「布局是否对应当前消息」判定
     // 需要它：分组会让 item 数 ≠ 消息数 + 1，不能再拿消息数当期望值。
     // 末轮且 agent 忙 = 当前正在跑的那一轮：它的折叠头默认展开（显示「执行中」），收工后自动收起。
     //
-    // 定位用运行时真值——本轮轮首用户行 id（VM 在发送前置工作刚开始时就登记，见 AIAgentViewModel 的
+    // 定位用运行时真值——本轮轮首用户行 id（VM 在本轮用户行落库时登记，见 AIAgentViewModel 的
     // currentSessionRunningTurnAnchorId）。不能按「最后一条用户消息」定位；插话不渲染（splitChatTurns
-    // 已剔除），本就不参与候选。锚点还没出现在已加载的消息里（发送前置那段空窗、或分页把它翻出去了），
-    // 或本轮本来就没有轮首用户行（自动触发轮次、后台通知轮次）时退回旧判据：后两种情况与改前一致。
-    val activeTurnKey = remember(messages, turnRunning, runningTurnAnchorId) {
-        if (!turnRunning) {
+    // 已剔除），本就不参与候选。锚点还没出现在已加载的消息里（分页把它翻出去了），或本轮本来就没有
+    // 轮首用户行（自动触发轮次、后台通知轮次）时退回旧判据：这些情况的行为与改前一致。
+    val activeTurnKey = remember(messages, isBusy, runningTurnAnchorId) {
+        if (!isBusy) {
             null
         } else {
             val anchor = runningTurnAnchorId?.let { id ->
@@ -1013,19 +1004,19 @@ fun AIChatPanel(
     // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方。
     // 正在跑的那一轮（以及运行期间出现的后续轮）不给结论：耗时与用量都要等本轮收工才成立。
     // 按轮首用户行 id 传入（与 activeTurnKey 同一个运行时真值），插话才顶不掉它。
-    val runningTurnStartId = if (turnRunning) runningTurnAnchorId else null
-    val turnStats = remember(messages, turnRunning, runningTurnStartId) {
-        computeTurnStats(messages, lastTurnFinished = !turnRunning, runningTurnStartId = runningTurnStartId)
+    val runningTurnStartId = if (isBusy) runningTurnAnchorId else null
+    val turnStats = remember(messages, isBusy, runningTurnStartId) {
+        computeTurnStats(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
     }
     val taskDurations = turnStats.taskDurations
     val turnUsages = turnStats.turnUsages
     val reasoningDurations = viewModel.reasoningDurations
     // 方案 A：每轮正常收尾的最终回复（包括历史所有轮次的回复）均挂操作行（复制/更多），
     // 彻底解决依赖内存集合导致重启 App 后历史消息丢失操作按钮的 Bug。
-    // 仅在最新一轮正在生成（turnRunning == true）时暂不挂出，避免生成中途按钮乱跳；
+    // 仅在最新一轮正在生成（isBusy == true）时暂不挂出，避免生成中途按钮乱跳；
     // 「正在跑的那一轮」按 activeTurnKey 定位（见上），运行期间出现的后续轮同属本次运行，也不挂。
-    val actionableMessageIds = remember(messages, turnRunning, activeTurnKey) {
-        actionableResultIds(messages, activeTurnKey, turnRunning)
+    val actionableMessageIds = remember(messages, isBusy, activeTurnKey) {
+        actionableResultIds(messages, activeTurnKey, isBusy)
     }
     val activeModel = activeProvider?.effectiveModel.orEmpty()
     val activeModelMetadata = activeProvider?.let { modelMetadata[modelMetadataKey(it.id, activeModel)] }
@@ -2078,7 +2069,7 @@ fun AIChatPanel(
                 onSend = sendMessage,
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
-                isBusy = turnRunning,
+                isBusy = isBusy,
                 workspaceViewModel = workspaceViewModel,
                 hasRunningSessions = { viewModel.hasRunningSessionsInCurrentWorkspace() },
                 onSwitchWorkspaceConfirmed = { viewModel.stopAllAndCloseTerminal() },
