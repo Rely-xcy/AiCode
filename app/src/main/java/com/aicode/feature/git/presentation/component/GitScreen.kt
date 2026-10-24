@@ -60,7 +60,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
@@ -72,6 +71,7 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
+import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.git.domain.model.GitStatus
 import com.aicode.feature.git.domain.model.GitTab
@@ -405,20 +405,11 @@ internal fun StatusMetric(label: String, count: Int, color: Color, modifier: Mod
     }
 }
 
+// 复用设置页的分组标题：字号、颜色、上下间距都以 SettingsGroupHeader 为唯一来源，
+// 不在这里另抄一份数值，免得共享组件调整后 Git 页与设置类页面节奏对不上。
 @Composable
 internal fun SectionHeader(text: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = Spacing.lg, top = Spacing.lg, end = Spacing.lg, bottom = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
-            fontWeight = FontWeight.Normal,
-            color = MaterialTheme.semanticColors.subtleText,
-            modifier = Modifier.weight(1f)
-        )
-    }
+    SettingsGroupHeader(text)
 }
 
 /**

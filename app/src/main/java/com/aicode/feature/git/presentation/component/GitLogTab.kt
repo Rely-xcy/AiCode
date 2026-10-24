@@ -78,13 +78,13 @@ import compose.icons.feathericons.Copy
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Tag
 import compose.icons.feathericons.RotateCcw
-import compose.icons.feathericons.Search
 import compose.icons.feathericons.X
 
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.RectangleShape
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
+import com.aicode.feature.settings.presentation.component.ModelSearchField
 import kotlinx.coroutines.launch
 
 @Composable
@@ -146,30 +146,28 @@ internal fun LogTab(
     }
     val cardColor = MaterialTheme.semanticColors.cardSurface
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
+        // 全 App 统一用胶囊搜索框：会话列表、MCP、日志页都是 ModelSearchField，
+        // 原先的描边输入框在这里会成为唯一的异类，且描边 + label 比胶囊重一档。
+        ModelSearchField(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = stringResource(R.string.git_search_commits_hint),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AppTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                label = stringResource(R.string.git_search_commits_hint),
-                leadingIcon = {
-                    Icon(FeatherIcons.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                },
-                trailingIcon = if (searchQuery.isNotEmpty()) {
-                    {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(FeatherIcons.X, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
+            trailing = if (searchQuery.isEmpty()) null else {
+                {
+                    IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                        Icon(
+                            FeatherIcons.X,
+                            contentDescription = stringResource(R.string.common_clear),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                } else null,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+                }
+            }
+        )
         SectionHeader(stringResource(R.string.git_commit_count, commits.size))
         // 滚动容器占满整屏（与状态/分支页一致）：白色卡片是滚动内容的一部分——
         // 内容少时卡片收缩在顶部；滚动时整卡可滚过 tab 被渐变蒙版渐隐，
