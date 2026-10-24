@@ -458,9 +458,6 @@ private fun TerminalSurface(
             view.isFocusableInTouchMode = true
             tab.view = view
             view.attachSession(tab.session)
-            // 会话创建时按 80x24 起子进程，attach 后必须立刻按真实视图尺寸纠正一次，
-            // 否则 PTY 列宽停在 80：apk 这类按终端宽度画进度条的程序会每行溢出、留下残影。
-            view.post { view.updateSize() }
 
             applyTerminalColors(view, tab, settings, effectiveTheme)
             view.requestFocus()

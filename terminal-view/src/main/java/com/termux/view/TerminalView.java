@@ -911,9 +911,6 @@ public final class TerminalView extends View {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
-        // 字体宽度未测量好时算出的列数会是一个荒谬的巨大值，PTY 一旦按它设宽，
-        // 后续输出全部按错误宽度换行；宁可这次不更新，等下一次布局回调。
-        if (mRenderer == null || mRenderer.mFontWidth <= 0 || mRenderer.mFontLineSpacing <= 0) return;
 
         // Set to 80 and 24 if you want to enable vttest.
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
