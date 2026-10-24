@@ -340,6 +340,7 @@
     <string name="common_allow">允许</string>
     <string name="common_close">关闭</string>
     <string name="common_clear">清除</string>
+    <string name="common_search">搜索</string>
     <string name="common_more">更多</string>
     <string name="workbench_split_handle">拖动调整分栏宽度</string>
     <string name="common_other">其他</string>

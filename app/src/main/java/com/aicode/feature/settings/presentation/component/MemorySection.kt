@@ -20,12 +20,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -60,10 +60,8 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
-import compose.icons.feathericons.Search
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.User
-import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,9 +73,8 @@ import java.util.Locale
  * 列表排在最前、两张设置/状态卡沉底，是按使用频率排的：列表才是用户来这一页要看的东西，
  * 设置与只读状态放前面会把列表挤到首屏折线以下。
  *
- * 搜索框在顶栏与「+」并排（见 [MemoryTopBarTitle]）：记忆一多就只能靠滚动找人，
- * 而搜索框留在内容区顶部会随列表一起滚走，翻两屏想换关键词还得先滚回顶部。
- * 搜索词与过滤结果都放 ViewModel，这里只负责把过滤后的列表画出来。
+ * 搜索不在这页：顶栏只放一个放大镜入口，点进二级搜索页（[MemorySearchSection]）去搜。
+ * 记忆一多只能靠滚动找人，而搜索框留在内容区会随列表一起滚走、塞进顶栏又会和「+」挤同一行。
  *
  * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
  * 混成一张清单会让人以为上下文也会被存下来。
@@ -86,12 +83,12 @@ import java.util.Locale
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  *
  * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
- * @param memories 已按搜索词过滤过的记忆；与 [searchQuery] 配合区分「没有记忆」与「搜不到」。
+ * @param memories 全部记忆；本页始终画完整列表，筛选只发生在搜索页，
+ *   否则从搜索页返回后列表会被上一次的关键词继续筛着。
  */
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
-    searchQuery: String,
     loading: Boolean,
     shortTerm: SessionShortTermState?,
     activeMemoryEnabled: Boolean,
@@ -116,20 +113,11 @@ internal fun MemorySection(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
-        // 搜索框已移到顶栏（见 SettingsScreen 的 title 与 [MemoryTopBarTitle]），
-        // 只在「有记忆可搜」或「正在搜」时出现，与下面的空态口径一致：
-        // 一条记忆都没有时不给搜索入口，搜不到时一定保留入口，否则用户没法清空条件。
-
         // 空态跟技能页 / MCP 页一样直接排在页内，不套卡片：一张没有分组标题的卡片贴在顶栏下
         // 既没有归属，也跟下面带标题的卡片不是一套节奏。
         if (memories.isEmpty()) {
             // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
-            // 空白搜索词不算筛选（与 ViewModel 的 trim 口径一致），此时说的就是「没有记忆」。
-            when {
-                loading -> MemoryLoadingPlaceholder()
-                searchQuery.isBlank() -> MemoryEmptyState()
-                else -> MemorySearchEmptyState()
-            }
+            if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
         } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
             val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
@@ -317,54 +305,128 @@ internal fun MemorySection(
 }
 
 /**
- * 记忆页顶栏标题行：左边标题、右边搜索框，右侧紧接顶栏现有的「+」按钮。
+ * 记忆搜索二级页：顶栏那一行搜索框由 SettingsScreen 渲染（[SearchTopBarField]），这里只画结果。
  *
- * 搜索框靠 `weight(1f)` 吃剩余宽度，不写固定宽度：顶栏宽度先被返回键、标题和「+」占掉，
- * 写死宽度在窄屏上会把「+」挤出屏幕，或者让标题被压成一列竖排字。
+ * 结果行直接复用列表的 [MemoryGroup] / [MemoryRow]：图标、作用域徽章、置顶与来源标注全长在行里，
+ * 另写一套搜索结果行，过一阵就会和列表长得不一样。分组也不拆：命中横跨全局与项目时，
+ * 一个作用域小标题比每行再重复两遍徽章更好扫。
  *
- * @param showSearch 没有可搜内容且没在搜索时不显示输入框：空页面上摆一个搜不到东西的框只会误导。
+ * 过滤不在这里做：进来的 [results] 已经是 MemoryViewModel.visibleMemories 的结果，
+ * 只对已读进内存的列表做字符串匹配，敲字不会触发任何读盘。
+ *
+ * 点击行为只到详情：详情弹层里本来就有编辑与删除入口，搜索页再挂一套长按菜单只多一层；
+ * 左滑删除保留——行组件自带这个手势，滑开了不回应反而像是坏了。
+ *
+ * @param results 已按当前关键词算好的命中列表（来自 MemoryViewModel.visibleMemories）
+ * @param query 当前关键词：只用来判断「是否刚进页面」，空词时把滚动位置归零
+ * @param loading 首次读盘未完成：此时 [results] 必然为空，不能拿「没搜到」冒充。
  */
 @Composable
-internal fun MemoryTopBarTitle(
-    title: String,
+internal fun MemorySearchSection(
+    results: List<Memory>,
     query: String,
-    onQueryChange: (String) -> Unit,
-    showSearch: Boolean
+    loading: Boolean,
+    onEdit: (Memory) -> Unit,
+    onDelete: (Memory) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+    // 详情与删除确认都留在这个页面上：从结果点进去、关掉弹层，还能回到同一份结果，
+    // 而不是被带回列表再搜一次。
+    var detailMemory by remember { mutableStateOf<Memory?>(null) }
+    var deleteTarget by remember { mutableStateOf<Memory?>(null) }
+
+    val scrollState = rememberScrollState()
+    // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
+    // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
+    LaunchedEffect(query.isBlank()) {
+        if (query.isBlank()) scrollState.scrollTo(0)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = Spacing.lg)
+            // 只补一点上边：结果从顶栏下方直接开始，不要在搜索框和第一行之间留一大片空白
+            .padding(top = Spacing.sm, bottom = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        Text(
-            text = title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (showSearch) {
-            Spacer(modifier = Modifier.width(Spacing.sm))
-            ModelSearchField(
-                query = query,
-                onQueryChange = onQueryChange,
-                placeholder = stringResource(R.string.memory_search_hint),
-                modifier = Modifier.weight(1f),
-                trailing = if (query.isEmpty()) null else {
-                    {
-                        IconButton(
-                            onClick = { onQueryChange("") },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.X,
-                                contentDescription = stringResource(R.string.common_clear),
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.semanticColors.subtleText
-                            )
-                        }
-                    }
+        when {
+            loading -> MemoryLoadingPlaceholder()
+            results.isEmpty() -> SearchEmptyHint(stringResource(R.string.memory_search_empty))
+            else -> {
+                val globalMemories = results.filter { it.scope == MemoryScope.GLOBAL }
+                val projectMemories = results.filter { it.scope == MemoryScope.PROJECT }
+                if (globalMemories.isNotEmpty()) {
+                    SettingsGroupHeader(
+                        text = stringResource(R.string.memory_group_global_count, globalMemories.size)
+                    )
+                    MemoryGroup(
+                        memories = globalMemories,
+                        onOpenDetail = { detailMemory = it },
+                        onLongClick = {},
+                        onDelete = { deleteTarget = it }
+                    )
                 }
-            )
+                if (projectMemories.isNotEmpty()) {
+                    SettingsGroupHeader(
+                        text = stringResource(R.string.memory_group_project_count, projectMemories.size)
+                    )
+                    MemoryGroup(
+                        memories = projectMemories,
+                        onOpenDetail = { detailMemory = it },
+                        onLongClick = {},
+                        onDelete = { deleteTarget = it }
+                    )
+                }
+            }
         }
     }
+
+    detailMemory?.let { memory ->
+        MemoryDetailSheet(
+            memory = memory,
+            onDismiss = { detailMemory = null },
+            onEdit = {
+                detailMemory = null
+                onEdit(memory)
+            },
+            onDelete = {
+                detailMemory = null
+                deleteTarget = memory
+            }
+        )
+    }
+
+    deleteTarget?.let { memory ->
+        MemoryDeleteConfirmDialog(
+            memory = memory,
+            onConfirm = {
+                onDelete(memory)
+                deleteTarget = null
+            },
+            onDismiss = { deleteTarget = null }
+        )
+    }
+}
+
+/** 删除记忆的二次确认框：列表页与搜索页共用，条目名统一取 memory.name。 */
+@Composable
+internal fun MemoryDeleteConfirmDialog(
+    memory: Memory,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.memory_delete_confirm_title)) },
+        text = { Text(stringResource(R.string.memory_delete_confirm_message, memory.name)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.common_delete)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        }
+    )
 }
 
 /** 短期卡片右侧取值：右对齐单行，配色与设置页其它取值行一致。 */
@@ -453,34 +515,6 @@ private fun MemoryEmptyState() {
         Text(
             text = stringResource(R.string.memory_empty_hint),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-/**
- * 搜索无结果：用 MCP 页那套紧凑形态（小号半透明图标 + 一行灰字），
- * 不沿用「没有记忆」的大图标 + 标题——筛不到不等于没有，摆同一套视觉会让人以为记忆全丢了。
- */
-@Composable
-private fun MemorySearchEmptyState() {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        Icon(
-            imageVector = FeatherIcons.Search,
-            contentDescription = null,
-            modifier = Modifier.size(28.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
-        Text(
-            text = stringResource(R.string.memory_search_empty),
-            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )

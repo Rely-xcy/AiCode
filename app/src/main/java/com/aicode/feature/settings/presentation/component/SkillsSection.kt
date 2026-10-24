@@ -14,14 +14,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,9 +51,7 @@ import com.aicode.feature.settings.presentation.SkillUiEntry
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.Search
 import compose.icons.feathericons.Trash2
-import compose.icons.feathericons.X
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
@@ -61,8 +61,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 删除。
  * 全选覆盖两组（含折叠起来的组），避免「点了全选却漏掉折叠里的」。
  *
- * 列表上方的搜索框只过滤已经加载到内存的 [entries]（名称 / 描述 / 正文），不重新扫盘；
- * 搜索词由 SettingsScreen 的页面级状态持有，进详情页返回、旋屏后不丢。
+ * 搜索不在这页：顶栏只放一个放大镜入口，点进二级搜索页（[SkillSearchSection]）去搜。
+ * 搜索框原先铺在列表上方，记忆页又塞在顶栏，两页两种位置；现在统一成「入口一个按钮、搜索一页」。
  */
 
 /** 列表 item key 前缀：既标识身份，也用来判定分组，跨组拖拽会被拦下。 */
@@ -80,8 +80,6 @@ private fun skillItemKey(scope: SkillScope, name: String): String =
 internal fun SkillsSection(
     projectName: String?,
     entries: List<SkillUiEntry>,
-    searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
     selection: ListSelectionState,
     deletingInProgress: Boolean,
     onDelete: (SkillUiEntry) -> Unit,
@@ -89,77 +87,22 @@ internal fun SkillsSection(
     onBatchDelete: (List<SkillUiEntry>) -> Unit,
     onBatchSetEnabled: (List<SkillUiEntry>, Boolean) -> Unit
 ) {
-    // 搜索只在已加载的 [entries] 上做字符串匹配：技能是从磁盘解析出来的，
-    // 每敲一个字重扫一次盘会直接把输入卡住。
-    // 匹配名称 + 描述 + 正文：记忆页用的是名称 + 正文，技能多一个用户可写的「描述」，
-    // 而列表行展示的正是描述，搜得到才对得上眼前看到的东西；触发词与 required_tools 不参与，
-    // 那两个是给引擎判断是否注入用的内部字段，按工具名搜技能只会搜出一堆无关结果。
-    val keyword = searchQuery.trim()
-    val visibleSkills = remember(entries, keyword) {
-        if (keyword.isEmpty()) {
-            entries
-        } else {
-            entries.filter { entry ->
-                entry.name.contains(keyword, ignoreCase = true) ||
-                    entry.description.contains(keyword, ignoreCase = true) ||
-                    entry.instructions.contains(keyword, ignoreCase = true)
-            }
-        }
-    }
+    // 本页总是画完整列表，不再做关键词过滤：筛选已经移到搜索页，否则从搜索页返回后
+    // 列表会被上一次的关键词继续筛着，看起来像技能丢了一堆。
     // 只在数据变化时分组，避免每次重组都产生两份新 List。
-    val (projectSkills, globalSkills) = remember(visibleSkills) {
-        visibleSkills.filter { it.scope == SkillScope.PROJECT } to visibleSkills.filter { it.scope == SkillScope.GLOBAL }
+    val (projectSkills, globalSkills) = remember(entries) {
+        entries.filter { it.scope == SkillScope.PROJECT } to entries.filter { it.scope == SkillScope.GLOBAL }
     }
 
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
-    // 多选与拖拽都只能作用在当前可见（过滤后）的条目上：否则「全选」会把搜不到的条目也选上。
-    val allKeys = remember(visibleSkills) { visibleSkills.map { skillSelectionKey(it) } }
-    val keyToEntry = remember(visibleSkills) { visibleSkills.associateBy { skillSelectionKey(it) } }
+    // 多选只能作用在列表里的条目上：全选覆盖两组（含折叠的），不包含任何被筛掉的。
+    val allKeys = remember(entries) { entries.map { skillSelectionKey(it) } }
+    val keyToEntry = remember(entries) { entries.associateBy { skillSelectionKey(it) } }
 
     // 列表刷新后剔除已消失的选中项；全空了就退出多选。
     LaunchedEffect(allKeys, selection.isActive) {
         selection.retainOnly(allKeys.toSet())
         if (selection.isActive && entries.isEmpty()) selection.exit()
-    }
-
-    if (entries.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = Spacing.xl, vertical = 48.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        FeatherIcons.Book,
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.skills_empty),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.skills_empty_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-        return
     }
 
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
@@ -185,30 +128,6 @@ internal fun SkillsSection(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 搜索框固定在列表上方、不跟内容滚走：技能一多，翻到下面还想换关键词时不必先滚回顶部。
-        // 搜索词因为是页面级状态（见 SettingsScreen），进详情页返回后仍在。
-        ModelSearchField(
-            query = searchQuery,
-            onQueryChange = onSearchQueryChange,
-            placeholder = stringResource(R.string.skills_search_hint),
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            trailing = if (searchQuery.isEmpty()) null else {
-                {
-                    IconButton(
-                        onClick = { onSearchQueryChange("") },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_clear),
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.semanticColors.subtleText
-                        )
-                    }
-                }
-            }
-        )
-
         if (selection.isActive) {
             val enabled = selection.selectedCount > 0
             SelectionActionBar(
@@ -249,10 +168,45 @@ internal fun SkillsSection(
             )
         }
 
-        // 筛不到时不渲染两个「暂无技能」空分组卡片：那会被读成「这一组本来就没有技能」，
-        // 用与记忆页同一套轻提示说明是搜索条件的问题。
-        if (visibleSkills.isEmpty()) {
-            SkillSearchEmptyState(modifier = Modifier.weight(1f))
+        // 一条技能都没有时给整页引导（图标 + 标题 + 一句提示）：这种空是「还没装」，
+        // 和分组里「这一组没有」不是一回事，不能只给一行灰字。
+        if (entries.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = Spacing.xl, vertical = 48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            FeatherIcons.Book,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.skills_empty),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(R.string.skills_empty_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
         } else {
             LazyColumn(
                 state = lazyListState,
@@ -471,29 +425,97 @@ private fun SkillEmptyHint(text: String) {
 }
 
 /**
- * 搜索无结果：与记忆页的搜索空态同一套轻提示（小号半透明图标 + 一行灰字），
- * 不摆「还没有安装技能」那套大图标 + 标题——筛不到不等于没装，摆同一套视觉会让人以为技能丢了。
+ * 技能搜索二级页：顶栏那一行搜索框由 SettingsScreen 渲染（[SearchTopBarField]），这里只画结果。
+ *
+ * 结果行直接复用列表的 [SkillRow]：图标、启用状态徽章、右箭头都在行里，
+ * 点击进详情、左滑删除与列表页同一套动作，不另造一种结果行。
+ *
+ * 同名技能可以同时存在于项目层与全局层，所以结果仍按作用域分组：行里没有作用域标识，
+ * 混成一份清单就分不清点开的是哪一个。
+ *
+ * 过滤口径（名称 / 描述 / 正文，大小写不敏感）只作用于已经加载到内存的 [entries]，
+ * 每敲一个字都不会重新扫盘。不搜触发词与 required_tools：那两个是给引擎判断是否注入用的，
+ * 按工具名搜技能只会搜出一堆无关结果。
  */
 @Composable
-private fun SkillSearchEmptyState(modifier: Modifier = Modifier) {
+internal fun SkillSearchSection(
+    projectName: String?,
+    entries: List<SkillUiEntry>,
+    keyword: String,
+    onOpenDetail: (SkillUiEntry) -> Unit,
+    onDelete: (SkillUiEntry) -> Unit
+) {
+    val results = remember(entries, keyword) {
+        val trimmed = keyword.trim()
+        if (trimmed.isEmpty()) {
+            entries
+        } else {
+            entries.filter { entry ->
+                entry.name.contains(trimmed, ignoreCase = true) ||
+                    entry.description.contains(trimmed, ignoreCase = true) ||
+                    entry.instructions.contains(trimmed, ignoreCase = true)
+            }
+        }
+    }
+    val projectSkills = remember(results) { results.filter { it.scope == SkillScope.PROJECT } }
+    val globalSkills = remember(results) { results.filter { it.scope == SkillScope.GLOBAL } }
+
+    val scrollState = rememberScrollState()
+    // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
+    // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
+    LaunchedEffect(keyword.isBlank()) {
+        if (keyword.isBlank()) scrollState.scrollTo(0)
+    }
+
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = Spacing.lg)
+            // 只补一点上边：结果从顶栏下方直接开始，不要在搜索框和第一行之间留一大片空白
+            .padding(top = Spacing.sm, bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        Icon(
-            imageVector = FeatherIcons.Search,
-            contentDescription = null,
-            modifier = Modifier.size(28.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
-        Text(
-            text = stringResource(R.string.skills_search_empty),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+        if (results.isEmpty()) {
+            SearchEmptyHint(text = stringResource(R.string.skills_search_empty))
+        } else {
+            if (projectSkills.isNotEmpty()) {
+                SettingsGroupHeader(
+                    text = if (projectName != null) {
+                        stringResource(R.string.perm_current_project, projectName)
+                    } else {
+                        stringResource(R.string.perm_current_project_none)
+                    }
+                )
+                SettingsGroup {
+                    projectSkills.forEachIndexed { index, entry ->
+                        // 带 key：滑开位移是行内 remember 的位置状态，删掉一条后不带 key 会继承上一条的滑开状态
+                        key(skillSelectionKey(entry)) {
+                            if (index > 0) SettingsDivider()
+                            SkillRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) }
+                            )
+                        }
+                    }
+                }
+            }
+            if (globalSkills.isNotEmpty()) {
+                SettingsGroupHeader(text = stringResource(R.string.perm_global))
+                SettingsGroup {
+                    globalSkills.forEachIndexed { index, entry ->
+                        key(skillSelectionKey(entry)) {
+                            if (index > 0) SettingsDivider()
+                            SkillRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

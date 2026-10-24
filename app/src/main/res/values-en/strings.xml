@@ -340,6 +340,7 @@
     <string name="common_allow">Allow</string>
     <string name="common_close">Close</string>
     <string name="common_clear">Clear</string>
+    <string name="common_search">Search</string>
     <string name="common_more">More</string>
     <string name="workbench_split_handle">Drag to resize panes</string>
     <string name="common_other">Other</string>

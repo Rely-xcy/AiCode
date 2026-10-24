@@ -118,6 +118,7 @@ import compose.icons.feathericons.PieChart
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Save
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
@@ -154,8 +155,10 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     DefaultModels(R.string.settings_default_models),
     Mcp(R.string.settings_mcp),
     Skills(R.string.settings_skills),
+    SkillSearch(R.string.settings_skills),
     Memory(R.string.settings_memory),
     MemoryEditor(R.string.settings_memory),
+    MemorySearch(R.string.settings_memory),
     Prompts(R.string.prompts_title),
     PromptDetail(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
@@ -186,17 +189,21 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
  */
 private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.Menu -> 0
-    // 技能/子代理编辑页既可从列表(1) 进也可从详情页(2) 进，必须比详情页更深：
-    // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
-    SettingsSection.SkillEditor,
+    // 技能这一支整体比其它分支深一层：技能详情既能从列表(1) 进、也能从搜索结果(2) 进，
+    // 只有让详情比搜索页更深，「详情返回到搜索结果」才是往左退，而不是又从右边推进来一页。
+    SettingsSection.SkillEditor -> 4
+    SettingsSection.SkillDetail -> 3
+    // 编辑页必须比详情页更深：同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SubAgentEditor,
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
     SettingsSection.PromptDetail,
-    SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
     SettingsSection.MemoryEditor,
+    // 搜索页是列表页的下一层：从列表推进去、返回时向左退。
+    SettingsSection.MemorySearch,
+    SettingsSection.SkillSearch,
     SettingsSection.Log -> 2
     else -> 1
 }
@@ -394,6 +401,9 @@ fun SettingsScreen(
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
     var skillEditorReturn by remember { mutableStateOf(SettingsSection.Skills) }
+    // 技能详情的返回目标：从搜索结果点进去就回搜索结果（关键词与滚动位置都还在），
+    // 从列表点进去就回列表。不能写死成列表，否则搜到一半点开一条，退回得重搜。
+    var skillDetailReturn by remember { mutableStateOf(SettingsSection.Skills) }
     // 保存后要在详情页展示的技能名：列表刷新是异步的，先记名字等刷新完再换快照。
     var pendingSkillName by remember { mutableStateOf<String?>(null) }
     // 「添加技能」底部弹层：选择作用域后走手动新建 / 文件导入 / 压缩包导入。
@@ -436,13 +446,15 @@ fun SettingsScreen(
         SettingsSection.Menu -> null
         SettingsSection.ProviderEditor -> SettingsSection.Providers
         SettingsSection.Log -> logReturnSection.takeUnless { expanded && it == SettingsSection.Menu }
-        SettingsSection.SkillDetail -> SettingsSection.Skills
+        SettingsSection.SkillDetail -> skillDetailReturn
         SettingsSection.PromptEditor -> promptEditorReturn
         SettingsSection.PromptDetail -> SettingsSection.Prompts
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
         SettingsSection.MemoryEditor -> SettingsSection.Memory
+        SettingsSection.MemorySearch -> SettingsSection.Memory
+        SettingsSection.SkillSearch -> SettingsSection.Skills
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
     }
@@ -721,30 +733,35 @@ fun SettingsScreen(
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
-            // 记忆页的顶栏搜索框与页面内容必须读写同一份搜索词 / 列表状态，回同一个 VM：
+            // 记忆页与记忆搜索页的顶栏、页面内容必须读写同一份搜索词 / 列表状态，回同一个 VM：
             // 与存储页一样在 Scaffold 之前取一次，内容区再取同一实例。
-            // 仍然只在这一分区创建，不会每次进设置页都扫一遍记忆目录。
+            // 仍然只在这两个分区创建，不会每次进设置页都扫一遍记忆目录。
             val memorySectionViewModel: com.aicode.feature.settings.presentation.MemoryViewModel? =
-                if (current == SettingsSection.Memory) androidx.hilt.navigation.compose.hiltViewModel() else null
+                if (current == SettingsSection.Memory || current == SettingsSection.MemorySearch) {
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                } else {
+                    null
+                }
             Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
                 title = {
                     val memoryVm = memorySectionViewModel
-                    if (current == SettingsSection.Memory && memoryVm != null) {
-                        // 搜索框移进顶栏：与右侧「+」同一行。输入词与过滤结果都来自同一个 VM，
-                        // 清空按钮与无结果提示沿用原实现，不在这里另存一份状态。
-                        // 首次读盘期间（loading）也算「可能有东西可搜」：否则有记忆的用户进来时，
-                        // 搜索框会在列表回来的一瞬才从顶栏长出来。
+                    if (current == SettingsSection.MemorySearch && memoryVm != null) {
+                        // 搜索页的顶栏只留返回箭头 + 输入框：没有标题、没有动作按钮，
+                        // 输入框才能吃满整行宽度，窄屏也不会被挤成一条缝。
                         val memoryQuery by memoryVm.searchQuery.collectAsStateWithLifecycle()
-                        val memoryHits by memoryVm.visibleMemories.collectAsStateWithLifecycle()
-                        val memoryLoading by memoryVm.loading.collectAsStateWithLifecycle()
-                        MemoryTopBarTitle(
-                            title = stringResource(current.titleRes),
+                        SearchTopBarField(
                             query = memoryQuery,
                             onQueryChange = memoryVm::setSearchQuery,
-                            showSearch = memoryLoading || memoryQuery.isNotBlank() || memoryHits.isNotEmpty()
+                            placeholder = stringResource(R.string.memory_search_hint)
+                        )
+                    } else if (current == SettingsSection.SkillSearch) {
+                        SearchTopBarField(
+                            query = skillSearchQuery,
+                            onQueryChange = { skillSearchQuery = it },
+                            placeholder = stringResource(R.string.skills_search_hint)
                         )
                     } else {
                         Text(
@@ -856,6 +873,18 @@ fun SettingsScreen(
                                 SelectionToggleAction(selectionFor(SettingsSection.Skills))
                             }
                             IconButton(onClick = {
+                                // 与记忆页同一个口径：搜索页是一次性查询入口，进去总是空词。
+                                skillSearchQuery = ""
+                                section = SettingsSection.SkillSearch
+                            }) {
+                                Icon(
+                                    FeatherIcons.Search,
+                                    contentDescription = stringResource(R.string.common_search),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            IconButton(onClick = {
                                 showSkillAddSheet = true
                             }) {
                                 Icon(
@@ -960,16 +989,31 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Memory -> IconButton(onClick = {
-                            memoryEditorTarget = MemoryEditorTarget()
-                            section = SettingsSection.MemoryEditor
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.memory_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Memory -> {
+                            IconButton(onClick = {
+                                // 每次从入口进搜索页都从空关键词开始：搜索页是一次性查询入口，
+                                // 留着上次的词会让人以为列表还在被筛选。
+                                memorySectionViewModel?.setSearchQuery("")
+                                section = SettingsSection.MemorySearch
+                            }) {
+                                Icon(
+                                    FeatherIcons.Search,
+                                    contentDescription = stringResource(R.string.common_search),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            IconButton(onClick = {
+                                memoryEditorTarget = MemoryEditorTarget()
+                                section = SettingsSection.MemoryEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.memory_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         SettingsSection.Storage -> {
                             IconButton(onClick = { storageViewModel?.refresh() }) {
@@ -1074,14 +1118,14 @@ fun SettingsScreen(
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
-                    searchQuery = skillSearchQuery,
-                    onSearchQueryChange = { skillSearchQuery = it },
                     selection = selectionFor(SettingsSection.Skills),
                     deletingInProgress = skillDeleting.isNotEmpty(),
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
                         selectionFor(SettingsSection.Skills).exit()
                         selectedSkill = it
+                        // 从列表进详情，返回目标就是列表；不复用上一次搜索留下的搜索页。
+                        skillDetailReturn = SettingsSection.Skills
                         section = SettingsSection.SkillDetail
                     },
                     onBatchDelete = { targets ->
@@ -1090,6 +1134,18 @@ fun SettingsScreen(
                     onBatchSetEnabled = { targets, enabled ->
                         viewModel.setSkillsEnabled(targets.map { it.name to it.scope }, enabled)
                     }
+                )
+                SettingsSection.SkillSearch -> SkillSearchSection(
+                    projectName = currentProjectName,
+                    entries = skills,
+                    keyword = skillSearchQuery,
+                    onOpenDetail = { entry ->
+                        selectedSkill = entry
+                        // 返回目标设成搜索页：搜到一半点进一条，退回还是那份结果，不用重搜
+                        skillDetailReturn = SettingsSection.SkillSearch
+                        section = SettingsSection.SkillDetail
+                    },
+                    onDelete = { skillToDelete = it }
                 )
                 SettingsSection.Prompts -> {
                     val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
@@ -1137,13 +1193,12 @@ fun SettingsScreen(
                 }
                 SettingsSection.PromptEditor -> Unit
                 SettingsSection.Memory -> {
-                    // 用 Scaffold 之前取好的那一个实例：顶栏搜索框与这里必须读写同一份状态。
+                    // 用 Scaffold 之前取好的那一个实例：顶栏入口与这里必须读写同一份状态。
                     // 仍然只在这一分区创建，不会每次进设置页都扫一遍记忆目录。
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                         requireNotNull(memorySectionViewModel) { "Memory section without ViewModel" }
-                    val memories by memoryViewModel.visibleMemories.collectAsStateWithLifecycle()
-                    // 搜索词只过滤已加载的列表，不会触发重扫（见 MemoryViewModel.visibleMemories）
-                    val memorySearchQuery by memoryViewModel.searchQuery.collectAsStateWithLifecycle()
+                    // 列表拿全量：筛选只发生在搜索页，否则从搜索页返回后列表还带着上次的关键词。
+                    val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
                     val memoryLoading by memoryViewModel.loading.collectAsStateWithLifecycle()
                     val shortTerm by memoryViewModel.shortTermSession.collectAsStateWithLifecycle()
                     val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
@@ -1172,7 +1227,6 @@ fun SettingsScreen(
                     var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
-                        searchQuery = memorySearchQuery,
                         loading = memoryLoading,
                         shortTerm = shortTerm,
                         activeMemoryEnabled = activeMemory,
@@ -1203,23 +1257,50 @@ fun SettingsScreen(
                             }
                         )
                     }
-                    // 删除记忆二次确认：确认按钮里才真正删；显示名用列表行同一个字段（memory.name）
+                    // 删除记忆二次确认：确认按钮里才真正删；确认框与搜索页共用同一个。
                     memoryToDelete?.let { memory ->
-                        AlertDialog(
-                            onDismissRequest = { memoryToDelete = null },
-                            title = { Text(stringResource(R.string.memory_delete_confirm_title)) },
-                            text = { Text(stringResource(R.string.memory_delete_confirm_message, memory.name)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    memoryViewModel.delete(memory)
-                                    memoryToDelete = null
-                                }) { Text(stringResource(R.string.common_delete)) }
+                        MemoryDeleteConfirmDialog(
+                            memory = memory,
+                            onConfirm = {
+                                memoryViewModel.delete(memory)
+                                memoryToDelete = null
                             },
-                            dismissButton = {
-                                TextButton(onClick = { memoryToDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-                            }
+                            onDismiss = { memoryToDelete = null }
                         )
                     }
+                }
+                SettingsSection.MemorySearch -> {
+                    // 与记忆页同一个 VM 实例：结果就是它按当前关键词算好的 visibleMemories，
+                    // 本页不做第二套过滤，敲字不会触发读盘。
+                    val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                        requireNotNull(memorySectionViewModel) { "Memory search without ViewModel" }
+                    val searchResults by memoryViewModel.visibleMemories.collectAsStateWithLifecycle()
+                    val searchQuery by memoryViewModel.searchQuery.collectAsStateWithLifecycle()
+                    val searchLoading by memoryViewModel.loading.collectAsStateWithLifecycle()
+                    // 删除失败（条目已不存在等）也要提示：搜索页的删除走同一个 VM，
+                    // 而列表页那一个 collector 在另一个分支里，不在这里再挂一个就什么都不弹。
+                    val searchDeleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
+                    val searchToastContext = LocalContext.current
+                    LaunchedEffect(searchDeleteFailed) {
+                        if (searchDeleteFailed) {
+                            Toast.makeText(
+                                searchToastContext,
+                                searchToastContext.getString(R.string.memory_delete_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            memoryViewModel.clearDeleteFailed()
+                        }
+                    }
+                    MemorySearchSection(
+                        results = searchResults,
+                        query = searchQuery,
+                        loading = searchLoading,
+                        onEdit = {
+                            memoryEditorTarget = MemoryEditorTarget(it)
+                            section = SettingsSection.MemoryEditor
+                        },
+                        onDelete = memoryViewModel::delete
+                    )
                 }
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
