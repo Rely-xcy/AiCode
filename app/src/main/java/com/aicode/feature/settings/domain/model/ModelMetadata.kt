@@ -22,8 +22,16 @@ data class ModelMetadata(
     val modelType: ModelType = ModelType.CHAT,
     val supportsImageOutput: Boolean = false,
     val source: Source = Source.INFERRED,
-    /** models.dev 思考强度档位（reasoning_options 中 effort 类型的 values，如 ["low","medium","high"]）；null/空 = 无档位（不显示思考强度选择）。 */
-    val reasoningEffortOptions: List<String>? = null,
+    /** models.dev 思考档位（reasoning_options 中 effort 类型的 values，如 ["low","medium","high"]）；null/空 = 无档位。 */
+    val reasoningLevels: List<String>? = null,
+    /** models.dev reasoning_options 是否声明思考可开关（`toggle` 类型）。 */
+    val reasoningCanDisable: Boolean = false,
+    /** 预算型模型的思考预算下界（`budget_tokens.min`）；null 表示该模型不是预算型。 */
+    val reasoningBudgetMin: Int? = null,
+    /** 预算型模型的思考预算上界（`budget_tokens.max`）。 */
+    val reasoningBudgetMax: Int? = null,
+    /** 服务端默认思考档位；未知为 null（不参与请求，仅用于 UI 标注）。 */
+    val reasoningDefaultLevel: String? = null,
     /** models.dev cost：输入单价（USD/1M tokens）。 */
     val inputCostUsdPerM: Double? = null,
     /** models.dev cost：输出单价（USD/1M tokens）。 */
@@ -33,6 +41,10 @@ data class ModelMetadata(
     /** models.dev cost：缓存写入单价（USD/1M tokens），通常高于普通输入价。 */
     val cacheWriteCostUsdPerM: Double? = null
 ) {
+    /** 兼容旧调用点：可选档位的 apiValue 列表（来自 [reasoningLevels]）。 */
+    val reasoningEffortOptions: List<String>?
+        get() = reasoningLevels?.takeIf { it.isNotEmpty() }
+
     enum class ModelType { CHAT, EMBEDDING }
 
     enum class Source {
@@ -57,7 +69,7 @@ fun mergeModelMetadata(
     base: ModelMetadata?,
     custom: ModelMetadata?
 ): ModelMetadata {
-    val a = base ?: ModelMetadata(
+    val a = base?.copy(id = model) ?: ModelMetadata(
         id = model,
         displayName = model,
         contextTokens = 0,
@@ -77,7 +89,13 @@ fun mergeModelMetadata(
         inputCostUsdPerM = c.inputCostUsdPerM ?: a.inputCostUsdPerM,
         outputCostUsdPerM = c.outputCostUsdPerM ?: a.outputCostUsdPerM,
         cacheReadCostUsdPerM = c.cacheReadCostUsdPerM ?: a.cacheReadCostUsdPerM,
-        cacheWriteCostUsdPerM = c.cacheWriteCostUsdPerM ?: a.cacheWriteCostUsdPerM
+        cacheWriteCostUsdPerM = c.cacheWriteCostUsdPerM ?: a.cacheWriteCostUsdPerM,
+        // 思考档位：自定义模型显式填了就以自定义为准（中转站改名后可自行纠正），未填沿用自动识别。
+        reasoningLevels = c.reasoningLevels?.takeIf { it.isNotEmpty() } ?: a.reasoningLevels,
+        reasoningCanDisable = c.reasoningCanDisable || a.reasoningCanDisable,
+        reasoningBudgetMin = c.reasoningBudgetMin ?: a.reasoningBudgetMin,
+        reasoningBudgetMax = c.reasoningBudgetMax ?: a.reasoningBudgetMax,
+        reasoningDefaultLevel = c.reasoningDefaultLevel ?: a.reasoningDefaultLevel
     )
 }
 

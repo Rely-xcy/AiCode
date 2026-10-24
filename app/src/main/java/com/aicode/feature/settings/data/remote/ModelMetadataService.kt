@@ -194,6 +194,10 @@ class ModelMetadataService @Inject constructor(
     )
 
     companion object {
+        /** reasoning_options 数组（统一成 JsonObject 列表，非数组/空返回空表）。 */
+        private fun reasoningOptionEntries(reasoningOptions: JsonElement?): List<JsonObject> =
+            (reasoningOptions as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+
         /** 从 models.dev 的 reasoning_options 数组中提取 effort 类型的档位 values；无 effort 档位时返回空列表。 */
         fun parseReasoningOptions(reasoningOptions: JsonElement?): List<String> =
             (reasoningOptions as? JsonArray)
@@ -202,6 +206,21 @@ class ModelMetadataService @Inject constructor(
                 ?.let { it["values"] as? JsonArray }
                 ?.mapNotNull { (it as? JsonPrimitive)?.content }
                 .orEmpty()
+
+        /**
+         * models.dev 的 `toggle` 类型：声明该模型可以开关思考。
+         * 具体用哪个线上字段关闭由 [com.aicode.feature.agent.domain.provider.ReasoningResolver] 按厂商判定。
+         */
+        fun parseReasoningToggle(reasoningOptions: JsonElement?): Boolean =
+            reasoningOptionEntries(reasoningOptions).any { (it["type"] as? JsonPrimitive)?.content == "toggle" }
+
+        /** models.dev 的 `budget_tokens` 类型：返回 (min, max)，非预算型返回 null。 */
+        fun parseReasoningBudget(reasoningOptions: JsonElement?): Pair<Int?, Int?>? =
+            reasoningOptionEntries(reasoningOptions)
+                .firstOrNull { (it["type"] as? JsonPrimitive)?.content == "budget_tokens" }
+                ?.let { entry ->
+                    (entry["min"] as? JsonPrimitive)?.intOrNull to (entry["max"] as? JsonPrimitive)?.intOrNull
+                }
 
         /**
          * 解析后的模型目录：[byProvider] 保留目录里的原始 id 大小写；[lowerByProvider] 结构相同但键统一小写
@@ -228,7 +247,10 @@ class ModelMetadataService @Inject constructor(
                         ?.mapNotNull { (it as? JsonPrimitive)?.content }
                         .orEmpty()
                     val cost = model["cost"] as? JsonObject
-                    val reasoningOptions = parseReasoningOptions(model["reasoning_options"])
+                    val reasoningOptions = model["reasoning_options"]
+                    val reasoningLevels = parseReasoningOptions(reasoningOptions)
+                    val reasoningCanDisable = parseReasoningToggle(reasoningOptions)
+                    val reasoningBudget = parseReasoningBudget(reasoningOptions)
                     catalogKey to ModelMetadata(
                         id = (model["id"] as? JsonPrimitive)?.content ?: "",
                         providerId = providerId,
@@ -245,7 +267,10 @@ class ModelMetadataService @Inject constructor(
                             ((model["id"] as? JsonPrimitive)?.content.orEmpty().endsWith("-image")),
                         supportsReasoning = (model["reasoning"] as? JsonPrimitive)?.booleanOrNull == true,
                         supportsCustomTemperature = (model["temperature"] as? JsonPrimitive)?.booleanOrNull == true,
-                        reasoningEffortOptions = reasoningOptions.takeIf { it.isNotEmpty() },
+                        reasoningLevels = reasoningLevels.takeIf { it.isNotEmpty() },
+                        reasoningCanDisable = reasoningCanDisable,
+                        reasoningBudgetMin = reasoningBudget?.first,
+                        reasoningBudgetMax = reasoningBudget?.second,
                         inputCostUsdPerM = (cost?.get("input") as? JsonPrimitive)?.doubleOrNull,
                         outputCostUsdPerM = (cost?.get("output") as? JsonPrimitive)?.doubleOrNull,
                         cacheReadCostUsdPerM = (cost?.get("cache_read") as? JsonPrimitive)?.doubleOrNull,

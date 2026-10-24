@@ -16,7 +16,13 @@ enum class ReasoningEffort(val apiValue: String) {
 
     companion object {
         /** 把 models.dev 的 effort values 解析为可识别的档位列表（保持 values 顺序）。 */
-        fun fromValues(values: List<String>): List<ReasoningEffort> =
-            values.mapNotNull { v -> entries.firstOrNull { it.apiValue == v } }
+        fun fromValues(values: List<String>): List<ReasoningEffort> = values.mapNotNull { fromApiValue(it) }
+
+        /**
+         * 单个 apiValue → 档位。无法识别（含 models.dev 的 `"default"` 与 `null` 值）返回 null，
+         * 由调用方按「不干预 / 未知」处理。
+         */
+        fun fromApiValue(value: String?): ReasoningEffort? =
+            value?.let { v -> entries.firstOrNull { it.apiValue == v } }
     }
 }
