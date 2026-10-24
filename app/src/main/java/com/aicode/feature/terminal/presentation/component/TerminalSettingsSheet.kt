@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -32,6 +33,7 @@ import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,16 +56,9 @@ import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
-import com.aicode.core.theme.semanticColors
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.SettingsRow
 import com.aicode.feature.terminal.data.repository.TerminalSettings
 import com.aicode.feature.terminal.domain.font.TerminalFontManager
 import com.aicode.feature.terminal.domain.model.TerminalThemePreset
-import compose.icons.FeatherIcons
-import compose.icons.feathericons.Upload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -87,8 +82,7 @@ fun TerminalSettingsSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        // 与设置页同底色：卡片色是 cardSurface（浅色下就是纯白），留白色弹层底会让整张卡片在浅色主题里直接消失
-        containerColor = MaterialTheme.semanticColors.pageBackground
+        containerColor = MaterialTheme.colorScheme.surface
     ) {
         Column(
             modifier = Modifier
@@ -97,98 +91,111 @@ fun TerminalSettingsSheet(
                 .padding(bottom = Spacing.xl)
                 .verticalScroll(rememberScrollState())
         ) {
-            // 弹层没有 TopAppBar，「终端设置」降级为分组小标题：这才是旁边设置页里唯一存在的标题层级
-            SettingsGroupHeader(text = stringResource(R.string.terminal_settings_title))
+            Text(
+                text = stringResource(R.string.terminal_settings_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
 
-            // 实时预览卡是这个弹层的核心，保留原卡片形态，不参与本次行/分组对齐
+            Spacer(Modifier.height(Spacing.md))
+
+            // 实时预览卡片
             TerminalPreviewCard(settings = settings)
 
+            Spacer(Modifier.height(Spacing.lg))
+
             // 配色主题选择
-            SettingsGroupHeader(text = stringResource(R.string.terminal_theme_title))
-            SettingsGroup {
-                // 主题是「多选一」，SettingsRow 的「标题 + 单个尾随值」装不下；保留 FilterChip，收进卡片统一底色与圆角
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    TerminalThemePreset.ALL_PRESETS.forEach { preset ->
-                        FilterChip(
-                            selected = preset.id == settings.themeId,
-                            onClick = { onSelectTheme(preset.id) },
-                            label = { Text(stringResource(preset.nameRes)) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+            Text(
+                text = stringResource(R.string.terminal_theme_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(Spacing.sm))
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                TerminalThemePreset.ALL_PRESETS.forEach { preset ->
+                    FilterChip(
+                        selected = preset.id == settings.themeId,
+                        onClick = { onSelectTheme(preset.id) },
+                        label = { Text(stringResource(preset.nameRes)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                    }
+                    )
                 }
             }
 
-            // 字号是「标签 + 当前值 + 滑块」的单体设置：标签交给 SettingsRow，不再加同名小标题，避免同一文案上下重复两遍
             Spacer(Modifier.height(Spacing.lg))
-            SettingsGroup {
-                SettingsRow(
-                    title = stringResource(R.string.terminal_font_size_title),
-                    trailing = {
-                        // 等宽数字：拖动滑块时读数逐帧变化，比例字体下数字宽度跳动会带着行跟着抖
-                        Text(
-                            text = "${settings.fontSizeSp} sp",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.semanticColors.subtleText
-                        )
-                    }
+
+            // 字号大小滑块
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.terminal_font_size_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                SettingsDivider()
-                // 滑块自带 48dp 触摸高度，只补少量留白，不额外抬升卡片高度
-                Slider(
-                    value = settings.fontSizeSp.toFloat(),
-                    onValueChange = { onChangeFontSize(it.toInt()) },
-                    valueRange = 5f..22f,
-                    steps = 16,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = Spacing.lg, end = Spacing.lg, top = Spacing.sm, bottom = Spacing.sm)
+                Text(
+                    text = "${settings.fontSizeSp} sp",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
                 )
             }
+            Slider(
+                value = settings.fontSizeSp.toFloat(),
+                onValueChange = { onChangeFontSize(it.toInt()) },
+                valueRange = 5f..22f,
+                steps = 16,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(Spacing.md))
 
             // 字体选择
-            SettingsGroupHeader(text = stringResource(R.string.terminal_font_title))
             TerminalFontSection(
                 currentPath = settings.fontPath,
                 onChangeFontPath = onChangeFontPath
             )
 
+            Spacer(Modifier.height(Spacing.md))
+
             // 光标样式选择
-            SettingsGroupHeader(text = stringResource(R.string.terminal_cursor_style_title))
-            SettingsGroup {
-                // 三种光标样式同样是单选集合，SettingsRow 放不下；把原来的定宽 Row 换成 FlowRow，窄屏不再裁掉最后一枚
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    listOf(
-                        0 to stringResource(R.string.terminal_cursor_block),
-                        1 to stringResource(R.string.terminal_cursor_underline),
-                        2 to stringResource(R.string.terminal_cursor_bar)
-                    ).forEach { (style, label) ->
-                        FilterChip(
-                            selected = settings.cursorStyle == style,
-                            onClick = { onChangeCursorStyle(style) },
-                            label = { Text(label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+            Text(
+                text = stringResource(R.string.terminal_cursor_style_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(Spacing.xs))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                listOf(
+                    0 to stringResource(R.string.terminal_cursor_block),
+                    1 to stringResource(R.string.terminal_cursor_underline),
+                    2 to stringResource(R.string.terminal_cursor_bar)
+                ).forEach { (style, label) ->
+                    FilterChip(
+                        selected = settings.cursorStyle == style,
+                        onClick = { onChangeCursorStyle(style) },
+                        label = { Text(label) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                    }
+                    )
                 }
             }
         }
@@ -219,64 +226,73 @@ private fun TerminalFontSection(
         }
     }
 
-    SettingsGroup {
-        // 导入是动作而非取值，改用设置页的「行 + 点击」表达；行尾箭头由 SettingsRow 自带
-        SettingsRow(
-            icon = FeatherIcons.Upload,
-            title = stringResource(R.string.terminal_font_import),
-            onClick = { importLauncher.launch(arrayOf("*/*")) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = stringResource(R.string.terminal_font_title),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
         )
-        SettingsDivider()
-        // 字体同样是一个单选集合，SettingsRow 只能放一个值，装不下；保留 FilterChip，收进同一张卡片
-        FlowRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            FilterChip(
-                selected = currentPath.isBlank(),
-                onClick = { onChangeFontPath("") },
-                label = { Text(stringResource(R.string.terminal_font_default)) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+        TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+            Icon(
+                imageVector = Icons.Outlined.FileUpload,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
             )
-            FilterChip(
-                selected = currentPath == TerminalFontManager.BUILTIN_PATH,
-                onClick = { onChangeFontPath(TerminalFontManager.BUILTIN_PATH) },
-                label = { Text(stringResource(R.string.terminal_font_builtin)) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+            Spacer(Modifier.width(Spacing.xs))
+            Text(stringResource(R.string.terminal_font_import))
+        }
+    }
+
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        FilterChip(
+            selected = currentPath.isBlank(),
+            onClick = { onChangeFontPath("") },
+            label = { Text(stringResource(R.string.terminal_font_default)) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
             )
-            fonts.forEach { font ->
-                FilterChip(
-                    selected = font.path == currentPath,
-                    onClick = { onChangeFontPath(font.path) },
-                    label = { Text(font.displayName) },
-                    trailingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = stringResource(R.string.terminal_font_delete),
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clickable {
-                                    TerminalFontManager.deleteFont(font.path)
-                                    fonts = TerminalFontManager.listFonts(context)
-                                    if (font.path == currentPath) onChangeFontPath(TerminalFontManager.BUILTIN_PATH)
-                                }
-                        )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+        FilterChip(
+            selected = currentPath == TerminalFontManager.BUILTIN_PATH,
+            onClick = { onChangeFontPath(TerminalFontManager.BUILTIN_PATH) },
+            label = { Text(stringResource(R.string.terminal_font_builtin)) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        )
+        fonts.forEach { font ->
+            FilterChip(
+                selected = font.path == currentPath,
+                onClick = { onChangeFontPath(font.path) },
+                label = { Text(font.displayName) },
+                trailingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = stringResource(R.string.terminal_font_delete),
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable {
+                                TerminalFontManager.deleteFont(font.path)
+                                fonts = TerminalFontManager.listFonts(context)
+                                if (font.path == currentPath) onChangeFontPath(TerminalFontManager.BUILTIN_PATH)
+                            }
                     )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                 )
-            }
+            )
         }
     }
 }
