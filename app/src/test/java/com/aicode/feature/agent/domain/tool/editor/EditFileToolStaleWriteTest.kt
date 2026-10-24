@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -148,16 +149,17 @@ class EditFileToolStaleWriteTest {
     }
 
     @Test
-    fun fingerprintUnavailable_doesNotBlockEdit() = runBlocking {
-        // 远端文件超过读取上限时 fingerprint 会抛异常。版本校验是辅助保护，
-        // 它自己算不出指纹时**必须放行**，否则用户会因为"算不出指纹"而改不了文件。
+    fun snapshotReadFailure_reportsReadErrorInsteadOfStale() = runBlocking {
+        // 远端文件超过读取上限时 readBytes 会抛异常，快照因此取不到：既没有旧内容可比对，也没有
+        // 当前指纹可算。这种情况必须报成「读取失败」而不是「版本冲突」——后者会诱导模型反复
+        // 重新读取一个根本读不出来的文件，且掩盖真正的失败原因。
         val file = tmp.newFile("big.kt").apply { writeText("val a = 1\n") }
         val throwing = object : FileAccessProvider by fileAccess {
-            override fun fingerprint(path: String): String? =
-                throw IllegalStateException("模拟：文件过大，无法计算指纹")
+            override fun readBytes(path: String): ByteArray =
+                throw IllegalStateException("模拟：文件过大，读取失败")
         }
         val guardedTool = EditFileTool(throwing, WorkspaceWriteSignal(), WorkspaceFileLock(), versions)
-        // 先登记一条版本，确保校验逻辑真的会走到 fingerprint 调用
+        // 先登记一条版本，确保校验逻辑本来会拿它参与比对：本用例要求的正是「读到内容才比版本」
         versions.record("s1", fileAccess.toDisplayPath(file.path), "sha256:whatever")
 
         val result = guardedTool.executeWithContext(
@@ -165,7 +167,11 @@ class EditFileToolStaleWriteTest {
             context("s1")
         )
 
-        assertTrue("算不出指纹时必须放行，实际=$result", result is ToolResult.Success)
-        assertEquals("val a = 2\n", file.readText())
+        assertTrue("读不到内容时应报读取失败，实际=$result", result is ToolResult.Error)
+        val error = result as ToolResult.Error
+        assertNotEquals("读不到 ≠ 版本冲突，不得报 STALE_FILE", STALE_FILE_CODE, error.code)
+        assertEquals("EDIT_ERROR", error.code)
+        assertTrue("错误信息要能读懂，实际=${error.message}", error.message.contains("文件过大"))
+        assertEquals("读失败时绝不能落盘", "val a = 1\n", file.readText())
     }
 }

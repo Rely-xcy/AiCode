@@ -1,12 +1,14 @@
 package com.aicode.feature.agent.domain.container
 
 import android.content.ContextWrapper
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -17,7 +19,13 @@ import java.io.RandomAccessFile
  * 标记格式即契约：`custom:<32 位 hex 采样指纹>`。
  *
  * 采样窗口是头/中/尾各 128KB，所以用例用 1MB 文件让三段互不重叠，分别改头、中、尾各一个字节。
+ *
+ * 必须跑在 Robolectric 下：`isInstalledFor` 经 `android.net.Uri.parse` 把 `RootfsSource.LocalFile`
+ * 解读成 File 分支，而纯 JVM 单测里 android.jar 是桩（见 app/build.gradle.kts 的
+ * `unitTests.isReturnDefaultValues`），`Uri.parse` 会返回 null，指纹一路取不到，
+ * 所有用例都只能看到「保守视为已安装」那一支——测不到任何内容变化的判定。
  */
+@RunWith(AndroidJUnit4::class)
 class ContainerInstallerImageSourceTest {
 
     private val root = File(System.getProperty("java.io.tmpdir"), "installer-image-${System.nanoTime()}")
