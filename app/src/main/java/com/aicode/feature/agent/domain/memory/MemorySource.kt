@@ -139,7 +139,11 @@ interface MemorySource {
          * rename 在同一文件系统内是原子的：要么全新、要么全旧。
          */
         fun writeAtomically(file: File, text: String) {
-            val parent = file.parentFile ?: run { file.writeText(text); return }
+            val parent = file.parentFile ?: run {
+                file.writeText(text)
+                MemoryFileCache.invalidate(file)
+                return
+            }
             // 临时文件名带纳秒后缀：与 withFileLock 是两道保险（万一有绕过锁的写入路径，也不互相覆盖临时文件）
             val tmp = File(parent, "${file.name}.${System.nanoTime()}.tmp")
             try {
@@ -148,6 +152,8 @@ interface MemorySource {
                 if (!tmp.renameTo(file)) file.writeText(text)
             } finally {
                 if (tmp.exists()) tmp.delete()
+                // 同一毫秒内改写且长度不变时 mtime+size 看不出来，写路径自己把缓存摘掉
+                MemoryFileCache.invalidate(file)
             }
         }
 

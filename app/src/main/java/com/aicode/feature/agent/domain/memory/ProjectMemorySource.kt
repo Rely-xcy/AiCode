@@ -35,12 +35,18 @@ class ProjectMemorySource(
         if (projectRoot.isBlank() || !memoryRoot.exists()) return emptyList()
         val files = memoryRoot.listFiles { file -> file.isFile && file.extension == "md" } ?: return emptyList()
         
-        return files.mapNotNull { file -> MemoryParser.parse(file, MemoryScope.PROJECT) }
+        return files.mapNotNull { file -> MemoryFileCache.parse(file, MemoryScope.PROJECT) }
             .sortedBy { it.name.lowercase() }
     }
 
     override fun loadContent(name: String): String? {
         if (projectRoot.isBlank()) return null
+        // 快路径：落盘文件名就是 sanitizeName(name) 的结果，读一条不必扫整个目录
+        val direct = MemorySource.resolveMemoryFile(memoryRoot, name)
+        MemoryFileCache.parse(direct, MemoryScope.PROJECT)
+            ?.takeIf { it.name.equals(name, ignoreCase = true) }
+            ?.let { return it.content }
+        // 文件名与 frontmatter 里的 name 不一致（手工改过文件）时按原名回退全量扫描
         return listMemories()
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?.content

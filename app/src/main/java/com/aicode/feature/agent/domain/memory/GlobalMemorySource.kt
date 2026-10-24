@@ -19,11 +19,17 @@ class GlobalMemorySource @Inject constructor(
         if (!memoryRoot.exists()) return emptyList()
         val files = memoryRoot.listFiles { file -> file.isFile && file.extension == "md" } ?: return emptyList()
         
-        return files.mapNotNull { file -> MemoryParser.parse(file, MemoryScope.GLOBAL) }
+        return files.mapNotNull { file -> MemoryFileCache.parse(file, MemoryScope.GLOBAL) }
             .sortedBy { it.name.lowercase() }
     }
 
     override fun loadContent(name: String): String? {
+        // 快路径：落盘文件名就是 sanitizeName(name) 的结果，读一条不必扫整个目录
+        val direct = MemorySource.resolveMemoryFile(memoryRoot, name)
+        MemoryFileCache.parse(direct, MemoryScope.GLOBAL)
+            ?.takeIf { it.name.equals(name, ignoreCase = true) }
+            ?.let { return it.content }
+        // 文件名与 frontmatter 里的 name 不一致（手工改过文件）时按原名回退全量扫描
         return listMemories()
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?.content
