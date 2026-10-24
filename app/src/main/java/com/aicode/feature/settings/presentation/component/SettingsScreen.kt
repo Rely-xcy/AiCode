@@ -287,6 +287,7 @@ fun SettingsScreen(
     val imageVersions by viewModel.imageVersions.collectAsStateWithLifecycle()
     val imageDownload by viewModel.containerImageDownload.collectAsStateWithLifecycle()
     val containerReset by viewModel.containerReset.collectAsStateWithLifecycle()
+    val containerReinstall by viewModel.containerReinstall.collectAsStateWithLifecycle()
     val imageSourceOptions by viewModel.imageSourceOptions.collectAsStateWithLifecycle()
     val selectedImageSource by viewModel.selectedImageSource.collectAsStateWithLifecycle()
     val downloadedImages by viewModel.downloadedImages.collectAsStateWithLifecycle()
@@ -1189,6 +1190,13 @@ fun SettingsScreen(
                         viewModel.resetContainer(profile)
                     },
                     resetState = containerReset,
+                    // 重装也会删 rootfs：与重置同样先停掉 AI 会话与终端标签，否则它们会继续读写正在被删的目录。
+                    reinstallState = containerReinstall,
+                    onDismissReinstall = { viewModel.dismissContainerReinstall() },
+                    onReinstallProfile = { profile ->
+                        onStopAllAndCloseTerminal()
+                        viewModel.reinstallContainerImage(profile)
+                    },
                     onRestoreBuiltin = { viewModel.restoreBuiltinAlpine() },
                     remoteConnections = remoteConnections
                 )

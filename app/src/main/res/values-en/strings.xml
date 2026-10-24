@@ -898,6 +898,11 @@
     <string name="container_resetting_title">Cleaning Container Data</string>
     <string name="container_resetting_message">Deleting data for "%1$s"…\n%2$s items removed</string>
     <string name="container_reset_confirm">This will delete the rootfs directory of "%1$s" (including installed tools and configs). It will be re-extracted and initialized on next use. Continue?</string>
+    <string name="container_reinstall_image">Reinstall Current Image</string>
+    <string name="container_reinstall_title">Reinstall Image</string>
+    <string name="container_reinstall_confirm">This will re-extract "%1$s" from the current image file. Tools and configs installed inside the container will be lost. Continue?</string>
+    <string name="container_reinstall_confirm_action">Reinstall</string>
+    <string name="container_reinstall_failed">Reinstall failed: %1$s</string>
     <string name="container_builtin_badge">Built-in</string>
     <string name="container_custom_badge">Custom</string>
     <string name="container_ssh_badge">SSH</string>

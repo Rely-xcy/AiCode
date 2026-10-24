@@ -89,6 +89,7 @@ import com.aicode.core.ui.containerOsLogo
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -135,6 +136,10 @@ internal fun ContainerSection(
     onResetProfile: (ContainerProfile) -> Unit = {},
     /** 非 null 说明正在重置，界面弹不可取消的进度框直到删完。 */
     resetState: ContainerResetUiState? = null,
+    /** 非 null 说明正在重新安装镜像（或停在失败态），界面弹进度框。 */
+    reinstallState: ContainerInitState? = null,
+    onDismissReinstall: () -> Unit = {},
+    onReinstallProfile: (ContainerProfile) -> Unit = {},
     onRestoreBuiltin: () -> Unit = {},
     remoteConnections: List<RemoteConnection> = emptyList(),
     /** 长按拖拽排序落库（顺序即列表存储顺序）。 */
@@ -149,6 +154,7 @@ internal fun ContainerSection(
     var deletingProfile by remember { mutableStateOf<ContainerProfile?>(null) }
     var pendingSwitch by remember { mutableStateOf<ContainerProfile?>(null) }
     var pendingReset by remember { mutableStateOf<ContainerProfile?>(null) }
+    var pendingReinstall by remember { mutableStateOf<ContainerProfile?>(null) }
 
     if (profiles.isEmpty()) {
         Column(
@@ -273,6 +279,7 @@ internal fun ContainerSection(
             remoteConnections = remoteConnections,
             onDismiss = { editingProfile = null },
             onReset = { pendingReset = editing },
+            onReinstall = { pendingReinstall = editing },
             onConfirm = { profile, setDefault ->
                 onEditCustom(profile.copy(id = editing.id))
                 // 本地镜像才可作默认容器；关闭默认时若原本就是默认则回退内置 Alpine。
@@ -336,6 +343,46 @@ internal fun ContainerSection(
         )
     }
 
+    pendingReinstall?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingReinstall = null },
+            title = { Text(stringResource(R.string.container_reinstall_title)) },
+            text = { Text(stringResource(R.string.container_reinstall_confirm, target.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onReinstallProfile(target)
+                    pendingReinstall = null
+                    if (editingProfile?.id == target.id) editingProfile = null
+                }) { Text(stringResource(R.string.container_reinstall_confirm_action)) }
+            },
+            dismissButton = { TextButton(onClick = { pendingReinstall = null }) { Text(stringResource(R.string.common_cancel)) } }
+        )
+    }
+
+    // 重装进度：清理与解压阶段由 ContainerInstaller 上报，这里只映射成文字；失败态给关闭按钮。
+    reinstallState?.takeIf { it !is ContainerInitState.Ready && it !is ContainerInitState.Idle }?.let { state ->
+        AlertDialog(
+            onDismissRequest = { if (state is ContainerInitState.Failed) onDismissReinstall() },
+            title = { Text(stringResource(R.string.container_reinstall_title)) },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state is ContainerInitState.Failed) {
+                        Spacer(Modifier.size(20.dp))
+                    } else {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                    Spacer(Modifier.width(Spacing.md))
+                    Text(reinstallMessage(context, state))
+                }
+            },
+            confirmButton = {
+                if (state is ContainerInitState.Failed) {
+                    TextButton(onClick = onDismissReinstall) { Text(stringResource(R.string.common_close)) }
+                }
+            }
+        )
+    }
+
     // 大容器删一遍要几十秒：删完前用不可取消的进度框占住界面，避免用户以为卡住或重复点。
     resetState?.let { state ->
         AlertDialog(
@@ -351,6 +398,22 @@ internal fun ContainerSection(
             confirmButton = {}
         )
     }
+}
+
+/**
+ * 重装进度文案：清理/解压阶段与终端页用同一套选项文案，避免同一状态两种措辞。
+ * Idle/Ready 不会进这个弹框（调用方已过滤），留空串只为穷尽分支。
+ */
+private fun reinstallMessage(context: Context, state: ContainerInitState): String = when (state) {
+    is ContainerInitState.CleaningOldRootfs ->
+        context.getString(R.string.terminal_cleaning_old_container, state.processed)
+    is ContainerInitState.ExtractingRootfs ->
+        context.getString(R.string.terminal_extracting_env, state.processed)
+    is ContainerInitState.InstallingPackages ->
+        context.getString(R.string.terminal_installing_packages, state.line ?: "")
+    is ContainerInitState.Failed ->
+        context.getString(R.string.container_reinstall_failed, state.reason)
+    ContainerInitState.Idle, ContainerInitState.Ready -> ""
 }
 
 /** 删除确认的补充说明：内置可恢复、自定义本地清 rootfs、远程 SSH 无额外说明。 */
@@ -535,6 +598,7 @@ private fun ProfileEditSheet(
     remoteConnections: List<RemoteConnection>,
     onDismiss: () -> Unit,
     onReset: (() -> Unit)? = null,
+    onReinstall: (() -> Unit)? = null,
     onConfirm: (ContainerProfile, Boolean) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -725,6 +789,35 @@ private fun ProfileEditSheet(
                                         text = pickedName
                                             ?: if (pickedUri != null) stringResource(R.string.container_file_selected)
                                             else stringResource(R.string.container_select_image_file),
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+
+                        // 同名镜像被覆盖但没被自动识别、或想回到干净镜像时的手动入口：只对本地导入镜像有意义
+                        if (initial != null && initial.rootfsSource is RootfsSource.LocalFile && onReinstall != null) {
+                            Spacer(modifier = Modifier.size(Spacing.xs))
+                            Surface(
+                                onClick = onReinstall,
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        FeatherIcons.RefreshCw,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.container_reinstall_image),
                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,

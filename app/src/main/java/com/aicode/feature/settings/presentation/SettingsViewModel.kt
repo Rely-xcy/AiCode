@@ -16,6 +16,7 @@ import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
+import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.ContainerProfile
@@ -960,6 +961,13 @@ class SettingsViewModel @Inject constructor(
     /** 正在重置的容器（含已删条目数），为 null 说明不在重置。UI 据此弹进度框。 */
     private val _containerReset = MutableStateFlow<ContainerResetUiState?>(null)
     val containerReset: StateFlow<ContainerResetUiState?> = _containerReset.asStateFlow()
+
+    /**
+     * 手动「重新安装当前镜像」的进度；null 表示没在重装。
+     * 直接复用 [ContainerInitState]：清理与解压阶段由 ContainerInstaller 上报，界面不必再维护一套阶段枚举。
+     */
+    private val _containerReinstall = MutableStateFlow<ContainerInitState?>(null)
+    val containerReinstall: StateFlow<ContainerInitState?> = _containerReinstall.asStateFlow()
 
     /** 当前下载任务句柄，取消下载时 cancel 它（底层 OkHttp call 同步中断）。 */
     private var downloadJob: kotlinx.coroutines.Job? = null
@@ -2449,6 +2457,37 @@ class SettingsViewModel @Inject constructor(
                 containerInstaller.resetRootfs(profile, onProgress)
             }
         }
+    }
+
+    /**
+     * 手动重新安装当前镜像：清掉 rootfs 后按当前导入文件重新解压。
+     *
+     * 覆盖场景：同名镜像文件被新内容替换但自动识别没命中（例如同大小又同修改时间的内容变更命中
+     * 了进程内指纹缓存），或用户主动想回到干净镜像。只对本地导入镜像生效：内置走 INSTALL_VERSION
+     * 判定（它一改就是所有老用户被清空重装，不能由这里间接触发），远程 SSH 没有本地 rootfs。
+     */
+    fun reinstallContainerImage(profile: ContainerProfile) {
+        if (_containerReinstall.value != null) return
+        if (profile.isBuiltin || profile.rootfsSource !is RootfsSource.LocalFile) return
+        viewModelScope.launch {
+            _containerReinstall.value = ContainerInitState.CleaningOldRootfs(0)
+            try {
+                containerInstaller.resetRootfs(profile) { deleted ->
+                    _containerReinstall.value = ContainerInitState.CleaningOldRootfs(deleted)
+                }
+                // 标记与 rootfs 已被删掉，installRootfsIfNeed 会走真正的解压分支并逐阶段上报进度
+                containerInstaller.installRootfsIfNeed(profile) { state -> _containerReinstall.value = state }
+                _containerReinstall.value = null
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "重新安装镜像失败：${profile.id}", e)
+                _containerReinstall.value = ContainerInitState.Failed(e.message ?: "")
+            }
+        }
+    }
+
+    /** 关闭重装失败提示；重装进行中不给关（进度框没有关闭按钮）。 */
+    fun dismissContainerReinstall() {
+        if (_containerReinstall.value is ContainerInitState.Failed) _containerReinstall.value = null
     }
 
     /** 删 profile 附带的 rootfs 清理，带进度；内置与远程 SSH 没本地 rootfs 可删，不弹进度框。 */
