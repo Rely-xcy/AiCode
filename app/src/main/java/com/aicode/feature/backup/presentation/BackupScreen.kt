@@ -438,6 +438,13 @@ internal fun BackupScreen(
                 else R.string.backup_import_done
             ),
             message = buildImportSummary(context, current.stats),
+            // 远程提醒单独成行：与「工作区文件」行下方的说明同款（图标 + 次要色小字），
+            // 不再拼进摘要正文，否则一段纯文本堆在末尾分不出主次。
+            hint = if (shouldShowRemoteRestoreHint(current.stats)) {
+                stringResource(R.string.backup_restore_remote_hint)
+            } else {
+                null
+            },
             onDismiss = { viewModel.reset() }
         )
         is BackupState.WorkspaceSelection -> WorkspaceRestoreDialog(
@@ -769,9 +776,23 @@ private fun TargetTypeBadge(type: BackupTargetType) {
 
 @Composable
 private fun WorkspaceBackupHint() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    HintLine(
+        text = stringResource(R.string.backup_workspace_git_hint),
         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+    )
+}
+
+/**
+ * 通用提示行：14dp 警示图标 + bodySmall 次要色。
+ *
+ * 备份页里与某一行绑定的说明（工作区文件、导入结果里的远程提醒）都用它，
+ * 避免两处各写一套图标尺寸与字号而慢慢走样。
+ */
+@Composable
+private fun HintLine(text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = FeatherIcons.AlertCircle,
@@ -781,7 +802,7 @@ private fun WorkspaceBackupHint() {
         )
         Spacer(Modifier.width(Spacing.xs))
         Text(
-            text = stringResource(R.string.backup_workspace_git_hint),
+            text = text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -984,11 +1005,22 @@ private fun targetSubtitle(target: BackupTarget): String = when (target.type) {
 }
 
 @Composable
-private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) {
+private fun ResultDialog(title: String, message: String, hint: String? = null, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { Text(message) },
+        text = {
+            Column {
+                Text(message)
+                // 与正文隔一个 Spacing.sm：和「工作区文件」行与其下方说明的间距一致。
+                if (hint != null) {
+                    HintLine(
+                        text = hint,
+                        modifier = Modifier.padding(top = Spacing.sm)
+                    )
+                }
+            }
+        },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_got_it)) } }
     )
 }
@@ -1082,14 +1114,19 @@ internal fun buildImportSummary(context: android.content.Context, stats: Restore
     if (stats.skippedLoginSecrets > 0) {
         appendLine(context.getString(R.string.backup_stat_skipped_login_secrets, stats.skippedLoginSecrets))
     }
-    // 远程相关的提醒只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
-    // 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
-    if (stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0) {
-        appendLine()
-        appendLine(context.getString(R.string.backup_restore_remote_hint))
-    }
+    // 远程提醒不拼进摘要：它在结果对话框里由 [HintLine] 单独成行渲染，与「工作区文件」
+    // 行下方的说明同款；拼进长文本里既分不出主次，也和页面上的提示样式两套。
     append(context.getString(R.string.backup_settings_covered))
 }
+
+/**
+ * 是否要展示「远程聊天记录只在远程模式下显示」的提醒。
+ *
+ * 只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
+ * 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
+ */
+internal fun shouldShowRemoteRestoreHint(stats: RestoreStats): Boolean =
+    stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0
 
 /** 逐行列出还原统计；导入成功摘要与「部分写入」失败提示共用，避免两处口径不一。 */
 internal fun buildRestoreStatsLines(context: android.content.Context, stats: RestoreStats): String = buildString {
