@@ -98,7 +98,6 @@ import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.AIAgentViewModel
-import com.aicode.feature.agent.presentation.RunningToolOutput
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.QueuedRequest
 import com.aicode.feature.agent.presentation.hasVisibleContent
@@ -650,6 +649,12 @@ private fun buildTurnProcessItems(
 /** 超过该长度（字符）的助手正文拆成多条有界 chunk。 */
 private const val CHUNK_SPLIT_THRESHOLD_CHARS = 2_000
 
+/**
+ * 预热队列上限：与 [MarkdownRenderCache] 容量同量级。再多也会被 LRU 挤掉，
+ * 先把最近窗口喂熟就已经覆盖「滑到哪都能命中」。
+ */
+private const val MARKDOWN_WARM_MAX_ENTRIES = 200
+
 /** 每条 chunk 的目标字符预算：正文按 markdown 块打包，单块超出预算（如巨大表格）时
  *  按行硬切兜底，保证任意 chunk 高度有界（≈0.5-0.7 屏）。 */
 private const val CHUNK_BUDGET_CHARS = 1_200
@@ -941,6 +946,9 @@ fun AIChatPanel(
     val reasoningOverrideSnapshot by remember { derivedStateOf { reasoningExpansionOverrides.toMap() } }
     // 正在执行的工具 id 集合：只让集合内容参与 remember key，避免实时输出逐字刷新导致整表重建。
     val runningToolIds by remember { derivedStateOf { runningTool.mapTo(HashSet()) { it.messageId } } }
+    // 实时工具输出按消息 id 摊平：runningTool 每来一个 token 就换实例，item 里逐项 firstOrNull
+    // 会让每个可见 item 在组合期各扫一遍；摊平后 item 只查一次表。
+    val liveToolOutputs = remember(runningTool) { runningTool.associate { it.messageId to it.text } }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -982,16 +990,26 @@ fun AIChatPanel(
             activeTurnKey = activeTurnKey,
         )
     }
+    // 预热队列：最近窗口里会走 Markdown 渲染的定稿正文。长文渲染的是分块切片（见 messageRenderItems），
+    // 所以取 item.slice 而不是整条正文，否则预热写进去的缓存键与渲染时查的键对不上。
+    // 从最近处往历史上预热：用户回看是从底部往上翻，先把即将滑入视口的那几条喂熟才划算。
+    val markdownWarmQueue = remember(currentSessionId, chatItems) {
+        chatItems
+            .filter { it.turnHeader == null && it.toolGroup == null && it.contentType != REASONING_CONTENT_TYPE }
+            .filter { it.message.role != MessageRole.TOOL && it.message.content.hasVisibleContent() }
+            .map { it.slice ?: it.message.content }
+            .takeLast(MARKDOWN_WARM_MAX_ENTRIES)
+            .asReversed()
+    }
     // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方。
     // 正在跑的那一轮（以及运行期间出现的后续轮）不给结论：耗时与用量都要等本轮收工才成立。
     // 按轮首用户行 id 传入（与 activeTurnKey 同一个运行时真值），插话才顶不掉它。
     val runningTurnStartId = if (isBusy) runningTurnAnchorId else null
-    val taskDurations = remember(messages, isBusy, runningTurnStartId) {
-        computeTaskDurations(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
+    val turnStats = remember(messages, isBusy, runningTurnStartId) {
+        computeTurnStats(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
     }
-    val turnUsages = remember(messages, isBusy, runningTurnStartId) {
-        computeTurnUsage(messages, lastTurnFinished = !isBusy, runningTurnStartId = runningTurnStartId)
-    }
+    val taskDurations = turnStats.taskDurations
+    val turnUsages = turnStats.turnUsages
     val reasoningDurations = viewModel.reasoningDurations
     // 方案 A：每轮正常收尾的最终回复（包括历史所有轮次的回复）均挂操作行（复制/更多），
     // 彻底解决依赖内存集合导致重启 App 后历史消息丢失操作按钮的 Bug。
@@ -1741,7 +1759,7 @@ fun AIChatPanel(
         messageEntryDelays,
         triggeredSkills,
         runningToolIds,
-        runningTool,
+        liveToolOutputs,
         onToolItemToggled,
         onOpenMessageMenu
     ) {
@@ -1757,7 +1775,7 @@ fun AIChatPanel(
             messageEntryDelays = messageEntryDelays,
             triggeredSkills = triggeredSkills,
             runningToolIds = runningToolIds,
-            runningTools = runningTool,
+            liveOutputs = liveToolOutputs,
             onToolItemToggled = onToolItemToggled,
             onOpenMessageMenu = onOpenMessageMenu,
         )
@@ -1926,6 +1944,12 @@ fun AIChatPanel(
                             }
                         }
                     }
+                    // 预热不产生 UI、也不参与布局：只为把「滑入视口才解析」提前到后台。
+                    MarkdownParseWarmer(
+                        queue = markdownWarmQueue,
+                        cache = markdownCache,
+                        resetKey = currentSessionId
+                    )
                 }
             }
             } // 内容层结束
@@ -2352,7 +2376,8 @@ private class ChatItemEnv(
     val messageEntryDelays: Map<String, Long>,
     val triggeredSkills: Map<String, List<String>>,
     val runningToolIds: Set<String>,
-    val runningTools: List<RunningToolOutput>,
+    /** 实时工具输出：messageId → 当前已产出的输出文本，一次查表代替逐项扫描。 */
+    val liveOutputs: Map<String, String>,
     val onToolItemToggled: () -> Unit,
     val onOpenMessageMenu: (AgentUIMessage) -> Unit,
 )
@@ -2416,11 +2441,10 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
             ) {
                 Column {
                     group.forEach { member ->
-                        val live = env.runningTools.firstOrNull { it.messageId == member.id }?.text
                         AgentMessageItem(
                             message = member,
                             showActions = member.id in env.actionableMessageIds,
-                            liveOutput = live,
+                            liveOutput = env.liveOutputs[member.id],
                             markdownCache = env.markdownCache,
                             onRewindClick = { env.viewModel.openRewindMenu(it) },
                             onMoreClick = { env.onOpenMessageMenu(it) },
@@ -2437,11 +2461,10 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
         }
         else -> {
             val message = item.message
-            val live = env.runningTools.firstOrNull { it.messageId == message.id }?.text
             AgentMessageItem(
                 message = message,
                 showActions = message.id in env.actionableMessageIds,
-                liveOutput = live,
+                liveOutput = env.liveOutputs[message.id],
                 markdownCache = env.markdownCache,
                 contentSlice = item.slice,
                 isChunkHeader = item.isChunkHeader,

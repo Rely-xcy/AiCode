@@ -161,9 +161,7 @@ internal fun computeTaskDurations(
     lastTurnFinished: Boolean,
     /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
     runningTurnStartId: String? = null
-): Map<String, Long> = splitTurns(messages, lastTurnFinished, runningTurnStartId)
-    .filter { it.endMessage.timestamp > it.startMillis }
-    .associate { it.endMessage.id to (it.endMessage.timestamp - it.startMillis) }
+): Map<String, Long> = computeTurnStats(messages, lastTurnFinished, runningTurnStartId).taskDurations
 
 /**
  * 每轮任务的 token 合计：轮内**所有步骤**的输入/输出/缓存命中求和，返回「消息 id → [TurnUsage]」，
@@ -177,12 +175,35 @@ internal fun computeTurnUsage(
     lastTurnFinished: Boolean,
     /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
     runningTurnStartId: String? = null
-): Map<String, TurnUsage> = splitTurns(messages, lastTurnFinished, runningTurnStartId).associate { turn ->
-    turn.endMessage.id to TurnUsage(
-        inputTokens = turn.assistantMessages.sumOf { it.inputTokens },
-        outputTokens = turn.assistantMessages.sumOf { it.outputTokens },
-        cachedInputTokens = turn.assistantMessages.sumOf { it.cachedInputTokens }
-    )
+): Map<String, TurnUsage> = computeTurnStats(messages, lastTurnFinished, runningTurnStartId).turnUsages
+
+/** 一次轮次切分产出的两份派生数据：[computeTaskDurations] 与 [computeTurnUsage] 的结果。 */
+internal data class TurnStats(
+    val taskDurations: Map<String, Long>,
+    val turnUsages: Map<String, TurnUsage>
+)
+
+/**
+ * 耗时与用量共用同一份轮次切分（[splitTurns]）：分开算等于对消息列表跑两遍 O(n) 切分，
+ * 而每次消息变化（流式落库、工具状态）都会重跑一次，两遍纯属重复。
+ */
+internal fun computeTurnStats(
+    messages: List<AgentUIMessage>,
+    lastTurnFinished: Boolean,
+    runningTurnStartId: String? = null
+): TurnStats {
+    val durations = LinkedHashMap<String, Long>()
+    val usages = LinkedHashMap<String, TurnUsage>()
+    for (turn in splitTurns(messages, lastTurnFinished, runningTurnStartId)) {
+        val end = turn.endMessage
+        if (end.timestamp > turn.startMillis) durations[end.id] = end.timestamp - turn.startMillis
+        usages[end.id] = TurnUsage(
+            inputTokens = turn.assistantMessages.sumOf { it.inputTokens },
+            outputTokens = turn.assistantMessages.sumOf { it.outputTokens },
+            cachedInputTokens = turn.assistantMessages.sumOf { it.cachedInputTokens }
+        )
+    }
+    return TurnStats(taskDurations = durations, turnUsages = usages)
 }
 
 /** 任务耗时格式化：不足 1 分钟显示 `12s`，不足 1 小时显示 `2:05`，更长显示 `1:02:05`。 */
