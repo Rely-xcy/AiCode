@@ -43,10 +43,25 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Export Room schema
+        # 强制重跑 KSP：构建缓存会跳过 schema 生成，导致声明的 schema 版本在仓库里缺失。
+        # 放在采集之前且 always 上传，这样即使后续采集失败也能拿到 schema。
+        if: always()
+        run: ./gradlew :app:kspUniversalDebugKotlin --rerun-tasks
+
+      - name: Upload Room schema
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schema-export
+          path: app/schemas/**
+          if-no-files-found: warn
+
       - name: Compile generator test APK
         # 先编译再来模拟器：配置/依赖/DSL 错误在这里就暴露，不用等 20 分钟开完机。
-        # app 的 benchmark APK 显式列出：仅构建 test APK 时它的产出位置不确定。
-        run: ./gradlew :baselineprofile:assembleUniversalBenchmark :app:assembleUniversalBenchmark --stacktrace
+        # 三个 APK 都要显式列出：profilegen 用于采集（未混淆），benchmark 仅用于下一步断言
+        # 「发布型构建确实把 profile 编进了 APK」。
+        run: ./gradlew :baselineprofile:assembleUniversalProfilegen :app:assembleUniversalProfilegen :app:assembleUniversalBenchmark --stacktrace
 
       - name: Verify profile is packaged
         # AGP 只在非 debuggable 变体里把 baseline-prof.txt 编译成 assets/dexopt/baseline.prof，
@@ -67,7 +82,16 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew :baselineprofile:connectedUniversalBenchmarkAndroidTest --stacktrace
+          script: ./gradlew :baselineprofile:connectedUniversalProfilegenAndroidTest --stacktrace
+
+      - name: Verify captured profile is unobfuscated
+        # 采集必须得到未混淆规则（形如 com/aicode/...），发布时再由 R8 按 mapping 重写。
+        # 若这里拿到的仍是 La/a; 这类短名，说明采集变体又被混淆了，这份 profile 代码一变就失配。
+        run: |
+          profile=$(find baselineprofile/build/outputs -name "*.txt" | head -1)
+          test -n "$profile" || { echo "未找到采集结果"; exit 1; }
+          echo "checking $profile"
+          grep -q "com/aicode" "$profile" || { echo "采集结果里没有原始类名，采集变体仍被混淆"; exit 1; }
 
       - name: Upload generated profile
         if: always()
