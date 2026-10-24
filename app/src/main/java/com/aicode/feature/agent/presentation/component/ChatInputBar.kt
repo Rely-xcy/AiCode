@@ -1117,8 +1117,9 @@ internal fun StatusBanner(state: AgentUIState) {
     val lastError = rememberLastNonNull((state as? AgentUIState.Error)?.message)
     AnimatedVisibility(
         visible = state is AgentUIState.Error,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
+        // 错误横幅是自动弹出的：尺寸一帧到位，不让悬浮层高度逐帧变化（列表留白会跟着逐帧重测）。
+        enter = fadeIn(tween(180)),
+        exit = fadeOut(tween(140))
     ) {
         lastError?.let { ErrorBubble(message = it) }
     }

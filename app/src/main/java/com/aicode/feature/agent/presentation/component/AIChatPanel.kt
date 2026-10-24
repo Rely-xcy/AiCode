@@ -1964,7 +1964,10 @@ fun AIChatPanel(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
+                    // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条。
+                    // 这里只在**最终尺寸**上更新：下面几处自动弹出的面板一律不用尺寸动画
+                    // （enter/exit 只有 alpha），否则高度逐帧变 → contentPadding.bottom 逐帧变
+                    // → LazyColumn 逐帧重测，用户滑动时就看到内容被逐帧推着走。
                     .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
             ) {
             Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = floatingPanelAlpha }) {
@@ -1977,8 +1980,10 @@ fun AIChatPanel(
             AnimatedVisibility(
                 visible = uploadingCount > 0,
                 modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+                // 只做绘制期动画：尺寸第 0 帧就到位，展开时空间先让出（内容不会被盖），
+                // 收起时面板退场完才收尺寸（不留空白），中间不再逐帧晃列表。
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(140))
             ) {
                 lastUploadingCount?.let { UploadingBanner(count = it, onCancel = { cancelUpload() }) }
             }
@@ -1989,8 +1994,10 @@ fun AIChatPanel(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .graphicsLayer { alpha = floatingPanelAlpha },
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+                // 只做绘制期动画：尺寸第 0 帧就到位，展开时空间先让出（内容不会被盖），
+                // 收起时面板退场完才收尺寸（不留空白），中间不再逐帧晃列表。
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(140))
             ) {
                 questionForPanel?.let { question ->
                     AskUserQuestionPanel(
@@ -2007,8 +2014,10 @@ fun AIChatPanel(
             AnimatedVisibility(
                 visible = planApproval != null,
                 modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+                // 只做绘制期动画：尺寸第 0 帧就到位，展开时空间先让出（内容不会被盖），
+                // 收起时面板退场完才收尺寸（不留空白），中间不再逐帧晃列表。
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(140))
             ) {
                 planForPanel?.let { state ->
                     PlanApprovalPanel(
@@ -2026,8 +2035,9 @@ fun AIChatPanel(
             AnimatedVisibility(
                 visible = interjectionAck != null,
                 modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
-                enter = fadeIn(tween(140)) + expandVertically(tween(180)),
-                exit = fadeOut(tween(160)) + shrinkVertically(tween(180))
+                // 同上：只改 alpha，不参与尺寸动画。
+                enter = fadeIn(tween(140)),
+                exit = fadeOut(tween(160))
             ) {
                 interjectionAck?.let { text ->
                     Row(
