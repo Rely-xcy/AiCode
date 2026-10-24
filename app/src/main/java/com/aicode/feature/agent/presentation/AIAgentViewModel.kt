@@ -1915,16 +1915,6 @@ class AIAgentViewModel @Inject constructor(
         // 再拼一遍，既重复又只活在请求里——下一轮从库里重建历史时这行必然变字。
         val effectiveModelRequest = modelRequest
 
-        // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
-        val currentSession = sessionUseCase.getSessionById(sessionId)
-        if (currentSession != null && (currentSession.providerId.isNullOrBlank() || currentSession.model.isNullOrBlank())) {
-            val defaultProviderId = defaultModelSettingsRepository.getDefaultProviderId().takeIf { it.isNotBlank() }
-            val defaultModel = defaultModelSettingsRepository.getDefaultModel().takeIf { it.isNotBlank() }
-            if (defaultProviderId != null && defaultModel != null) {
-                sessionUseCase.updateProviderModel(sessionId, defaultProviderId, defaultModel)
-            }
-        }
-
         coroutineContext[Job]?.let { sessionJobs[sessionId] = it }
         FileLogger.d(TAG, "stream start: sid=$sessionId prevState=${_agentStates.value[sessionId]} isAutoTrigger=$isAutoTrigger")
         acquireKeepalive()
@@ -1941,6 +1931,36 @@ class AIAgentViewModel @Inject constructor(
         val isGoalTurn = !persistUserMessage
         try {
             var failed = false
+
+            // 先把「正在工作」的灯点亮，再去做下面这些前置工作。它们串起来是几百毫秒级：重建历史要整段读库
+            // 并解码工具快照（会话越长越慢），之后才是用户行落库、检查点、会话时间戳。用户按下发送后盯着的是
+            // 空无一物的尾巴，灯比这些工作晚亮多久，观感上就是「卡了多久」。
+            // 消息上屏不必等落库：界面在调过来之前就已经摆出乐观气泡（AIChatPanel.pendingUserMessages）；
+            // 落库仍在本协程里同步等待，失败照旧走下面的 catch，语义不变。
+            setAgentState(sessionId, AgentUIState.Streaming)
+
+            // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
+            // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
+            // 调用方带了预生成 id（UI 乐观气泡）就用它，让「气泡」与「落库行」是同一条的判据落在 id 上。
+            val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
+            // 登记本轮轮首用户行 id（见 [currentSessionRunningTurnAnchorId]）：界面靠它认定「哪一轮还在跑」。
+            // 提到用户行落库之前登记，界面才能分辨「已经收下这条消息」与「这一轮真的有行了」——那段空窗里
+            // 不能把上一轮当成正在跑（见 AIChatPanel 的 runningTurnRowLoaded）。
+            // 后台通知轮次落的是通知行、不是轮起点，不登记。
+            if (persistUserMessage && userMsgId != null && !request.startsWith(BACKGROUND_NOTIFICATION_PREFIX)) {
+                _runningTurnAnchorIds.value = _runningTurnAnchorIds.value + (sessionId to userMsgId)
+            }
+
+            // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
+            val currentSession = sessionUseCase.getSessionById(sessionId)
+            if (currentSession != null && (currentSession.providerId.isNullOrBlank() || currentSession.model.isNullOrBlank())) {
+                val defaultProviderId = defaultModelSettingsRepository.getDefaultProviderId().takeIf { it.isNotBlank() }
+                val defaultModel = defaultModelSettingsRepository.getDefaultModel().takeIf { it.isNotBlank() }
+                if (defaultProviderId != null && defaultModel != null) {
+                    sessionUseCase.updateProviderModel(sessionId, defaultProviderId, defaultModel)
+                }
+            }
+
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
             val historyStartedNs = System.nanoTime()
             FileLogger.memoryCheckpoint(
@@ -1961,10 +1981,6 @@ class AIAgentViewModel @Inject constructor(
             )
             val isFirst = history.isEmpty()
 
-            // 本轮用户消息在库里的行 id：workflow 把模式提醒写回该行的 modelReminder 列（content 保持用户原话）。
-            // 自动触发轮次（/init、/skill 等）不落用户行，提醒只在本轮请求里生效。
-            // 调用方带了预生成 id（UI 乐观气泡）就用它，让「气泡」与「落库行」是同一条的判据落在 id 上。
-            val userMsgId = if (isAutoTrigger) null else (clientMessageId ?: UUID.randomUUID().toString())
             if (!persistUserMessage) {
                 // 目标续跑等内部轮次：不落库、不建检查点，仅把指令作为本轮用户消息发给模型。
             } else if (userMsgId != null) {
@@ -1972,11 +1988,6 @@ class AIAgentViewModel @Inject constructor(
                 // 本轮自动触发的技能名 → 气泡下方 chip（内存态，不落库：正文已注入本轮请求，重开后无需再展示）。
                 if (triggeredHits.isNotEmpty()) {
                     _triggeredSkills.value = _triggeredSkills.value + (userMsgId to triggeredHits.map { it.skill.name })
-                }
-                // 登记本轮轮首用户行 id（见 [currentSessionRunningTurnAnchorId]）：界面靠它认定
-                // 「哪一轮还在跑」。后台通知轮次落的是通知行、不是轮起点，不登记。
-                if (!request.startsWith(BACKGROUND_NOTIFICATION_PREFIX)) {
-                    _runningTurnAnchorIds.value = _runningTurnAnchorIds.value + (sessionId to userMsgId)
                 }
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
                 if (isFirst && !skipTitleUpdate) {
@@ -1988,13 +1999,6 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
             sessionUseCase.touch(sessionId, messagePersistenceUseCase.nextTimestamp())
-
-            // 本次用户消息落库（上面的 persist 已返回）之后才点「正在工作」的灯：灯早于消息上屏时，
-            // 用户看到的是「三点已亮 + 正在思考，消息还没出现」。这一段前置工作（buildHistory、persist）
-            // 都在主线程上跑，会话越长越慢，灯早亮几百毫秒就是同一现象的放大器。
-            // 队列/停止等等分支都不看这个状态（队列看 sessionJobs，见 enqueueAgentRequest），判据与本行位置无关；
-            // 错误路径：buildHistory 抛异常时状态还是 Idle，直接由下面的 catch 置 Error，不存在从 Streaming 回退的问题。
-            setAgentState(sessionId, AgentUIState.Streaming)
 
             val sessionEntity = sessionUseCase.getSessionById(sessionId)
             val sessionDomain = sessionEntity?.toDomain()
