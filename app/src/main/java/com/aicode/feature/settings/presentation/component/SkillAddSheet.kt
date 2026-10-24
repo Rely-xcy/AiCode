@@ -42,7 +42,7 @@ internal fun SkillAddSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = settingsPageBackground()
     ) {
         Column(
             modifier = Modifier

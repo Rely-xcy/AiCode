@@ -625,7 +625,10 @@ internal fun MemoryDetailSheet(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = settingsPageBackground()
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -808,7 +811,7 @@ private fun MemoryActionsSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = settingsPageBackground()
     ) {
         Column(
             modifier = Modifier

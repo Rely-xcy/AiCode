@@ -249,7 +249,7 @@ internal fun ContainerImageDownloadSection(
                 TextButton(onClick = {
                     onDelete(entry.id)
                     deleteEntry = null
-                }) { Text(stringResource(R.string.common_delete)) }
+                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { deleteEntry = null }) { Text(stringResource(R.string.common_cancel)) }

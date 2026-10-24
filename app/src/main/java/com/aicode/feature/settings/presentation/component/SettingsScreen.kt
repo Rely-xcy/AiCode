@@ -1571,7 +1571,7 @@ fun SettingsScreen(
                     if (deleting) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
-                        Text(stringResource(R.string.common_delete))
+                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
@@ -1606,7 +1606,7 @@ fun SettingsScreen(
                     if (deleting) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
-                        Text(stringResource(R.string.common_delete))
+                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                     }
                 }
             },

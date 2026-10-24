@@ -305,7 +305,7 @@ internal fun ContainerSection(
                     deleteImageCopy(deleting)
                     onDeleteProfile(deleting)
                     deletingProfile = null
-                }) { Text(stringResource(R.string.common_delete)) }
+                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deletingProfile = null }) { Text(stringResource(R.string.common_cancel)) } }
         )
@@ -560,17 +560,7 @@ private fun ContainerRow(
 /** 来源徽章：主题色浅底胶囊小字，按来源类型传入不同颜色。 */
 @Composable
 private fun SourceBadge(text: String, color: Color) {
-    Box(
-        modifier = Modifier
-            .background(color.copy(alpha = 0.12f), RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color
-        )
-    }
+    McpPill(text = text, textColor = color, backgroundColor = color.copy(alpha = 0.12f))
 }
 
 /** 镜像列表项副标题：本地镜像（内置/自定义）统一显示生效 shell，不区分来源；远程 SSH 显示通道名。 */
@@ -655,7 +645,7 @@ private fun ProfileEditSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = settingsPageBackground(),
         contentWindowInsets = { WindowInsets(0.dp) },
         dialogMaxWidth = 600.dp
     ) {

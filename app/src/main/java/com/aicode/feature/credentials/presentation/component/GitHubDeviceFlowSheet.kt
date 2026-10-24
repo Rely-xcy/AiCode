@@ -376,7 +376,7 @@ private fun AwaitingContent(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(Radius.lg),
-            color = MaterialTheme.semanticColors.mutedSurface.copy(alpha = 0.5f)
+            color = MaterialTheme.semanticColors.cardSurface.copy(alpha = 0.5f)
         ) {
             Column(
                 modifier = Modifier

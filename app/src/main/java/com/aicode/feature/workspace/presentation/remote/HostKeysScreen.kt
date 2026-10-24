@@ -380,7 +380,7 @@ private fun AddLoginKeyMethodSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.semanticColors.pageBackground
     ) {
         Column(
             modifier = Modifier

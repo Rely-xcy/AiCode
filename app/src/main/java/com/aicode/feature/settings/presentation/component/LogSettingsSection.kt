@@ -114,28 +114,12 @@ internal fun LogSection(
                 title = stringResource(R.string.log_level),
                 onClick = { showLevelSheet = true },
                 trailing = {
-                    Surface(
-                        shape = RoundedCornerShape(Radius.pill),
-                        color = logLevelColor(current).copy(alpha = 0.15f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(logLevelColor(current), RoundedCornerShape(Radius.pill))
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = current.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium,
-                                color = logLevelColor(current)
-                            )
-                        }
-                    }
+                    McpPill(
+                        text = current.name,
+                        textColor = logLevelColor(current),
+                        backgroundColor = logLevelColor(current).copy(alpha = 0.15f),
+                        leadingDotColor = logLevelColor(current)
+                    )
                 }
             )
             SettingsDivider()

@@ -60,7 +60,7 @@ internal fun ProviderPresetSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = settingsPageBackground()
     ) {
         Column(
             modifier = Modifier

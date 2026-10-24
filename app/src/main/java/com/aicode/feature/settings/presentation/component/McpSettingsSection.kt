@@ -462,19 +462,30 @@ internal fun McpServerRow(
     }
 }
 
-/** 紧凑 pill 标签：胶囊背景 + 小字，用于状态/类型/摘要。 */
+/** 紧凑 pill 标签：胶囊背景 + 小字，用于状态/类型/摘要。
+ *  [leadingDotColor] 非空时在文字前加同色小圆点（日志等级等需要靠色点区分的位置）。 */
 @Composable
 internal fun McpPill(
     text: String,
     textColor: Color,
     backgroundColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    leadingDotColor: Color? = null
 ) {
-    Box(
+    Row(
         modifier = modifier
             .background(backgroundColor, RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        if (leadingDotColor != null) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .background(leadingDotColor, RoundedCornerShape(Radius.pill))
+            )
+            Spacer(Modifier.width(6.dp))
+        }
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),

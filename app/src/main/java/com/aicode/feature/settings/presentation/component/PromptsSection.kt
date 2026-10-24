@@ -283,7 +283,10 @@ internal fun PromptsAddSheet(
     onAddFragment: () -> Unit,
     onHelp: () -> Unit
 ) {
-    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = settingsPageBackground()
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -403,7 +406,7 @@ private fun SourceBadge(source: PromptFragmentSource) {
         PromptFragmentSource.LOCAL -> MaterialTheme.colorScheme.secondary
         PromptFragmentSource.BUILTIN -> MaterialTheme.semanticColors.subtleText
     }
-    Text(
+    McpPill(
         text = stringResource(
             when (source) {
                 PromptFragmentSource.PROJECT -> R.string.prompts_source_project
@@ -412,10 +415,7 @@ private fun SourceBadge(source: PromptFragmentSource) {
                 PromptFragmentSource.BUILTIN -> R.string.prompts_source_builtin
             }
         ),
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        modifier = Modifier
-            .background(color.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+        textColor = color,
+        backgroundColor = color.copy(alpha = 0.12f)
     )
 }

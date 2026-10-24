@@ -2799,7 +2799,7 @@ private fun ProviderHeadersSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = settingsPageBackground(),
         contentWindowInsets = { WindowInsets(0.dp) }
     ) {
         Column(
@@ -2978,7 +2978,7 @@ private fun ProviderScriptParamsSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = settingsPageBackground(),
         contentWindowInsets = { WindowInsets(0.dp) }
     ) {
         Column(
