@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +57,36 @@ class MemoryViewModel @Inject constructor(
 
     private val _memories = MutableStateFlow<List<Memory>>(emptyList())
     val memories: StateFlow<List<Memory>> = _memories.asStateFlow()
+
+    /**
+     * 搜索词放这里而不是 Composable 的 remember：旋转屏幕或进出详情页回来时要保留用户输入。
+     */
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    /**
+     * 过滤后的可见列表：只在已经读进内存的 [memories] 上做字符串匹配，每敲一个字都不会重扫记忆目录。
+     *
+     * 名称或正文任一命中即保留；记忆名多是英文 slug，大小写敏感会让「全小写」搜不到。
+     * 描述不参与匹配：需求口径就是名称 + 正文，而描述通常只是正文的一句话摘要，
+     * 正文里真出现过的词照样能命中。
+     */
+    val visibleMemories: StateFlow<List<Memory>> =
+        combine(_memories, _searchQuery) { memories, query ->
+            val keyword = query.trim()
+            if (keyword.isEmpty()) {
+                memories
+            } else {
+                memories.filter { memory ->
+                    memory.name.contains(keyword, ignoreCase = true) ||
+                        memory.content.contains(keyword, ignoreCase = true)
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
      * 首次读盘尚未完成：列表此时必然为空，界面据此渲染「正在读取」而不是「没有记忆」。

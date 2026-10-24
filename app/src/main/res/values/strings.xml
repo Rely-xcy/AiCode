@@ -1316,6 +1316,8 @@
     <string name="memory_empty">还没有记忆</string>
     <string name="memory_loading">正在读取记忆…</string>
     <string name="memory_empty_hint">AI 会在对话中自动沉淀（需打开主动记忆）；也可以点右上角「+」手动新增</string>
+    <string name="memory_search_hint">搜索记忆名称或内容…</string>
+    <string name="memory_search_empty">未找到匹配的记忆</string>
     <string name="memory_active_memory">主动记忆</string>
     <string name="memory_active_memory_desc">打开后模型会在对话中主动沉淀记忆；若它声称记住了却没调用 memory 工具，会提醒它补记（会调用模型，默认关闭）</string>
     <string name="memory_source_auto">自动沉淀</string>

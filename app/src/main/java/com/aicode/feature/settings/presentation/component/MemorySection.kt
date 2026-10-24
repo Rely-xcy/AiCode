@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,8 +60,10 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.User
+import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -72,6 +75,9 @@ import java.util.Locale
  * 列表排在最前、两张设置/状态卡沉底，是按使用频率排的：列表才是用户来这一页要看的东西，
  * 设置与只读状态放前面会把列表挤到首屏折线以下。
  *
+ * 列表顶部带搜索框：记忆一多就只能靠滚动找人。搜索词与过滤结果都放 ViewModel，
+ * 这里只负责把过滤后的列表画出来。
+ *
  * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
  * 混成一张清单会让人以为上下文也会被存下来。
  *
@@ -79,10 +85,13 @@ import java.util.Locale
  * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
  *
  * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
+ * @param memories 已按搜索词过滤过的记忆；与 [searchQuery] 配合区分「没有记忆」与「搜不到」。
  */
 @Composable
 internal fun MemorySection(
     memories: List<Memory>,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     loading: Boolean,
     shortTerm: SessionShortTermState?,
     activeMemoryEnabled: Boolean,
@@ -107,11 +116,41 @@ internal fun MemorySection(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
+        // 一条记忆都没有时不给搜索框：没东西可搜，只会让空态顶上多一块空白。
+        // 搜不到时一定要保留它，否则用户没有入口清空条件，页面看着就像记忆全没了。
+        if (searchQuery.isNotBlank() || memories.isNotEmpty()) {
+            ModelSearchField(
+                query = searchQuery,
+                onQueryChange = onSearchQueryChange,
+                placeholder = stringResource(R.string.memory_search_hint),
+                trailing = if (searchQuery.isEmpty()) null else {
+                    {
+                        IconButton(
+                            onClick = { onSearchQueryChange("") },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.common_clear),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.semanticColors.subtleText
+                            )
+                        }
+                    }
+                }
+            )
+        }
+
         // 空态也包进分组卡片，否则一行灰字悬在卡片体系之外，看着像漏渲染的占位。
         if (memories.isEmpty()) {
             SettingsGroup {
                 // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
-                if (loading) MemoryLoadingPlaceholder() else EmptyState()
+                // 空白搜索词不算筛选（与 ViewModel 的 trim 口径一致），此时说的就是「没有记忆」。
+                when {
+                    loading -> MemoryLoadingPlaceholder()
+                    searchQuery.isBlank() -> EmptyState()
+                    else -> MemorySearchEmptyState()
+                }
             }
         } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
@@ -353,6 +392,28 @@ private fun MemoryLoadingPlaceholder() {
 
 @Composable
 private fun EmptyState() {
+    EmptyState(
+        icon = FeatherIcons.FileText,
+        title = stringResource(R.string.memory_empty),
+        hint = stringResource(R.string.memory_empty_hint)
+    )
+}
+
+/** 搜索无结果：图标与文案换掉，尺寸与留白跟无记忆时的空态一致。 */
+@Composable
+private fun MemorySearchEmptyState() {
+    EmptyState(
+        icon = FeatherIcons.Search,
+        title = stringResource(R.string.memory_search_empty)
+    )
+}
+
+@Composable
+private fun EmptyState(
+    icon: ImageVector,
+    title: String,
+    hint: String? = null
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -367,23 +428,26 @@ private fun EmptyState() {
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                FeatherIcons.FileText,
+                icon,
                 contentDescription = null,
                 modifier = Modifier.size(28.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Text(
-            text = stringResource(R.string.memory_empty),
+            text = title,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Text(
-            text = stringResource(R.string.memory_empty_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+        // 搜不到时已经没有可给的建议，就不摆一行空提示
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 

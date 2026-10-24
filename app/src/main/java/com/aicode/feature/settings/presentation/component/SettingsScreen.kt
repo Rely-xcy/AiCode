@@ -1111,7 +1111,9 @@ fun SettingsScreen(
                     // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
-                    val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
+                    val memories by memoryViewModel.visibleMemories.collectAsStateWithLifecycle()
+                    // 搜索词只过滤已加载的列表，不会触发重扫（见 MemoryViewModel.visibleMemories）
+                    val memorySearchQuery by memoryViewModel.searchQuery.collectAsStateWithLifecycle()
                     val memoryLoading by memoryViewModel.loading.collectAsStateWithLifecycle()
                     val shortTerm by memoryViewModel.shortTermSession.collectAsStateWithLifecycle()
                     val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
@@ -1140,6 +1142,8 @@ fun SettingsScreen(
                     var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
+                        searchQuery = memorySearchQuery,
+                        onSearchQueryChange = memoryViewModel::setSearchQuery,
                         loading = memoryLoading,
                         shortTerm = shortTerm,
                         activeMemoryEnabled = activeMemory,

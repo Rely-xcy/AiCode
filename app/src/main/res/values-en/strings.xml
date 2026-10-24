@@ -1316,6 +1316,8 @@
     <string name="memory_empty">No memories yet</string>
     <string name="memory_loading">Loading memories…</string>
     <string name="memory_empty_hint">Saved automatically as you chat (with Active memory on), or tap + in the top right to add one</string>
+    <string name="memory_search_hint">Search memory names or content…</string>
+    <string name="memory_search_empty">No matching memories found</string>
     <string name="memory_active_memory">Active memory</string>
     <string name="memory_active_memory_desc">When on, the model records durable conclusions as memories during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
     <string name="memory_source_auto">Auto-saved</string>
