@@ -52,4 +52,25 @@ class RootToolTest {
         val result = tool.execute(emptyMap())
         assertTrue(result is com.aicode.feature.agent.domain.tool.ToolResult.Error)
     }
+
+    @Test
+    fun `子命令越权时直接回具体原因`() = runBlocking {
+        // `service call` 首 token 在白名单内，但子命令越权：应回带理由的 ROOT_COMMAND_BLOCKED，
+        // 而不是笼统的「不在白名单」。
+        val result = tool.execute(mapOf("command" to JsonPrimitive("service call activity 1")))
+        assertTrue(result is com.aicode.feature.agent.domain.tool.ToolResult.Error)
+        val error = result as com.aicode.feature.agent.domain.tool.ToolResult.Error
+        assertEquals("ROOT_COMMAND_BLOCKED", error.code)
+        assertTrue(error.message.contains("binder"))
+    }
+
+    @Test
+    fun `会改运行状态的命令在弹窗里标注`() {
+        val request = tool.buildPermissionRequest(
+            callId = "call-2",
+            args = mapOf("command" to JsonPrimitive("am force-stop com.tencent.mm")),
+            argsPreview = "am force-stop com.tencent.mm"
+        )
+        assertTrue(request.details.contains("改变设备运行状态"))
+    }
 }

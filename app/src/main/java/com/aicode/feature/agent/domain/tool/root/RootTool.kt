@@ -46,9 +46,11 @@ class RootTool @Inject constructor(
     override val name = "Root"
 
     override val description =
-        "通过设备 root（su，uid 0）在宿主 Android 系统上执行**只读/调试类**命令（`dumpsys`/`getprop`/`ls`/`cat`/`ps`/`logcat`/`input`/`screencap`/`wm`/`settings get`/`pm list` 等），" +
+        "通过设备 root（su，uid 0）在宿主 Android 系统上执行**只读/调试类**命令（`dumpsys`/`getprop`/`ls`/`cat`/`ps`/`logcat -d`/`input`/`screencap`/`wm` 查询/`settings get`/`pm list`/`am stack list` 等），" +
             "用于辅助调试宿主系统与虚拟屏自动化测试。需设备已 root，且每次调用都会弹窗确认（不可「始终允许」）。" +
-            "**白名单外的命令一律拒绝执行**（不提供解锁参数）：需要改系统、刷机、清数据这类操作请让用户在终端自己跑。"
+            "**白名单外的命令一律拒绝执行**（不提供解锁参数）：`service` 只放 `list`、`wm`/`cmd window` 只放查询、" +
+            "`monkey` 全拒、`am` 只放已评估的子命令（`start`/`force-stop`/`broadcast` 这类会改运行状态的照常放行，但弹窗会标注）。" +
+            "需要改系统、刷机、清数据这类操作请让用户在终端自己跑。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
@@ -80,12 +82,17 @@ class RootTool @Inject constructor(
     ): PendingToolPermission {
         val command = args["command"]?.jsonPrimitive?.contentOrNull ?: "未知命令"
         val timeoutSeconds = resolveTimeoutMs(args) / 1000L
+        // 会改运行状态的命令（am start 之类）照常放行，但要让用户在弹窗里看见这一点。
+        val details = buildString {
+            append(context.getString(R.string.tool_root_permission_details, timeoutSeconds))
+            RootCommandGuard.advisory(command)?.let { append('\n').append(it) }
+        }
         return PendingToolPermission(
             id = callId,
             toolName = name,
             title = context.getString(R.string.tool_root_permission_title),
             summary = command,
-            details = context.getString(R.string.tool_root_permission_details, timeoutSeconds),
+            details = details,
             argsPreview = argsPreview
         )
     }
@@ -103,9 +110,17 @@ class RootTool @Inject constructor(
         // 只有白名单（只读/调试类）命令能由 AI 自动执行。
         // 这里**不提供任何解锁参数**：能不能改系统，不由 AI 决定，也不靠「拦得住」——
         // 白名单外的需求一律回给用户，由其自行在终端执行（用户对设备负责）。
+        // 首 token 虽在白名单内、但子命令越权（service call / wm size WxH / monkey 等）：给具体原因，
+        // 比下面那句通用文案更能让模型换一条合法写法，而不是反复重试。
+        RootCommandGuard.rejectionReason(command)?.let { reason ->
+            FileLogger.w(TAG, "Root 命令子命令越权被拦下：$command")
+            return ToolResult.Error(reason, code = "ROOT_COMMAND_BLOCKED")
+        }
+
         if (!RootCommandGuard.isAllowlisted(command)) {
             return ToolResult.Error(
-                "该命令不在可自动执行的白名单内（白名单为只读/调试类：dumpsys/getprop/ls/cat/ps/logcat/input/screencap/wm/pm 等）。" +
+                "该命令不在可自动执行的白名单内（白名单为只读/调试类：dumpsys/getprop/ls/cat/ps/logcat -d/input/screencap/" +
+                    "wm 查询/settings get/pm list/service list/am 的已评估子命令等）。" +
                     "为设备安全，AI 不会以 root 执行白名单外的命令。如需执行，请让用户在容器终端里自己跑。",
                 code = "ROOT_COMMAND_NOT_ALLOWLISTED"
             )
