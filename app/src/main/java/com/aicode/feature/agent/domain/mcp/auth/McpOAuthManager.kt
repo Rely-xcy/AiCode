@@ -92,6 +92,25 @@ class McpOAuthManager @Inject constructor(
         refreshIfNeeded(cfg, state)
     }
 
+    /**
+     * 从存储重新加载内存会话的令牌。文件被本进程之外整份覆盖（备份导入、手工替换）后，
+     * 已经读过旧令牌的会话不会自己更新，必须显式同步；否则要等下次冷启动才认新令牌。
+     * 已经不存在令牌的会话直接丢弃，避免继续拿旧令牌发请求。
+     */
+    suspend fun syncFromStore() {
+        for ((name, session) in sessions) {
+            val tokens = tokenStore.getTokens(session.issuer)
+            if (tokens == null) {
+                if (sessions.remove(name, session)) FileLogger.i(TAG, "[$name] 存储中已无令牌，丢弃内存会话")
+            } else if (tokens != session.tokens) {
+                // CAS 替换：同步期间另一条流程（授权/刷新）刚写进来的新会话不能被这次同步盖回旧值。
+                if (sessions.replace(name, session, session.copy(tokens = tokens))) {
+                    FileLogger.i(TAG, "[$name] 存储中的令牌已更新，内存会话同步")
+                }
+            }
+        }
+    }
+
     /** 完整授权流程。成功返回令牌并写入存储与内存会话。 */
     suspend fun authorize(cfg: McpServerConfig): OAuthTokens {
         val challenge = probeChallenge(cfg)

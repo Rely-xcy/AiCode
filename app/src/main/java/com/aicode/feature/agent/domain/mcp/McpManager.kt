@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.auth.McpOAuthException
 import com.aicode.feature.agent.domain.mcp.auth.McpOAuthManager
+import com.aicode.feature.agent.domain.mcp.auth.McpTokenStore
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -29,6 +30,8 @@ import okhttp3.OkHttpClient
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private const val TAG = "McpManager"
+
 data class McpServerStatus(
     val name: String,
     val state: State,
@@ -47,12 +50,9 @@ class McpManager @Inject constructor(
     private val containerEngine: LinuxContainerEngine,
     private val workspaceRepository: WorkspaceRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
-    private val oauthManager: McpOAuthManager
+    private val oauthManager: McpOAuthManager,
+    private val tokenStore: McpTokenStore
 ) {
-    private companion object {
-        const val TAG = "McpManager"
-    }
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val reloadMutex = Mutex()
 
@@ -90,6 +90,15 @@ class McpManager @Inject constructor(
                 if (currentActiveProfile().mode == ExecutionMode.REMOTE_SSH) {
                     reloadStdioServers()
                 }
+            }
+        }
+        // 令牌被本进程之外的入口整份覆盖（备份导入、手工替换文件）：内存快照与 OAuth 会话都还是旧的，
+        // 不刷新就一直用旧令牌到下次冷启动。先同步会话，再重建这些 server 的连接。
+        scope.launch {
+            tokenStore.externalChanges.collect {
+                FileLogger.i(TAG, "检测到 MCP 令牌被外部覆盖，刷新授权会话并重建远程连接")
+                oauthManager.syncFromStore()
+                reloadAuthServers()
             }
         }
     }
@@ -292,19 +301,41 @@ class McpManager @Inject constructor(
         }
     }
 
+    /** 令牌来源变化后重建启用了 OAuth 的远程 server；stdio 与匿名 server 不受令牌影响，不动。 */
+    private suspend fun reloadAuthServers() = reloadMutex.withLock {
+        val servers = configRepository.getEffectiveServers()
+            .filter { it.enabled && !it.isStdio && it.auth != null }
+        if (servers.isEmpty()) return@withLock
+        for (cfg in servers) {
+            teardownServer(cfg.name)
+            reconnectOne(cfg)
+        }
+    }
+
+    /** 某个 server 最近一次连接结果；尚未出现在状态列表时为 null。 */
+    private fun statusOf(name: String): McpServerStatus.State? =
+        _statuses.value.firstOrNull { it.name == name }?.state
+
     /** 删除 server 时仅断开其连接并反注册其工具，不影响其他 server。 */
     suspend fun removeServer(name: String) = reloadMutex.withLock {
         teardownServer(name)
         _statuses.value = _statuses.value.filterNot { it.name == name }
     }
 
-    /** 触发某个 server 的 OAuth 授权；成功后重连使其工具可用。 */
+    /**
+     * 触发某个 server 的 OAuth 授权；成功后立即重连使其工具可用。
+     * 授权前因无令牌而失败的连接不会自己恢复，所以这里连一次，没连上再补一次（失败只记日志）。
+     */
     suspend fun authorize(name: String): Result<Unit> {
         val cfg = configRepository.getEffectiveServers().firstOrNull { it.name == name }
             ?: return Result.failure(McpOAuthException("未找到 MCP server: $name"))
         return runCatching {
             oauthManager.authorize(cfg)
-            reloadServer(name)
+            retryConnectAfterAuthorize(name) {
+                reloadServer(name)
+                statusOf(name)
+            }
+            Unit
         }
     }
 
@@ -339,4 +370,22 @@ class McpManager @Inject constructor(
             activeClients.clear()
         }
     }
+}
+
+/**
+ * 授权成功后重连：首次没连上再补一次，两次都没连上只记日志（授权本身已成功，不因此报授权失败）。
+ * [attempt] 返回本次尝试后的连接状态。授权流程要开系统浏览器，真机路径在单测里跑不起来，
+ * 所以把重试次数与判定抽成这个函数，用假连接验证。
+ */
+internal suspend fun retryConnectAfterAuthorize(
+    serverName: String,
+    attempt: suspend () -> McpServerStatus.State?
+): Boolean {
+    val first = attempt()
+    if (first == McpServerStatus.State.CONNECTED) return true
+    FileLogger.w(TAG, "[$serverName] 授权后首次重连未成功（${first ?: "未连接"}），自动重试一次")
+    val second = attempt()
+    if (second == McpServerStatus.State.CONNECTED) return true
+    FileLogger.w(TAG, "[$serverName] 授权后重试仍未连上（${second ?: "未连接"}），需用户手动重连")
+    return false
 }
