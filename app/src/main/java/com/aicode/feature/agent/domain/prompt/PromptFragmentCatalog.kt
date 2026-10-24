@@ -98,17 +98,28 @@ class PromptFragmentCatalog @Inject constructor(
     )
 
     /** 静态基线正文：所有生效片段去掉前导注释后按编号拼接。 */
-    fun renderStatic(projectRoot: String?): String =
-        list(projectRoot)
-            .mapNotNull { it.content.replace(LEADING_COMMENT, "").trim().takeIf { text -> text.isNotEmpty() } }
-            .joinToString("\n\n")
+    fun renderStatic(projectRoot: String?): String = joinBodies(staticBodies(projectRoot))
 
     /** 「仅自定义片段」模式：只取项目层与全局层的自定义片段正文。 */
-    fun renderCustomOnly(projectRoot: String?): String =
-        list(projectRoot)
-            .filter { it.source == PromptFragmentSource.PROJECT || it.source == PromptFragmentSource.GLOBAL }
-            .mapNotNull { it.content.replace(LEADING_COMMENT, "").trim().takeIf { text -> text.isNotEmpty() } }
-            .joinToString("\n\n")
+    fun renderCustomOnly(projectRoot: String?): String = joinBodies(staticBodies(projectRoot).filter { it.customOnly })
+
+    /**
+     * 静态基线按片段拆开的正文，与 [renderStatic] 的拼接结果逐段对应：
+     * 段级哈希要按片段取，又不能与拼接逻辑各写一份（两处一漂移，日志就对着错内容说「没变」）。
+     */
+    fun staticBodies(projectRoot: String?): List<FragmentBody> =
+        list(projectRoot).mapNotNull { fragment ->
+            val body = fragment.content.replace(LEADING_COMMENT, "").trim()
+            if (body.isEmpty()) null else FragmentBody(fragment, body)
+        }
+
+    /** 一个片段在拼接中真正贡献的正文；[customOnly] 与「仅自定义片段」模式的筛选条件同源。 */
+    data class FragmentBody(val fragment: PromptFragment, val body: String) {
+        val customOnly: Boolean
+            get() = fragment.source == PromptFragmentSource.PROJECT || fragment.source == PromptFragmentSource.GLOBAL
+    }
+
+    private fun joinBodies(bodies: List<FragmentBody>): String = bodies.joinToString("\n\n") { it.body }
 
     /** 是否存在「完全禁用内置提示词」标记（全局层）。 */
     fun isBuiltinDisabled(): Boolean = PromptFragmentResolver.isBuiltinDisabled(globalDir)

@@ -23,12 +23,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 按模块组装系统提示词：稳定基线放最前（享受 KV Cache），仅日期为低频变化。
+ * 按模块组装系统提示词：稳定基线放最前（享受 KV Cache），易变内容集中在末尾片段。
  * 多数 Source 维护内容缓存，避免重复读取与格式化；静态基线片段除外，每次读盘以保证编辑即时生效。
  *
  * 片段分两类：
  * - 静态基线：`prompts/` 顶层 `<NN>-<名称>.md`，可被 `prompts.custom/` 按数字身份覆盖或新增；
  * - 按需叶子：`prompts/agent/` 下的无数字片段（模式提醒、子代理基线、压缩/标题提示词），按精确同名覆盖。
+ *
+ * 拼装完成后按段输出一行 `[prompt] build id=… segs=… changed=… reused=…`：段取自「输入」（静态片段按模板、
+ * 注入变量按取值），见 [PromptSegmentTracker]——日志里能直接看出本轮是哪个片段/变量把前缀弄变了。
  *
  * `prompts.custom/` 存在 [PromptFragmentResolver.DISABLE_BUILTIN_FILE] 时，主代理提示词只由自定义数字片段组成，
  * 不再注入任何内置来源；此时用 `{{AICODE_*}}` 变量按需取回动态内容。
@@ -52,7 +55,7 @@ class SystemPromptProvider @Inject constructor(
 
     private inner class StaticRuleSource : PromptSource {
         // 每次都重新读盘：未编辑时字符串一致，KV Cache 照常命中；编辑后立即生效，无需重启。
-        // 技能/记忆等运行期内容由末尾的 99-runtime-context.md 片段用 {{AICODE_*}} 变量承载。
+        // 技能/工具等运行期内容由末尾的 99-runtime-context.md 片段用 {{AICODE_*}} 变量承载。
         override fun build(ctx: AgentContext): String = promptFragmentCatalog.renderStatic(ctx.projectRoot)
     }
 
@@ -72,8 +75,13 @@ class SystemPromptProvider @Inject constructor(
                 return null
             }
 
-            val list = skills.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "（无描述）" } }" }
-            val content = list
+            // 超长清单按预算截断，但保留「共几项、去哪看」：技能装到上百个时整表展开会让系统提示词尾部很长，
+            // 尾部一变，前面几十 KB 的稳定前缀就都白缓存了。正常规模（放得下）时输出与截断前逐字相同。
+            val content = PromptListBudget.limit(
+                skills.map { "- ${it.name}: ${it.description.ifBlank { "（无描述）" } }" },
+                PromptListBudget.SKILLS,
+                PromptListBudget::skillsNote
+            )
             cachedByKey[key] = content
             trimIfNeeded()
             return content
@@ -117,10 +125,14 @@ class SystemPromptProvider @Inject constructor(
                 return null
             }
 
-            val list = entries.joinToString("\n") { entry ->
-                "- ${entry.definition.name}: ${entry.definition.description.ifBlank { "（无描述）" }}"
-            }
-            val content = list
+            // 与技能清单同理：截断只对超长清单生效，摘要行必须同时给出总数与所在目录。
+            val content = PromptListBudget.limit(
+                entries.map { entry ->
+                    "- ${entry.definition.name}: ${entry.definition.description.ifBlank { "（无描述）" }}"
+                },
+                PromptListBudget.SUBAGENTS,
+                PromptListBudget::subAgentsNote
+            )
             cachedByKey[key] = content
             trimIfNeeded()
             return content
@@ -229,12 +241,66 @@ class SystemPromptProvider @Inject constructor(
     private val workspaceSource = WorkspaceSource()
     private val environmentSource = EnvironmentSource()
 
+    /**
+     * 段级哈希的上一轮快照。纯观测用：构建路径不读它的结果，所以不进 DI，随 Provider 单例存活一份。
+     * 状态按「会话 + 工作区」分开存，原因见 [PromptSegmentTracker]。
+     */
+    private val segmentTracker = PromptSegmentTracker()
+
     private val customDir: File
         get() = File(containerInstaller.aicodeDir, "prompts.custom")
 
     /** 自定义目录顶层数字片段（数字身份 → 文件），进程内只扫一次（重启 App 才刷新）。 */
     private val customFragmentsByNumber: Map<Int, File> by lazy {
         PromptFragmentResolver.numberedFragments(customDir).toMap()
+    }
+
+    /** 静态基线按片段拆成段：段名带编号，日志里 `changed=frag:60-tools-and-paths` 能直接对上是哪个文件。 */
+    private fun staticSegments(ctx: AgentContext, onlyCustom: Boolean): List<PromptSegment> {
+        val bodies = promptFragmentCatalog.staticBodies(ctx.projectRoot)
+        return bodies.filter { !onlyCustom || it.customOnly }.map { (fragment, body) ->
+            PromptSegment("frag:" + fragment.number.toString().padStart(2, '0') + "-" + fragment.title, body)
+        }
+    }
+
+    /**
+     * 注入变量各算一段；模板里没出现这个变量时返回 null——它的取值变不变都不影响提示词字节，
+     * 登记进去只会让 changed 长期挂着与提示词无关的噪声。段名取变量名的短形式（`{{AICODE_SKILLS}}` → `var:skills`）。
+     */
+    private fun varSegment(
+        template: String,
+        variable: String,
+        content: String,
+        volatile: Boolean = false
+    ): PromptSegment? = if (variable !in template) null else PromptSegment(
+        "var:" + variable.removePrefix("{{").removeSuffix("}}").removePrefix("AICODE_").lowercase(),
+        content,
+        volatile
+    )
+
+    /**
+     * 输出本次构建的段级日志，原样返回提示词（供 `return` 位置直接包一层）。
+     *
+     * 主行只放固定字段；volatile 段名另起一行：那些段本来就会变，从 changed 里单拿出来，
+     * 剩下的才显得出真正的问题。
+     */
+    private fun trackPrompt(ctx: AgentContext, prompt: String, segments: List<PromptSegment>): String {
+        // 同一个变量可能被多个模板展开（子代理路径），内容相同则合为一段，segs 才与 unique 段数一致。
+        val unique = segments.distinctBy { it.name }
+        val diff = segmentTracker.record("${ctx.sessionId ?: "-"}@${ctx.projectRoot}", unique)
+        FileLogger.i(
+            TAG,
+            "[prompt] build id=${PromptSegmentTracker.shortHash(prompt)} segs=${unique.size} " +
+                "changed=${diff.changedText()} reused=${diff.reused}"
+        )
+        val volatileSegs = unique.filter { it.volatile }
+        if (volatileSegs.isNotEmpty()) {
+            FileLogger.i(
+                TAG,
+                "[prompt] volatile segs=${volatileSegs.size} names=${volatileSegs.joinToString(",") { it.name }}"
+            )
+        }
+        return prompt
     }
 
     fun build(agentContext: AgentContext): String {
@@ -246,8 +312,10 @@ class SystemPromptProvider @Inject constructor(
             return buildCustomOnly(agentContext)
         }
 
-        // 1. 获取各个 Source 的基线快照。
+        // 1. 获取各个 Source 的基线快照；每个来源登记一段哈希，静态基线按片段各登记一段。
         val rawStatic = staticRuleSource.build(agentContext)
+        val segments = ArrayList<PromptSegment>()
+        segments += staticSegments(agentContext, onlyCustom = false)
         val skillsContent = activeSkillsSource.build(agentContext)
         val subAgentsContent = subAgentListSource.build(agentContext)
         // 记忆内容全来自引擎：内置片段用的整块走 `{{AICODE_MEMORY}}`，两个按作用域分节的纯列表
@@ -258,6 +326,25 @@ class SystemPromptProvider @Inject constructor(
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
         val toolsContent = toolListSource.build(agentContext)
+        // 日期与目标块各算一次：下面拼装与登记哈希取的是同一串字符，不会出现两处不一致。
+        val dateContent = currentDate()
+        val goalBlock = renderGoalBlock(agentContext)
+        segments += listOfNotNull(
+            varSegment(rawStatic, SKILLS_VAR, skillsContent.orEmpty()),
+            varSegment(rawStatic, MEMORY_VAR, memoryContent.orEmpty()),
+            // 两个按范围分节的记忆清单列的是全部记忆，会话中途写入/删除记忆就会整段变：标 volatile。
+            varSegment(rawStatic, MEMORY_GLOBAL_VAR, memories?.global.orEmpty(), volatile = true),
+            varSegment(rawStatic, MEMORY_PROJECT_VAR, memories?.project.orEmpty(), volatile = true),
+            varSegment(rawStatic, SUBAGENTS_VAR, subAgentsContent.orEmpty()),
+            varSegment(rawStatic, TOOLS_VAR, toolsContent.orEmpty(), volatile = true),
+            varSegment(rawStatic, PROJECT_RULES_GLOBAL_VAR, projectRules?.global.orEmpty()),
+            varSegment(rawStatic, PROJECT_RULES_PROJECT_VAR, projectRules?.project.orEmpty()),
+            varSegment(rawStatic, WORKSPACE_VAR, workspaceContent),
+            // 执行模式可在会话中途切换（本地容器 ↔ 远程 SSH），切一次它之后的字节就全失效。
+            varSegment(rawStatic, ENVIRONMENT_VAR, environmentContent, volatile = true),
+            varSegment(rawStatic, DATE_VAR, dateContent, volatile = true),
+            varSegment(rawStatic, GOAL_VAR, goalBlock.orEmpty(), volatile = true)
+        )
 
         // 2. 变量就地展开：`{{AICODE_*}}` 替换为纯数据；未写变量的片段原样保留。
         val staticContent = renderVariables(
@@ -271,12 +358,15 @@ class SystemPromptProvider @Inject constructor(
             projectRules?.project,
             workspaceContent,
             environmentContent,
-            currentDate(),
-            goal = renderGoalBlock(agentContext),
+            dateContent,
+            goal = goalBlock,
             tools = toolsContent
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
+        //
+        // 顺序即缓存代价：变量位置由片段决定（内置布局：00~70 是稳定规则，99-runtime-context 把技能、子代理、
+        // 项目规则、工作区、运行环境、时间、目标与工具清单收在尾部），所以挪动易变内容靠改片段顺序，不改这里。
         //
         // 这里不再做「就地展开 + 末尾追加」两路兜底：内置 99-runtime-context.md 已把技能、子代理、记忆、
         // 项目规则、工作区、运行环境与时间全写在变量位上，展开即到位；再追加一遍就是逐字重复
@@ -285,9 +375,11 @@ class SystemPromptProvider @Inject constructor(
         // 没有自定义定义的子代理（`task` 没写 `agent` 参数派发的默认子代理）走的就是上面这条通用路径，
         // 但它仍然是子代理会话，固定纪律段必须照样注入——所以判据取 isSubAgent，不取「有没有定义」，
         // 而且必须走 [SubAgentRulesSource] 而不是片段变量：纪律段不受 `inject` 门禁。
-        if (!agentContext.isSubAgent) return rendered
-        val rules = subAgentRulesSource.build(agentContext) ?: return rendered
-        return if (rendered.isEmpty()) rules else "$rendered\n\n$rules"
+        if (!agentContext.isSubAgent) return trackPrompt(agentContext, rendered, segments)
+        val rules = subAgentRulesSource.build(agentContext)
+            ?: return trackPrompt(agentContext, rendered, segments)
+        segments += PromptSegment("agent:subagent-rules", rules)
+        return trackPrompt(agentContext, if (rendered.isEmpty()) rules else "$rendered\n\n$rules", segments)
     }
 
     /**
@@ -305,21 +397,49 @@ class SystemPromptProvider @Inject constructor(
         }
         val memories = agentEngine.memoryListGroups(engineContextOf(ctx))
         val projectRules = projectRulesFor(ctx)
+        val skillsContent = activeSkillsSource.build(ctx)
+        val memoryContent = engineFragmentSource.build(ctx)
+        val subAgentsContent = subAgentListSource.build(ctx)
         val toolsContent = toolListSource.build(ctx)
-        return renderVariables(
-            content,
-            activeSkillsSource.build(ctx),
-            engineFragmentSource.build(ctx),
-            memories?.global,
-            memories?.project,
-            subAgentListSource.build(ctx),
-            projectRules?.global,
-            projectRules?.project,
-            workspaceSource.build(ctx),
-            environmentSource.build(ctx),
-            currentDate(),
-            goal = renderGoalBlock(ctx),
-            tools = toolsContent
+        val workspaceContent = workspaceSource.build(ctx)
+        val environmentContent = environmentSource.build(ctx)
+        val dateContent = currentDate()
+        val goalBlock = renderGoalBlock(ctx)
+        // 仅自定义片段时，变量只在自己片段里写了的情况下才被展开；没写的变量取值怎样变都不影响提示词字节。
+        val segments = ArrayList<PromptSegment>()
+        segments += staticSegments(ctx, onlyCustom = true)
+        segments += listOfNotNull(
+            varSegment(content, SKILLS_VAR, skillsContent.orEmpty()),
+            varSegment(content, MEMORY_VAR, memoryContent.orEmpty()),
+            varSegment(content, MEMORY_GLOBAL_VAR, memories?.global.orEmpty(), volatile = true),
+            varSegment(content, MEMORY_PROJECT_VAR, memories?.project.orEmpty(), volatile = true),
+            varSegment(content, SUBAGENTS_VAR, subAgentsContent.orEmpty()),
+            varSegment(content, TOOLS_VAR, toolsContent.orEmpty(), volatile = true),
+            varSegment(content, PROJECT_RULES_GLOBAL_VAR, projectRules?.global.orEmpty()),
+            varSegment(content, PROJECT_RULES_PROJECT_VAR, projectRules?.project.orEmpty()),
+            varSegment(content, WORKSPACE_VAR, workspaceContent),
+            varSegment(content, ENVIRONMENT_VAR, environmentContent, volatile = true),
+            varSegment(content, DATE_VAR, dateContent, volatile = true),
+            varSegment(content, GOAL_VAR, goalBlock.orEmpty(), volatile = true)
+        )
+        return trackPrompt(
+            ctx,
+            renderVariables(
+                content,
+                skillsContent,
+                memoryContent,
+                memories?.global,
+                memories?.project,
+                subAgentsContent,
+                projectRules?.global,
+                projectRules?.project,
+                workspaceContent,
+                environmentContent,
+                dateContent,
+                goal = goalBlock,
+                tools = toolsContent
+            ),
+            segments
         )
     }
 
@@ -332,96 +452,133 @@ class SystemPromptProvider @Inject constructor(
     private fun buildForSubAgent(
         definition: AgentDefinition,
         agentContext: AgentContext
-    ): String = buildString {
-        if (InjectPart.MAIN_RULES in definition.inject) {
-            append(staticRuleSource.build(agentContext))
-            append("\n\n")
-        }
-        if (InjectPart.BASE in definition.inject) {
-            append(subAgentBaseSource.build(agentContext))
-            append("\n\n")
-        }
-
-        // 固定纪律段：不受 inject 门禁，且不靠派发的人每次记得写。
-        subAgentRulesSource.build(agentContext)?.let {
-            append(it)
-            append("\n\n")
-        }
+    ): String {
+        // 各来源只读一次：拼装、下面按 inject 追加、以及段级哈希取的都是同一批值。
+        val rawStatic = staticRuleSource.build(agentContext)
+        val skillsContent = activeSkillsSource.build(agentContext)
+        val memoryContent = engineFragmentSource.build(agentContext)
+        val subAgentsContent = subAgentListSource.build(agentContext)
+        val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
+        // 一次读取为本段与下方 PROJECT_RULES 追加路径共用：子代理提示词重组时不再多读一遍文件。
+        val projectRules = projectRulesFor(agentContext)
+        val toolsContent = toolListSource.build(agentContext)
+        val workspaceContent = workspaceSource.build(agentContext)
+        val environmentContent = environmentSource.build(agentContext)
+        val dateContent = currentDate()
+        val contextTemplate = resolvePrompt(SUBAGENT_CONTEXT_FILE)
 
         // 守卫判据是**展开前**的正文：正文里自己写了哪个占位符，就说明注入点由作者指定，
         // 下方不再按 inject 追加同一段内容。判据必须取 rawPrompt——展开后的文本里占位符已消失，
         // 用它判会永远为真。（主代理 build() 把运行期内容全放在片段变量位上，没有这条追加路径。）
         val rawPrompt = definition.prompt
-        val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
-        // 一次读取为本段与下方 PROJECT_RULES 追加路径共用：子代理提示词重组时不再多读一遍文件。
-        val projectRules = projectRulesFor(agentContext)
-        val toolsContent = toolListSource.build(agentContext)
-        append(
-            renderVariables(
-                rawPrompt,
-                activeSkillsSource.build(agentContext),
-                engineFragmentSource.build(agentContext),
-                memories?.global,
-                memories?.project,
-                subAgentListSource.build(agentContext),
-                projectRules?.global,
-                projectRules?.project,
-                workspaceSource.build(agentContext),
-                environmentSource.build(agentContext),
-                currentDate(),
-                tools = toolsContent
-            )
+        // 三处模板都可能写变量，判据合成一份：同一个变量只登记一段（取值相同）。
+        val templates = rawStatic + rawPrompt + contextTemplate
+        val segments = ArrayList<PromptSegment>()
+        segments += listOfNotNull(
+            varSegment(templates, SKILLS_VAR, skillsContent.orEmpty()),
+            varSegment(templates, MEMORY_VAR, memoryContent.orEmpty()),
+            varSegment(templates, MEMORY_GLOBAL_VAR, memories?.global.orEmpty(), volatile = true),
+            varSegment(templates, MEMORY_PROJECT_VAR, memories?.project.orEmpty(), volatile = true),
+            varSegment(templates, SUBAGENTS_VAR, subAgentsContent.orEmpty()),
+            varSegment(templates, TOOLS_VAR, toolsContent.orEmpty(), volatile = true),
+            varSegment(templates, PROJECT_RULES_GLOBAL_VAR, projectRules?.global.orEmpty()),
+            varSegment(templates, PROJECT_RULES_PROJECT_VAR, projectRules?.project.orEmpty()),
+            varSegment(templates, WORKSPACE_VAR, workspaceContent),
+            varSegment(templates, ENVIRONMENT_VAR, environmentContent, volatile = true),
+            varSegment(templates, DATE_VAR, dateContent, volatile = true),
+            varSegment(templates, SUBAGENT_NAME_VAR, definition.name)
         )
 
-        if (InjectPart.SKILLS in definition.inject && SKILLS_VAR !in rawPrompt) {
-            activeSkillsSource.build(agentContext)?.let {
+        val prompt = buildString {
+            if (InjectPart.MAIN_RULES in definition.inject) {
+                append(rawStatic)
+                segments += staticSegments(agentContext, onlyCustom = false)
                 append("\n\n")
-                append(it)
             }
-        }
-        // 三个记忆变量里写过任意一个，都说明作者已指定注入位置；引擎块的清单与两个纯列表变量内容重叠，
-        // 再追加一遍就是逐字重复。
-        if (InjectPart.MEMORY in definition.inject &&
-            MEMORY_VAR !in rawPrompt &&
-            MEMORY_GLOBAL_VAR !in rawPrompt &&
-            MEMORY_PROJECT_VAR !in rawPrompt
-        ) {
-            engineFragmentSource.build(agentContext)?.let {
+            if (InjectPart.BASE in definition.inject) {
+                val base = subAgentBaseSource.build(agentContext)
+                append(base)
+                segments += PromptSegment("agent:subagent-base", base)
                 append("\n\n")
-                append(it)
             }
-        }
-        if (InjectPart.PROJECT_RULES in definition.inject &&
-            PROJECT_RULES_VAR !in rawPrompt &&
-            PROJECT_RULES_GLOBAL_VAR !in rawPrompt &&
-            PROJECT_RULES_PROJECT_VAR !in rawPrompt
-        ) {
-            listOfNotNull(projectRules?.global, projectRules?.project).takeIf { it.isNotEmpty() }?.let { parts ->
-                append("\n\n")
-                append(parts.joinToString("\n\n"))
-            }
-        }
 
-        // 子代理的工作区与当前时间不再在这里追加：身份、工作区、运行环境、时间统一由
-        // `agent/subagent-context.md` 承载（可用 prompts.custom/agent/ 同名覆盖）。
-        append("\n\n")
-        append(
-            renderVariables(
-                resolvePrompt(SUBAGENT_CONTEXT_FILE),
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                workspaceSource.build(agentContext),
-                environmentSource.build(agentContext),
-                currentDate(),
-                definition.name,
-                tools = toolsContent
+            // 固定纪律段：不受 inject 门禁，且不靠派发的人每次记得写。
+            subAgentRulesSource.build(agentContext)?.let {
+                append(it)
+                segments += PromptSegment("agent:subagent-rules", it)
+                append("\n\n")
+            }
+
+            segments += PromptSegment("agent:" + definition.name.ifBlank { "custom" }, rawPrompt)
+            append(
+                renderVariables(
+                    rawPrompt,
+                    skillsContent,
+                    memoryContent,
+                    memories?.global,
+                    memories?.project,
+                    subAgentsContent,
+                    projectRules?.global,
+                    projectRules?.project,
+                    workspaceContent,
+                    environmentContent,
+                    dateContent,
+                    tools = toolsContent
+                )
             )
-        )
+
+            if (InjectPart.SKILLS in definition.inject && SKILLS_VAR !in rawPrompt) {
+                skillsContent?.let {
+                    append("\n\n")
+                    append(it)
+                }
+            }
+            // 三个记忆变量里写过任意一个，都说明作者已指定注入位置；引擎块的清单与两个纯列表变量内容重叠，
+            // 再追加一遍就是逐字重复。
+            if (InjectPart.MEMORY in definition.inject &&
+                MEMORY_VAR !in rawPrompt &&
+                MEMORY_GLOBAL_VAR !in rawPrompt &&
+                MEMORY_PROJECT_VAR !in rawPrompt
+            ) {
+                memoryContent?.let {
+                    append("\n\n")
+                    append(it)
+                }
+            }
+            if (InjectPart.PROJECT_RULES in definition.inject &&
+                PROJECT_RULES_VAR !in rawPrompt &&
+                PROJECT_RULES_GLOBAL_VAR !in rawPrompt &&
+                PROJECT_RULES_PROJECT_VAR !in rawPrompt
+            ) {
+                listOfNotNull(projectRules?.global, projectRules?.project).takeIf { it.isNotEmpty() }?.let { parts ->
+                    append("\n\n")
+                    append(parts.joinToString("\n\n"))
+                }
+            }
+
+            // 子代理的工作区与当前时间不再在这里追加：身份、工作区、运行环境、时间统一由
+            // `agent/subagent-context.md` 承载（可用 prompts.custom/agent/ 同名覆盖）。
+            segments += PromptSegment("agent:subagent-context", contextTemplate)
+            append("\n\n")
+            append(
+                renderVariables(
+                    contextTemplate,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    workspaceContent,
+                    environmentContent,
+                    dateContent,
+                    definition.name,
+                    tools = toolsContent
+                )
+            )
+        }
+        return trackPrompt(agentContext, prompt, segments)
     }
 
     /**
