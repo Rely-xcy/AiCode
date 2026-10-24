@@ -141,16 +141,15 @@ internal fun MemorySection(
             )
         }
 
-        // 空态也包进分组卡片，否则一行灰字悬在卡片体系之外，看着像漏渲染的占位。
+        // 空态跟技能页 / MCP 页一样直接排在页内，不套卡片：一张没有分组标题的卡片贴在顶栏下
+        // 既没有归属，也跟下面带标题的卡片不是一套节奏。
         if (memories.isEmpty()) {
-            SettingsGroup {
-                // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
-                // 空白搜索词不算筛选（与 ViewModel 的 trim 口径一致），此时说的就是「没有记忆」。
-                when {
-                    loading -> MemoryLoadingPlaceholder()
-                    searchQuery.isBlank() -> EmptyState()
-                    else -> MemorySearchEmptyState()
-                }
+            // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
+            // 空白搜索词不算筛选（与 ViewModel 的 trim 口径一致），此时说的就是「没有记忆」。
+            when {
+                loading -> MemoryLoadingPlaceholder()
+                searchQuery.isBlank() -> MemoryEmptyState()
+                else -> MemorySearchEmptyState()
             }
         } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
@@ -185,7 +184,9 @@ internal fun MemorySection(
             Text(
                 text = stringResource(R.string.memory_long_term_desc),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.semanticColors.subtleText,
+                // 说明句统一用 onSurfaceVariant（与各项副标题、页脚说明同色）；
+                // subtleText 在本仓只用于取值与箭头这类弱提示
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
             )
             SettingsDivider()
@@ -390,34 +391,14 @@ private fun MemoryLoadingPlaceholder() {
     )
 }
 
+/** 一条记忆都没有：页内空态，与技能页 / MCP 页同一套图标尺寸、文字层级与留白。 */
 @Composable
-private fun EmptyState() {
-    EmptyState(
-        icon = FeatherIcons.FileText,
-        title = stringResource(R.string.memory_empty),
-        hint = stringResource(R.string.memory_empty_hint)
-    )
-}
-
-/** 搜索无结果：图标与文案换掉，尺寸与留白跟无记忆时的空态一致。 */
-@Composable
-private fun MemorySearchEmptyState() {
-    EmptyState(
-        icon = FeatherIcons.Search,
-        title = stringResource(R.string.memory_search_empty)
-    )
-}
-
-@Composable
-private fun EmptyState(
-    icon: ImageVector,
-    title: String,
-    hint: String? = null
-) {
+private fun MemoryEmptyState() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 40.dp),
+            // 左右 24 是给那条长提示的：不留白时它会顶到屏幕两侧
+            .padding(horizontal = Spacing.xl, vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
@@ -428,26 +409,51 @@ private fun EmptyState(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                icon,
+                imageVector = FeatherIcons.FileText,
                 contentDescription = null,
                 modifier = Modifier.size(28.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Text(
-            text = title,
+            text = stringResource(R.string.memory_empty),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
-        // 搜不到时已经没有可给的建议，就不摆一行空提示
-        if (hint != null) {
-            Text(
-                text = hint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
+        Text(
+            text = stringResource(R.string.memory_empty_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * 搜索无结果：用 MCP 页那套紧凑形态（小号半透明图标 + 一行灰字），
+ * 不沿用「没有记忆」的大图标 + 标题——筛不到不等于没有，摆同一套视觉会让人以为记忆全丢了。
+ */
+@Composable
+private fun MemorySearchEmptyState() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        Icon(
+            imageVector = FeatherIcons.Search,
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        )
+        Text(
+            text = stringResource(R.string.memory_search_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
