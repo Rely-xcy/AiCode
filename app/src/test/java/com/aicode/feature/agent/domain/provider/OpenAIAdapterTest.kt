@@ -139,22 +139,54 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_reasoningEffort_normalizesNoneAndMax() = runBlocking {
+    fun complete_reasoningEffort_notClampedForHighTierModels() = runBlocking {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
 
-        adapter(api).complete("", emptyList(), reasoningEffort = "none")
-        assertNull(reqSlot.captured.reasoning_effort)
+        // gpt-5.6 的档位集合里真有 xhigh/max：必须如实透传，不能再压成 high。
+        adapter(api).apply { model = "gpt-5.6-sol" }.complete("", emptyList(), reasoningEffort = "max")
+        assertEquals("max", reqSlot.captured.reasoning_effort)
 
-        adapter(api).complete("", emptyList(), reasoningEffort = "minimal")
-        assertNull(reqSlot.captured.reasoning_effort)
+        adapter(api).apply { model = "gpt-5.6-sol" }.complete("", emptyList(), reasoningEffort = "xhigh")
+        assertEquals("xhigh", reqSlot.captured.reasoning_effort)
 
-        adapter(api).complete("", emptyList(), reasoningEffort = "xhigh")
+        // gpt-5 支持 minimal，不能再被丢成「不发字段」（那等于服务端默认 medium）。
+        adapter(api).apply { model = "gpt-5" }.complete("", emptyList(), reasoningEffort = "minimal")
+        assertEquals("minimal", reqSlot.captured.reasoning_effort)
+
+        // 模型最高只到 high 时向上取不到、向下取最近档。
+        adapter(api).apply { model = "o3" }.complete("", emptyList(), reasoningEffort = "xhigh")
         assertEquals("high", reqSlot.captured.reasoning_effort)
 
-        adapter(api).complete("", emptyList(), reasoningEffort = "medium")
+        adapter(api).apply { model = "gpt-4-turbo" }.complete("", emptyList(), reasoningEffort = "medium")
         assertEquals("medium", reqSlot.captured.reasoning_effort)
+    }
+
+    @Test
+    fun complete_reasoningDisable_usesVendorSpecificFields() = runBlocking {
+        val api = api()
+        val reqSlot = slot<ChatCompletionRequest>()
+        coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
+
+        // DeepSeek / Kimi / GLM：只有 thinking.type=disabled 能真关，effort="none" 无效。
+        adapter(api).apply { model = "deepseek-v4-pro" }.complete("", emptyList(), reasoningEffort = "none")
+        assertEquals(mapOf("type" to "disabled"), reqSlot.captured.thinking)
+        assertNull(reqSlot.captured.reasoning_effort)
+
+        // Qwen：只认 enable_thinking。
+        adapter(api).apply { model = "qwen/qwen3.8-max" }.complete("", emptyList(), reasoningEffort = "none")
+        assertEquals(false, reqSlot.captured.enable_thinking)
+        assertNull(reqSlot.captured.thinking)
+
+        // OpenAI 官方：chat/completions 上只能发 none（是否真关闭取决于服务端）。
+        adapter(api).apply { model = "gpt-5.6-sol" }.complete("", emptyList(), reasoningEffort = "none")
+        assertEquals("none", reqSlot.captured.reasoning_effort)
+        assertNull(reqSlot.captured.thinking)
+
+        // 思考恒开的模型（gpt-6-astra）：降为最低档而不是发关闭。
+        adapter(api).apply { model = "gpt-6-astra" }.complete("", emptyList(), reasoningEffort = "none")
+        assertEquals("low", reqSlot.captured.reasoning_effort)
     }
 
     @Test

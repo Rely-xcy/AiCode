@@ -32,6 +32,10 @@ import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import com.aicode.feature.agent.domain.subagent.InterruptedWorkRecorder
 import com.aicode.feature.agent.domain.provider.RetryErrorKind
 import com.aicode.feature.agent.domain.provider.toRetryErrorInfo
+import com.aicode.feature.agent.domain.provider.toReasoningCapability
+import com.aicode.feature.agent.domain.provider.reasoningPlanFor
+import com.aicode.feature.agent.domain.provider.wireSummary
+import com.aicode.feature.agent.domain.provider.clampedFrom
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
@@ -411,6 +415,8 @@ class StatefulAgentWorkflow @Inject constructor(
         val metadata = modelMetadataService.resolve(config.id, config.type, config.effectiveModel)
         // 模型元数据的输出上限（models.dev limit.output）：不传时 Anthropic 会把输出卡在 adapter 兜底值上。
         provider.maxOutputTokens = metadata.outputTokens
+        // 思考能力随模型走：adapter 用它判断能否关闭与降级目标，未命中元数据时由厂商表兜底。
+        provider.reasoningCapability = metadata.toReasoningCapability()
         // 元数据说不接受自定义温度就不发该字段（kimi-k3、gpt-5 系带了直接 400）；允许的只发官方固定值。
         provider.temperature = if (metadata.supportsCustomTemperature) fixedTemperature(config.effectiveModel) else null
         provider.firstByteTimeoutMs = generalSettingsRepository.firstByteTimeoutMs()
@@ -966,12 +972,17 @@ class StatefulAgentWorkflow @Inject constructor(
                             val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
                             val usage = stream.finalResponse
                             runCatching {
+                                // 与适配器同源算一次「实际会发什么」：落库后能在统计页分辨
+                                // 「选了但没生效」「被降级」这些静默问题。
+                                val reasoningPlan = reasoningPlanFor(providerInUse, currentContext.reasoningEffort)
                                 llmCallRecordDao.insert(
                                     LlmCallRecordEntity(
                                         sessionId = currentContext.sessionId,
                                         providerId = providerInUse.providerId.ifBlank { null },
                                         model = providerInUse.model,
                                         reasoningEffort = currentContext.reasoningEffort,
+                                        reasoningWire = reasoningPlan.wireSummary(),
+                                        reasoningClampedFrom = reasoningPlan.clampedFrom(currentContext.reasoningEffort),
                                         kind = callKind,
                                         inputTokens = usage?.inputTokens ?: 0,
                                         outputTokens = usage?.outputTokens ?: 0,

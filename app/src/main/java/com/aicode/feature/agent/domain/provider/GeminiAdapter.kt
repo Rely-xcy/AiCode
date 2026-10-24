@@ -4,6 +4,8 @@ import com.aicode.core.util.AILogger
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.ReasoningCapability
+import com.aicode.feature.agent.domain.model.ReasoningWire
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -45,6 +47,13 @@ class GeminiAdapter @Inject constructor(
 
     // Gemini 发 generationConfig.maxOutputTokens（模型元数据的输出上限）；为 null 时不发该参数，用服务端默认。
     override var maxOutputTokens: Int? = null
+
+    /** 当前模型的思考能力，由工作流按元数据注入；null 时由 [ReasoningResolver] 按模型名兜底。 */
+    override var reasoningCapability: ReasoningCapability? = null
+
+    /** 服务端 400 学到的档位优先于元数据：它反映的是该渠道真实接受的白名单。 */
+    private fun effectiveReasoningCapability(): ReasoningCapability? =
+        ReasoningLearning.recall(providerId, model) ?: reasoningCapability
 
     // 原生 generateContent 不发 generationConfig.temperature：Gemini 2.0 起服务端默认就是 1.0，与推荐值一致。
     override var temperature: Float? = null
@@ -101,6 +110,8 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "Gemini", response, seq)
@@ -333,6 +344,8 @@ class GeminiAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             sseLog.finish()
@@ -378,11 +391,13 @@ class GeminiAdapter @Inject constructor(
         return request
     }
 
-    /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high。 */
-    private fun interactionsThinkingLevel(reasoningEffort: String?): String? = when (reasoningEffort) {
-        null, "none" -> null
-        "xhigh", "max" -> "high"
-        else -> reasoningEffort
+    /**
+     * 思考强度 → Interactions 的 `thinking_level`。档位集合与降级规则见 [ReasoningResolver]；
+     * Interactions 只认档位、没有预算字段，因此预算型模型（2.5 系）在这里不发思考配置。
+     */
+    private fun interactionsThinkingLevel(reasoningEffort: String?): String? {
+        val plan = ReasoningResolver.plan(ReasoningProtocol.GEMINI, model, reasoningEffort, effectiveReasoningCapability())
+        return (plan.wire as? ReasoningWire.Effort)?.value
     }
 
     /**
@@ -413,6 +428,8 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "Gemini", response, seq)
@@ -551,6 +568,8 @@ class GeminiAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             sseLog.finish()
@@ -658,25 +677,20 @@ class GeminiAdapter @Inject constructor(
         }.getOrNull()
     }
 
-    /** 思考强度 → Gemini thinkingConfig。模型名含 gemini-3 用 thinkingLevel，否则用 thinkingBudget（2.5 系）。显式带上 includeThoughts 以返回思考内容。 */
+    /**
+     * 思考强度 → Gemini thinkingConfig。协议面与档位由 [ReasoningResolver] 决定：
+     * - Gemini 3 / 4：`thinkingLevel`（档位集合按模型不同，Pro 无 minimal、3.7/3.8 Flash 无 minimal）；
+     * - Gemini 2.5：`thinkingBudget`（Pro 不能关闭，Flash/Flash-Lite 关闭即预算 0）。
+     * 显式带上 `includeThoughts` 以返回思考内容。
+     */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
-        if (reasoningEffort == null) return null
-        return if (model.contains("gemini-3")) {
-            // thinkingLevel 仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high（元数据未命中时 UI 会给出全部档位）
-            val level = when (reasoningEffort) {
-                "none" -> return null
-                "xhigh", "max" -> "high"
-                else -> reasoningEffort
-            }
-            mapOf("thinkingLevel" to level, "includeThoughts" to true)
-        } else {
-            val budget = when (reasoningEffort) {
-                "low" -> 1024
-                "medium" -> 4096
-                "high", "xhigh", "max" -> 8192
-                else -> return null
-            }
-            mapOf("thinkingBudget" to budget, "includeThoughts" to true)
+        val plan = ReasoningResolver.plan(ReasoningProtocol.GEMINI, model, reasoningEffort, effectiveReasoningCapability())
+        return when (val wire = plan.wire) {
+            is ReasoningWire.Effort -> mapOf("thinkingLevel" to wire.value, "includeThoughts" to true)
+            is ReasoningWire.Budget -> mapOf("thinkingBudget" to wire.tokens, "includeThoughts" to true)
+            // 关闭/不支持在这个协议面上没有「关闭」字段：不思考的模型本就不该收到这两项。
+            ReasoningWire.DisableEffortNone, ReasoningWire.BetweenTools,
+            is ReasoningWire.DisableToggle, ReasoningWire.Omit -> null
         }
     }
 

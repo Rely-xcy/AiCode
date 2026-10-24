@@ -9,6 +9,10 @@ import com.aicode.feature.agent.data.remote.openai.ChatCompletionRequest
 import com.aicode.feature.agent.data.remote.openai.OpenAIChatMessage
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.DisableFieldKind
+import com.aicode.feature.agent.domain.model.ReasoningCapability
+import com.aicode.feature.agent.domain.model.ReasoningPlan
+import com.aicode.feature.agent.domain.model.ReasoningWire
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -62,6 +66,13 @@ class OpenAIAdapter @Inject constructor(
     // OpenAI 系不发输出上限参数（用服务端默认），仅为接口完整性保留。
     override var maxOutputTokens: Int? = null
 
+    /** 当前模型的思考能力，由工作流按元数据注入；null 时由 [ReasoningResolver] 按模型名兜底。 */
+    override var reasoningCapability: ReasoningCapability? = null
+
+    /** 服务端 400 学到的档位优先于元数据：它反映的是该渠道真实接受的白名单。 */
+    private fun effectiveReasoningCapability(): ReasoningCapability? =
+        ReasoningLearning.recall(providerId, model) ?: reasoningCapability
+
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认。
     override var temperature: Float? = null
 
@@ -106,11 +117,15 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
+        val reasoningPlan = chatReasoningPlan(reasoningEffort)
+        val disableToggle = reasoningPlan.wire as? ReasoningWire.DisableToggle
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = (reasoningPlan.wire as? ReasoningWire.Effort)?.value,
+            thinking = if (disableToggle?.field == DisableFieldKind.THINKING_TYPE) mapOf("type" to "disabled") else null,
+            enable_thinking = if (disableToggle?.field == DisableFieldKind.ENABLE_THINKING) false else null,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = false,
@@ -131,6 +146,8 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "OpenAI", response, seq)
@@ -160,18 +177,18 @@ class OpenAIAdapter @Inject constructor(
     }
 
     /**
-     * 思考强度 → OpenAI reasoning_effort。
-     * OpenAI 官方 Chat Completions 的 reasoning_effort 仅接受 low/medium/high（gpt-5 系额外支持
-     * none/minimal，但 o 系列不接受），"none"/"minimal" 原样透传会在多数推理模型上 400。
-     * 这里把 "none"/"minimal" 明确跳过（不发该字段，交由服务端默认），"xhigh"/"max" 归一到 high
-     * （OpenAI 无更高档），low/medium/high 原样透传。与 Anthropic/Gemini 对齐「不可表达即跳过」的策略。
+     * 思考强度 → 请求字段。档位是否支持、能否关闭、该降级到哪一档全部交给 [ReasoningResolver]：
+     * - 支持 max/xhigh 的模型（gpt-5.6、gpt-6、Grok 4.6+ 等）如实透传，不再被压成 high；
+     * - 模型确实不支持的低档位向下取最近档，未知模型按保守集合发送；
+     * - 关闭思考：厂商私有开关走 `thinking` / `enable_thinking`；
+     *   OpenAI 官方在 chat/completions 上只能发 `reasoning_effort="none"`（实测部分服务会当 low 处理，
+     *   真正归零需切到 Responses 端点）。
      */
-    private fun normalizeReasoningEffort(effort: String?): String? = when (effort) {
-        null -> null
-        "none", "minimal" -> null
-        "xhigh", "max" -> "high"
-        else -> effort
-    }
+    private fun chatReasoningPlan(effort: String?): ReasoningPlan =
+        ReasoningResolver.plan(ReasoningProtocol.OPENAI_CHAT, model, effort, effectiveReasoningCapability())
+
+    private fun responsesReasoningPlan(effort: String?): ReasoningPlan =
+        ReasoningResolver.plan(ReasoningProtocol.OPENAI_RESPONSES, model, effort, effectiveReasoningCapability())
 
     /**
      * Responses 请求体。system prompt 作为首个 message item 进 `input`（与顶层 `instructions` 等价，
@@ -203,15 +220,33 @@ class OpenAIAdapter @Inject constructor(
             request["tool_choice"] = "auto"
         }
         if (stream) request["stream"] = true
-        normalizeReasoningEffort(reasoningEffort)?.let { effort ->
-            if (isDeepSeek) {
-                request["reasoning"] = mapOf("effort" to effort)
-            } else {
-                // OpenAI 官方/通用 Responses 规范：显式开启思考总结（summary: "auto"），
-                // 并索取 encrypted_content 密文，供无状态多轮对话连续推理。
-                request["reasoning"] = mapOf("effort" to effort, "summary" to "auto")
-                request["include"] = listOf("reasoning.encrypted_content")
+        // Responses 端点的思考字段：effort 走 reasoning.effort；厂商私有开关走 thinking / enable_thinking。
+        when (val wire = responsesReasoningPlan(reasoningEffort).wire) {
+            is ReasoningWire.Effort -> {
+                if (isDeepSeek) {
+                    request["reasoning"] = mapOf("effort" to wire.value)
+                } else {
+                    // OpenAI 官方/通用 Responses 规范：显式开启思考总结（summary: "auto"），
+                    // 并索取 encrypted_content 密文，供无状态多轮对话连续推理。
+                    request["reasoning"] = mapOf("effort" to wire.value, "summary" to "auto")
+                    request["include"] = listOf("reasoning.encrypted_content")
+                }
             }
+            // OpenAI 官方关闭思考的唯一可靠写法（chat/completions 上 none 常被降成 low）。
+            ReasoningWire.DisableEffortNone -> request["reasoning"] = mapOf("effort" to "none")
+            is ReasoningWire.DisableToggle -> when (wire.field) {
+                DisableFieldKind.THINKING_TYPE -> {
+                    request["thinking"] = mapOf("type" to "disabled")
+                    // 少数厂商关闭时仍需带档位（Anthropic 系），OpenAI 兼容侧一般为空。
+                    effectiveReasoningCapability()?.effortWhileDisabled?.let {
+                        request["reasoning"] = mapOf("effort" to it.apiValue)
+                    }
+                }
+                DisableFieldKind.ENABLE_THINKING -> request["enable_thinking"] = false
+            }
+            ReasoningWire.BetweenTools -> request["thinking"] = mapOf("type" to "between_tools")
+            // 预算型与「不发」在这条端点上没有对应字段，交给服务端默认。
+            is ReasoningWire.Budget, ReasoningWire.Omit -> Unit
         }
         // OpenAI 官方 Responses 原生支持 prompt_cache_key（同会话路由到同一缓存 shard）；
         // 自动管理缓存的服务（如 DeepSeek）会静默忽略该字段，不会报错。
@@ -247,6 +282,8 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "OpenAI", response, seq)
@@ -298,12 +335,15 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
-
+        val streamReasoningPlan = chatReasoningPlan(reasoningEffort)
+        val streamDisableToggle = streamReasoningPlan.wire as? ReasoningWire.DisableToggle
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = (streamReasoningPlan.wire as? ReasoningWire.Effort)?.value,
+            thinking = if (streamDisableToggle?.field == DisableFieldKind.THINKING_TYPE) mapOf("type" to "disabled") else null,
+            enable_thinking = if (streamDisableToggle?.field == DisableFieldKind.ENABLE_THINKING) false else null,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = true,
@@ -482,6 +522,8 @@ class OpenAIAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             // 无论成功/失败/取消，把已收到的原始 SSE 落盘（重试时会从上次中断处续写）。
@@ -608,6 +650,8 @@ class OpenAIAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             sseLog.finish()

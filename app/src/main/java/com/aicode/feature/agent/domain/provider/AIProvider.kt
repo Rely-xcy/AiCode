@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.provider
 
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.ReasoningCapability
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import kotlinx.coroutines.flow.Flow
@@ -164,6 +165,12 @@ interface AIProvider {
      * 调用前由工作流设置；为 null 时各 adapter 用自身默认值或不发该参数。
      */
     var maxOutputTokens: Int?
+
+    /**
+     * 当前模型的思考控制能力，调用前由工作流按模型元数据注入（见 [com.aicode.feature.agent.domain.provider.toReasoningCapability]）。
+     * 为 null 表示未知，此时 adapter 按协议经 [ReasoningResolver] 保守兜底，不会发可能被 400 的档位。
+     */
+    var reasoningCapability: ReasoningCapability?
 
     /**
      * 本次请求的采样温度，调用前由工作流按模型元数据设置（见 [fixedTemperature]）。

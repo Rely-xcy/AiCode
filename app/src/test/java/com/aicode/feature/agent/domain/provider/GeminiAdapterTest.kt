@@ -111,11 +111,13 @@ class GeminiAdapterTest {
     fun max_output_tokens_and_thinking_config_coexist_in_generation_config() = runBlocking {
         val api = FakeApi(textResponse())
         // 两者曾各自覆盖式写 generationConfig，只会剩下后写的那个。
-        adapter(api, maxOutput = 64000).complete("sys", listOf(user("hi")), reasoningEffort = "high")
+        adapter(api, maxOutput = 64000)
+            .apply { model = "gemini-3-flash-preview" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "high")
 
         val config = generationConfig(api.lastRequest)
         assertEquals(64000, config["maxOutputTokens"])
-        assertEquals(mapOf("thinkingBudget" to 8192, "includeThoughts" to true), config["thinkingConfig"])
+        assertEquals(mapOf("thinkingLevel" to "high", "includeThoughts" to true), config["thinkingConfig"])
     }
 
     @Test
@@ -409,12 +411,14 @@ class GeminiAdapterTest {
     @Test
     fun interactions_generation_config_uses_thinking_level_not_budget() = runBlocking {
         val api = FakeApi(interactionResponse())
-        interactionsAdapter(api, maxOutput = 64000).complete("sys", listOf(user("hi")), reasoningEffort = "max")
+        interactionsAdapter(api, maxOutput = 64000)
+            .apply { model = "gemini-3-flash-preview" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "max")
 
         @Suppress("UNCHECKED_CAST")
         val config = api.lastRequest?.get("generation_config") as Map<*, *>
         assertEquals(64000, config["max_output_tokens"])
-        // thinkingBudget 在 Interactions 里不存在；xhigh/max 归一到 high
+        // thinkingBudget 在 Interactions 里不存在；该模型最高只到 high，max 向下取最近档
         assertEquals("high", config["thinking_level"])
         assertFalse(config.containsKey("thinkingConfig"))
         // 不显式要摘要就拿不到可展示的思考文本

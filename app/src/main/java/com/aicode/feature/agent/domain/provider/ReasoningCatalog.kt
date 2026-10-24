@@ -52,6 +52,19 @@ fun ReasoningCapability.selectableLevelsForUi(): List<ReasoningEffort> =
 /** 是否给「思考」总开关：能关闭，或能力未知（交给用户试）。 */
 fun ReasoningCapability.showsThinkingToggle(): Boolean = canDisable || !isKnown
 
+/** 适配器侧协议判定：按实现类分派，OpenAI 系再看是否切了新版端点。 */
+fun reasoningProtocolOf(provider: AIProvider): ReasoningProtocol = when (provider) {
+    is AnthropicAdapter -> ReasoningProtocol.ANTHROPIC
+    is GeminiAdapter -> ReasoningProtocol.GEMINI
+    else -> if (provider.useResponseApi) ReasoningProtocol.OPENAI_RESPONSES else ReasoningProtocol.OPENAI_CHAT
+}
+
+/** 用与适配器完全相同的输入算一次 plan，供调用记录 / 排障展示「实际会发什么」。 */
+fun reasoningPlanFor(provider: AIProvider, effort: String?): ReasoningPlan {
+    val capability = ReasoningLearning.recall(provider.providerId, provider.model) ?: provider.reasoningCapability
+    return ReasoningResolver.plan(reasoningProtocolOf(provider), provider.model, effort, capability)
+}
+
 /** 实际发出的思考参数摘要，直接落库到调用记录。 */
 fun ReasoningPlan.wireSummary(): String = when (val w = wire) {
     is ReasoningWire.Effort -> "effort=${w.value}"
