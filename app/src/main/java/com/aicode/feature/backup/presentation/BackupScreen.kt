@@ -45,6 +45,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -550,7 +551,6 @@ private fun LocalBackupTab(
             SettingsDivider()
             SettingsRow(
                 title = stringResource(R.string.backup_data_memory),
-                subtitle = stringResource(R.string.backup_data_memory_hint),
                 trailing = {
                     AppSwitch(
                         checked = exportOptions.memoryFiles,
@@ -558,10 +558,10 @@ private fun LocalBackupTab(
                     )
                 }
             )
+            BackupOptionHint(text = stringResource(R.string.backup_data_memory_hint))
             SettingsDivider()
             SettingsRow(
                 title = stringResource(R.string.backup_data_session_briefs),
-                subtitle = stringResource(R.string.backup_data_session_briefs_hint),
                 trailing = {
                     AppSwitch(
                         checked = exportOptions.sessionBriefs,
@@ -569,19 +569,22 @@ private fun LocalBackupTab(
                     )
                 }
             )
+            BackupOptionHint(text = stringResource(R.string.backup_data_session_briefs_hint))
             SettingsDivider()
             SettingsRow(
                 title = stringResource(R.string.backup_data_login_secrets),
-                subtitle = stringResource(
-                    if (exportOptions.loginSecrets) R.string.backup_data_login_secrets_hint_on
-                    else R.string.backup_data_login_secrets_hint_off
-                ),
                 trailing = {
                     AppSwitch(
                         checked = exportOptions.loginSecrets,
                         onCheckedChange = { onUpdateOptions(exportOptions.copy(loginSecrets = it)) }
                     )
                 }
+            )
+            BackupOptionHint(
+                text = stringResource(
+                    if (exportOptions.loginSecrets) R.string.backup_data_login_secrets_hint_on
+                    else R.string.backup_data_login_secrets_hint_off
+                )
             )
             if (exportOptions.loginSecrets) {
                 SecretPasswordHint()
@@ -776,20 +779,43 @@ private fun TargetTypeBadge(type: BackupTargetType) {
 
 @Composable
 private fun WorkspaceBackupHint() {
-    HintLine(
-        text = stringResource(R.string.backup_workspace_git_hint),
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-    )
+    BackupOptionHint(text = stringResource(R.string.backup_workspace_git_hint))
 }
 
 /**
- * 通用提示行：14dp 警示图标 + bodySmall 次要色。
- *
- * 备份页里与某一行绑定的说明（工作区文件、导入结果里的远程提醒）都用它，
- * 避免两处各写一套图标尺寸与字号而慢慢走样。
+ * 选项行下方提示的统一间距：上侧不再单独留白，靠 [SettingsRow] 自身的 11dp 下内边距
+ * 把提示与其主行分开；下侧只留 [Spacing.xs] 再接分隔线。
+ * 此前每处各写 vertical = Spacing.sm，与行内边距叠加后上下各空出近 20dp，
+ * 看上去像凭空多了一行。
+ */
+private val OptionHintModifier =
+    Modifier.padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.xs)
+
+/**
+ * 备份选项下方的提示行：与「工作区文件」那条同款（14dp 警示图标 + bodySmall 次要色），
+ * 间距统一走 [OptionHintModifier]，避免各处自成一套、空隙越调越大。
+ * [contentColor] 只给需要警示语气的提示（如登录凭据口令）换成错误色。
  */
 @Composable
-private fun HintLine(text: String, modifier: Modifier = Modifier) {
+private fun BackupOptionHint(
+    text: String,
+    contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+    HintLine(text = text, modifier = OptionHintModifier, contentColor = contentColor)
+}
+
+/**
+ * 通用提示行：14dp 警示图标 + bodySmall 小字。
+ *
+ * 备份页里与某一行绑定的说明（工作区文件、其它备份选项、导入结果里的远程提醒）都用它，
+ * 避免各处各写一套图标尺寸与字号而慢慢走样。默认次要色，[contentColor] 可换成警示色。
+ */
+@Composable
+private fun HintLine(
+    text: String,
+    modifier: Modifier = Modifier,
+    contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
@@ -797,41 +823,28 @@ private fun HintLine(text: String, modifier: Modifier = Modifier) {
         Icon(
             imageVector = FeatherIcons.AlertCircle,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = contentColor,
             modifier = Modifier.size(14.dp)
         )
         Spacer(Modifier.width(Spacing.xs))
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = contentColor
         )
     }
 }
 
 /**
  * 勾了「包含登录凭据」后的必读提示：导出入口会强制要求口令，这里提前讲清楚，
- * 免得用户在口令弹窗里才发现无法导出。
+ * 免得用户在口令弹窗里才发现无法导出。几何与其它选项提示一致，只保留错误色以示警示。
  */
 @Composable
 private fun SecretPasswordHint() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-    ) {
-        Icon(
-            imageVector = FeatherIcons.AlertCircle,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.size(14.dp)
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = stringResource(R.string.backup_data_login_secrets_password_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error
-        )
-    }
+    BackupOptionHint(
+        text = stringResource(R.string.backup_data_login_secrets_password_hint),
+        contentColor = MaterialTheme.colorScheme.error
+    )
 }
 
 @Composable
@@ -1012,7 +1025,7 @@ private fun ResultDialog(title: String, message: String, hint: String? = null, o
         text = {
             Column {
                 Text(message)
-                // 与正文隔一个 Spacing.sm：和「工作区文件」行与其下方说明的间距一致。
+                // 对话框正文没有分组行的内边距可借用，单独隔一个 Spacing.sm。
                 if (hint != null) {
                     HintLine(
                         text = hint,
