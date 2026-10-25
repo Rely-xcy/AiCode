@@ -2328,10 +2328,13 @@ class AIAgentViewModel @Inject constructor(
                         } else {
                             normalized0
                         }
+                        // 本行落库用的 id：UI 认领、思考展开态都按它挂，所以先算出来。
+                        val msgId = java.util.UUID.randomUUID().toString()
                         // 流式收尾：在落库并触发 UI messages 更新之前，先同步清空流式状态，
                         // 避免落库消息先行发射导致 UI 出现「落库消息与流式气泡同屏并存」的时差。
+                        // 展开态必须在 setStreamingReasoning(null) 之前搬走，它会删掉流式键下那条记录。
                         reasoningExpansionOverrides.remove(streamingReasoningKey(sessionId))?.let { expanded ->
-                            reasoningExpansionOverrides[event.messageId] = expanded
+                            reasoningExpansionOverrides[msgId] = expanded
                         }
                         setStreamingReasoning(sessionId, null)
                         setStreamingText(sessionId, null)
@@ -2340,7 +2343,6 @@ class AIAgentViewModel @Inject constructor(
                         }
 
                         val reasoning = event.reasoning.takeIf { it.hasVisibleContent() }
-                        val msgId = java.util.UUID.randomUUID().toString()
                         // 显式登记本行 id 供 UI 认领（见 [currentSessionPendingAssistantRowId]）：
                         // 只登记有可见正文或有 reasoning 的行——空白工具行会被 messagesState 过滤掉，
                         // 登记了 UI 永远认不到（R2）。每条新 AssistantText 覆盖上一条（R1）。

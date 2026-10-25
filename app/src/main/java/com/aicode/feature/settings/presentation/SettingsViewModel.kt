@@ -1602,20 +1602,18 @@ class SettingsViewModel @Inject constructor(
     fun deleteMcpServers(targets: List<Pair<String, McpScope>>) {
         if (targets.isEmpty()) return
         viewModelScope.launch {
+            var written = true
             targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
                 val nameSet = names.toSet()
-                val base = if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.getGlobalServers()
-                } else {
-                    mcpConfigRepository.getProjectServers()
-                }
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
                 val updated = base.filterNot { it.name in nameSet }
                 if (scope == McpScope.GLOBAL) {
                     mcpConfigRepository.setGlobalServers(updated)
                 } else {
-                    mcpConfigRepository.setProjectServers(updated)
+                    written = mcpConfigRepository.setProjectServers(updated) && written
                 }
             }
+            if (!written) reportConfigWriteSkipped()
             _mcpReloading.value = true
             try {
                 mcpManager.removeServers(targets.map { it.first })
@@ -1629,36 +1627,21 @@ class SettingsViewModel @Inject constructor(
     fun setMcpServersEnabled(targets: List<Pair<String, McpScope>>, enabled: Boolean) {
         if (targets.isEmpty()) return
         viewModelScope.launch {
+            var written = true
             targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
                 val nameSet = names.toSet()
-                val base = if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.getGlobalServers()
-                } else {
-                    mcpConfigRepository.getProjectServers()
-                }
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
                 val updated = base.map { if (it.name in nameSet) it.copy(enabled = enabled) else it }
                 if (scope == McpScope.GLOBAL) {
                     mcpConfigRepository.setGlobalServers(updated)
                 } else {
-                    mcpConfigRepository.setProjectServers(updated)
+                    written = mcpConfigRepository.setProjectServers(updated) && written
                 }
             }
+            if (!written) reportConfigWriteSkipped()
             _mcpReloading.value = true
             try {
                 targets.map { it.first }.distinct().forEach { mcpManager.reloadServer(it) }
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
-
-    /** 批量重连 MCP server（多选后一次性刷新连接状态）。 */
-    fun reconnectMcpServers(names: Collection<String>) {
-        if (names.isEmpty()) return
-        viewModelScope.launch {
-            _mcpReloading.value = true
-            try {
-                names.distinct().forEach { mcpManager.reloadServer(it) }
             } finally {
                 _mcpReloading.value = false
             }
@@ -1679,60 +1662,6 @@ class SettingsViewModel @Inject constructor(
             _mcpReloading.value = true
             try {
                 mcpManager.reloadServer(name)
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
-
-    /**
-     * 批量删除 MCP server（列表多选批量操作）。
-     * 配置按作用域分组写：同作用域只读一次、写一次；写文件不能逐条做，否则 N 条就是 N 次全量重写。
-     * 断开连接仍逐条走 [McpManager.removeServer]（它自带 reloadMutex），不另开批量入口。
-     */
-    fun deleteMcpServers(targets: List<Pair<String, McpScope>>) {
-        if (targets.isEmpty()) return
-        viewModelScope.launch {
-            var written = true
-            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
-                val nameSet = names.toSet()
-                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-                val updated = base.filterNot { it.name in nameSet }
-                if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.setGlobalServers(updated)
-                } else {
-                    written = mcpConfigRepository.setProjectServers(updated) && written
-                }
-            }
-            if (!written) reportConfigWriteSkipped()
-            _mcpReloading.value = true
-            try {
-                targets.map { it.first }.distinct().forEach { mcpManager.removeServer(it) }
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
-
-    /** 批量启用 / 停用 MCP server：配置按作用域分组各写一次，再逐个重连（停用的会落到 DISABLED 状态）。 */
-    fun setMcpServersEnabled(targets: List<Pair<String, McpScope>>, enabled: Boolean) {
-        if (targets.isEmpty()) return
-        viewModelScope.launch {
-            var written = true
-            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
-                val nameSet = names.toSet()
-                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-                val updated = base.map { if (it.name in nameSet) it.copy(enabled = enabled) else it }
-                if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.setGlobalServers(updated)
-                } else {
-                    written = mcpConfigRepository.setProjectServers(updated) && written
-                }
-            }
-            if (!written) reportConfigWriteSkipped()
-            _mcpReloading.value = true
-            try {
-                targets.map { it.first }.distinct().forEach { mcpManager.reloadServer(it) }
             } finally {
                 _mcpReloading.value = false
             }
@@ -1881,17 +1810,6 @@ class SettingsViewModel @Inject constructor(
                 }
             }
             if (!written) reportConfigWriteSkipped()
-            refreshSkills()
-        }
-    }
-
-    /** 批量启用 / 停用技能（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
-    fun setSkillsEnabled(targets: List<Pair<String, SkillScope>>, enabled: Boolean) {
-        if (targets.isEmpty()) return
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                targets.forEach { (name, scope) -> skillRepository.setSkillDisabled(name, !enabled, scope) }
-            }
             refreshSkills()
         }
     }
@@ -2059,17 +1977,6 @@ class SettingsViewModel @Inject constructor(
                 }
             }
             if (!written) reportConfigWriteSkipped()
-            refreshSubAgents()
-        }
-    }
-
-    /** 批量启用 / 停用子代理（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
-    fun setSubAgentsEnabled(targets: List<Pair<String, AgentDefinitionScope>>, enabled: Boolean) {
-        if (targets.isEmpty()) return
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                targets.forEach { (name, scope) -> agentDefinitionRepository.setDisabled(name, !enabled, scope) }
-            }
             refreshSubAgents()
         }
     }

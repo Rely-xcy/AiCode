@@ -487,10 +487,10 @@ internal fun buildChatItems(
         if (running && !emittedForTurn) {
             items += ChatRenderItem(
                 message = turn.userMessage,
-                key = "$stableTurnKey#header",
+                key = "${turn.key}#header",
                 contentType = TURN_HEADER_CONTENT_TYPE,
                 turnHeader = TurnHeaderState(
-                    key = stableTurnKey,
+                    key = turn.key,
                     endMessageId = endAssistant?.id,
                     running = running,
                     expanded = expanded,

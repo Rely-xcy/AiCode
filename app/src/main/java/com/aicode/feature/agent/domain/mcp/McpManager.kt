@@ -330,7 +330,6 @@ class McpManager @Inject constructor(
     }
 
     /**
-    /**
      * 批量删除：一次持锁断开多个 server（列表多选批量删除）。
      * 逐条调用 [removeServer] 会反复抢 reloadMutex，服务端较多时串行等待明显。
      */

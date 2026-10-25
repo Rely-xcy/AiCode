@@ -185,7 +185,8 @@ private fun PromptList(
     selection: ListSelectionState,
     onOpenFragment: (PromptFragment) -> Unit,
     onDeleteFragment: (Int, PromptFragmentSource) -> Unit,
-    onReorder: (List<PromptFragment>) -> Unit
+    onReorder: (List<PromptFragment>) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var localFragments by remember { mutableStateOf(fragments) }
     LaunchedEffect(fragments) { localFragments = fragments }
