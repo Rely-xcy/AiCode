@@ -19,6 +19,9 @@ object SkillDirectoryScanner {
     private const val SKILL_FILE = "SKILL.md"
     private const val CLAUDE_FILE = "CLAUDE.md"
 
+    /** 汇总日志里最多列这么多个失败路径（每个失败本身已经单独带路径打过一行）。 */
+    private const val MAX_LOGGED_FAILURES = 5
+
     /**
      * 扫描 [root] 目录下所有合法技能，按名称排序。
      * 目录不存在时返回空列表；读取失败（IO 异常、远程未连接）也降级为空列表并记日志——
@@ -36,6 +39,16 @@ object SkillDirectoryScanner {
         root: String,
         bulk: BulkFileSource = BulkFileSource.Disabled
     ): List<Skill>? {
+        val outcomes = collect(provider, root, bulk) ?: return null
+        return summarize(outcomes, root)
+    }
+
+    /** 收集本次扫描的全部解析结果；读失败（IO、远程未连接）返回 null。 */
+    private fun collect(
+        provider: FileAccessProvider,
+        root: String,
+        bulk: BulkFileSource
+    ): List<SkillParser.ParseOutcome>? {
         // 批量读取只是加速路径：它出任何事都不能把异常抛给上层（提示词构建 / 设置页）。
         val bulkFiles = runCatching { bulk.filesUnder(root) }.getOrNull()
         if (bulkFiles != null) {
@@ -51,24 +64,45 @@ object SkillDirectoryScanner {
         }
     }
 
+    /**
+     * 按名称排序并汇总本次扫描的 frontmatter 失败数：单个失败已在解析器里带路径打过日志，
+     * 这里补一行总数，否则要翻整天的日志逐条数才知道坏了几个。
+     */
+    private fun summarize(outcomes: List<SkillParser.ParseOutcome>, root: String): List<Skill> {
+        val failed = outcomes.filter { it.frontmatterFellBack }
+        if (failed.isNotEmpty()) {
+            val shown = failed.take(MAX_LOGGED_FAILURES)
+                .joinToString(", ") { it.skill.dirPath ?: it.skill.name }
+            FileLogger.w(
+                TAG,
+                "扫描 $root: 共 ${outcomes.size} 个技能，${failed.size} 个 frontmatter 解析失败（已按行兜底）: $shown"
+            )
+        }
+        return outcomes.map { it.skill }.sortedBy { it.name.lowercase() }
+    }
+
     /** 用批量读到的「相对路径 → 全文」组装技能；不再对每个目录单独列一次目录。 */
-    private fun parseBulkFiles(files: Map<String, String>, root: String): List<Skill> {
+    private fun parseBulkFiles(files: Map<String, String>, root: String): List<SkillParser.ParseOutcome> {
         val base = root.trimEnd('/')
         return preferredInstructionFiles(files.keys).map { (dirRelative, fileName) ->
             val dirPath = if (dirRelative.isEmpty()) base else "$base/$dirRelative"
             val relativeFile = if (dirRelative.isEmpty()) fileName else "$dirRelative/$fileName"
-            SkillParser.parseText(files.getValue(relativeFile), dirPath.substringAfterLast('/').ifBlank { dirPath })
-                .copy(dirPath = dirPath)
-        }.sortedBy { it.name.lowercase() }
+            val outcome = SkillParser.parseTextWithStatus(
+                files.getValue(relativeFile),
+                dirPath.substringAfterLast('/').ifBlank { dirPath },
+                "$base/$relativeFile"
+            )
+            outcome.copy(skill = outcome.skill.copy(dirPath = dirPath))
+        }
     }
 
-    private fun scanByProvider(provider: FileAccessProvider, root: String): List<Skill> {
+    private fun scanByProvider(provider: FileAccessProvider, root: String): List<SkillParser.ParseOutcome> {
         val base = root.trimEnd('/')
         return preferredInstructionFiles(provider.listFilesRecursive(root, MAX_DEPTH)).mapNotNull { (dirRelative, fileName) ->
             val dirPath = if (dirRelative.isEmpty()) base else "$base/$dirRelative"
             // 文件名在扫描阶段已经知道，交给解析器就省掉它再列一次目录的往返。
-            SkillParser.parse(provider, dirPath, fileName)
-        }.sortedBy { it.name.lowercase() }
+            SkillParser.parseWithStatus(provider, dirPath, fileName)
+        }
     }
 
     /**

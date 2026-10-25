@@ -203,8 +203,21 @@ class SkillRepository @Inject constructor(
         /** 合并两级来源：同名项目级覆盖全局，按名称排序。 */
         internal fun mergeAll(global: List<Skill>, project: List<Skill>): List<SkillEntry> {
             val byName = LinkedHashMap<String, SkillEntry>()
-            global.forEach { byName[it.name.lowercase()] = SkillEntry(it, SkillScope.GLOBAL) }
-            project.forEach { byName[it.name.lowercase()] = SkillEntry(it, SkillScope.PROJECT) }
+            fun put(skill: Skill, scope: SkillScope) {
+                val previous = byName.put(skill.name.lowercase(), SkillEntry(skill, scope))
+                // 覆盖是既定语义（项目级优先），但静默覆盖会让一个技能凭空消失：列表里名字与描述
+                // 来自 A、正文却取自 B 时几乎查不出来。留一条带两个来源路径的 warn 才定位得到。
+                if (previous != null) {
+                    FileLogger.w(
+                        TAG,
+                        "技能重名，${scope.name} 覆盖 ${previous.scope.name}: " +
+                            "${previous.skill.name} (${previous.skill.dirPath ?: "无目录"}) <- " +
+                            "${skill.name} (${skill.dirPath ?: "无目录"})"
+                    )
+                }
+            }
+            global.forEach { put(it, SkillScope.GLOBAL) }
+            project.forEach { put(it, SkillScope.PROJECT) }
             return byName.values.sortedBy { it.skill.name.lowercase() }
         }
 
