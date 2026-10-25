@@ -119,8 +119,8 @@ data class AgentDefinition(
             group.any { allowsTool(it) } -> "是"
             else -> "否"
         }
-        return "文件读取 ${flag(READ_TOOLS)} · 文件修改 ${flag(WRITE_TOOLS, blockedByMode = true)}" +
-            " · 执行命令 ${flag(EXEC_TOOLS, blockedByMode = true)}"
+        return "文件读取 ${flag(CAP_READ_TOOLS)} · 文件修改 ${flag(CAP_WRITE_TOOLS, blockedByMode = true)}" +
+            " · 执行命令 ${flag(CAP_EXEC_TOOLS, blockedByMode = true)}"
     }
 
     /** 该定义（不叠加模式约束）是否具备写文件或执行命令的能力。 */
@@ -164,9 +164,9 @@ data class AgentDefinition(
          * browser 归入写组：浏览器自动化（点击/填表）在 PLAN 下同样被拦截。
          * MCP 动态工具（`mcp__*`）性质未知，不归组——定义绑定 MCP 时以描述文本为准。
          */
-        private val READ_TOOLS = setOf("readFile", "list", "search", "viewImage")
-        private val WRITE_TOOLS = setOf("writeFile", "editFile", "generateImage", "browser")
-        private val EXEC_TOOLS = setOf("Bash", "terminal", "Shizuku")
+        private val CAP_READ_TOOLS = setOf("readFile", "list", "search", "viewImage")
+        private val CAP_WRITE_TOOLS = setOf("writeFile", "editFile", "generateImage", "browser")
+        private val CAP_EXEC_TOOLS = setOf("Bash", "terminal", "Shizuku")
     }
 }
 

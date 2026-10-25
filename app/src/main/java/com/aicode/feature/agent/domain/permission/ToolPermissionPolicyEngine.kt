@@ -207,7 +207,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
             if (action == TASK_DELETE_ACTION) {
                 // 删除子会话及其全部消息不可逆：尊重显式 DENY，其余一律单次确认，不提供
                 // 「始终允许」——create/stop 落下的 ALWAYS 记忆不得连带放行删除。
-                val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
+                val rules = effective.rules.filter { it.toolName == toolName }
                 if (rules.any { it.pattern == PermissionRule.WHOLE_TOOL && it.decision == PermissionDecision.DENY }) {
                     return EvalResult(Verdict.DENY, emptyList(), denyReason = appContext.getString(R.string.tool_permission_rule_denied))
                 }
