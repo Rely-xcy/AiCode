@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -56,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.FloatingTabBar
@@ -123,6 +125,7 @@ internal fun BackupScreen(
 
     var editingTarget by remember { mutableStateOf<BackupTarget?>(null) }
     var showTargetSheet by remember { mutableStateOf(false) }
+    var showChatOptionsSheet by remember { mutableStateOf(false) }
     var targetToDelete by remember { mutableStateOf<BackupTarget?>(null) }
     var uploadTarget by remember { mutableStateOf<BackupTarget?>(null) }
     var uploadPassword by remember { mutableStateOf("") }
@@ -199,6 +202,7 @@ internal fun BackupScreen(
                         exportOptions = exportOptions,
                         onUpdateOptions = viewModel::updateExportOptions,
                         working = state is BackupState.Working,
+                        onOpenChatOptions = { showChatOptionsSheet = true },
                         onExport = { pendingAction = PendingAction.ExportPassword },
                         onImport = {
                             pendingAction = PendingAction.Import
@@ -287,6 +291,16 @@ internal fun BackupScreen(
                 pendingAction = null
                 pendingImportUri = null
             }
+        )
+    }
+
+    // 「聊天」二级面板：长期记忆与会话工作状态同属聊天数据的附属产物，
+    // 收进这一层后主列表不再被三个相邻开关切成两段，范围列表一眼能读完。
+    if (showChatOptionsSheet) {
+        ChatBackupOptionsSheet(
+            exportOptions = exportOptions,
+            onUpdateOptions = viewModel::updateExportOptions,
+            onDismiss = { showChatOptionsSheet = false }
         )
     }
 
@@ -463,6 +477,7 @@ private fun LocalBackupTab(
     exportOptions: BackupOptions,
     onUpdateOptions: (BackupOptions) -> Unit,
     working: Boolean,
+    onOpenChatOptions: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit
 ) {
@@ -495,8 +510,11 @@ private fun LocalBackupTab(
                 }
             )
             SettingsDivider()
+            // 行本身可点开二级面板，开关单独留在行尾：chevron 由 SettingsRow 依据 onClick 自动补上，
+            // 用户不会把「开/关聊天」误当成「打开面板」。
             SettingsRow(
                 title = stringResource(R.string.backup_data_chat_history),
+                onClick = onOpenChatOptions,
                 trailing = {
                     AppSwitch(
                         checked = exportOptions.chatHistory,
@@ -545,28 +563,6 @@ private fun LocalBackupTab(
                 }
             )
             WorkspaceBackupHint()
-            SettingsDivider()
-            SettingsRow(
-                title = stringResource(R.string.backup_data_memory),
-                trailing = {
-                    AppSwitch(
-                        checked = exportOptions.memoryFiles,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(memoryFiles = it)) }
-                    )
-                }
-            )
-            BackupOptionHint(text = stringResource(R.string.backup_data_memory_hint))
-            SettingsDivider()
-            SettingsRow(
-                title = stringResource(R.string.backup_data_session_briefs),
-                trailing = {
-                    AppSwitch(
-                        checked = exportOptions.sessionBriefs,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(sessionBriefs = it)) }
-                    )
-                }
-            )
-            BackupOptionHint(text = stringResource(R.string.backup_data_session_briefs_hint))
             SettingsDivider()
             SettingsRow(
                 title = stringResource(R.string.backup_data_login_secrets),
@@ -777,6 +773,64 @@ private fun TargetTypeBadge(type: BackupTargetType) {
 @Composable
 private fun WorkspaceBackupHint() {
     BackupOptionHint(text = stringResource(R.string.backup_workspace_git_hint))
+}
+
+/**
+ * 「聊天」的二级控制面板：长期记忆与会话工作状态属于聊天数据的附属产物，
+ * 收进这一层后主列表保持「一行一件事」，说明小字也跟着开关一起搬进来。
+ * 两个开关直接写回同一个 [BackupOptions]，导出行为与合并前完全一致。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatBackupOptionsSheet(
+    exportOptions: BackupOptions,
+    onUpdateOptions: (BackupOptions) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.backup_data_chat_history),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.md)
+            )
+            SettingsGroup {
+                SettingsRow(
+                    title = stringResource(R.string.backup_data_memory),
+                    trailing = {
+                        AppSwitch(
+                            checked = exportOptions.memoryFiles,
+                            onCheckedChange = { onUpdateOptions(exportOptions.copy(memoryFiles = it)) }
+                        )
+                    }
+                )
+                BackupOptionHint(text = stringResource(R.string.backup_data_memory_hint))
+                SettingsDivider()
+                SettingsRow(
+                    title = stringResource(R.string.backup_data_session_briefs),
+                    trailing = {
+                        AppSwitch(
+                            checked = exportOptions.sessionBriefs,
+                            onCheckedChange = { onUpdateOptions(exportOptions.copy(sessionBriefs = it)) }
+                        )
+                    }
+                )
+                BackupOptionHint(text = stringResource(R.string.backup_data_session_briefs_hint))
+            }
+        }
+    }
 }
 
 /**

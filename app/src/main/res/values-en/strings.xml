@@ -565,7 +565,7 @@
     <string name="backup_import_done_secrets_need_refill">Import complete (some keys need re-entry)</string>
     <string name="backup_select_data">Select export data</string>
     <string name="backup_data_remote">Connections &amp; Sync</string>
-    <string name="backup_data_chat_history">Chat History</string>
+    <string name="backup_data_chat_history">Chat</string>
     <string name="backup_data_mcp">MCP Servers</string>
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
@@ -574,7 +574,7 @@
     <string name="backup_data_memory_hint">Global and current workspace memory files; off by default</string>
     <string name="backup_data_session_briefs">Session Working State</string>
     <string name="backup_data_session_briefs_hint">Session briefs and current progress; off by default</string>
-    <string name="backup_data_login_secrets">Include Login Credentials</string>
+    <string name="backup_data_login_secrets">Credentials</string>
     <string name="backup_data_login_secrets_hint_off">Excludes git tokens, SSH private keys and passphrases, network backup target keys</string>
     <string name="backup_data_login_secrets_hint_on">The backup file will contain credentials usable for signing in; keep it in your own safe keeping</string>
     <string name="backup_data_login_secrets_password_hint">Login credentials are included: an export password is required, exporting is blocked while it is empty</string>

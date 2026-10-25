@@ -565,7 +565,7 @@
     <string name="backup_import_done_secrets_need_refill">导入完成（有密钥需重填）</string>
     <string name="backup_select_data">选择导出数据</string>
     <string name="backup_data_remote">连接与同步</string>
-    <string name="backup_data_chat_history">聊天记录</string>
+    <string name="backup_data_chat_history">聊天</string>
     <string name="backup_data_mcp">MCP 服务器</string>
     <string name="backup_data_permissions">授权规则</string>
     <string name="backup_data_app_settings">应用设置</string>
@@ -574,7 +574,7 @@
     <string name="backup_data_memory_hint">全局与当前工作区的记忆目录；默认不导出</string>
     <string name="backup_data_session_briefs">会话工作状态</string>
     <string name="backup_data_session_briefs_hint">会话摘要与当前进展；默认不导出</string>
-    <string name="backup_data_login_secrets">包含登录凭据</string>
+    <string name="backup_data_login_secrets">凭据</string>
     <string name="backup_data_login_secrets_hint_off">不包含 git 令牌、SSH 私钥与登录口令、网络备份目标密钥等</string>
     <string name="backup_data_login_secrets_hint_on">备份文件将包含可用于登录的凭据，请自行妥善保管</string>
     <string name="backup_data_login_secrets_password_hint">已勾选包含登录凭据：导出时必须设置口令，留空将无法导出</string>
