@@ -24,17 +24,23 @@ import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.SyncConnectionState
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
+import com.aicode.feature.workspace.domain.remote.RemoteSyncClient
 import com.aicode.feature.workspace.domain.remote.SyncEngine
 import com.aicode.feature.workspace.domain.remote.SyncIndexStore
 import com.aicode.feature.workspace.domain.remote.ftp.FtpSyncClient
 import com.aicode.feature.workspace.domain.remote.sftp.SftpSyncClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
@@ -65,6 +71,8 @@ class RemoteRepository @Inject constructor(
     /** 每个挂载的同步指纹索引，用于跳过未变文件；落在 app 私有的 `aicode/sync-index/` 下。 */
     private val syncIndexStore = SyncIndexStore(File(containerInstaller.aicodeDir, "sync-index"))
     private val activeEngines = ConcurrentHashMap<String, SyncEngine>()
+    private val connectionLock = Any()
+    private val connectionAttempts = mutableMapOf<String, Any>()
     private val activeEngineIds = MutableStateFlow<Set<String>>(emptySet())
 
     /** 各挂载的实时连接健康度，由 SyncEngine.connectionState 回写。 */
@@ -83,23 +91,25 @@ class RemoteRepository @Inject constructor(
         // 连接当前工作区里勾了「应用启动时自动连接」的挂载（失败退避重试直到成功）。
         scope.launch {
             workspaceRepository.current.collect { workspace ->
-                if (workspace != null) {
-                    syncMountsToWorkspace(workspace.path)
-                }
+                syncMountsToWorkspace(workspace?.path)
             }
         }
     }
 
     /** 把激活挂载集合对齐到当前工作区。 */
-    private suspend fun syncMountsToWorkspace(workspacePath: String) {
+    private suspend fun syncMountsToWorkspace(workspacePath: String?) {
         val mounts = dao.getAllMountsOnce()
         // 1. 断开不属于当前工作区的激活挂载（含手动连接的，保证切换后只同步当前工作区）
-        activeEngineIds.value
+        val trackedIds = synchronized(connectionLock) {
+            activeEngineIds.value + autoConnectJobs.keys + connectionAttempts.keys
+        }
+        trackedIds
             .filter { activeId ->
-                mounts.firstOrNull { it.id == activeId }?.let { !belongsTo(it, workspacePath) } ?: true
+                workspacePath == null || mounts.firstOrNull { it.id == activeId }?.let { !belongsTo(it, workspacePath) } ?: true
             }
             .forEach { disconnectMount(it) }
         // 2. 自动连接当前工作区里勾了 autoConnect 的挂载
+        if (workspacePath == null || workspaceRepository.current.value?.path != workspacePath) return
         mounts.filter { it.autoConnect && belongsTo(it, workspacePath) && it.id !in activeEngineIds.value }
             .forEach { connectMountWithRetry(it.id, workspacePath) }
     }
@@ -114,7 +124,7 @@ class RemoteRepository @Inject constructor(
             var backoffMs = 30_000L
             while (isActive) {
                 val mount = dao.getMountById(mountId) ?: break
-                if (!belongsTo(mount, workspacePath)) break
+                if (workspaceRepository.current.value?.path != workspacePath || !belongsTo(mount, workspacePath)) break
                 if (mountId in activeEngineIds.value) break
                 val result = connectMount(mountId)
                 if (result.isSuccess) break
@@ -192,10 +202,9 @@ class RemoteRepository @Inject constructor(
     suspend fun deleteConnection(id: String) {
         val entity = dao.getConnectionById(id)
         if (entity != null) {
-            // Associated mounts will cascade delete in DB, but we should disconnect them
-            val mounts = dao.getMountsByConnectionId(id)
-            // Just disconnect everything from memory to be safe, cascading handles DB
-            activeEngines.keys.forEach { mountId -> disconnectMount(mountId) }
+            // 关联挂载在 DB 里会级联删除，但需先断开内存中的同步引擎；只断该连接下的挂载，
+            // 不能遍历所有 activeEngines（那会连带断开其它连接，且在遍历时修改 map）。
+            dao.getMountsByConnectionId(id).first().forEach { disconnectMount(it.id) }
             dao.deleteConnection(entity)
         }
     }
@@ -232,47 +241,71 @@ class RemoteRepository @Inject constructor(
     }
 
     suspend fun connectMount(mountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val attempt = Any()
+        val workspacePath = workspaceRepository.current.value?.path
+        var client: RemoteSyncClient? = null
+        var published = false
         var endpoint: Pair<String, Int>? = null
-        try {
-            // 已存在旧连接时先清理，避免重复/并发连接泄漏 engine
-            activeEngines[mountId]?.shutdown()
-            activeEngines.remove(mountId)
+        val previous = synchronized(connectionLock) {
+            connectionAttempts[mountId] = attempt
+            watchJobs.remove(mountId)?.cancel()
             activeEngineIds.update { it - mountId }
             stopStateWatch(mountId)
+            activeEngines.remove(mountId)
+        }
+        try {
+            previous?.shutdown()
 
             val mountEntity = dao.getMountById(mountId) ?: return@withContext Result.failure(Exception("Mount not found"))
             val connEntity = dao.getConnectionById(mountEntity.connectionId) ?: return@withContext Result.failure(Exception("Connection not found"))
-            
+            if (workspacePath == null || !belongsTo(mountEntity, workspacePath)) {
+                throw CancellationException("Mount is outside the current workspace")
+            }
+
             val conn = connEntity.toDomainModel()
             val mount = mountEntity.toDomainModel(conn)
             if (conn.protocol == RemoteProtocol.SFTP) endpoint = conn.host to conn.port
 
-            val client = when (conn.protocol) {
+            val connectingClient = when (conn.protocol) {
                 RemoteProtocol.SFTP -> SftpSyncClient(hostKeyVerifier, privateKeyStore)
                 RemoteProtocol.FTP -> FtpSyncClient()
             }
 
+            client = connectingClient
             val auth = resolveAuth(connEntity)
 
-            client.connect(conn.host, conn.port, conn.username, auth)
+            synchronized(connectionLock) {
+                if (connectionAttempts[mountId] !== attempt || workspaceRepository.current.value?.path != workspacePath) {
+                    throw CancellationException("Mount connection is no longer current")
+                }
+            }
+            connectingClient.connect(conn.host, conn.port, conn.username, auth)
+            currentCoroutineContext().ensureActive()
             
-            val engine = SyncEngine(
-                mount = mount, 
-                connection = conn, 
-                syncClient = client,
-                auth = auth,
-                ignoredPatternsStr = syncSettings.ignoredPatterns.value,
-                useGitIgnore = syncSettings.useGitIgnore.value,
-                maxSyncBatchSize = syncSettings.maxSyncBatchSize.value,
-                indexStore = syncIndexStore
-            )
-            // 移除默认的全量下载以免覆盖本地修改，交由用户手动点击同步
+            synchronized(connectionLock) {
+                if (connectionAttempts[mountId] !== attempt || workspaceRepository.current.value?.path != workspacePath) {
+                    throw CancellationException("Mount connection is no longer current")
+                }
+                val engine = SyncEngine(
+                    mount = mount,
+                    connection = conn,
+                    syncClient = connectingClient,
+                    auth = auth,
+                    ignoredPatternsStr = syncSettings.ignoredPatterns.value,
+                    useGitIgnore = syncSettings.useGitIgnore.value,
+                    maxSyncBatchSize = syncSettings.maxSyncBatchSize.value,
+                    indexStore = syncIndexStore
+                )
 
-            activeEngines[mountId] = engine
-            activeEngineIds.update { it + mountId }
-            startLocalWatching(mountId, mount, engine)
-            startStateWatch(mountId, engine)
+                activeEngines[mountId] = engine
+                activeEngineIds.update { it + mountId }
+                startLocalWatching(mountId, mount, engine)
+                startStateWatch(mountId, engine)
+                published = true
+            }
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // 挂载连接不弹确认：提示用户先去连接配置页测试连通性完成确认（文案与执行模式路径共用）
             val pending = endpoint?.let { (host, port) -> hostKeyVerifier.consumePending(host, port) }
@@ -280,6 +313,16 @@ class RemoteRepository @Inject constructor(
                 Result.failure(Exception(context.getString(R.string.ssh_host_key_confirm_hint), e))
             } else {
                 Result.failure(Exception(friendlySshError(e), e))
+            }
+        } finally {
+            synchronized(connectionLock) {
+                if (connectionAttempts[mountId] === attempt) connectionAttempts.remove(mountId)
+            }
+            if (!published) {
+                withContext(NonCancellable) {
+                    runCatching { client?.disconnect() }
+                        .onFailure { FileLogger.w(TAG, "关闭未启用的挂载连接失败", it) }
+                }
             }
         }
     }
@@ -308,13 +351,15 @@ class RemoteRepository @Inject constructor(
     }
 
     suspend fun disconnectMount(mountId: String) {
-        autoConnectJobs[mountId]?.cancel()
-        autoConnectJobs.remove(mountId)
-        watchJobs.remove(mountId)?.cancel()
-        stopStateWatch(mountId)
-        activeEngines[mountId]?.shutdown()
-        activeEngines.remove(mountId)
-        activeEngineIds.update { it - mountId }
+        val engine = synchronized(connectionLock) {
+            connectionAttempts.remove(mountId)
+            autoConnectJobs.remove(mountId)?.cancel()
+            watchJobs.remove(mountId)?.cancel()
+            stopStateWatch(mountId)
+            activeEngineIds.update { it - mountId }
+            activeEngines.remove(mountId)
+        }
+        engine?.shutdown()
     }
 
     /** 订阅某挂载的实时连接健康度并回写到 [mountStates]。 */

@@ -117,6 +117,7 @@ import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.PieChart
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.Save
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
@@ -277,6 +278,7 @@ fun SettingsScreen(
     val compactionModel by viewModel.compactionModel.collectAsStateWithLifecycle()
     val titleProviderId by viewModel.titleProviderId.collectAsStateWithLifecycle()
     val titleModel by viewModel.titleModel.collectAsStateWithLifecycle()
+    val subagentTierSelections by viewModel.subagentTierSelections.collectAsStateWithLifecycle()
     val imageGenProviderId by viewModel.imageGenProviderId.collectAsStateWithLifecycle()
     val imageGenModel by viewModel.imageGenModel.collectAsStateWithLifecycle()
     val modelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
@@ -385,8 +387,8 @@ fun SettingsScreen(
     // 过滤只作用于已经加载到内存的列表（见 SkillsSection），不会因为敲字重扫盘。
     var skillSearchQuery by rememberSaveable { mutableStateOf("") }
 
-    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
-    var showPromptsAddSheet by remember { mutableStateOf(false) }
+    // 自定义提示词：编辑目标（新建/编辑/固定片段）+ 「重置」确认弹窗可见性
+    var showResetPrompts by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
     var selectedPrompt by remember { mutableStateOf<PromptFragment?>(null) }
     var showPromptsAnnouncement by remember { mutableStateOf(false) }
@@ -510,8 +512,10 @@ fun SettingsScreen(
     // 滚动位置必须提到 AnimatedContent 之外持有：菜单页作为分区分支被切走时会被 dispose，
     // 内部 rememberScrollState 一并丢弃，从二级页返回就跳回顶部。
     val menuScrollState = rememberScrollState()
-    // 同理：一级页与详情页整块内容被 AnimatedContent 切走后内部状态一并丢失，从下一级返回会跳回顶部。
-    // 这里按分区名（详情页带条目身份）接住内部 rememberSaveable 状态。
+    // 同理：一级 / 详情页整块内容切走后会被 AnimatedContent dispose，内部 rememberScrollState、
+    // rememberLazyListState 一并丢失，从下一级页面返回就跳回顶部（供应商、技能、MCP 等所有列表都中招）。
+    // 用 SaveableStateHolder 按分区名接住这些 rememberSaveable 状态；编辑类页面不走这一步
+    // （它们在 AnimatedContent 里是独立分支），否则每次进编辑器会把上次的输入恢复出来。
     val sectionStateHolder = rememberSaveableStateHolder()
     val menuBody: @Composable () -> Unit = {
         SettingsMenu(
@@ -721,7 +725,8 @@ fun SettingsScreen(
                 )
 
             else -> {
-            // 详情页要带条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
+            // 用分区名接住本页内部的滚动位置等 rememberSaveable 状态，返回时原样恢复（详见 sectionStateHolder）。
+            // 详情页要带上条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
             val stateKey: String = when (current) {
                 SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
                 SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
@@ -956,8 +961,15 @@ fun SettingsScreen(
                             }
                         }
                         SettingsSection.Prompts -> {
-                            // 多选：批量删除自定义提示词（内置来源的片段不可选）。
-                            SelectionToggleAction(selectionFor(SettingsSection.Prompts))
+                            // 多选：批量删除自定义提示词（本地/内置来源只读、不可勾选）。
+                            // 片段全部来自只读层（如未自定义时的全「本地」）时置灰开关——进多选也无项可勾。
+                            val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                                androidx.hilt.navigation.compose.hiltViewModel()
+                            val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                            SelectionToggleAction(
+                                selectionFor(SettingsSection.Prompts),
+                                enabled = promptsState.fragments.any { it.editable }
+                            )
                             IconButton(onClick = { showPromptsAnnouncement = true }) {
                                 Icon(
                                     FeatherIcons.Info,
@@ -966,7 +978,21 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
-                            IconButton(onClick = { showPromptsAddSheet = true }) {
+                            // 重置：清空自定义提示词，各编号回落到内置（排在「+」左侧）。
+                            IconButton(onClick = { showResetPrompts = true }) {
+                                Icon(
+                                    FeatherIcons.RotateCcw,
+                                    contentDescription = stringResource(R.string.prompts_reset_custom),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            // 「+」直接进新建页，不再弹方式选择。
+                            IconButton(onClick = {
+                                promptEditTarget = PromptEditTarget(null)
+                                promptEditorReturn = SettingsSection.Prompts
+                                section = SettingsSection.PromptEditor
+                            }) {
                                 Icon(
                                     FeatherIcons.Plus,
                                     contentDescription = stringResource(R.string.prompts_add_prompt),
@@ -1088,6 +1114,7 @@ fun SettingsScreen(
                     titleModel = titleModel,
                     imageGenProviderId = imageGenProviderId,
                     imageGenModel = imageGenModel,
+                    subagentTierSelections = subagentTierSelections,
                     modelMetadata = modelMetadata,
                     onLoadMetadata = { viewModel.loadAllModelMetadata() },
                     onSelectVisionModel = { pid, m -> viewModel.setVisionModel(pid, m) },
@@ -1097,7 +1124,9 @@ fun SettingsScreen(
                     onSelectTitleModel = { pid, m -> viewModel.setTitleModel(pid, m) },
                     onClearTitleModel = { viewModel.clearTitleModel() },
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
-                    onClearImageGenModel = { viewModel.clearImageGenModel() }
+                    onClearImageGenModel = { viewModel.clearImageGenModel() },
+                    onSelectSubagentTierModel = { tier, pid, m -> viewModel.setSubagentTierModel(tier, pid, m) },
+                    onClearSubagentTierModel = { tier -> viewModel.clearSubagentTier(tier) }
                 )
                 SettingsSection.Mcp -> McpSection(
                     entries = mcpEntries,
@@ -1165,18 +1194,21 @@ fun SettingsScreen(
                         onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled,
                         onBatchDeleteFragments = { targets -> promptsViewModel.deleteFragments(targets) }
                     )
-                    if (showPromptsAddSheet) {
-                        PromptsAddSheet(
-                            onDismiss = { showPromptsAddSheet = false },
-                            onAddFragment = {
-                                showPromptsAddSheet = false
-                                promptEditTarget = PromptEditTarget(null)
-                                promptEditorReturn = SettingsSection.Prompts
-                                section = SettingsSection.PromptEditor
+                    if (showResetPrompts) {
+                        AlertDialog(
+                            onDismissRequest = { showResetPrompts = false },
+                            title = { Text(stringResource(R.string.prompts_reset_custom)) },
+                            text = { Text(stringResource(R.string.prompts_reset_confirm)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    promptsViewModel.resetCustomFragments()
+                                    showResetPrompts = false
+                                }) { Text(stringResource(R.string.common_reset)) }
                             },
-                            onHelp = {
-                                showPromptsAddSheet = false
-                                showPromptsAnnouncement = true
+                            dismissButton = {
+                                TextButton(onClick = { showResetPrompts = false }) {
+                                    Text(stringResource(R.string.common_cancel))
+                                }
                             }
                         )
                     }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aicode.core.datastore.preferencesCorruptionHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -13,7 +14,10 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private val Context.generalDataStore by preferencesDataStore(name = "general_prefs")
+private val Context.generalDataStore by preferencesDataStore(
+    name = "general_prefs",
+    corruptionHandler = preferencesCorruptionHandler
+)
 
 /** App 启动（含切换工作区）时进入哪个会话。 */
 enum class StartupSessionMode {

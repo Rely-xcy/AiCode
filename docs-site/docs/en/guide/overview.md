@@ -61,7 +61,9 @@ Entries marked with a version (e.g. "since 1.11.0") were introduced in that vers
 | Token stats | Usage, cost estimation, call details |
 | Storage | Per-category usage of chats, containers, workspaces, and cleanup of temporary data |
 | Backup & restore | Encrypted export/import of configuration and workspaces |
-| About | Version info and update checks |
+| About | Version info and update checks; separate User Agreement and Privacy Policy entries open in the system browser |
+| [User Agreement](/en/terms) | Usage rules, AI and operational risks, third-party fees, and open-source rights |
+| [Privacy Policy](/en/privacy) | Data storage, network transfers, logs, backups, and deletion |
 
 ## Advanced Tutorials
 

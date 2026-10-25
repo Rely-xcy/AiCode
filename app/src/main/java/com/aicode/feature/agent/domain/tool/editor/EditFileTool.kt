@@ -85,11 +85,11 @@ class EditFileTool @Inject constructor(
         "properties" to mapOf(
             "old_string" to mapOf(
                 "type" to "string",
-                "description" to "要被替换的原文，需与文件当前内容精确匹配（含缩进和换行）。带足够上下文以保证唯一。"
+                "description" to "要被替换的原文，除 LF/CRLF 换行差异外需与文件当前内容精确匹配（含缩进）。带足够上下文以保证唯一。"
             ),
             "new_string" to mapOf(
                 "type" to "string",
-                "description" to "替换后的新内容。传空字符串表示删除匹配到的内容。"
+                "description" to "替换后的新内容，换行沿用匹配区域或文件的换行格式。传空字符串表示删除匹配到的内容。"
             ),
             "replace_all" to mapOf(
                 "type" to "boolean",
@@ -265,7 +265,7 @@ class EditFileTool @Inject constructor(
                     FileLogger.w(TAG, "edit_file 第 ${i + 1} 个编辑未匹配: $path")
                     return EditOutcome(
                         ToolResult.Error(
-                            "第 ${i + 1} 个编辑未在文件中找到 old_string，请确认内容（含缩进/换行）与当前文件完全一致",
+                            "第 ${i + 1} 个编辑未在文件中找到 old_string，请确认内容（含缩进，LF/CRLF 换行差异除外）与当前文件完全一致",
                             "NO_MATCH"
                         )
                     )

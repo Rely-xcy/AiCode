@@ -145,7 +145,6 @@ internal fun ProviderModelRow(
     selected: Boolean = false,
     onToggleSelect: () -> Unit = {}
 ) {
-    var showDetail by remember { mutableStateOf(false) }
     val sortDescription = stringResource(R.string.provider_sort_long_press)
 
     val rowContent: @Composable () -> Unit = {
@@ -235,43 +234,11 @@ internal fun ProviderModelRow(
                     }
                 }
                 result?.let { r ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .padding(top = Spacing.xs, start = ModelContentStart)
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { showDetail = true }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (r.success) FeatherIcons.Check else FeatherIcons.AlertCircle,
-                            contentDescription = null,
-                            tint = if (r.success) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(Spacing.xs))
-                        val displayMsg = if (r.success) {
-                            r.message
-                        } else {
-                            val codeMatch = Regex("""(?i)(HTTP\s*\d{3}|code[:\s]+[a-zA-Z0-9_]+)""").find(r.message)
-                            if (codeMatch != null) codeMatch.value
-                            else r.message.lines().firstOrNull()?.let { if (it.length > 20) it.take(20) + "..." else it } ?: "Error"
-                        }
-                        Text(
-                            text = displayMsg,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (r.success) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            imageVector = FeatherIcons.ChevronRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.size(12.dp)
-                        )
-                    }
+                    ModelTestResultLine(
+                        model = model,
+                        result = r,
+                        modifier = Modifier.padding(top = Spacing.xs, start = ModelContentStart)
+                    )
                 }
             }
             if (showDivider) {
@@ -296,8 +263,57 @@ internal fun ProviderModelRow(
             rowContent()
         }
     }
+}
 
-    if (showDetail && result != null) {
+/**
+ * 测试结果行：成功/失败图标 + 摘要文案，点击打开调试详情弹窗。
+ * 提供商编辑页与主页模型弹层共用；失败时只展示 HTTP 状态码等关键片段，全文进详情。
+ */
+@Composable
+internal fun ModelTestResultLine(
+    model: String,
+    result: ModelTestResult,
+    modifier: Modifier = Modifier
+) {
+    var showDetail by remember { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable { showDetail = true }
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        Icon(
+            imageVector = if (result.success) FeatherIcons.Check else FeatherIcons.AlertCircle,
+            contentDescription = null,
+            tint = if (result.success) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        val displayMsg = if (result.success) {
+            result.message
+        } else {
+            val codeMatch = Regex("""(?i)(HTTP\s*\d{3}|code[:\s]+[a-zA-Z0-9_]+)""").find(result.message)
+            if (codeMatch != null) codeMatch.value
+            else result.message.lines().firstOrNull()?.let { if (it.length > 20) it.take(20) + "..." else it } ?: "Error"
+        }
+        Text(
+            text = displayMsg,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (result.success) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            imageVector = FeatherIcons.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(12.dp)
+        )
+    }
+
+    if (showDetail) {
         ModelTestDetailBottomSheet(
             model = model,
             result = result,

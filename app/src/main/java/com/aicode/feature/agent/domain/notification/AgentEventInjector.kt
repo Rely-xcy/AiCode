@@ -12,7 +12,7 @@ interface AgentEventInjector {
     /**
      * @param rawToolResult 原始工具结果（通常是 transport JSON 文本）
      * @param events 待送系统事件
-     * @return 注入后仍可被下游解析的结果文本
+     * @return JSON 结果保持合法，纯文本结果保留原文并附加通知
      */
     fun inject(rawToolResult: String, events: List<PendingNotification>): String
 }
@@ -20,7 +20,7 @@ interface AgentEventInjector {
 /**
  * 默认实现：优先把事件作为 transport JSON 顶层的 `notifications` 字段注入，结果仍是合法 JSON，
  * UI 的 formatToolResult（只读 data/message）与各类结构化解析不受影响。
- * raw 已不是合法 JSON（如已被模式切换提示等纯文本追加过）时，退化为文本追加。
+ * 非 JSON 工具结果保留原文，并以文本形式附加通知。
  */
 class DefaultAgentEventInjector : AgentEventInjector {
 

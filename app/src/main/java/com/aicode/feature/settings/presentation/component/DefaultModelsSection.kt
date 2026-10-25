@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,14 +21,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,17 +41,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.feature.agent.domain.subagent.SubagentModelTier
+import com.aicode.feature.agent.domain.subagent.SubagentTierSelection
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.settings.data.local.ModelSheetCollapseStore
+import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.domain.model.modelMetadataKey
@@ -55,9 +65,12 @@ import compose.icons.feathericons.ArrowDown
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Camera
+import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
+import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Type
+import compose.icons.feathericons.Zap
 
 /**
  * 默认模型二级页：集中管理应用中的默认/特定用途模型设置（如识图模型、压缩模型）。
@@ -73,6 +86,7 @@ internal fun DefaultModelsSection(
     titleModel: String,
     imageGenProviderId: String,
     imageGenModel: String,
+    subagentTierSelections: Map<SubagentModelTier, SubagentTierSelection>,
     modelMetadata: Map<String, ModelMetadata>,
     onLoadMetadata: () -> Unit,
     onSelectVisionModel: (providerId: String, model: String) -> Unit,
@@ -82,12 +96,16 @@ internal fun DefaultModelsSection(
     onSelectTitleModel: (providerId: String, model: String) -> Unit,
     onClearTitleModel: () -> Unit,
     onSelectImageGenModel: (providerId: String, model: String) -> Unit,
-    onClearImageGenModel: () -> Unit
+    onClearImageGenModel: () -> Unit,
+    onSelectSubagentTierModel: (SubagentModelTier, providerId: String, model: String) -> Unit,
+    onClearSubagentTierModel: (SubagentModelTier) -> Unit
 ) {
     var showVisionSheet by remember { mutableStateOf(false) }
     var showCompactionSheet by remember { mutableStateOf(false) }
     var showTitleSheet by remember { mutableStateOf(false) }
     var showImageGenSheet by remember { mutableStateOf(false) }
+    // 三档共用一个弹层：记下当前在编辑哪一档即可，不必三个 boolean。
+    var tierSheet by remember { mutableStateOf<SubagentModelTier?>(null) }
 
     LaunchedEffect(Unit) { onLoadMetadata() }
 
@@ -192,6 +210,35 @@ internal fun DefaultModelsSection(
                 }
             )
         }
+
+        // 子代理模型档位：AI 派发子代理时按任务难度选档，这里定义「哪一档对应哪个模型」。
+        SettingsGroupHeader(text = stringResource(R.string.settings_subagent_tiers_header))
+        SettingsGroup {
+            SubagentModelTier.entries.forEachIndexed { index, tier ->
+                if (index > 0) SettingsDivider()
+                val selection = subagentTierSelections[tier] ?: SubagentTierSelection()
+                SettingsRow(
+                    icon = tierIcon(tier),
+                    title = stringResource(tierTitleRes(tier)),
+                    onClick = { tierSheet = tier },
+                    trailing = {
+                        Text(
+                            text = if (selection.isConfigured) {
+                                selection.model
+                            } else {
+                                stringResource(R.string.settings_subagent_tier_unconfigured)
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(2f)
+                        )
+                    }
+                )
+            }
+        }
     }
 
     if (showVisionSheet) {
@@ -273,11 +320,50 @@ internal fun DefaultModelsSection(
             onDismiss = { showImageGenSheet = false }
         )
     }
+
+    tierSheet?.let { tier ->
+        val selection = subagentTierSelections[tier] ?: SubagentTierSelection()
+        ModelSelectionSheet(
+            title = stringResource(tierTitleRes(tier)),
+            noModelsText = stringResource(R.string.subagent_no_models),
+            providers = providers,
+            currentProviderId = selection.providerId,
+            currentModel = selection.model,
+            modelMetadata = modelMetadata,
+            onSelect = { pid, model ->
+                onSelectSubagentTierModel(tier, pid, model)
+                tierSheet = null
+            },
+            onClear = {
+                onClearSubagentTierModel(tier)
+                tierSheet = null
+            },
+            onDismiss = { tierSheet = null }
+        )
+    }
+}
+
+/** 档位显示名：轻量 / 标准 / 强力。 */
+@StringRes
+private fun tierTitleRes(tier: SubagentModelTier): Int = when (tier) {
+    SubagentModelTier.LIGHT -> R.string.settings_subagent_tier_light
+    SubagentModelTier.STANDARD -> R.string.settings_subagent_tier_standard
+    SubagentModelTier.STRONG -> R.string.settings_subagent_tier_strong
+}
+
+/** 档位图标：由弱到强用不同图示，方便一屏扫读。 */
+private fun tierIcon(tier: SubagentModelTier): ImageVector = when (tier) {
+    SubagentModelTier.LIGHT -> FeatherIcons.Zap
+    SubagentModelTier.STANDARD -> FeatherIcons.Sliders
+    SubagentModelTier.STRONG -> FeatherIcons.Cpu
 }
 
 /**
  * 模型选择弹窗：风格与拉取模型弹窗保持一致（iOS 胶囊搜索框、提供商分组卡片、能力 Tag）。
  * 识图模型、压缩模型与主页聊天模型共用此组件，仅文案不同；右上角「重置」清除专用模型配置（回退跟随聊天模型），主页场景传 null 不显示。
+ *
+ * 测试支持：传入 [onTestModel]（主页场景）时每个模型行尾显示「测试」按钮与结果，不显示选中小勾；
+ * 未传（识图/压缩等设置页场景）保持原样，仅在选中行尾显示小勾。测试态与结果由调用方持有，key 用 [modelMetadataKey]。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -290,7 +376,10 @@ internal fun ModelSelectionSheet(
     modelMetadata: Map<String, ModelMetadata>,
     onSelect: (providerId: String, model: String) -> Unit,
     onClear: (() -> Unit)?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onTestModel: ((provider: AIProviderConfig, model: String) -> Unit)? = null,
+    testingModels: Set<String> = emptySet(),
+    testResults: Map<String, ModelTestResult> = emptyMap()
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -392,11 +481,15 @@ internal fun ModelSelectionSheet(
                                             if (index > 0) {
                                                 SettingsDivider()
                                             }
+                                            val testKey = modelMetadataKey(provider.id, model)
                                             ModelSelectionRow(
                                                 model = model,
                                                 selected = provider.id == currentProviderId && model == currentModel,
-                                                metadata = modelMetadata[modelMetadataKey(provider.id, model)],
-                                                onClick = { onSelect(provider.id, model) }
+                                                metadata = modelMetadata[testKey],
+                                                onClick = { onSelect(provider.id, model) },
+                                                onTest = onTestModel?.let { test -> { test(provider, model) } },
+                                                testing = testKey in testingModels,
+                                                result = if (onTestModel != null) testResults[testKey] else null
                                             )
                                         }
                                     }
@@ -410,12 +503,19 @@ internal fun ModelSelectionSheet(
     }
 }
 
+/**
+ * 单个模型行。传 [onTest]（主页场景）时行尾显示「测试」按钮 / 测试中转圈与结果行，选中态只用名称颜色表达；
+ * 未传时保持原样：选中行尾显示小勾。
+ */
 @Composable
 private fun ModelSelectionRow(
     model: String,
     selected: Boolean,
     metadata: ModelMetadata?,
     onClick: () -> Unit,
+    onTest: (() -> Unit)? = null,
+    testing: Boolean = false,
+    result: ModelTestResult? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -437,8 +537,34 @@ private fun ModelSelectionRow(
             )
             Spacer(Modifier.height(4.dp))
             ModelMetadataTags(metadata)
+            result?.let {
+                ModelTestResultLine(model = model, result = it, modifier = Modifier.padding(top = 2.dp))
+            }
         }
-        if (selected) {
+        if (onTest != null) {
+            // 弹层行高较紧凑，关掉 48dp 最小触摸尺寸约束，让按钮贴合行高。
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                if (testing) {
+                    Box(
+                        modifier = Modifier.width(56.dp).height(36.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    TextButton(
+                        onClick = onTest,
+                        contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
+                        modifier = Modifier.width(56.dp).height(32.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.provider_test),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
+        } else if (selected) {
             Spacer(Modifier.width(Spacing.sm))
             Icon(
                 imageVector = FeatherIcons.Check,

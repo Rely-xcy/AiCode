@@ -681,13 +681,16 @@ class GeminiAdapter @Inject constructor(
      * 思考强度 → Gemini thinkingConfig。协议面与档位由 [ReasoningResolver] 决定：
      * - Gemini 3 / 4：`thinkingLevel`（档位集合按模型不同，Pro 无 minimal、3.7/3.8 Flash 无 minimal）；
      * - Gemini 2.5：`thinkingBudget`（Pro 不能关闭，Flash/Flash-Lite 关闭即预算 0）。
-     * 显式带上 `includeThoughts` 以返回思考内容。
+     * 显式带上 `includeThoughts` 以返回思考内容；预算 0 除外——Gemini 拒绝
+     * `thinkingBudget=0` 与 `includeThoughts=true` 同时出现（invalid argument，请求硬失败）。
      */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
         val plan = ReasoningResolver.plan(ReasoningProtocol.GEMINI, model, reasoningEffort, effectiveReasoningCapability())
         return when (val wire = plan.wire) {
             is ReasoningWire.Effort -> mapOf("thinkingLevel" to wire.value, "includeThoughts" to true)
-            is ReasoningWire.Budget -> mapOf("thinkingBudget" to wire.tokens, "includeThoughts" to true)
+            is ReasoningWire.Budget ->
+                if (wire.tokens == 0) mapOf("thinkingBudget" to 0)
+                else mapOf("thinkingBudget" to wire.tokens, "includeThoughts" to true)
             // 关闭/不支持在这个协议面上没有「关闭」字段：不思考的模型本就不该收到这两项。
             ReasoningWire.DisableEffortNone, ReasoningWire.BetweenTools,
             is ReasoningWire.DisableToggle, ReasoningWire.Omit -> null

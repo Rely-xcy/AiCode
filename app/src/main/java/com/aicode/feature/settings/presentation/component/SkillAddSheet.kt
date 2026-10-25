@@ -2,23 +2,20 @@ package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.agent.domain.skill.SkillScope
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Archive
@@ -26,8 +23,10 @@ import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.FileText
 
 /**
- * 「添加技能」底部弹层：顶部选择作用域（全局 / 当前项目），下方三种添加方式——
+ * 「添加技能」底部弹层：顶部选作用域（全局 / 当前项目），下方三种添加方式——
  * 手动新建（进编辑表单）、从文件导入（.md）、从压缩包导入（.zip，可含多个技能）。
+ *
+ * 版式与 [McpAddSheet] 保持一致：标题 + 小字标签 + 分段控件选作用域 + 分组卡片列添加方式。
  */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +38,8 @@ internal fun SkillAddSheet(
     onPickZip: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val scopes = listOf(SkillScope.GLOBAL, SkillScope.PROJECT)
+
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
@@ -49,34 +50,28 @@ internal fun SkillAddSheet(
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.lg)
                 .padding(bottom = Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            verticalArrangement = Arrangement.spacedBy(Spacing.md)
         ) {
             Text(
                 text = stringResource(R.string.skills_add_sheet_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = Spacing.xs)
+                color = MaterialTheme.colorScheme.onSurface
             )
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text(
                     text = stringResource(R.string.skills_editor_scope),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                FilterChip(
-                    selected = scope == SkillScope.GLOBAL,
-                    onClick = { onScopeChange(SkillScope.GLOBAL) },
-                    label = { Text(stringResource(R.string.skills_scope_global)) }
-                )
-                FilterChip(
-                    selected = scope == SkillScope.PROJECT,
-                    onClick = { onScopeChange(SkillScope.PROJECT) },
-                    label = { Text(stringResource(R.string.skills_scope_project)) }
+                SegmentedTabs(
+                    selected = scopes.indexOf(scope).coerceAtLeast(0),
+                    labels = listOf(
+                        stringResource(R.string.skills_scope_global),
+                        stringResource(R.string.skills_scope_project)
+                    ),
+                    onSelect = { onScopeChange(scopes[it]) }
                 )
             }
 

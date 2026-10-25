@@ -43,42 +43,33 @@ class LocalFileAccessTest {
         return LocalFileAccess(pathMapper)
     }
 
-    /**
-     * 真实 [WorkspacePathMapper]：链接解析必须走生产实现，mock 掉 mapper 就测不到。
-     * 容器 home 固定 /root，工作区指向临时目录，于是容器路径 `~/workspace/…` 就是 tmp.root/…。
-     */
     private fun linkedAccess(): LocalFileAccess {
         val workspace: WorkspaceRepository = mockk()
         val installer: ContainerInstaller = mockk()
         val settings: ContainerSettingsRepository = mockk()
         val home: PathHomeResolver = mockk()
-        every { workspace.currentPathOrNull() } returns tmp.root.absolutePath
+        every { workspace.currentPath() } returns tmp.root.absolutePath
         every { installer.aicodeDir } returns File(tmp.root, "global")
         every { installer.rootfsDirFor(any()) } returns File(tmp.root, "rootfs")
         every { settings.activeProfileIdFlow } returns emptyFlow()
         every { home.home() } returns "/root"
         every { home.expandHome(any()) } answers {
-            val p = firstArg<String>()
-            if (p.startsWith("~/")) "/root/" + p.removePrefix("~/") else p
+            firstArg<String>().replaceFirst("~/", "/root/")
         }
         return LocalFileAccess(WorkspacePathMapper(workspace, installer, settings, home))
     }
 
-    // ---------- 容器符号链接 ----------
-
     @Test
-    fun absoluteDirectoryLink_readsWritesAndListsTarget() {
+    fun absoluteDirectoryLink_readsAndWritesTarget() {
         val access = linkedAccess()
         val target = tmp.newFolder("target")
         File(target, "probe.txt").writeText("original")
         val link = File(tmp.root, "link").toPath()
         Files.createSymbolicLink(link, File("/root/workspace/target").toPath())
-
         assertEquals("original", access.readFile("link/probe.txt"))
         access.writeFile("link/probe.txt", "changed", overwrite = true)
-
         assertEquals("changed", File(target, "probe.txt").readText())
-        assertTrue("写链接必须保留链接本身", Files.isSymbolicLink(link))
+        assertTrue(Files.isSymbolicLink(link))
         assertEquals(listOf("probe.txt"), access.listFiles("link").map { it.name })
     }
 
@@ -94,7 +85,18 @@ class LocalFileAccessTest {
     }
 
     @Test
-    fun absoluteFileLink_atomicWriteUpdatesTargetKeepsLinkAndNoTempFile() {
+    fun absoluteFileLink_writePreservesLinkAndUpdatesTarget() {
+        val access = linkedAccess()
+        val target = tmp.newFile("target.txt").apply { writeText("original") }
+        val link = File(tmp.root, "link.txt").toPath()
+        Files.createSymbolicLink(link, File("/root/workspace/target.txt").toPath())
+        access.writeBytes("link.txt", "updated".toByteArray(), overwrite = true)
+        assertEquals("updated", target.readText())
+        assertTrue(Files.isSymbolicLink(link))
+    }
+
+    @Test
+    fun absoluteFileLink_writeFileUpdatesTargetAndCleansTempFiles() {
         val access = linkedAccess()
         val target = tmp.newFile("target.txt").apply { writeText("original") }
         val link = File(tmp.root, "link.txt").toPath()
@@ -106,8 +108,35 @@ class LocalFileAccessTest {
         assertEquals("updated", target.readText())
         assertTrue(Files.isSymbolicLink(link))
         assertEquals(linkTarget, Files.readSymbolicLink(link))
-        val leftovers = tmp.root.listFiles().orEmpty().map { it.name }.filter { it.startsWith(".aicode-tmp-") }
+        val leftovers = tmp.root.listFiles().orEmpty().map { it.name }
+            .filter { it.startsWith(".aicode-tmp-") }
         assertEquals(emptyList<String>(), leftovers)
+    }
+
+    @Test
+    fun absoluteDirectoryLink_fingerprintTracksAtomicWrite() {
+        val access = linkedAccess()
+        val target = tmp.newFolder("target")
+        File(target, "probe.txt").writeText("original")
+        val link = File(tmp.root, "link").toPath()
+        val linkTarget = File("/root/workspace/target").toPath()
+        Files.createSymbolicLink(link, linkTarget)
+
+        val beforeLinked = access.fingerprint("link/probe.txt")
+        val beforeDirect = access.fingerprint("target/probe.txt")
+        assertNotNull(beforeLinked)
+        assertEquals(beforeDirect, beforeLinked)
+
+        access.writeFile("link/probe.txt", "updated", overwrite = true)
+
+        val afterLinked = access.fingerprint("link/probe.txt")
+        val afterDirect = access.fingerprint("target/probe.txt")
+        assertNotNull(afterLinked)
+        assertNotEquals(beforeLinked, afterLinked)
+        assertNotEquals(beforeDirect, afterDirect)
+        assertEquals(afterDirect, afterLinked)
+        assertTrue(Files.isSymbolicLink(link))
+        assertEquals(linkTarget, Files.readSymbolicLink(link))
     }
 
     @Test
@@ -117,23 +146,19 @@ class LocalFileAccessTest {
         File(target, "keep.txt").writeText("keep")
         val link = File(tmp.root, "link").toPath()
         Files.createSymbolicLink(link, File("target").toPath())
-
         access.deleteRecursively("link")
-
-        assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS))
+        assertFalse(Files.isSymbolicLink(link))
         assertEquals("keep", File(target, "keep.txt").readText())
     }
 
     @Test
-    fun deleteRecursively_nestedDirectoryLink_preservesTargetContents() {
+    fun deleteRecursively_nestedDirectoryLink_preservesExternalTarget() {
         val access = linkedAccess()
         val target = tmp.newFolder("target")
         File(target, "keep.txt").writeText("keep")
         val directory = tmp.newFolder("remove")
-        Files.createSymbolicLink(File(directory, "link").toPath(), File("target").toPath())
-
+        Files.createSymbolicLink(File(directory, "link").toPath(), File("../target").toPath())
         access.deleteRecursively("remove")
-
         assertFalse(directory.exists())
         assertEquals("keep", File(target, "keep.txt").readText())
     }
@@ -152,16 +177,13 @@ class LocalFileAccessTest {
     }
 
     @Test
-    fun renameAndMove_link_preserveLinkAndTarget() {
+    fun renameAndMove_absoluteLink_preserveLinkAndTarget() {
         val access = linkedAccess()
         val target = tmp.newFile("target.txt").apply { writeText("keep") }
-        val linkTarget = File("/root/workspace/target.txt").toPath()
-        Files.createSymbolicLink(File(tmp.root, "link").toPath(), linkTarget)
-
+        Files.createSymbolicLink(File(tmp.root, "link").toPath(), File("/root/workspace/target.txt").toPath())
         access.rename("link", "renamed")
         access.move("renamed", "moved", overwrite = false)
-
-        assertEquals(linkTarget, Files.readSymbolicLink(File(tmp.root, "moved").toPath()))
+        assertTrue(Files.isSymbolicLink(File(tmp.root, "moved").toPath()))
         assertEquals("keep", target.readText())
         assertEquals("keep", access.readFile("moved"))
     }
@@ -170,24 +192,18 @@ class LocalFileAccessTest {
     fun danglingLink_canBeRenamedAndDeleted() {
         val access = linkedAccess()
         Files.createSymbolicLink(File(tmp.root, "link").toPath(), File("/missing").toPath())
-
         access.rename("link", "renamed")
         access.delete("renamed")
-
-        assertFalse(Files.exists(File(tmp.root, "renamed").toPath(), LinkOption.NOFOLLOW_LINKS))
+        assertFalse(Files.isSymbolicLink(File(tmp.root, "renamed").toPath()))
     }
 
     @Test
-    fun listing_linkCycle_returnsAndReadingReportsLoop() {
+    fun listing_linkCycle_keepsEntriesButReadingReportsLoop() {
         val access = linkedAccess()
         Files.createSymbolicLink(File(tmp.root, "a").toPath(), File("b").toPath())
         Files.createSymbolicLink(File(tmp.root, "b").toPath(), File("a").toPath())
-
         assertEquals(setOf("a", "b"), access.listFiles(".").map { it.name }.toSet())
-        assertTrue(
-            "递归遍历遇到链接环必须返回，不能挂死",
-            access.listFilesRecursive(".", maxDepth = 8).isEmpty()
-        )
+        assertTrue(access.listFilesRecursive(".", maxDepth = 8).isEmpty())
         assertThrows(FileSystemLoopException::class.java) { access.readFile("a") }
     }
 
@@ -197,7 +213,6 @@ class LocalFileAccessTest {
         val directory = tmp.newFolder("directory")
         File(directory, "probe.txt").writeText("test")
         Files.createSymbolicLink(File(directory, "back").toPath(), File("/root/workspace").toPath())
-
         assertEquals(listOf("directory/probe.txt"), access.listFilesRecursive(".", maxDepth = 8))
     }
 

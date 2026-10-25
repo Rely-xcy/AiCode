@@ -177,7 +177,7 @@ fun SwipeToDeleteRow(
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.common_delete),
                         style = MaterialTheme.typography.bodyMedium.copy(

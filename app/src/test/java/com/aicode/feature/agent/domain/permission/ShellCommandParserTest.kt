@@ -71,6 +71,32 @@ class ShellCommandParserTest {
         assertFalse(ShellCommandParser.analyze("echo \"abc").analyzable)
     }
 
+    /** 不可静态判定时要能说清是哪个构造触发的，否则上层只能说「无法分析」而 AI 无从修正。 */
+    @Test
+    fun blockers_nameTheOffendingConstruct() {
+        assertEquals(listOf("命令替换 \$(...)"), ShellCommandParser.analyze("echo \$(whoami)").blockers)
+        assertEquals(listOf("反引号命令替换"), ShellCommandParser.analyze("echo `whoami`").blockers)
+        assertEquals(listOf("子 shell 或分组括号"), ShellCommandParser.analyze("(cd x && ls)").blockers)
+        assertEquals("未闭合的引号", ShellCommandParser.analyze("echo \"abc").blockers.single())
+    }
+
+    @Test
+    fun blockers_includeRedirectTarget() {
+        assertEquals(
+            listOf("输出重定向到绝对路径 /etc/passwd"),
+            ShellCommandParser.analyze("echo hi > /etc/passwd").blockers
+        )
+    }
+
+    /** 多种构造同时出现时逐条记录、不重复；可静态判定的命令没有任何 blocker。 */
+    @Test
+    fun blockers_areDistinctAndEmptyWhenAnalyzable() {
+        val multi = ShellCommandParser.analyze("echo \$(a) \$(b) `c`")
+
+        assertEquals(listOf("命令替换 \$(...)", "反引号命令替换"), multi.blockers)
+        assertTrue(ShellCommandParser.analyze("git status").blockers.isEmpty())
+    }
+
     @Test
     fun matches_isTokenPrefix() {
         assertTrue(ShellCommandParser.matches("git", listOf("git", "status")))

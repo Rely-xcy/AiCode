@@ -6,7 +6,25 @@ package com.aicode.feature.agent.domain.model
 enum class AgentMode {
     BUILD, // 默认模式，允许所有授权操作
     PLAN,  // 计划模式，拦截修改类操作，只读/探索为主
-    AUTO   // 自动模式，放行所有权限（不弹窗），仅用户手动可切换；AI 无法通过 planMode 进入
+    AUTO;  // 自动模式，放行所有权限（不弹窗），仅用户手动可切换；AI 无法通过 planMode 进入
+
+    /** 权限宽松度：数值越大越宽。用于把子会话的权限压到不超过父会话。 */
+    val permissiveness: Int
+        get() = when (this) {
+            PLAN -> 0
+            BUILD -> 1
+            AUTO -> 2
+        }
+
+    /**
+     * 把子会话期望的模式收敛到「不比 [parent] 更宽」的范围。
+     *
+     * 子代理必须继承父会话的权限边界：PLAN 下派出一个定义里写了 `mode: build` 的子代理，
+     * 就能绕过只读限制去改文件——业界（Claude Code / Codex）都把「子代理不继承」视为安全漏洞。
+     * 定义里的 mode 只允许往更严的方向收（如 AUTO 父会话派一个 PLAN 子代理），不允许放大。
+     */
+    fun limitedBy(parent: AgentMode): AgentMode =
+        if (permissiveness <= parent.permissiveness) this else parent
 }
 
 /**

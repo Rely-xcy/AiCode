@@ -33,9 +33,23 @@ object ReasoningLearning {
         val levels = parseSupportedLevels(message) ?: return
         if (providerId.isBlank() || model.isBlank()) return
         val base = current ?: ReasoningCapabilityTables.forProtocol(ReasoningProtocol.OPENAI_CHAT, model)
+        val noneAllowed = levels.contains(ReasoningEffort.NONE)
+        // EFFORT_NONE 的「关闭」与档位同值空间（effort="none"）：白名单里没有 none 说明
+        // 该渠道连关闭也拒，必须摘掉 canDisable，否则下次仍发 none、永远重复同一个 400。
+        // 其余关闭形态（thinking.type 开关、预算 0 等）不走这个值空间，保留原有可关闭性。
+        val canDisable = when {
+            base.disableKind == ReasoningCapability.DisableKind.EFFORT_NONE -> noneAllowed
+            else -> base.canDisable || noneAllowed
+        }
         learned[key(providerId, model)] = base.copy(
             levels = levels.filter { it != ReasoningEffort.NONE },
-            canDisable = base.canDisable || levels.contains(ReasoningEffort.NONE),
+            canDisable = canDisable,
+            disableKind = when {
+                !canDisable -> ReasoningCapability.DisableKind.UNSUPPORTED
+                base.disableKind != ReasoningCapability.DisableKind.UNSUPPORTED -> base.disableKind
+                // 原本不可关闭、但白名单明确收下了 none：唯一能推断的关闭方式就是档位置 none。
+                else -> ReasoningCapability.DisableKind.EFFORT_NONE
+            },
             source = ReasoningCapability.Source.LEARNED
         )
     }

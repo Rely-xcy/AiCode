@@ -246,6 +246,8 @@ internal fun AgentMessageItem(
     toolExpandedOverride: Boolean? = null,
     /** 工具行手动展开/收起时回传新状态，由上层持久化。 */
     onToolExpandedChange: ((Boolean) -> Unit)? = null,
+    reasoningExpandedOverride: Boolean? = null,
+    onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
     /** 本 item 内容的外层内边距：工具调用分组展开时由 [AIChatPanel] 传入缩进，用于区分层级。 */
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /** 本轮任务总耗时（ms）：仅轮末助手消息非空，见 [computeTaskDurations]。 */
@@ -350,7 +352,9 @@ internal fun AgentMessageItem(
             ReasoningBubble(
                 text = message.reasoning.orEmpty(),
                 cache = markdownCache,
-                durationMs = reasoningDurationMs
+                durationMs = reasoningDurationMs,
+                expandedOverride = reasoningExpandedOverride,
+                onExpandedChange = onReasoningExpandedChange
             )
         }
         if (hasContent || hasAttachments || message.role != MessageRole.ASSISTANT) {

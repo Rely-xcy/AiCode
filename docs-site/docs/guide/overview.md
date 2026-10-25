@@ -35,6 +35,7 @@
 | 入口 | 说明 |
 | --- | --- |
 | AI 供应商 | 接入模型服务、管理模型列表、多 Key（1.11.0 起）、思考强度 → [文档](/guide/providers) |
+| 模型思考模式 | 各模型真实支持的思考档位、能否关闭思考、怎么判断是否生效 → [文档](/advanced/reasoning-modes) |
 | 默认与专用模型 | 新会话默认模型，以及识图、生图、标题总结的专用模型 → [文档](/guide/default-models) |
 | MCP 服务器 | 接入外部工具，全局与项目两级配置 → [文档](/guide/mcp) |
 | 技能 | 按需加载的专项能力扩展包 → [文档](/guide/skills) |
@@ -74,7 +75,9 @@
 
 | 入口 | 说明 |
 | --- | --- |
-| 关于 | 版本信息与检查更新 → [文档](/guide/about) |
+| 关于 | 版本信息、检查更新与首次启动确认流程 → [文档](/guide/about) |
+| 用户协议 | 使用规则、AI 与操作风险、第三方费用及开源权利 → [文档](/terms) |
+| 隐私政策 | 数据保存、联网传输、日志、备份与删除 → [文档](/privacy) |
 
 ## 进阶教程
 
@@ -82,6 +85,7 @@
 | --- | --- |
 | 在容器中编译 Android 应用 | 搭 JDK 与 Android SDK，从源码出 APK → [文档](/advanced/build-android-app) |
 | 在容器中编译 Flutter 应用 | 装 JDK、Android SDK 与 Flutter SDK，构建 Flutter debug APK → [文档](/advanced/build-flutter-app) |
+| 在容器中构建 Flutter release APK | 用 qemu 转译补齐 AOT 编译器，本地构建 Flutter release 包 → [文档](/advanced/build-flutter-release) |
 | 安装 Playwright 浏览器自动化 | 容器内装 Chromium 并接入 Playwright MCP，让 AI 操作网页 → [文档](/advanced/playwright-mcp) |
 | 用 adb 无线调试其他设备 | 在容器里用 adb 连接另一台手机或本机，安装应用、抓日志、截屏 → [文档](/advanced/adb-wireless-debug) |
 | 自定义面板 | 用脚本在输入框上方画余额或用量卡片 → [文档](/advanced/dashboard-cards) |

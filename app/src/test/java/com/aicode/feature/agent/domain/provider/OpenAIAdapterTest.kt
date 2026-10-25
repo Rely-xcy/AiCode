@@ -19,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -139,7 +140,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_reasoningEffort_notClampedForHighTierModels() = runBlocking {
+    fun complete_reasoningEffort_notClampedForHighTierModels() = runTest {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -155,7 +156,7 @@ class OpenAIAdapterTest {
         adapter(api).apply { model = "gpt-5" }.complete("", emptyList(), reasoningEffort = "minimal")
         assertEquals("minimal", reqSlot.captured.reasoning_effort)
 
-        // 模型最高只到 high 时向上取不到、向下取最近档。
+        // 模型最高只到 high 时向下取最近档。
         adapter(api).apply { model = "o3" }.complete("", emptyList(), reasoningEffort = "xhigh")
         assertEquals("high", reqSlot.captured.reasoning_effort)
 
@@ -164,7 +165,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_reasoningDisable_usesVendorSpecificFields() = runBlocking {
+    fun complete_reasoningDisable_usesVendorSpecificFields() = runTest {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()
@@ -190,7 +191,7 @@ class OpenAIAdapterTest {
     }
 
     @Test
-    fun complete_temperature_passedThroughWhenSet() = runBlocking {
+    fun complete_temperature_passedThroughWhenSet() = runTest {
         val api = api()
         val reqSlot = slot<ChatCompletionRequest>()
         coEvery { api.createChatCompletion(any(), any(), any(), capture(reqSlot)) } returns response()

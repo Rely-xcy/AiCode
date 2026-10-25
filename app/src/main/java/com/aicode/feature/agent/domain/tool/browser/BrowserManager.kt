@@ -494,7 +494,9 @@ class BrowserManager @Inject constructor(
         wv.settings.displayZoomControls = false
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
-        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // 混合内容不放行 https 页面加载 http 子资源，避免被 MITM 篡改；allowFileAccess 因浏览器
+        // 工具需直接渲染 file:// 本地文件（本地 HTML/Markdown）而保留。
+        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         if (defaultSystemUserAgent.isBlank()) {
             defaultSystemUserAgent = wv.settings.userAgentString.orEmpty()
         }

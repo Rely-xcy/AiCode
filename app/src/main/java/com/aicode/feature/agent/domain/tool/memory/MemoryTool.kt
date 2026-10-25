@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.tool.memory
 import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.memory.MemoryEdit
 import com.aicode.feature.agent.domain.memory.MemoryEditResult
 import com.aicode.feature.agent.domain.memory.MemoryRepository
@@ -15,7 +16,6 @@ import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject

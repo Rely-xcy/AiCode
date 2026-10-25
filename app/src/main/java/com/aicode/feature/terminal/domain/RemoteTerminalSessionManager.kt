@@ -1,5 +1,7 @@
 package com.aicode.feature.terminal.domain
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.FileLogger
@@ -11,7 +13,11 @@ import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -27,6 +33,9 @@ private const val TAG = "RemoteTerminalSessionManager"
 private const val TRANSCRIPT_ROWS = 2000
 private const val DEFAULT_COLUMNS = 80
 private const val DEFAULT_ROWS = 24
+private const val EXIT_MARKER_PREFIX = "[command exited: "
+private const val EXIT_MARKER_POLL_MS = 1_000L
+private const val EXIT_MARKER_GRACE_MS = 1_500L
 
 /**
  * 远程 SSH 终端会话管理器：用 sshj shell channel 驱动 [TerminalSession]（接 [SshShellBackend]），
@@ -61,6 +70,9 @@ class RemoteTerminalSessionManager @Inject constructor(
      * [SshShellBackend.closedByDisconnect] 只能从 backend 上读到。
      */
     private val backends = mutableMapOf<String, SshShellBackend>()
+
+    // 后台命令退出兜底监控（见 monitorBackgroundExit），随单例生命周期常驻。
+    private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val activeTab: TerminalTab? get() = _tabs.value.firstOrNull { it.id == _activeTabId.value }
 
@@ -107,6 +119,7 @@ class RemoteTerminalSessionManager @Inject constructor(
     ): String {
         remoteUnavailableReason()?.let { throw IllegalStateException(it) }
         val id = openShellTab(command, isBackground = true, notify = notify, title = title, sourceSessionId = sourceSessionId)
+        if (notify) monitorBackgroundExit(id)
         FileLogger.i(TAG, "后台命令标签 $id: $command")
         return id
     }
@@ -143,7 +156,15 @@ class RemoteTerminalSessionManager @Inject constructor(
         if (command == null) {
             termSession.write("$workspaceCommand || exit\n")
         } else {
-            val init = command + (if (notify) "" else "; exec /bin/sh")
+            // notify=true：命令后打印退出标记并 exit，让交互 shell 结束 → channel 关闭 →
+            // onSessionFinished 触发；标记同时供 monitorBackgroundExit 解析真实退出码
+            //（SSH shell 不透传退出码，waitForExit 恒返回 0）。
+            // notify=false：exec /bin/sh 保活，标签可复用。
+            val init = if (notify) {
+                "$command; ec=\$?; echo \"$EXIT_MARKER_PREFIX\$ec]\"; exit \$ec"
+            } else {
+                "$command; exec /bin/sh"
+            }
             termSession.write("$workspaceCommand && $init\n")
         }
         val tab = TerminalTab(
@@ -257,6 +278,63 @@ class RemoteTerminalSessionManager @Inject constructor(
         _revision.value = _revision.value + 1
     }
 
+    /**
+     * 远程后台命令的退出兜底：交互式 shell channel 不保证在命令结束时及时关闭，单靠
+     * onSessionFinished 可能永远收不到；轮询输出中的退出标记强制收尾（与本地实现对齐）。
+     */
+    private fun monitorBackgroundExit(tabId: String) {
+        monitorScope.launch {
+            var seenMarker = false
+            var lastOutputLen = -1
+            while (true) {
+                val current = tab(tabId) ?: return@launch
+                if (current.runState !is RunState.Running) return@launch
+                val output = getTabOutput(tabId) ?: return@launch
+                if (!seenMarker) {
+                    if (output.length != lastOutputLen) {
+                        lastOutputLen = output.length
+                        if (extractExitCode(output) != null) seenMarker = true
+                    }
+                } else {
+                    delay(EXIT_MARKER_GRACE_MS)
+                    val tab2 = tab(tabId) ?: return@launch
+                    if (tab2.runState is RunState.Running) {
+                        val exitCode = extractExitCode(getTabOutput(tabId) ?: "") ?: 0
+                        tab2.runState = RunState.Finished(exitCode)
+                        bumpRevision()
+                        FileLogger.i(TAG, "兜底：远程标签 $tabId 检测到退出标记，强制收尾 exit=$exitCode")
+                        if (tab2.notifyOnExit && !tab2.finishedNotified) {
+                            tab2.finishedNotified = true
+                            _tabFinishedEvents.tryEmit(
+                                TabFinishedEvent(
+                                    tab2.id, tab2.title, tab2.command, exitCode, tab2.sourceSessionId,
+                                    tailOutput = getTabOutput(tab2.id)?.takeTailLines(TAIL_LINES)
+                                )
+                            )
+                        }
+                    }
+                    return@launch
+                }
+                delay(EXIT_MARKER_POLL_MS)
+            }
+        }
+    }
+
+    private fun extractExitCode(output: String): Int? {
+        val tail = output.takeLast(1000)
+        val idx = tail.lastIndexOf(EXIT_MARKER_PREFIX)
+        if (idx < 0) return null
+        if (idx > 0 && tail[idx - 1] != '\n' && tail[idx - 1] != '\r') return null
+        var end = idx + EXIT_MARKER_PREFIX.length
+        if (end >= tail.length || !tail[end].isDigit()) return null
+        var code = 0
+        while (end < tail.length && tail[end].isDigit()) {
+            code = code * 10 + (tail[end] - '0')
+            end++
+        }
+        return if (end < tail.length && tail[end] == ']') code else null
+    }
+
     /** 远程模式的 [TerminalSessionClient] 实现，回调与本地一致。 */
     private inner class AppRemoteSessionClient : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
@@ -269,16 +347,18 @@ class RemoteTerminalSessionManager @Inject constructor(
                 // 断线导致的结束：远程 shell 没有有意义的退出码，只看 Termux 的
                 // 「[Process completed]」分不出是用户敲了 exit 还是网断了，得看 backend 的标记。
                 val dropped = backends[target.id]?.closedByDisconnect == true
-                target.runState = RunState.Finished(0)
+                val exitCode = extractExitCode(getTabOutput(target.id) ?: "") ?: 0
+                target.runState = RunState.Finished(exitCode)
                 if (dropped) {
                     target.droppedByDisconnect = true
                     FileLogger.w(TAG, "远程 shell 因连接断开而结束: ${target.id}")
                 }
                 bumpRevision()
-                if (target.notifyOnExit) {
+                if (target.notifyOnExit && !target.finishedNotified) {
+                    target.finishedNotified = true
                     _tabFinishedEvents.tryEmit(
                         TabFinishedEvent(
-                            target.id, target.title, target.command, 0, target.sourceSessionId,
+                            target.id, target.title, target.command, exitCode, target.sourceSessionId,
                             tailOutput = getTabOutput(target.id)?.takeTailLines(TAIL_LINES)
                         )
                     )
@@ -286,8 +366,20 @@ class RemoteTerminalSessionManager @Inject constructor(
             }
         }
 
-        override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
-        override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+        override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+            if (text.isNullOrEmpty()) return
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("terminal", text))
+        }
+
+        override fun onPasteTextFromClipboard(session: TerminalSession?) {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val text = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString() ?: return
+            if (text.isNotEmpty()) {
+                val bytes = text.toByteArray(Charsets.UTF_8)
+                session?.write(bytes, 0, bytes.size)
+            }
+        }
         override fun onBell(session: TerminalSession) {}
         override fun onColorsChanged(session: TerminalSession) {}
         override fun onTerminalCursorStateChange(state: Boolean) {}

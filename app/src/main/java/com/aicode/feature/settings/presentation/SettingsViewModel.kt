@@ -49,6 +49,8 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.agent.domain.subagent.AgentSaveError
 import com.aicode.feature.agent.domain.subagent.InjectPart
+import com.aicode.feature.agent.domain.subagent.SubagentModelTier
+import com.aicode.feature.agent.domain.subagent.SubagentTierSelection
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
@@ -75,6 +77,7 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.SubagentTierSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -421,6 +424,7 @@ class SettingsViewModel @Inject constructor(
     private val imageGenModelSettingsRepository: ImageGenModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val titleModelSettingsRepository: TitleModelSettingsRepository,
+    private val subagentTierSettingsRepository: SubagentTierSettingsRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val containerImageCatalog: ContainerImageCatalog,
@@ -563,6 +567,16 @@ class SettingsViewModel @Inject constructor(
 
     private val _titleModel = MutableStateFlow("")
     val titleModel: StateFlow<String> = _titleModel.asStateFlow()
+
+    /**
+     * 子代理模型档位：三档各一对 (providerId, model)，空串即该档未配置。
+     * 映射始终包含全部档位，UI 直接按档位取用，不必判空。
+     */
+    private val _subagentTierSelections = MutableStateFlow(
+        SubagentModelTier.entries.associateWith { SubagentTierSelection() }
+    )
+    val subagentTierSelections: StateFlow<Map<SubagentModelTier, SubagentTierSelection>> =
+        _subagentTierSelections.asStateFlow()
 
     /** 生图专用模型选择：providerId 为空即未配置（生图不跟随聊天模型）。 */
     private val _imageGenProviderId = MutableStateFlow("")
@@ -1125,6 +1139,15 @@ class SettingsViewModel @Inject constructor(
                 }
             }
 
+            // 三档子代理模型：任一档变化即刷新快照，UI 按档位渲染。
+            SubagentModelTier.entries.forEach { tier ->
+                launch {
+                    subagentTierSettingsRepository.selectionFlow(tier).collectLatest { selection ->
+                        _subagentTierSelections.value = _subagentTierSelections.value + (tier to selection)
+                    }
+                }
+            }
+
             launch {
                 imageGenModelSettingsRepository.providerIdFlow.collectLatest {
                     _imageGenProviderId.value = it
@@ -1571,6 +1594,77 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 批量删除 MCP server（列表多选批量操作）。
+     * 配置按作用域分组写：同作用域只读一次、写一次；写文件不能逐条做，否则 N 条就是 N 次全量重写。
+     * 删完一次性断开（[McpManager.removeServers]），避免反复抢连接锁。
+     */
+    fun deleteMcpServers(targets: List<Pair<String, McpScope>>) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.getGlobalServers()
+                } else {
+                    mcpConfigRepository.getProjectServers()
+                }
+                val updated = base.filterNot { it.name in nameSet }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    mcpConfigRepository.setProjectServers(updated)
+                }
+            }
+            _mcpReloading.value = true
+            try {
+                mcpManager.removeServers(targets.map { it.first })
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 批量启用 / 停用 MCP server：配置按作用域分组各写一次，再逐个重连（停用的会落到 DISABLED 状态）。 */
+    fun setMcpServersEnabled(targets: List<Pair<String, McpScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.getGlobalServers()
+                } else {
+                    mcpConfigRepository.getProjectServers()
+                }
+                val updated = base.map { if (it.name in nameSet) it.copy(enabled = enabled) else it }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    mcpConfigRepository.setProjectServers(updated)
+                }
+            }
+            _mcpReloading.value = true
+            try {
+                targets.map { it.first }.distinct().forEach { mcpManager.reloadServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 批量重连 MCP server（多选后一次性刷新连接状态）。 */
+    fun reconnectMcpServers(names: Collection<String>) {
+        if (names.isEmpty()) return
+        viewModelScope.launch {
+            _mcpReloading.value = true
+            try {
+                names.distinct().forEach { mcpManager.reloadServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
     fun setMcpServerEnabled(name: String, enabled: Boolean, scope: McpScope) {
         viewModelScope.launch {
             val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
@@ -1791,6 +1885,17 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用技能（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSkillsEnabled(targets: List<Pair<String, SkillScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) -> skillRepository.setSkillDisabled(name, !enabled, scope) }
+            }
+            refreshSkills()
+        }
+    }
+
     /**
      * 删除指定作用域的技能（删除其目录，不可恢复），完成后刷新列表。
      * 删除本体在 IO 线程跑（远程模式经 SFTP 递归删，不能在主线程）；期间 [skillDeleting] 置名供 UI 转圈。
@@ -1934,8 +2039,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
-    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；项目级被跳过时提示并刷新回磁盘状态。 */
+    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；禁用后不再进主代理的可派发清单。 */
     fun setSubAgentEnabled(name: String, enabled: Boolean, scope: AgentDefinitionScope) {
         viewModelScope.launch {
             val written = withContext(Dispatchers.IO) { agentDefinitionRepository.setDisabled(name, !enabled, scope) }
@@ -1955,6 +2059,17 @@ class SettingsViewModel @Inject constructor(
                 }
             }
             if (!written) reportConfigWriteSkipped()
+            refreshSubAgents()
+        }
+    }
+
+    /** 批量启用 / 停用子代理（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSubAgentsEnabled(targets: List<Pair<String, AgentDefinitionScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) -> agentDefinitionRepository.setDisabled(name, !enabled, scope) }
+            }
             refreshSubAgents()
         }
     }
@@ -1993,7 +2108,9 @@ class SettingsViewModel @Inject constructor(
     /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
     fun deleteSubAgent(name: String, scope: AgentDefinitionScope) = deleteSubAgents(listOf(name to scope))
 
-    /** 批量删除子代理（列表多选批量操作）。语义同 [deleteSkills]：串行删、逐条报进度。 */
+    /**
+     * 批量删除子代理（列表多选批量操作）。语义同 [deleteSkills]：串行删、逐条报进度。
+     */
     fun deleteSubAgents(targets: List<Pair<String, AgentDefinitionScope>>) {
         if (targets.isEmpty() || _subAgentDeleting.value.isNotEmpty()) return
         _subAgentDeleting.value = targets.map { it.first }.toSet()
@@ -2846,6 +2963,24 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 设置某子代理模型档位绑定的模型；两个参数都留空等同 [clearSubagentTier]。 */
+    fun setSubagentTierModel(tier: SubagentModelTier, providerId: String, model: String) {
+        viewModelScope.launch {
+            if (providerId.isBlank() || model.isBlank()) {
+                subagentTierSettingsRepository.clear(tier)
+            } else {
+                subagentTierSettingsRepository.setSelection(tier, providerId, model)
+            }
+        }
+    }
+
+    /** 清空某档位——该档回退到「未配置」，派发时按降级链处理。 */
+    fun clearSubagentTier(tier: SubagentModelTier) {
+        viewModelScope.launch {
+            subagentTierSettingsRepository.clear(tier)
+        }
+    }
+
     /** 设置生图专用模型；providerId 留空等同 [clearImageGenModel]（未配置）。 */
     fun setImageGenModel(providerId: String, model: String) {
         viewModelScope.launch {
@@ -3029,6 +3164,8 @@ class SettingsViewModel @Inject constructor(
         ) {
             titleModelSettingsRepository.clear()
         }
+        // 档位绑定的是 provider + model，提供商整个被删时按 provider 直接清档。
+        subagentTierSettingsRepository.clearTiersUsingProvider(provider.id)
     }
 
     fun deleteProvider(id: String) {
@@ -3243,6 +3380,14 @@ class SettingsViewModel @Inject constructor(
             _testing.update { it - model }
         }
     }
+
+    /**
+     * 主页模型弹层用：直接跑一次连通性测试并返回结果。
+     * 不落 ViewModel 状态——弹层跨多个 provider，同名模型会撞 key，
+     * 测试中的行集合与结果由弹层自己按 provider+模型持有。
+     */
+    suspend fun runModelTest(provider: AIProviderConfig, model: String): ModelTestResult =
+        modelApiService.testModel(provider.baseUrl, provider.firstUsableApiKey, provider.type, provider.useFullUrl, provider.useResponseApi, model, provider.customHeaders)
 
     fun clearTestResults() {
         _testResults.value = emptyMap()

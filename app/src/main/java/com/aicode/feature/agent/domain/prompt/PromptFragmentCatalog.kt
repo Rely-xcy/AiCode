@@ -219,6 +219,27 @@ class PromptFragmentCatalog @Inject constructor(
         return numberedFragments(dir)[number]?.delete() ?: false
     }
 
+    /**
+     * 清空所有自定义提示词：删掉项目层与全局层里的全部 `<两位数字>-*.md`，
+     * 各编号随即回落到内置 / 本地层，等于把提示词「重置」回默认。
+     *
+     * 只删带编号的片段文件，全局层里的「完全禁用内置提示词」标记等其它文件原样保留。
+     * @return 实际删除的文件数。
+     */
+    fun deleteAllCustom(projectRoot: String?): Int {
+        val dirs = listOfNotNull(projectDir(projectRoot), globalDir).distinct()
+        var deleted = 0
+        dirs.forEach { dir ->
+            dir.listFiles()?.forEach { file ->
+                if (file.isFile && PromptFragmentResolver.parseNumber(file.name) != null && file.delete()) {
+                    deleted++
+                }
+            }
+        }
+        FileLogger.i(TAG, "已清空自定义提示词，删除 $deleted 个文件")
+        return deleted
+    }
+
     /** 切换「完全禁用内置提示词」标记（全局层）。 */
     fun setBuiltinDisabled(disabled: Boolean): Boolean {
         return try {

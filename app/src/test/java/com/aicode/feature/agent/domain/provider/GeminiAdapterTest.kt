@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.provider
 
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.google.gson.JsonObject
@@ -105,6 +106,19 @@ class GeminiAdapterTest {
         assertEquals("把提醒挪走\n\n【模式提醒】AUTO 模式正文", parts.first()["text"])
         // 落库/界面那份不动
         assertEquals("把提醒挪走", message.content)
+    }
+
+    @Test
+    fun budgetZero_omits_includeThoughts() = runTest {
+        val api = FakeApi(textResponse())
+        // Gemini 拒绝 thinkingBudget=0 与 includeThoughts=true 同发（invalid argument），
+        // 关闭思考的 2.5 系模型必须只发预算。
+        adapter(api)
+            .apply { model = "gemini-2.5-flash" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        val config = generationConfig(api.lastRequest)
+        assertEquals(mapOf("thinkingBudget" to 0), config["thinkingConfig"])
     }
 
     @Test

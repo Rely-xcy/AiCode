@@ -23,39 +23,29 @@ import javax.inject.Singleton
 
 /**
  * [FileAccessProvider] 的本地实现：包一层 [WorkspacePathMapper]，走 java.io.File 直读。
- *
- * 内容访问（读写、复制源）解析容器符号链接，落到链接指向的真实文件；
- * 删除、改名与递归遍历只动链接本身，绝不进入链接目标。
+ * 内容访问解析容器符号链接；删除与重命名保留末级链接本身。
  */
 @Singleton
 class LocalFileAccess @Inject constructor(
     private val pathMapper: WorkspacePathMapper
 ) : FileAccessProvider {
 
-    /** [followFinalLink] 为 false 时保留最后一段链接本身——删除、改名只该动链接，不该动目标。 */
     private fun resolve(path: String, followFinalLink: Boolean = true): File =
         pathMapper.resolveFile(path, followFinalLink)
 
-    /**
-     * 目录条目指向的真实文件（供判断类型、大小）；成环的链接退回条目本身，
-     * 不让一个坏链接把整个目录的浏览打挂。
-     */
     private fun resolveEntry(file: File): File = try {
         pathMapper.resolveHostFile(file)
     } catch (_: FileSystemLoopException) {
+        // 保留循环链接条目供删除或重命名，不让一个坏链接阻断整个目录的浏览。
         file
     }
 
-    /** 存在性判断不跟随链接：悬空链接也是一个可删除、可改名的条目。 */
     private fun entryExists(file: File): Boolean =
         Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
 
-    /**
-     * 递归删除，绝不进入符号链接：`walkFileTree` 默认不跟随链接，链接作为普通条目被删掉，
-     * 目标内容原封不动。否则删一个指向 `/etc` 的链接会连带删掉容器的真实目录。
-     */
     private fun deleteTree(file: File) {
         if (!entryExists(file)) return
+        // walkFileTree 默认不跟随链接，递归删除也不能进入链接指向的目录。
         Files.walkFileTree(file.toPath(), object : SimpleFileVisitor<Path>() {
             override fun visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult {
                 Files.delete(path)
@@ -145,7 +135,6 @@ class LocalFileAccess @Inject constructor(
         val dir = resolve(path)
         if (!dir.isDirectory) return emptyList()
         val paths = mutableListOf<String>()
-        // 用祖先绝对路径去重：链接指回上层目录时停止向下递归，而不是无限走到底或报错让整个目录无法扫描。
         fun visit(directory: File, prefix: String, depth: Int, ancestors: Set<String>) {
             if (depth >= maxDepth) return
             directory.listFiles().orEmpty().forEach { entry ->
@@ -305,7 +294,7 @@ class LocalFileAccess @Inject constructor(
             false
         }
         if (moved) return
-        // 跨文件系统移动链接时保留链接文本本身，不复制、也不删除它指向的内容。
+        // 跨文件系统移动链接时保留链接文本，不复制或删除它指向的内容。
         if (Files.isSymbolicLink(source.toPath())) {
             Files.copy(source.toPath(), target.toPath(), LinkOption.NOFOLLOW_LINKS)
             Files.delete(source.toPath())
@@ -325,8 +314,6 @@ class LocalFileAccess @Inject constructor(
     }
 
     override fun parentPath(path: String): String? {
-        // 回显用词法父目录：顺着链接解析会让浏览器里链接条目的父级跳到目标位置，
-        // 用户看到的目录树就跟自己点开的层级对不上了。
         val parent = pathMapper.toHostFile(path).parentFile ?: return null
         return pathMapper.toContainerPath(parent.absolutePath)
     }

@@ -1,6 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
+    <string name="plan_mode_refinement_requested">The user chose to refine the plan. Remain in PLAN and wait for specific feedback before making changes or requesting to exit again.</string>
+    <string name="plan_mode_approved_build">The plan was approved. BUILD mode is active; implement within the approved scope.</string>
+    <string name="plan_mode_approved_auto">The plan was approved and AUTO mode restored. Implement within the approved scope and follow AUTO permission rules.</string>
+    <string name="plan_mode_external_build">The user switched to BUILD. Continue within the current task scope and mode permissions.</string>
+    <string name="plan_mode_external_auto">The user switched to AUTO. Continue within the current task scope and mode permissions.</string>
+    <string name="tool_plan_mode_denied">This operation was not executed because PLAN mode allows read-only exploration. To implement changes, submit the plan and request to exit PLAN.</string>
+    <string name="tool_permission_rule_denied">Permission rules prohibit this tool call.</string>
+    <string name="tool_command_rule_denied">Permission rules prohibit this command.</string>
+    <string name="tool_command_rule_denied_detail">Permission rules prohibit this command. Matched rule: %1$s; offending segment: %2$s; suggestion: rewrite it in an allowed form, or ask the user to update the rule under Tool permissions and retry.</string>
+    <string name="tool_command_unanalyzable_reason">The command contains constructs that cannot be statically analyzed (%1$s); it can only be allowed once and cannot be remembered.</string>
+    <string name="tool_shizuku_confirmation_reason">Shizuku operates on Android as adb shell. Each call requires confirmation and cannot be saved as always allowed.</string>
+    <string name="tool_subagent_message_delivered">Message delivered. A running subagent will receive it shortly; an idle subagent will resume to process it.</string>
+    <string name="tool_subagent_plan_readonly_warning">PLAN mode is active: subagents inherit read-only permissions, so file edits and commands will be blocked. If implementation is needed, request to exit PLAN before delegating.</string>
+    <string name="tool_subagent_tier_pinned">This subagent pins its model (%1$s), so the requested "%2$s" tier was ignored.</string>
+    <string name="tool_subagent_tier_fallback">The requested "%1$s" tier is not configured or its provider is unavailable; using the "%2$s" tier (%3$s) instead.</string>
+    <string name="tool_subagent_tier_unavailable">The requested "%1$s" tier is not configured or its provider is unavailable; this subagent will inherit the current session model.</string>
+    <string name="tool_subagent_provider_unresolved">The provider "%1$s" in this subagent definition was not found (missing or name mismatch); the parent session provider will be combined with the definition model "%2$s", which may not be callable.</string>
+    <!-- Subagent model tiers -->
+    <string name="settings_subagent_tiers_header">Subagent model tiers</string>
+    <string name="settings_subagent_tier_light">Light</string>
+    <string name="settings_subagent_tier_standard">Balanced</string>
+    <string name="settings_subagent_tier_strong">Strong</string>
+    <string name="settings_subagent_tier_unconfigured">Not configured</string>
+    <!-- Subagent dispatch card -->
+    <string name="subagent_dispatch_title">Subagent Tasks</string>
+    <string name="subagent_dispatch_count">%1$d tasks dispatched</string>
+    <string name="subagent_card_default_agent">Subagent</string>
+    <string name="subagent_card_status_dispatched">Dispatched</string>
+    <string name="subagent_card_status_running">Running</string>
+    <string name="subagent_card_status_completed">Completed</string>
+    <string name="subagent_card_status_failed">Failed</string>
+    <string name="subagent_card_status_stopped">Stopped</string>
+    <string name="subagent_card_expand">Show full summary</string>
+    <string name="subagent_card_collapse">Collapse summary</string>
+    <string name="subagent_card_changed_files">%1$d files changed</string>
+    <string name="subagent_card_open">Open session</string>
+    <string name="subagent_card_stop">Stop</string>
+    <string name="chat_context_usage_estimated">Estimated input budget usage: %1$d%%</string>
+    <string name="agent_input_budget_exceeded">Context exceeds the model input budget. Shorten the input or reduce tool definitions.</string>
 
     <!-- Settings menu titles -->
     <string name="settings_title">Settings</string>
@@ -123,6 +162,7 @@
     <string name="settings_token_stats_calls_suffix2">%1$d calls</string>
     <string name="settings_token_stats_col_model">Model</string>
     <string name="settings_token_stats_col_reasoning_effort">Effort</string>
+    <string name="settings_token_stats_col_reasoning_wire">Sent as</string>
     <string name="settings_token_stats_col_provider">Vendor</string>
     <string name="settings_token_stats_col_input">Input</string>
     <string name="settings_token_stats_col_output">Output</string>
@@ -366,6 +406,8 @@
     <string name="common_show">Show</string>
     <string name="common_local">Local</string>
     <string name="common_model">Model</string>
+    <!-- Level name followed by its API value, e.g. "Max (max)", to match model docs and error text. -->
+    <string name="common_label_with_api">%1$s (%2$s)</string>
     <string name="common_add">Add</string>
     <string name="credential_add">Add Credential</string>
     <string name="common_username">Username</string>
@@ -427,6 +469,17 @@
     <string name="chat_reasoning_effort_high">High</string>
     <string name="chat_reasoning_effort_xhigh">Extra high</string>
     <string name="chat_reasoning_effort_max">Max</string>
+    <string name="chat_reasoning_toggle">Thinking</string>
+    <string name="chat_reasoning_off_short">Off</string>
+    <string name="chat_reasoning_default_tag">Default</string>
+    <string name="chat_reasoning_effective_tag">Active</string>
+    <string name="chat_reasoning_effective">Effective: %1$s</string>
+    <string name="chat_reasoning_unknown_hint">Levels are unknown for this model, so the selected level may not take effect</string>
+    <string name="chat_reasoning_cannot_disable">This model always thinks; the lowest level is used instead</string>
+    <string name="chat_reasoning_endpoint_weak">This endpoint may ignore &quot;None&quot;; switch to the provider\'s Responses endpoint to fully disable thinking</string>
+    <string name="provider_model_section_reasoning">Reasoning levels</string>
+    <string name="provider_model_reasoning_hint">Tick only the levels this model really accepts; leave all unticked to use the built-in capability table</string>
+    <string name="provider_model_reasoning_can_disable">Thinking can be turned off</string>
     <string name="chat_open_file_missing">File not found or has been moved</string>
     <string name="chat_open_file_unavailable">Cannot read this file: the connection is lost or the workspace is not ready yet, please try again later</string>
     <string name="chat_open_file_unshareable">This file\'s location cannot be shared with other apps</string>
@@ -461,7 +514,7 @@
     <string name="about_version">Version</string>
     <string name="about_github_repo">GitHub Repository</string>
     <string name="about_license">Open Source License</string>
-    <string name="about_description">AI-powered code editor running on Android · Built-in Terminal · AI Agent · MCP Protocol</string>
+    <string name="about_description">Universal AI Coding Agent for Android · Linux dev environment · Local &amp; remote SSH</string>
     <string name="about_check_update">Check for updates</string>
     <string name="about_checking_update">Querying GitHub for the latest version…</string>
     <string name="about_up_to_date">Already up to date</string>
@@ -515,12 +568,18 @@
     <string name="about_update_verify_not_newer">Package version is not newer than the installed one</string>
     <string name="about_update_install_failed">No app available to install packages</string>
 
-    <!-- Disclaimer -->
-    <string name="about_disclaimer">Disclaimer</string>
-    <string name="disclaimer_title">Disclaimer</string>
-    <string name="disclaimer_body">AiCode is free and open-source software provided “as is”, for learning, research and lawful software development only.\n\nYou must comply with the laws and regulations of your jurisdiction and the terms of any service you use. Using this software for any illegal or infringing purpose is strictly prohibited, including but not limited to: unauthorized access to, cracking or reverse engineering of others’ software or systems, circumventing technological protection measures, stealing or leaking others’ data, distributing malicious code, or any other act that infringes the lawful rights of others.\n\nYou bear all risks and responsibility for your use of this software. The authors and contributors shall not be liable for any direct or indirect loss arising from your use of, or inability to use, this software, nor for any act you perform using this software or its consequences.\n\nIf you do not agree with this disclaimer, please stop using the software and uninstall it immediately.</string>
-    <string name="disclaimer_accept">I have read and agree</string>
-    <string name="disclaimer_decline">Disagree</string>
+    <string name="agreement_title">Welcome to AiCode</string>
+    <string name="agreement_terms">User Agreement</string>
+    <string name="agreement_privacy">Privacy Policy</string>
+    <string name="agreement_notice_prefix">"Before using AiCode, please read and agree to the "</string>
+    <string name="agreement_terms_link">User Agreement</string>
+    <string name="agreement_notice_conjunction">" and "</string>
+    <string name="agreement_privacy_link">Privacy Policy</string>
+    <string name="agreement_notice_suffix">" to understand the usage rules and data handling practices.\n\nBy tapping “Agree and continue”, you confirm that you have read and agree to both documents."</string>
+    <string name="agreement_accept">Agree and continue</string>
+    <string name="agreement_decline">Disagree</string>
+    <string name="agreement_terms_url">https://aicode.murk.top/en/terms</string>
+    <string name="agreement_privacy_url">https://aicode.murk.top/en/privacy</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>
@@ -629,6 +688,7 @@
     <string name="backup_net_add_target">Add backup target</string>
     <string name="backup_net_edit_target">Edit backup target</string>
     <string name="backup_net_no_target">No cloud backup target yet</string>
+    <string name="backup_net_no_target_hint">Tap + in the top right to add a WebDAV or S3 backup target</string>
     <string name="backup_net_upload">Upload</string>
     <string name="backup_net_upload_short">Upload</string>
     <string name="backup_net_upload_password_hint">The backup will be uploaded to the cloud. A password is required (AES-GCM) to keep API keys, SSH credentials, etc. from being exposed in plain text</string>
@@ -866,6 +926,11 @@
     <string name="chat_goal_clear">Clear goal</string>
     <string name="chat_goal_auto_approve_hint">Tools are auto-approved; pause to restore per-call confirmation</string>
     <string name="chat_error_title">Request failed</string>
+    <string name="network_error_dns">DNS resolution failed: the host has no usable address. Check your network, Wi-Fi DNS, or proxy settings</string>
+    <string name="network_error_timeout">Request timed out: slow network or no response from the server</string>
+    <string name="network_error_connect">Connection refused: check the Base URL and port</string>
+    <string name="network_error_ssl">SSL handshake failed: check the certificate or proxy settings</string>
+    <string name="common_error_unknown">Unknown error</string>
     <string name="slash_command_compress_desc">Manually compact this session context</string>
     <string name="slash_command_init_desc">Analyze the workspace codebase and generate or improve the AGENTS.md project rules</string>
     <string name="slash_command_usage_desc">View today and all-time call count, token usage and estimated cost</string>
@@ -982,7 +1047,7 @@
     <!-- Credential List -->
     <string name="credential_empty_hint">No credentials yet, tap + to add</string>
     <string name="credential_empty_title">No Git Credentials</string>
-    <string name="credential_empty_desc">Configure credentials so AiCode can authenticate when pushing or pulling repositories</string>
+    <string name="credential_empty_desc">Tap + in the top right to sign in with GitHub or add an access token. AiCode then authenticates pushes and pulls automatically</string>
 
     <!-- Credential Add / Quick Login -->
     <string name="credential_add_sheet_title">Add Credential</string>
@@ -1198,8 +1263,8 @@
 
     <!-- Git Conflict -->
     <string name="git_conflicted_count">Conflicts (%1$s)</string>
-    <string name="git_conflict_detected">Merge Conflicts Detected</string>
-    <string name="git_conflict_hint">Resolve conflicts in editor then stage the files, or abort the merge.</string>
+    <string name="git_merge_pending_title">Merge Awaiting Commit</string>
+    <string name="git_merge_pending_hint">There are no unresolved conflicts. Review and stage the changes you want to keep, then commit to complete the merge.</string>
     <string name="git_action_abort_merge">Abort Merge</string>
     <string name="git_abort_merge_confirm">Abort the current merge? Unresolved changes will be discarded and the working tree will be restored.</string>
 
@@ -1401,11 +1466,10 @@
     <string name="prompts_field_content_placeholder">What the model should follow</string>
     <string name="prompts_editor_new">New prompt</string>
     <string name="prompts_editor_edit">Edit prompt</string>
-    <string name="prompts_add_sheet_title">Prompts</string>
     <string name="prompts_add_prompt">Add fragment</string>
-    <string name="prompts_add_prompt_hint">Insert a new fragment with a free number</string>
+    <string name="prompts_reset_custom">Reset custom prompts</string>
+    <string name="prompts_reset_confirm">Deletes every custom prompt fragment in this project and the global layer; each number falls back to the built-in prompt. This cannot be undone.</string>
     <string name="prompts_help">Help</string>
-    <string name="prompts_help_hint">How it works and when it applies</string>
     <string name="prompts_disable_builtin">Disable all built-in prompts</string>
     <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
 
@@ -1709,6 +1773,11 @@
     <string name="ftp_login_password">Login Password</string>
     <string name="ftp_allow_anonymous">Allow Anonymous</string>
     <string name="ftp_anonymous_desc">Connect without username and password</string>
+    <string name="ftp_anonymous_confirm_title">Allow anonymous access?</string>
+    <string name="ftp_anonymous_confirm_message">Once enabled, any device on the same LAN can read and write your workspace without credentials.</string>
+    <string name="ftp_password_required">Set a username and password first</string>
+    <string name="ftp_reserved_username">anonymous is reserved for anonymous login. Use a different username.</string>
+    <string name="ftp_user_cache_cleanup_failed">Could not clear old FTP login data. The server was not started. Try again.</string>
     <string name="ftp_auto_start">Auto-start on app launch</string>
     <string name="ftp_auto_start_desc">Automatically start FTP service in background on app launch</string>
     <string name="ftp_config_saved">Configuration saved</string>
@@ -1869,8 +1938,8 @@
     <string name="workspace_switch_confirm">Switching workspace will stop all running AI sessions and close terminal tabs in the current workspace. Continue?</string>
     <string name="workspace_confirm">Confirm</string>
     <string name="workspace_open">Open Workspace</string>
-    <string name="workspace_new">New</string>
-    <string name="workspace_empty_hint">No workspaces, tap "New" to create one</string>
+    <string name="workspace_new_internal">New Internal Workspace</string>
+    <string name="workspace_empty_hint">No workspaces, tap %1$s to create one</string>
     <string name="workspace_delete">Delete Workspace</string>
     <string name="workspace_delete_confirm">Delete "%1$s"? All files in this directory and this workspace\'s chats will be deleted and cannot be undone.</string>
     <string name="workspace_new_workspace">New Workspace</string>
@@ -1880,9 +1949,9 @@
     <string name="workspace_remote_default_create_failed">Failed to create the default remote workspace. Check server permissions and disk space.</string>
     <string name="workspace_remote_target_dir_empty">Remote workspace path is empty or invalid. Set a concrete directory in Container &amp; Images.</string>
     <string name="workspace_remote_not_configured">No remote connection is configured, so no workspace was loaded.</string>
-    <string name="workspace_add_local_dir">Add Local Directory</string>
-    <string name="workspace_external_added">Local directory workspace "%1$s" added</string>
-    <string name="workspace_external_warning_title">Add local directory workspace</string>
+    <string name="workspace_add_external">Add External Workspace</string>
+    <string name="workspace_external_added">External workspace "%1$s" added</string>
+    <string name="workspace_external_warning_title">Add External Workspace</string>
     <string name="workspace_external_warning_message">AI directly reads and writes the real files in the selected directory. Public storage does not support symlinks, so npm, yarn, pnpm, and git operations involving symlinks may fail. Removing the workspace only removes the association and does not delete directory contents.</string>
     <string name="workspace_external_warning_dont_show_again">Don’t show again</string>
     <string name="workspace_external_warning_continue">Continue</string>
@@ -1905,7 +1974,9 @@
     <string name="chat_more_options">More Options</string>
     <string name="chat_action_edit">Edit Message</string>
     <string name="chat_action_copy">Copy Text</string>
+    <string name="chat_action_fork">Fork From Here</string>
     <string name="chat_action_delete">Delete Message</string>
+    <string name="chat_fork_title">Fork of %1$s</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>
 

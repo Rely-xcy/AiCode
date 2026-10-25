@@ -216,6 +216,9 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var networkConnectivityObserver: com.aicode.core.net.NetworkConnectivityObserver
 
+    @Inject
+    lateinit var remoteTerminalSessionManager: com.aicode.feature.terminal.domain.RemoteTerminalSessionManager
+
     /** 当前激活 profile 的连接配置解析器：连接/profile/模式变化时驱动重连。 */
     @Inject
     lateinit var activeRemoteConnectionResolver: com.aicode.feature.agent.domain.container.ActiveRemoteConnectionResolver
@@ -348,7 +351,13 @@ class AIEditorApp : Application(), Configuration.Provider {
                 activeRemoteConnectionResolver.activeConfigFlow,
                 executionModeHolder.mode
             ) { config, mode -> config to mode }.collect { (config, mode) ->
-                if (mode != ExecutionMode.REMOTE_SSH) return@collect
+                if (mode != ExecutionMode.REMOTE_SSH) {
+                    // 切回本地：远程终端标签指向的 shell 已随连接断开，一并关掉，不留死标签页。
+                    remoteTerminalSessionManager.tabs.value.map { it.id }.forEach {
+                        remoteTerminalSessionManager.closeTab(it)
+                    }
+                    return@collect
+                }
                 if (config == null || config == remoteSshConnection.config) return@collect
                 runCatching {
                     remoteSshConnection.connect(config)

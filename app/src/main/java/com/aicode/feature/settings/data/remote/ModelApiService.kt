@@ -2,10 +2,12 @@ package com.aicode.feature.settings.data.remote
 
 import android.content.Context
 import com.aicode.R
+import com.aicode.core.util.toUserMessage
 import com.aicode.feature.agent.domain.provider.joinUrl
 import com.aicode.feature.settings.domain.model.ProviderType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -18,6 +20,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** 网络类失败重试前的退避时长：跨过 libcore 解析失败缓存的有效期，否则重试必然复现同一失败。 */
+private const val NETWORK_RETRY_BACKOFF_MS = 3_000L
 
 /** 拉取模型列表的结果，包含解析出的模型列表及完整的调试信息。 */
 data class FetchModelsResult(
@@ -180,8 +185,27 @@ class ModelApiService @Inject constructor(
         useResponseApi: Boolean,
         model: String,
         customHeaders: Map<String, String> = emptyMap()
-    ): ModelTestResult = withContext(Dispatchers.IO) {
+    ): ModelTestResult {
+        val first = testModelAttempt(baseUrl, apiKey, type, useFullUrl, useResponseApi, model, customHeaders)
+        if (!first.failure.isRetryableNetworkFailure()) return first.result
+        // libcore 会缓存解析失败（约 2 秒），立即重试只会命中原样失败，故先退避再试一次
+        delay(NETWORK_RETRY_BACKOFF_MS)
+        return testModelAttempt(baseUrl, apiKey, type, useFullUrl, useResponseApi, model, customHeaders).result
+    }
+
+    private suspend fun testModelAttempt(
+        baseUrl: String,
+        apiKey: String,
+        type: ProviderType,
+        useFullUrl: Boolean,
+        useResponseApi: Boolean,
+        model: String,
+        customHeaders: Map<String, String>
+    ): TestAttempt = withContext(Dispatchers.IO) {
         val start = System.nanoTime()
+        var capturedUrl = ""
+        var capturedHeaders: Map<String, String> = emptyMap()
+        var capturedBody = ""
         try {
             if (apiKey.isBlank()) error(context.getString(R.string.provider_api_key_required))
 
@@ -230,6 +254,8 @@ class ModelApiService @Inject constructor(
                 .applyCustomHeaders(customHeaders)
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
+            capturedUrl = url
+            capturedBody = payload
 
             val reqHeadersMap = request.headers.names().associateWith { name ->
                 val raw = request.header(name).orEmpty()
@@ -239,6 +265,7 @@ class ModelApiService @Inject constructor(
                     raw
                 }
             }
+            capturedHeaders = reqHeadersMap
 
             client.newCall(request).execute().use { response ->
                 val latency = (System.nanoTime() - start) / 1_000_000
@@ -246,7 +273,7 @@ class ModelApiService @Inject constructor(
                 val respHeadersMap = response.headers.names().associateWith { response.header(it).orEmpty() }
 
                 if (response.isSuccessful) {
-                    ModelTestResult(
+                    TestAttempt(ModelTestResult(
                         success = true,
                         latencyMs = latency,
                         message = context.getString(R.string.provider_test_success, latency),
@@ -256,9 +283,9 @@ class ModelApiService @Inject constructor(
                         responseCode = response.code,
                         responseHeaders = respHeadersMap,
                         responseBody = body
-                    )
+                    ))
                 } else {
-                    ModelTestResult(
+                    TestAttempt(ModelTestResult(
                         success = false,
                         latencyMs = latency,
                         message = "HTTP ${response.code}: ${body.take(160)}",
@@ -269,19 +296,32 @@ class ModelApiService @Inject constructor(
                         responseHeaders = respHeadersMap,
                         responseBody = body,
                         errorDetail = body
-                    )
+                    ))
                 }
             }
         } catch (e: Exception) {
             val latency = (System.nanoTime() - start) / 1_000_000
-            ModelTestResult(
-                success = false,
-                latencyMs = latency,
-                message = e.message ?: context.getString(R.string.chat_error_title),
-                errorDetail = e.stackTraceToString()
+            TestAttempt(
+                result = ModelTestResult(
+                    success = false,
+                    latencyMs = latency,
+                    message = e.toUserMessage(context),
+                    requestUrl = capturedUrl,
+                    requestHeaders = capturedHeaders,
+                    requestBody = capturedBody,
+                    errorDetail = e.stackTraceToString()
+                ),
+                failure = e
             )
         }
     }
+
+    private fun Throwable?.isRetryableNetworkFailure(): Boolean =
+        this is java.net.UnknownHostException ||
+            this is java.net.ConnectException ||
+            this is java.net.SocketTimeoutException
+
+    private data class TestAttempt(val result: ModelTestResult, val failure: Throwable? = null)
 
     private fun Request.Builder.applyAuth(apiKey: String, type: ProviderType): Request.Builder =
         when (type) {

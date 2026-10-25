@@ -134,6 +134,36 @@ internal fun SettingsGroup(
 }
 
 /**
+ * [SettingsGroup] 的 LazyColumn 版：逐项绘制卡片背景，首项圆上角、末项圆下角，项间自动补分隔线。
+ *
+ * 技能 / 子代理这类列表条目数不可控（项目里可能有上百个），必须走 LazyColumn 逐项虚拟化，
+ * 只组合可见行；卡片外观靠这里的首尾圆角拼出来，视觉与 [SettingsGroup] 一致。
+ */
+@Composable
+internal fun LazyGroupItem(
+    index: Int,
+    lastIndex: Int,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val shape = RoundedCornerShape(
+        topStart = if (index == 0) 14.dp else 0.dp,
+        topEnd = if (index == 0) 14.dp else 0.dp,
+        bottomStart = if (index == lastIndex) 14.dp else 0.dp,
+        bottomEnd = if (index == lastIndex) 14.dp else 0.dp
+    )
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.semanticColors.cardSurface)
+    ) {
+        content()
+        if (index != lastIndex) SettingsDivider()
+    }
+}
+
+/**
  * 分组内单行：左侧线条图标 + 标题，右侧可选尾随组件（右箭头/开关/值）。
  *
  * @param icon 左侧图标，null 则标题与无图标行对齐。

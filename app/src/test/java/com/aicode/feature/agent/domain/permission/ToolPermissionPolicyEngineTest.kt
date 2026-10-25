@@ -1,7 +1,6 @@
 package com.aicode.feature.agent.domain.permission
 
 import android.content.Context
-import kotlinx.coroutines.runBlocking
 import com.aicode.R
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.tool.AgentTool
@@ -12,6 +11,8 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -64,6 +65,19 @@ class ToolPermissionPolicyEngineTest {
             "安全防护：命令含命令替换、子 shell 或绝对路径重定向等无法静态判定的构造，且疑似破坏性操作，无法确认安全"
     }
 
+    /** 最近一次带格式参数的 getString 收到的参数，供断言拦截原因里回显了命中规则与触发片段。 */
+    private val formatArgs = mutableListOf<String>()
+
+    private fun appContext(): Context = mockk {
+        every { getString(any()) } answers { "resource:${firstArg<Int>()}" }
+        // 带格式参数的文案（拦截原因回显命中规则 / 触发片段）：记录参数，返回资源 id 便于断言。
+        every { getString(any(), *anyVararg()) } answers {
+            formatArgs.clear()
+            formatArgs += secondArg<Array<Any?>>().map { it.toString() }
+            "resource:${firstArg<Int>()}"
+        }
+    }
+
     private fun engine(
         vararg rules: PermissionRule,
         safetyDisabled: Boolean = false,
@@ -78,7 +92,7 @@ class ToolPermissionPolicyEngineTest {
             EffectivePermissionRules(rules.toList(), projectRulesConfirmed, globalRulesConfirmed)
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
-        return ToolPermissionPolicyEngine(context, repo, safety)
+        return ToolPermissionPolicyEngine(context, repo, safety, appContext())
     }
 
     private fun tool(vararg caps: ToolCapability): AgentTool {
@@ -99,7 +113,7 @@ class ToolPermissionPolicyEngineTest {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
-        assertNotNull(r.denyReason)
+        assertEquals("resource:${R.string.tool_plan_mode_denied}", r.denyReason)
     }
 
     @Test
@@ -200,6 +214,30 @@ class ToolPermissionPolicyEngineTest {
             PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY)
         )
         val r = e.evaluate(tool(ToolCapability.EXTERNAL_TOOL), "task", terminal("read"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    // ── task 的 del（删除子会话及消息）不可逆：单次确认，不受 ALWAYS 记忆放行 ──
+
+    @Test
+    fun taskDeleteAction_asksUnrememberableEvenWithWholeAllow() = runTest {
+        // 用户此前对 task 选过「始终允许」（create/stop 落下的记忆）——不得连带放行删除
+        val e = engine(
+            PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW)
+        )
+        val r = e.evaluate(tool(ToolCapability.MODIFY_SESSION_STATE), "task", terminal("del"), AgentMode.BUILD)
+
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertTrue("删除不可记忆，必须逐次确认", r.rememberablePatterns.isEmpty())
+        assertNotNull(r.rememberDisabledReason)
+    }
+
+    @Test
+    fun taskDeleteAction_deniedWhenWholeRuleDenies() = runTest {
+        val e = engine(
+            PermissionRule("task", PermissionRule.WHOLE_TOOL, PermissionDecision.DENY)
+        )
+        val r = e.evaluate(tool(ToolCapability.MODIFY_SESSION_STATE), "task", terminal("del"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
@@ -648,6 +686,60 @@ class ToolPermissionPolicyEngineTest {
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 
+    // ── 拦截原因回显：命中规则 / 触发片段 ──────────────────────────
+
+    /**
+     * DENY 只说「权限规则禁止」时，AI 不知道该改哪一段，只能整条换写法反复重试。
+     * 回显命中规则与被拦段之后，一次就能定位。
+     */
+    @Test
+    fun shellDeny_echoesMatchedRuleAndOffendingSegment() = runTest {
+        val e = engine(PermissionRule("Bash", "git push", PermissionDecision.DENY))
+        val r = e.evaluate(
+            tool(ToolCapability.EXECUTE_COMMANDS),
+            "Bash",
+            bash("ls && git push origin main"),
+            AgentMode.BUILD
+        )
+
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertEquals("resource:${R.string.tool_command_rule_denied_detail}", r.denyReason)
+        assertEquals(listOf("Bash(git push)", "git push origin main"), formatArgs)
+    }
+
+    /** AUTO 下不可静态判定 + 疑似破坏性：原因里要写明是哪个构造，AI 才知道怎么拆。 */
+    @Test
+    fun autoMode_unanalyzableDestructiveReasonNamesConstruct() = runTest {
+        val e = engine()
+        val r = e.evaluate(
+            tool(ToolCapability.EXECUTE_COMMANDS),
+            "Bash",
+            bash("rm -rf \$(pwd)/build"),
+            AgentMode.AUTO
+        )
+
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertTrue(r.denyReason!!.contains("触发构造：命令替换 \$(...)"))
+        assertTrue(r.denyReason!!.contains("elevate"))
+    }
+
+    /** 非 AUTO 下不可静态判定走弹窗：弹窗也要说明为什么不能「始终允许」。 */
+    @Test
+    fun buildMode_unanalyzableAskExplainsWhyNotRememberable() = runTest {
+        val e = engine()
+        val r = e.evaluate(
+            tool(ToolCapability.EXECUTE_COMMANDS),
+            "Bash",
+            bash("ls \$(pwd)"),
+            AgentMode.BUILD
+        )
+
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertTrue(r.rememberablePatterns.isEmpty())
+        assertEquals("resource:${R.string.tool_command_unanalyzable_reason}", r.rememberDisabledReason)
+        assertEquals(listOf("命令替换 \$(...)"), formatArgs)
+    }
+
     // ── remember：去重后逐条落库 ────────────────────────────────────
 
     @Test
@@ -656,7 +748,7 @@ class ToolPermissionPolicyEngineTest {
         // add 现在返回 Boolean（写没写进去），默认 stub 要与返回类型一致；relaxed 不顶用在这类显式 stub 上：
         // 旧的 `just runs` 只适用于 Unit 返回的函数。
         coEvery { repo.add(any(), any()) } returns true
-        val e = ToolPermissionPolicyEngine(context, repo, mockk(relaxed = true))
+        val e = ToolPermissionPolicyEngine(context, repo, mockk(relaxed = true), appContext())
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
 

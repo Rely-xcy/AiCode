@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.tool.browser
 import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.ToolCapability
@@ -10,7 +11,6 @@ import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import android.util.Base64
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.JsonArray

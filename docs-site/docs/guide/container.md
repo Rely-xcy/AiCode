@@ -86,7 +86,7 @@ App 自带 Alpine 镜像，首次启动时自动加入列表并选中，shell �
 
 基础工具（bash、curl、ripgrep、git）在任何场景下都会安装。场景默认安装软件仓库的最新主版本；如需指定版本，使用菜单中的「自定义安装」逐项勾选。菜单中还支持单独换软件源、查看已安装的运行时。
 
-「Kotlin / Android 开发」与「Flutter 开发」属重场景：会从国内镜像下载 JDK、Android SDK（含 build-tools、platform-tools）及 Flutter SDK，耗时较长、占用存储较多。建议在 Debian / Ubuntu 镜像中安装（内置 Alpine 因使用 musl libc 需额外处理）；ARM64 设备会自动替换为可执行的 aapt2 等原生二进制。注意 ARM64 容器仅能构建 Flutter debug APK，release 包需通过远程构建。安装完成后，新开终端会自动带上 `JAVA_HOME`、`ANDROID_HOME` 等环境变量，具体编译步骤见「进阶教程」中的《在容器中编译 Android 应用》《在容器中编译 Flutter 应用》。
+「Kotlin / Android 开发」与「Flutter 开发」属重场景：会从国内镜像下载 JDK、Android SDK（含 build-tools、platform-tools）及 Flutter SDK，耗时较长、占用存储较多。建议在 Debian / Ubuntu 镜像中安装（内置 Alpine 因使用 musl libc 需额外处理）；ARM64 设备会自动替换为可执行的 aapt2 等原生二进制。ARM64 容器可直接构建 Flutter debug APK，release 包需额外补装转译工具，见《在容器中构建 Flutter release APK》。安装完成后，新开终端会自动带上 `JAVA_HOME`、`ANDROID_HOME` 等环境变量，具体编译步骤见「进阶教程」中的《在容器中编译 Android 应用》《在容器中编译 Flutter 应用》。
 
 终端右上角的设置图标打开终端设置面板，可调整配色主题、字号、字体与光标样式。
 
@@ -102,6 +102,8 @@ App 自带 Alpine 镜像，首次启动时自动加入列表并选中，shell �
 4. 下载完成后点击「导入」，镜像加入容器列表，选中即可使用。
 
 已下载的镜像可重复导入；左滑可删除已下载的镜像文件。
+
+下载页右上角的「多选」按钮（方框带勾的图标）可一次清理多个下载文件：进入多选后每行左侧出现勾选框，顶部操作条给出「全选 / 取消全选」与删除按钮，确认后选中的镜像文件一并删除（已导入的容器将无法再从这些文件解压，但已解压好的容器不受影响）。只有**已下载且文件存在**的条目能勾选，未下载的勾选框是灰的。
 
 **版本信息会自动更新**：列表中的版本号由上游发布信息刷新，上游放出新补丁后不用等 App 更新就能看到，断网时则使用内置的版本清单。因此：
 

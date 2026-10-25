@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,16 +20,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,17 +36,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -66,14 +59,13 @@ import com.aicode.feature.credentials.presentation.CredentialViewModel
 import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.git.presentation.component.SectionHeader
 import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.feature.settings.presentation.component.SettingsEmptyState
 import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsLightMode
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Github
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Plus
@@ -184,18 +176,15 @@ fun CredentialScreen(
                         }
                     }
                     1 -> if (state.credentials.isEmpty()) {
-                        Box(
+                        SettingsEmptyState(
+                            icon = FeatherIcons.Key,
+                            title = stringResource(R.string.credential_empty_title),
+                            hint = stringResource(R.string.credential_empty_desc),
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = Spacing.lg)
-                                .padding(bottom = 70.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            EmptyCredentialsCard(
-                                onQuickLogin = { viewModel.startGitHubLogin() },
-                                onManualAdd = { isAddingCredential = true }
-                            )
-                        }
+                                .padding(horizontal = Spacing.xl)
+                                .padding(bottom = 70.dp)
+                        )
                     } else {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
@@ -420,104 +409,5 @@ private fun hostBadgeLabel(host: String): String {
         clean.contains("codeberg", ignoreCase = true) -> "Codeberg"
         clean.contains("azure", ignoreCase = true) || clean.contains("visualstudio", ignoreCase = true) -> "Azure DevOps"
         else -> clean.substringBefore('.').ifBlank { clean }.replaceFirstChar { it.uppercase() }
-    }
-}
-
-/** 凭据列表为空时的现代空态引导卡片 */
-@Composable
-private fun EmptyCredentialsCard(
-    onQuickLogin: () -> Unit,
-    onManualAdd: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.xl),
-        color = MaterialTheme.semanticColors.cardSurface,
-        shadowElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.md)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(Radius.mdLarge)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Key,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
-            ) {
-                Text(
-                    text = stringResource(R.string.credential_empty_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.credential_empty_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = Spacing.sm)
-                )
-            }
-
-            Spacer(Modifier.height(Spacing.xs))
-
-            Button(
-                onClick = onQuickLogin,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                shape = RoundedCornerShape(Radius.mdLarge)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Github,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(Spacing.sm))
-                Text(
-                    text = stringResource(R.string.credential_add_github_title),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            OutlinedButton(
-                onClick = onManualAdd,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                shape = RoundedCornerShape(Radius.mdLarge)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Edit3,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(Spacing.sm))
-                Text(
-                    text = stringResource(R.string.credential_add_manual_title),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
     }
 }

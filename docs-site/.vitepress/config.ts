@@ -28,7 +28,9 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Guide', link: '/en/guide/quick-start', activeMatch: '/en/guide/' },
-          { text: 'Download', link: 'https://github.com/jieapi/aicode/releases/latest' }
+          { text: 'Download', link: 'https://github.com/jieapi/aicode/releases/latest' },
+          { text: 'User Agreement', link: '/en/terms' },
+          { text: 'Privacy', link: '/en/privacy' }
         ],
         sidebar: {
           '/en/guide/': [
@@ -95,7 +97,9 @@ export default defineConfig({
     nav: [
       { text: '使用手册', link: '/guide/quick-start', activeMatch: '/guide/' },
       { text: '进阶教程', link: '/advanced/build-android-app', activeMatch: '/advanced/' },
-      { text: '下载', link: 'https://github.com/jieapi/aicode/releases/latest' }
+      { text: '下载', link: 'https://github.com/jieapi/aicode/releases/latest' },
+      { text: '用户协议', link: '/terms' },
+      { text: '隐私政策', link: '/privacy' }
     ],
     sidebar: {
       '/guide/': [
@@ -163,7 +167,9 @@ export default defineConfig({
             { text: '常见错误提示', link: '/guide/error-codes' },
             { text: '存储空间', link: '/guide/storage' },
             { text: '备份与还原', link: '/guide/backup' },
-            { text: '关于与更新', link: '/guide/about' }
+            { text: '关于与更新', link: '/guide/about' },
+            { text: '用户协议', link: '/terms' },
+            { text: '隐私政策', link: '/privacy' }
           ]
         }
       ],
@@ -173,6 +179,7 @@ export default defineConfig({
           items: [
             { text: '在容器中编译 Android 应用', link: '/advanced/build-android-app' },
             { text: '在容器中编译 Flutter 应用', link: '/advanced/build-flutter-app' },
+            { text: '在容器中构建 Flutter release APK', link: '/advanced/build-flutter-release' },
             { text: '安装 Playwright 浏览器自动化', link: '/advanced/playwright-mcp' }
           ]
         },
@@ -180,6 +187,12 @@ export default defineConfig({
           text: '设备调试',
           items: [
             { text: '用 adb 无线调试其他设备', link: '/advanced/adb-wireless-debug' }
+          ]
+        },
+        {
+          text: '模型与推理',
+          items: [
+            { text: '思考强度与关闭思考', link: '/advanced/reasoning-modes' }
           ]
         },
         {

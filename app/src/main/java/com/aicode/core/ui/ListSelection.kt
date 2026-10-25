@@ -101,15 +101,20 @@ fun rememberListSelectionState(): ListSelectionState = remember { ListSelectionS
 
 /**
  * 顶部栏右上角的多选开关：与模型页同一套图标与配色（`FeatherIcons.CheckSquare`）。
- * 列表为空时调用方不显示它。
+ * 列表为空时调用方不显示它；[enabled] = false 时置灰不可点（如提示词全部为只读来源，
+ * 进多选也无项可勾）。
  */
 @Composable
-fun SelectionToggleAction(selection: ListSelectionState) {
-    IconButton(onClick = { if (selection.isActive) selection.exit() else selection.enter() }) {
+fun SelectionToggleAction(selection: ListSelectionState, enabled: Boolean = true) {
+    IconButton(
+        onClick = { if (selection.isActive) selection.exit() else selection.enter() },
+        enabled = enabled
+    ) {
         Icon(
             FeatherIcons.CheckSquare,
             contentDescription = stringResource(R.string.common_select_mode),
-            tint = if (selection.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+            tint = if (selection.isActive) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = if (enabled) 1f else 0.38f),
             modifier = Modifier.size(22.dp)
         )
     }

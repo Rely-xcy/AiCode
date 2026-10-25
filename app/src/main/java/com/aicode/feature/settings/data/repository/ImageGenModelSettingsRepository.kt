@@ -2,11 +2,15 @@ package com.aicode.feature.settings.data.repository
 
 import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
+import com.aicode.core.datastore.preferencesCorruptionHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private val Context.imageGenModelDataStore by preferencesDataStore(name = "image_gen_model_prefs")
+private val Context.imageGenModelDataStore by preferencesDataStore(
+    name = "image_gen_model_prefs",
+    corruptionHandler = preferencesCorruptionHandler
+)
 
 /**
  * 持久化「生图模型」选择（providerId + model 两字符串）。

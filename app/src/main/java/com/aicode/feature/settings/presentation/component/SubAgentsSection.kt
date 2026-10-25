@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +56,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * 每行一个子代理（图标 + 名称 + 描述 + 模型标签），左滑删除，点击行进入详情，长按整行拖拽排序（仅同组内）。
  * 新建入口在顶栏的「＋」，启用开关与编辑入口在详情页。
  *
+ * 列表走 [LazyColumn] 只组合可见行：子代理数量随项目增长，一次组合全部行会明显掉帧。
+ *
  * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 删除。
  * 全选覆盖两组（含折叠起来的组）。
  */
@@ -83,9 +86,8 @@ internal fun SubAgentsSection(
 ) {
     // 只在数据变化时分组，避免每次重组都产生两份新 List。
     val (projectAgents, globalAgents) = remember(entries) {
-        val project = entries.filter { it.scope == AgentDefinitionScope.PROJECT }
-        val global = entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
-        project to global
+        entries.filter { it.scope == AgentDefinitionScope.PROJECT } to
+            entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
     }
 
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
@@ -333,6 +335,7 @@ private fun SubAgentRow(
     selected: Boolean = false,
     onToggleSelect: () -> Unit = {}
 ) {
+    // 行背景由 SwipeToDeleteRow 提供，这里不再重复画一层。
     SwipeToDeleteRow(
         onDelete = onDelete,
         onClick = onClick,

@@ -1,6 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
+    <string name="plan_mode_refinement_requested">用户选择继续完善方案，当前保持 PLAN 模式。等待具体反馈后再调整，暂不重复申请退出。</string>
+    <string name="plan_mode_approved_build">计划已获批准，当前为 BUILD 模式。按已批准的范围实施。</string>
+    <string name="plan_mode_approved_auto">计划已获批准，已恢复 AUTO 模式。按已批准的范围实施，工具调用遵守 AUTO 权限策略。</string>
+    <string name="plan_mode_external_build">用户已切换到 BUILD 模式，后续操作遵守该模式权限和当前任务范围。</string>
+    <string name="plan_mode_external_auto">用户已切换到 AUTO 模式，后续操作遵守该模式权限和当前任务范围。</string>
+    <string name="tool_plan_mode_denied">当前为 PLAN（计划）模式，此操作未执行。该模式仅允许只读探索；需要实施时，请提交方案并申请退出 PLAN。</string>
+    <string name="tool_permission_rule_denied">权限规则禁止执行此工具。</string>
+    <string name="tool_command_rule_denied">权限规则禁止执行此命令。</string>
+    <string name="tool_command_rule_denied_detail">权限规则禁止执行此命令。命中规则：%1$s；触发片段：%2$s；建议：改用允许的写法，或请用户在「工具授权」中调整规则后重试。</string>
+    <string name="tool_command_unanalyzable_reason">命令含 %1$s 等无法静态判定的构造，只能单次放行，无法保存为始终允许</string>
+    <string name="tool_shizuku_confirmation_reason">Shizuku 会以 adb shell 身份操作 Android 系统，需要逐次确认，无法保存为始终允许。</string>
+    <string name="tool_subagent_message_delivered">消息已投递。运行中的子代理会尽快收到，已结束的会继续处理消息。</string>
+    <string name="tool_subagent_plan_readonly_warning">当前为 PLAN（计划）模式：子代理继承只读权限，文件修改与命令执行会被模式拦截。如确需实施，请先申请退出 PLAN 再派发。</string>
+    <string name="tool_subagent_tier_pinned">该子代理定义里已写死模型（%1$s），请求的「%2$s」档被忽略。</string>
+    <string name="tool_subagent_tier_fallback">请求的「%1$s」档未配置或对应提供商不可用，已改用「%2$s」档（%3$s）。</string>
+    <string name="tool_subagent_tier_unavailable">请求的「%1$s」档未配置或对应提供商不可用，该子代理将继承当前会话模型。</string>
+    <string name="tool_subagent_provider_unresolved">该子代理定义里的 provider「%1$s」未找到（未配置或名称不符），本次将用父会话提供商搭配定义模型「%2$s」，该组合可能无法调用。</string>
+    <!-- 子代理模型档位 -->
+    <string name="settings_subagent_tiers_header">子代理模型档位</string>
+    <string name="settings_subagent_tier_light">轻量</string>
+    <string name="settings_subagent_tier_standard">均衡</string>
+    <string name="settings_subagent_tier_strong">强力</string>
+    <string name="settings_subagent_tier_unconfigured">未配置</string>
+    <!-- 子代理派发卡片 -->
+    <string name="subagent_dispatch_title">子代理任务</string>
+    <string name="subagent_dispatch_count">已派发 %1$d 个任务</string>
+    <string name="subagent_card_default_agent">子代理</string>
+    <string name="subagent_card_status_dispatched">已派发</string>
+    <string name="subagent_card_status_running">运行中</string>
+    <string name="subagent_card_status_completed">已完成</string>
+    <string name="subagent_card_status_failed">失败</string>
+    <string name="subagent_card_status_stopped">已停止</string>
+    <string name="subagent_card_expand">展开摘要</string>
+    <string name="subagent_card_collapse">收起摘要</string>
+    <string name="subagent_card_changed_files">改动 %1$d 个文件</string>
+    <string name="subagent_card_open">进入会话</string>
+    <string name="subagent_card_stop">停止</string>
+    <string name="chat_context_usage_estimated">预计占可用输入预算 %1$d%%</string>
+    <string name="agent_input_budget_exceeded">上下文超过当前模型的可用输入预算，请缩短输入或减少工具定义。</string>
 
     <!-- 设置页菜单标题 -->
     <string name="settings_title">设置</string>
@@ -123,6 +162,7 @@
     <string name="settings_token_stats_calls_suffix2">%1$d 次调用</string>
     <string name="settings_token_stats_col_model">模型</string>
     <string name="settings_token_stats_col_reasoning_effort">思考强度</string>
+    <string name="settings_token_stats_col_reasoning_wire">实际发出</string>
     <string name="settings_token_stats_col_provider">供应商</string>
     <string name="settings_token_stats_col_input">输入</string>
     <string name="settings_token_stats_col_output">输出</string>
@@ -366,6 +406,8 @@
     <string name="common_show">显示</string>
     <string name="common_local">本地</string>
     <string name="common_model">模型</string>
+    <!-- 档位名后附接口值，如「最高（max）」，便于对照模型文档与报错文案。 -->
+    <string name="common_label_with_api">%1$s（%2$s）</string>
     <string name="common_add">添加</string>
     <string name="credential_add">添加凭据</string>
     <string name="common_username">用户名</string>
@@ -427,6 +469,17 @@
     <string name="chat_reasoning_effort_high">高</string>
     <string name="chat_reasoning_effort_xhigh">极高</string>
     <string name="chat_reasoning_effort_max">最高</string>
+    <string name="chat_reasoning_toggle">思考</string>
+    <string name="chat_reasoning_off_short">不思考</string>
+    <string name="chat_reasoning_default_tag">默认</string>
+    <string name="chat_reasoning_effective_tag">生效</string>
+    <string name="chat_reasoning_effective">实际生效：%1$s</string>
+    <string name="chat_reasoning_unknown_hint">未识别到该模型支持的档位，所选档位可能不生效</string>
+    <string name="chat_reasoning_cannot_disable">该模型无法关闭思考，已改用最低档</string>
+    <string name="chat_reasoning_endpoint_weak">当前端点可能忽略「关闭」，改用该厂商的新版端点（Responses）才能真关闭</string>
+    <string name="provider_model_section_reasoning">思考档位</string>
+    <string name="provider_model_reasoning_hint">只勾选该模型真实支持的档位；全部不勾则由内置能力表自动判断</string>
+    <string name="provider_model_reasoning_can_disable">可以关闭思考</string>
     <string name="chat_open_file_missing">文件不存在或已被移动</string>
     <string name="chat_open_file_unavailable">无法读取文件：连接已断开或工作区未就绪，请稍后重试</string>
     <string name="chat_open_file_unshareable">文件所在位置无法分享给其它应用</string>
@@ -461,7 +514,7 @@
     <string name="about_version">版本</string>
     <string name="about_github_repo">GitHub 仓库</string>
     <string name="about_license">开源许可证</string>
-    <string name="about_description">在 Android 设备上运行的 AI 驱动代码编辑器 · 内置终端 · AI Agent · MCP 协议</string>
+    <string name="about_description">Android 上的通用 AI Coding Agent · Linux 开发环境 · 支持本地与远程 SSH</string>
     <string name="about_check_update">检查更新</string>
     <string name="about_checking_update">正在向 GitHub 查询最新版本…</string>
     <string name="about_up_to_date">已经是最新版本</string>
@@ -515,12 +568,18 @@
     <string name="about_update_verify_not_newer">安装包版本不高于当前版本</string>
     <string name="about_update_install_failed">没有可用的安装程序</string>
 
-    <!-- Disclaimer -->
-    <string name="about_disclaimer">免责声明</string>
-    <string name="disclaimer_title">免责声明</string>
-    <string name="disclaimer_body">本软件（AiCode）为开源软件，按「现状」提供，仅供学习、研究与合法的软件开发用途。\n\n使用本软件时，你应遵守所在国家或地区的法律法规以及所使用服务的相关条款。严禁将本软件用于任何违法或侵权用途，包括但不限于：未经授权入侵、破解、逆向工程他人软件或系统，绕过技术保护措施，窃取或泄露他人数据，传播恶意代码，以及其它侵害他人合法权益的行为。\n\n你应自行承担使用本软件的全部风险与责任。对于你因使用或无法使用本软件而产生的任何直接或间接损失，以及你利用本软件实施的任何行为及其后果，作者与贡献者均不承担任何责任。\n\n若你不同意本声明，请立即停止使用并卸载本软件。</string>
-    <string name="disclaimer_accept">我已阅读并同意</string>
-    <string name="disclaimer_decline">不同意</string>
+    <string name="agreement_title">欢迎使用 AiCode</string>
+    <string name="agreement_terms">用户协议</string>
+    <string name="agreement_privacy">隐私政策</string>
+    <string name="agreement_notice_prefix">使用前，请阅读并同意</string>
+    <string name="agreement_terms_link">《用户协议》</string>
+    <string name="agreement_notice_conjunction">和</string>
+    <string name="agreement_privacy_link">《隐私政策》</string>
+    <string name="agreement_notice_suffix">，了解使用规则与数据处理方式。\n\n点击“同意并继续”表示你已阅读并同意上述两份文件。</string>
+    <string name="agreement_accept">同意并继续</string>
+    <string name="agreement_decline">不同意</string>
+    <string name="agreement_terms_url">https://aicode.murk.top/terms</string>
+    <string name="agreement_privacy_url">https://aicode.murk.top/privacy</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI 需要你的确认</string>
@@ -629,6 +688,7 @@
     <string name="backup_net_add_target">添加备份目标</string>
     <string name="backup_net_edit_target">编辑备份目标</string>
     <string name="backup_net_no_target">尚未添加网络备份目标</string>
+    <string name="backup_net_no_target_hint">点击右上角 + 添加 WebDAV 或 S3 备份目标</string>
     <string name="backup_net_upload">上传到云端</string>
     <string name="backup_net_upload_short">上传</string>
     <string name="backup_net_upload_password_hint">备份将上传到云端，为避免 API Key、SSH 凭据等明文泄露，必须设置口令加密（AES-GCM）</string>
@@ -866,6 +926,11 @@
     <string name="chat_goal_clear">清除目标</string>
     <string name="chat_goal_auto_approve_hint">工具已自动放行，暂停即恢复逐次确认</string>
     <string name="chat_error_title">请求失败</string>
+    <string name="network_error_dns">DNS 解析失败：域名没有解析到可用地址，请检查网络、Wi-Fi 的 DNS 或代理设置</string>
+    <string name="network_error_timeout">请求超时：网络较慢或服务未响应</string>
+    <string name="network_error_connect">连接被拒绝：请检查 Base URL 与端口</string>
+    <string name="network_error_ssl">SSL 握手失败：请检查证书或代理设置</string>
+    <string name="common_error_unknown">未知错误</string>
     <string name="slash_command_compress_desc">手动触发当前会话的上下文压缩</string>
     <string name="slash_command_init_desc">分析当前工作区代码库，生成或改进项目规则 AGENTS.md</string>
     <string name="slash_command_usage_desc">查看今日与累计的调用次数、token 用量与预估费用</string>
@@ -982,7 +1047,7 @@
     <!-- Credential List -->
     <string name="credential_empty_hint">尚未添加凭据，点右上角 + 添加</string>
     <string name="credential_empty_title">暂无 Git 凭据</string>
-    <string name="credential_empty_desc">配置凭据后，AiCode 可在推送或拉取代码仓库时自动完成身份认证</string>
+    <string name="credential_empty_desc">点击右上角 + 添加：GitHub 快捷登录或手动配置访问令牌。配置后推送、拉取代码时会自动完成身份认证</string>
 
     <!-- Credential Add / Quick Login -->
     <string name="credential_add_sheet_title">添加凭据</string>
@@ -1198,8 +1263,8 @@
 
     <!-- Git Conflict -->
     <string name="git_conflicted_count">存在冲突 (%1$s)</string>
-    <string name="git_conflict_detected">检测到合并冲突</string>
-    <string name="git_conflict_hint">请在编辑器中解决冲突后暂存文件，或中止本次合并。</string>
+    <string name="git_merge_pending_title">合并待提交</string>
+    <string name="git_merge_pending_hint">当前没有未解决的冲突。请确认并暂存需要保留的改动，然后提交以完成合并。</string>
     <string name="git_action_abort_merge">中止合并</string>
     <string name="git_abort_merge_confirm">确定中止当前合并吗？未解决的冲突改动将被放弃，工作区将还原到合并前的状态。</string>
 
@@ -1401,11 +1466,10 @@
     <string name="prompts_field_content_placeholder">写模型要遵守的内容</string>
     <string name="prompts_editor_new">新建提示词</string>
     <string name="prompts_editor_edit">编辑提示词</string>
-    <string name="prompts_add_sheet_title">提示词</string>
     <string name="prompts_add_prompt">添加片段</string>
-    <string name="prompts_add_prompt_hint">用未占用的编号新增一条片段</string>
+    <string name="prompts_reset_custom">重置自定义提示词</string>
+    <string name="prompts_reset_confirm">将删除当前项目与全局层里的所有自定义提示词，各编号回落到内置提示词。此操作不可撤销。</string>
     <string name="prompts_help">帮助</string>
-    <string name="prompts_help_hint">怎么用、什么时候生效</string>
     <string name="prompts_disable_builtin">完全禁用内置提示词</string>
     <string name="prompts_disable_builtin_hint">只保留你的片段；需要自己补全全部规则，谨慎开启</string>
 
@@ -1709,6 +1773,11 @@
     <string name="ftp_login_password">登录密码</string>
     <string name="ftp_allow_anonymous">允许匿名访问</string>
     <string name="ftp_anonymous_desc">无需输入用户名和密码即可连接</string>
+    <string name="ftp_anonymous_confirm_title">允许匿名访问？</string>
+    <string name="ftp_anonymous_confirm_message">开启后，同一局域网内任何设备无需凭据即可读写你的工作区，存在被他人访问的风险。</string>
+    <string name="ftp_password_required">请先设置登录用户名与密码</string>
+    <string name="ftp_reserved_username">anonymous 是匿名登录的保留名称，请使用其它用户名</string>
+    <string name="ftp_user_cache_cleanup_failed">无法清理旧 FTP 登录信息，服务未启动，请重试</string>
     <string name="ftp_auto_start">应用启动时自启</string>
     <string name="ftp_auto_start_desc">应用启动时后台自动运行 FTP 服务</string>
     <string name="ftp_config_saved">配置已保存</string>
@@ -1868,8 +1937,8 @@
     <string name="workspace_switch_confirm">切换工作区会停止当前工作区所有正在运行的 AI 会话并关闭终端标签。确定要切换吗？</string>
     <string name="workspace_confirm">确定</string>
     <string name="workspace_open">打开工作区</string>
-    <string name="workspace_new">新建</string>
-    <string name="workspace_empty_hint">暂无工作区，点击「新建」创建一个</string>
+    <string name="workspace_new_internal">新建内部工作区</string>
+    <string name="workspace_empty_hint">暂无工作区，点击「%1$s」创建一个</string>
     <string name="workspace_delete">删除工作区</string>
     <string name="workspace_delete_confirm">确定删除「%1$s」？该目录下的所有文件及该工作区的聊天记录都将被删除，且无法恢复。</string>
     <string name="workspace_new_workspace">新建工作区</string>
@@ -1879,9 +1948,9 @@
     <string name="workspace_remote_default_create_failed">远程默认工作区创建失败，请检查服务器权限与磁盘空间</string>
     <string name="workspace_remote_target_dir_empty">远程工作区路径为空或无效，请在「容器与镜像」中填写具体目录</string>
     <string name="workspace_remote_not_configured">尚未配置远程连接，无法加载工作区</string>
-    <string name="workspace_add_local_dir">添加本地目录</string>
-    <string name="workspace_external_added">已添加本地目录工作区「%1$s」</string>
-    <string name="workspace_external_warning_title">添加本地目录工作区</string>
+    <string name="workspace_add_external">添加外部工作区</string>
+    <string name="workspace_external_added">已添加外部工作区「%1$s」</string>
+    <string name="workspace_external_warning_title">添加外部工作区</string>
     <string name="workspace_external_warning_message">AI 会直接读写所选目录中的真实文件。公共存储不支持软链，npm、yarn、pnpm、git 涉及软链的操作可能失败；移除工作区只解除关联，不会删除目录内容。</string>
     <string name="workspace_external_warning_dont_show_again">不再提示</string>
     <string name="workspace_external_warning_continue">继续</string>
@@ -1904,7 +1973,9 @@
     <string name="chat_more_options">更多选项</string>
     <string name="chat_action_edit">编辑消息</string>
     <string name="chat_action_copy">复制文本</string>
+    <string name="chat_action_fork">从此处新建分支</string>
     <string name="chat_action_delete">删除消息</string>
+    <string name="chat_fork_title">Fork of %1$s</string>
     <string name="chat_edit_dialog_title">编辑消息</string>
     <string name="chat_edit_dialog_hint">请输入消息内容</string>
 

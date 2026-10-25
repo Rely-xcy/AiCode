@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,6 +49,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Surface
@@ -58,6 +61,7 @@ import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -240,63 +244,76 @@ fun ChatDrawerContent(
                 shape = RoundedCornerShape(Radius.mdLarge),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
+                CompositionLocalProvider(
+                    LocalMinimumInteractiveComponentSize provides 0.dp
                 ) {
-                    IconButton(
-                        onClick = {
-                            isSelectionMode = false
-                            selectedSessionIds.clear()
-                        },
-                        modifier = Modifier.size(32.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .padding(horizontal = Spacing.md),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_cancel),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(Modifier.width(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
-                        val ids = mutableListOf<String>()
-                        sessions.forEach { s ->
-                            ids.add(s.id)
-                            subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                        IconButton(
+                            onClick = {
+                                isSelectionMode = false
+                                selectedSessionIds.clear()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.common_cancel),
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                        ids
-                    }
-                    val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
-                    TextButton(onClick = {
-                        if (allSelected) {
-                            selectedSessionIds.clear()
-                        } else {
-                            selectedSessionIds.clear()
-                            selectedSessionIds.addAll(allSessionIds)
-                        }
-                    }) {
-                        Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
-                    }
-                    IconButton(
-                        onClick = { showBatchDeleteConfirm = true },
-                        enabled = selectedSessionIds.isNotEmpty(),
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Trash2,
-                            contentDescription = stringResource(R.string.chat_batch_delete_title),
-                            modifier = Modifier.size(18.dp),
-                            tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
                         )
+                        val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
+                            val ids = mutableListOf<String>()
+                            sessions.forEach { s ->
+                                ids.add(s.id)
+                                subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                            }
+                            ids
+                        }
+                        val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
+                        TextButton(
+                            onClick = {
+                                if (allSelected) {
+                                    selectedSessionIds.clear()
+                                } else {
+                                    selectedSessionIds.clear()
+                                    selectedSessionIds.addAll(allSessionIds)
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        Spacer(Modifier.width(Spacing.xs))
+                        IconButton(
+                            onClick = { showBatchDeleteConfirm = true },
+                            enabled = selectedSessionIds.isNotEmpty(),
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Trash2,
+                                contentDescription = stringResource(R.string.chat_batch_delete_title),
+                                modifier = Modifier.size(18.dp),
+                                tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            )
+                        }
                     }
                 }
             }

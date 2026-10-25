@@ -136,6 +136,15 @@ class PromptsViewModel @Inject constructor(
         }
     }
 
+    /** 重置：清空项目层与全局层的所有自定义片段，各编号回落到内置提示词。 */
+    fun resetCustomFragments() {
+        viewModelScope.launch {
+            val projectRoot = currentProjectRoot()
+            withContext(Dispatchers.IO) { catalog.deleteAllCustom(projectRoot) }
+            refresh()
+        }
+    }
+
     /** 拖拽重排：按新顺序重新编号并落盘，改变注入顺序。乐观更新本地状态，避免重读导致列表跳动。 */
     fun reorderFragments(reordered: List<PromptFragment>) {
         val numbers = reordered.map { it.number }.sorted()

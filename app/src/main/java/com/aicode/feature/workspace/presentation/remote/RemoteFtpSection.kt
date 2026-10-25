@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import com.aicode.core.ui.AppTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,6 +70,7 @@ fun WiFiFtpServerSection(
     var editPassword by remember(password) { mutableStateOf(password) }
     var editAnonymous by remember(isAnonymous) { mutableStateOf(isAnonymous) }
     var editAutoStart by remember(autoStart) { mutableStateOf(autoStart) }
+    var showAnonymousConfirm by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -238,7 +241,12 @@ fun WiFiFtpServerSection(
                         Text(text = stringResource(R.string.ftp_allow_anonymous), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                         Text(text = stringResource(R.string.ftp_anonymous_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    AppSwitch(checked = editAnonymous, onCheckedChange = { editAnonymous = it })
+                    AppSwitch(
+                        checked = editAnonymous,
+                        onCheckedChange = { allowed ->
+                            if (allowed) showAnonymousConfirm = true else editAnonymous = false
+                        }
+                    )
                 }
 
                 Row(
@@ -268,5 +276,26 @@ fun WiFiFtpServerSection(
                 }
             }
         }
+    }
+
+    if (showAnonymousConfirm) {
+        AlertDialog(
+            onDismissRequest = { showAnonymousConfirm = false },
+            title = { Text(stringResource(R.string.ftp_anonymous_confirm_title)) },
+            text = { Text(stringResource(R.string.ftp_anonymous_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        editAnonymous = true
+                        showAnonymousConfirm = false
+                    }
+                ) { Text(stringResource(R.string.common_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAnonymousConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
     }
 }

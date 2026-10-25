@@ -164,6 +164,7 @@ import compose.icons.feathericons.Slash
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
+import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.component.AdaptiveCardView
 import com.aicode.feature.settings.domain.model.ProviderDashboardResult
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
@@ -1204,6 +1205,9 @@ private fun AddModelSheet(
     var supportsImageOutput by remember { mutableStateOf(initial?.supportsImageOutput ?: false) }
     var supportsTools by remember { mutableStateOf(initial?.supportsTools ?: false) }
     var supportsReasoning by remember { mutableStateOf(initial?.supportsReasoning ?: false) }
+    // 思考档位：勾选的档位写进自定义元数据，留空则回退内置能力表/目录自动判断。
+    var reasoningCanDisable by remember { mutableStateOf(initial?.reasoningCanDisable ?: false) }
+    var reasoningLevels by remember { mutableStateOf(initial?.reasoningLevels?.toSet() ?: emptySet<String>()) }
     var contextTokens by remember { mutableStateOf(initial?.contextTokens?.takeIf { it > 0 }?.toString() ?: "") }
     var inputTokens by remember { mutableStateOf(initial?.inputTokens?.toString() ?: "") }
     var outputTokens by remember { mutableStateOf(initial?.outputTokens?.toString() ?: "") }
@@ -1359,6 +1363,44 @@ private fun AddModelSheet(
                     }
                 }
 
+                if (supportsReasoning) {
+                    SectionLabel(stringResource(R.string.provider_model_section_reasoning))
+                    Text(
+                        text = stringResource(R.string.provider_model_reasoning_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.semanticColors.mutedSurface
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column {
+                            CapabilitySwitchRow(
+                                title = stringResource(R.string.provider_model_reasoning_can_disable),
+                                checked = reasoningCanDisable,
+                                onCheckedChange = { reasoningCanDisable = it }
+                            )
+                            EDITABLE_REASONING_LEVELS.forEach { level ->
+                                SettingsDivider()
+                                ReasoningLevelRow(
+                                    title = level.reasoningLabel(),
+                                    checked = level.apiValue in reasoningLevels,
+                                    onToggle = {
+                                        reasoningLevels = if (level.apiValue in reasoningLevels) {
+                                            reasoningLevels - level.apiValue
+                                        } else {
+                                            reasoningLevels + level.apiValue
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
@@ -1388,7 +1430,13 @@ private fun AddModelSheet(
                             supportsVision = supportsVision,
                             supportsImageOutput = supportsImageOutput,
                             supportsTools = supportsTools,
-                            supportsReasoning = supportsReasoning
+                            supportsReasoning = supportsReasoning,
+                            reasoningLevels = reasoningLevels.toList().takeIf { it.isNotEmpty() },
+                            reasoningCanDisable = reasoningCanDisable,
+                            // 预算范围与默认档沿用自动识别值，避免手填档位时丢掉预算型信息。
+                            reasoningBudgetMin = initial?.reasoningBudgetMin,
+                            reasoningBudgetMax = initial?.reasoningBudgetMax,
+                            reasoningDefaultLevel = initial?.reasoningDefaultLevel
                         )
                         onSave(trimmedModel, meta)
                     },
@@ -1402,6 +1450,58 @@ private fun AddModelSheet(
                     Text(confirmLabel, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
                 }
             }
+        }
+    }
+}
+
+/** 可手动标注的思考档位（不含「不思考」：能否关闭由单独开关表达）。 */
+private val EDITABLE_REASONING_LEVELS = listOf(
+    ReasoningEffort.MINIMAL,
+    ReasoningEffort.LOW,
+    ReasoningEffort.MEDIUM,
+    ReasoningEffort.HIGH,
+    ReasoningEffort.XHIGH,
+    ReasoningEffort.MAX
+)
+
+/** 档位显示名：中文 + 对应接口值（如「最高（max）」）。 */
+@Composable
+private fun ReasoningEffort.reasoningLabel(): String =
+    stringResource(R.string.common_label_with_api, stringResource(reasoningLabelRes()), apiValue)
+
+private fun ReasoningEffort.reasoningLabelRes(): Int = when (this) {
+    ReasoningEffort.NONE -> R.string.chat_reasoning_effort_none
+    ReasoningEffort.MINIMAL -> R.string.chat_reasoning_effort_minimal
+    ReasoningEffort.LOW -> R.string.chat_reasoning_effort_low
+    ReasoningEffort.MEDIUM -> R.string.chat_reasoning_effort_medium
+    ReasoningEffort.HIGH -> R.string.chat_reasoning_effort_high
+    ReasoningEffort.XHIGH -> R.string.chat_reasoning_effort_xhigh
+    ReasoningEffort.MAX -> R.string.chat_reasoning_effort_max
+}
+
+/** 思考档位多选行：勾选表示该模型真实支持这一档。 */
+@Composable
+private fun ReasoningLevelRow(title: String, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = Spacing.lg, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        if (checked) {
+            Icon(
+                FeatherIcons.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }

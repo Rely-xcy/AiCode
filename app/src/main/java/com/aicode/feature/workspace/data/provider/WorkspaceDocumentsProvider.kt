@@ -90,7 +90,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
             add(Root.COLUMN_SUMMARY, null)
             add(
                 Root.COLUMN_FLAGS,
-                Root.FLAG_SUPPORTS_CREATE or Root.FLAG_SUPPORTS_SEARCH or Root.FLAG_SUPPORTS_IS_CHILD,
+                Root.FLAG_SUPPORTS_SEARCH or Root.FLAG_SUPPORTS_IS_CHILD,
             )
             add(Root.COLUMN_TITLE, title)
             add(Root.COLUMN_MIME_TYPES, ALL_MIME_TYPES)
@@ -114,12 +114,12 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         val parent = fileForDocId(parentDocumentId)
         // 根目录（filesDir 本身）只放出白名单子目录，隐藏 rootfs/数据库等内部目录；
         // 其余层级照常列出全部内容。
-        val children = if (parent.absolutePath == baseDir().absolutePath) {
+        val children = if (parent.canonicalFile == baseDir().canonicalFile) {
             exposedChildren()
         } else {
             parent.listFiles()?.toList() ?: emptyList()
         }
-        children.forEach { child -> includeFile(result, null, child) }
+        children.filter { isWithinExposedRoots(it) }.forEach { child -> includeFile(result, null, child) }
         return result
     }
 
@@ -138,10 +138,22 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         mimeType: String,
         displayName: String,
     ): String {
+        if (displayName.isEmpty() || displayName == "." || displayName == ".." ||
+            '/' in displayName || '\u0000' in displayName
+        ) {
+            throw FileNotFoundException("Invalid document name")
+        }
         val parent = fileForDocId(parentDocumentId)
+        if (parent.canonicalFile == baseDir().canonicalFile) {
+            throw FileNotFoundException("Cannot create documents in the root directory")
+        }
         var newFile = File(parent, displayName)
         var conflictId = 2
-        while (newFile.exists()) {
+        while (true) {
+            if (!isWithinExposedRoots(newFile) || newFile.canonicalFile == baseDir().canonicalFile) {
+                throw FileNotFoundException("${newFile.path} is outside exposed roots")
+            }
+            if (!newFile.exists() && !java.nio.file.Files.isSymbolicLink(newFile.toPath())) break
             newFile = File(parent, "$displayName ($conflictId)")
             conflictId++
         }
@@ -156,6 +168,9 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
 
     override fun deleteDocument(documentId: String) {
         val file = fileForDocId(documentId)
+        if (file.canonicalFile == baseDir().canonicalFile) {
+            throw FileNotFoundException("Cannot delete the root directory")
+        }
         if (!file.deleteRecursively()) {
             throw FileNotFoundException("Failed to delete document: $documentId")
         }
@@ -173,19 +188,18 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         val root = fileForDocId(rootId)
         val rootCanonical = root.canonicalPath
         // 从根（filesDir）搜索时只下钻白名单子目录，避免扫到 rootfs 等内部目录；其余层级照常。
-        val seeds = if (root.absolutePath == baseDir().absolutePath) exposedChildren() else listOf(root)
+        val seeds = if (rootCanonical == baseDir().canonicalPath) exposedChildren() else listOf(root)
         val pending = LinkedList<File>().apply { addAll(seeds) }
+        val visited = HashSet<String>()
         val needle = query.lowercase()
 
         while (pending.isNotEmpty() && result.count < MAX_SEARCH_RESULTS) {
             val file = pending.removeFirst()
-            // 仅在根目录内搜索，避免 symlink 指向外部导致扫到整个磁盘
-            val insideRoot = try {
-                file.canonicalPath.startsWith(rootCanonical)
-            } catch (e: Exception) {
-                false
-            }
-            if (!insideRoot) continue
+            val canonical = runCatching { file.canonicalPath }.getOrNull() ?: continue
+            if (!isWithinExposedRoots(file) ||
+                (canonical != rootCanonical && !canonical.startsWith("$rootCanonical/")) ||
+                !visited.add(canonical)
+            ) continue
             if (file.isDirectory) {
                 file.listFiles()?.let { pending.addAll(it) }
             } else if (file.name.lowercase().contains(needle)) {
@@ -195,15 +209,34 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         return result
     }
 
-    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
-        documentId.startsWith(parentDocumentId)
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
+        val parent = runCatching { fileForDocId(parentDocumentId).canonicalPath }.getOrNull() ?: return false
+        val child = runCatching { fileForDocId(documentId).canonicalPath }.getOrNull() ?: return false
+        return child != parent && child.startsWith("$parent/")
+    }
 
     private fun docIdForFile(file: File): String = file.absolutePath
 
+    /**
+     * docId 直接用绝对路径（与 Termux 一致），故必须校验归属：仅根目录本身及其白名单子目录
+     * （projects/aicode）内的路径可访问，其余一律拒绝——否则获 root 授权的应用可构造 docId
+     * 读写 databases、shared_prefs、git-credentials 等 filesDir 内部文件。
+     */
     private fun fileForDocId(docId: String): File {
         val f = File(docId)
         if (!f.exists()) throw FileNotFoundException("${f.absolutePath} not found")
+        if (!isWithinExposedRoots(f)) throw FileNotFoundException("$docId is outside exposed roots")
         return f
+    }
+
+    private fun isWithinExposedRoots(file: File): Boolean {
+        val path = runCatching { file.canonicalPath }.getOrNull() ?: return false
+        val base = runCatching { baseDir().canonicalPath }.getOrNull() ?: return false
+        if (path == base) return true
+        return listOf("projects", "aicode").any { name ->
+            val root = File(base, name).path
+            path == root || path.startsWith("$root/")
+        }
     }
 
     private fun mimeType(file: File): String {
@@ -220,13 +253,14 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         ?: throw FileNotFoundException("docId and file both null")
         val resolvedDocId = docId ?: docIdForFile(resolvedFile)
 
+        val isRoot = resolvedFile.canonicalFile == baseDir().canonicalFile
         var flags = 0
         if (resolvedFile.isDirectory) {
-            if (resolvedFile.canWrite()) flags = flags or Document.FLAG_DIR_SUPPORTS_CREATE
+            if (!isRoot && resolvedFile.canWrite()) flags = flags or Document.FLAG_DIR_SUPPORTS_CREATE
         } else if (resolvedFile.canWrite()) {
             flags = flags or Document.FLAG_SUPPORTS_WRITE
         }
-        if (resolvedFile.parentFile?.canWrite() == true) flags = flags or Document.FLAG_SUPPORTS_DELETE
+        if (!isRoot && resolvedFile.parentFile?.canWrite() == true) flags = flags or Document.FLAG_SUPPORTS_DELETE
 
         val mime = mimeType(resolvedFile)
         if (mime.startsWith("image/")) flags = flags or Document.FLAG_SUPPORTS_THUMBNAIL

@@ -128,8 +128,7 @@ class SessionUseCase @Inject constructor(
 
     /** 工作区下可复用的空会话（从未发送过消息的根会话，取最近更新的一个），供「新建会话」直接切过去。 */
     suspend fun getEmptySessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
-        return chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath)
-            .firstOrNull { !agentMessageDao.hasMessages(it.id) }
+        return chatSessionDao.getEmptyRootSessionByWorkspace(workspacePath)
     }
 
     /** 回收工作区下多余的空会话（从未发送过消息），保留 [keepId]；保证列表最多一个空会话。 */
@@ -152,7 +151,7 @@ class SessionUseCase @Inject constructor(
      * @param providerId 覆盖 provider；null 表示继承父会话
      * @param model 覆盖模型；null 表示继承父会话
      * @param reasoningEffort 覆盖思考强度；null 表示继承父会话
-     * @param mode 覆盖运行模式；null 表示继承父会话
+     * @param mode 覆盖运行模式；null 表示继承父会话（只能往更严的方向收，不能放大，见 [resolveChildMode]）
      */
     fun newSubSessionEntity(
         title: String,
@@ -173,14 +172,24 @@ class SessionUseCase @Inject constructor(
             updatedAt = now,
             // 默认继承父会话 mode：权限引擎按会话 mode 判定写拦截，默认 BUILD 会让 PLAN
             // 模式下派出的子代理绕过只读限制，反过来 AUTO 模式的子代理又会弹授权窗打扰用户。
-            // 自定义子代理可用定义的 mode 覆盖该默认值。
-            mode = mode?.name ?: parent.mode,
+            mode = resolveChildMode(mode, parent.mode),
             providerId = providerId ?: parent.providerId,
             model = model ?: parent.model,
             reasoningEffort = reasoningEffort ?: parent.reasoningEffort,
             parentId = parentId,
             subagentType = subagentType
         )
+    }
+
+    /**
+     * 子会话实际生效的模式：默认继承父会话；自定义子代理的定义可覆盖，但只能更严、不能更宽。
+     *
+     * 若允许放大，PLAN 下派一个 `mode: build` 的子代理就能直接改文件——这正是业界把
+     * 「子代理不继承父权限」列为安全漏洞的原因。父会话 mode 值异常时按继承处理。
+     */
+    internal fun resolveChildMode(requested: AgentMode?, parentMode: String): String {
+        val parent = runCatching { AgentMode.valueOf(parentMode) }.getOrNull() ?: return parentMode
+        return (requested ?: parent).limitedBy(parent).name
     }
 
     suspend fun upsertSession(entity: ChatSessionEntity) {

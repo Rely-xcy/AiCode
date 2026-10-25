@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.tool
 import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver

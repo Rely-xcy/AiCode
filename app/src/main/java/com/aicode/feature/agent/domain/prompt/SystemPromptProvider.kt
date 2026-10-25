@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.skill.oneLineDescription
@@ -105,24 +106,29 @@ class SystemPromptProvider @Inject constructor(
 
     /** 子代理专用精简基线：只保留工具用法、路径约定与安全边界，不含模式切换、结尾总结等主代理专属规则。 */
     private inner class SubAgentBaseSource : PromptSource {
-        @Volatile private var cached: String? = null
-
+        // 每次读盘：与静态基线同理，未编辑时内容一致不影响 KV 缓存，编辑 subagent-base.md 后立即生效。
         override fun build(ctx: AgentContext): String =
-            cached ?: resolvePrompt(SUBAGENT_BASE_FILE)
+            resolvePrompt(SUBAGENT_BASE_FILE)
                 .replace(LEADING_COMMENT, "")
                 .trim()
-                .also { cached = it }
     }
 
     /**
      * 可用子代理清单（仅注入主代理）：让 AI 知道有哪些自定义 agent 可派发。
      * 会话级缓存，避免每轮扫盘导致 system prompt 抖动打断 KV 缓存。
+     * 缓存 key 带定义版本：设置页里新建/编辑/启停子代理后，下一轮即可见，不必开新会话。
      */
     private inner class SubAgentListSource : PromptSource {
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
 
         override fun build(ctx: AgentContext): String? {
-            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
+            // key 里带 mode：能力摘要随模式变化（PLAN 下写/命令不可用），切换模式必须重建缓存。
+            val key = SourceCacheKey(
+                ctx.sessionId,
+                ctx.projectRoot,
+                ctx.mode,
+                agentDefinitionRepository.definitionsVersion
+            )
             val cached = cachedByKey[key]
             if (cached != null) return cached.ifEmpty { null }
             val entries = try {
@@ -137,9 +143,13 @@ class SystemPromptProvider @Inject constructor(
             }
 
             // 与技能清单同理：截断只对超长清单生效，摘要行必须同时给出总数与所在目录。
+            // 每行除「名称: 用途」外再标注读/写/命令能力，避免主代理把写任务派给只读子代理；
+            // 按当前会话模式计算：PLAN 下子代理继承只读，能力要如实显示，否则主代理会照摘要派错活。
             val content = PromptListBudget.limit(
                 entries.map { entry ->
-                    "- ${entry.definition.name}: ${entry.definition.description.ifBlank { "（无描述）" }}"
+                    val definition = entry.definition
+                    "- ${definition.name}: ${definition.description.ifBlank { "（无描述）" }}" +
+                        "｜${definition.capabilitySummary(ctx.mode)}"
                 },
                 PromptListBudget.SUBAGENTS,
                 PromptListBudget::subAgentsNote
@@ -238,8 +248,18 @@ class SystemPromptProvider @Inject constructor(
         subAgentName = ctx.agentDefinition?.name
     )
 
-    /** 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。 */
-    private data class SourceCacheKey(val sessionId: String?, val projectRoot: String)
+    /**
+     * 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。
+     *
+     * [mode] 只有内容依赖模式的来源才传（子代理清单的能力摘要）；
+     * [definitionVersion] 只有子代理清单传（定义变更后失效缓存），其余来源留默认值以免白白碎片化缓存。
+     */
+    private data class SourceCacheKey(
+        val sessionId: String?,
+        val projectRoot: String,
+        val mode: AgentMode? = null,
+        val definitionVersion: Long = 0
+    )
 
     private val staticRuleSource = StaticRuleSource()
     private val subAgentBaseSource = SubAgentBaseSource()

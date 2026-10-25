@@ -90,6 +90,52 @@ class ReasoningLearningTest {
     }
 
     @Test
+    fun observe_effortNoneWithoutNoneInWhitelist_dropsDisable() {
+        // EFFORT_NONE 的关闭与档位同值空间：白名单没有 none 时必须摘掉可关闭性，
+        // 否则下次仍发 effort="none"，学习永远不生效、无限重复同一个 400。
+        val current = ReasoningCapability(
+            levels = listOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH),
+            canDisable = true,
+            disableKind = ReasoningCapability.DisableKind.EFFORT_NONE,
+            source = ReasoningCapability.Source.VENDOR_TABLE
+        )
+        ReasoningLearning.observe(
+            "p1",
+            "gpt-6-astra",
+            IllegalStateException(
+                "Unsupported value: 'none' is not supported with the 'gpt-6-astra' model. " +
+                    "Supported values are: 'low', 'medium', 'high'"
+            ),
+            current
+        )
+
+        val learned = ReasoningLearning.recall("p1", "gpt-6-astra")!!
+        assertFalse(learned.canDisable)
+        assertEquals(ReasoningCapability.DisableKind.UNSUPPORTED, learned.disableKind)
+        assertEquals(listOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH), learned.levels)
+    }
+
+    @Test
+    fun observe_effortNoneWithNoneInWhitelist_keepsDisable() {
+        val current = ReasoningCapability(
+            levels = listOf(ReasoningEffort.LOW, ReasoningEffort.HIGH),
+            canDisable = true,
+            disableKind = ReasoningCapability.DisableKind.EFFORT_NONE,
+            source = ReasoningCapability.Source.VENDOR_TABLE
+        )
+        ReasoningLearning.observe(
+            "p1", "gpt-5.6-sol",
+            IllegalStateException("valid levels: none, low, high"), current
+        )
+
+        val learned = ReasoningLearning.recall("p1", "gpt-5.6-sol")!!
+        assertTrue(learned.canDisable)
+        assertEquals(ReasoningCapability.DisableKind.EFFORT_NONE, learned.disableKind)
+        // none 不算档位，只保留在关闭能力里。
+        assertEquals(listOf(ReasoningEffort.LOW, ReasoningEffort.HIGH), learned.levels)
+    }
+
+    @Test
     fun observe_unparsableError_learnsNothing() {
         ReasoningLearning.observe("p1", "gpt-5.6-sol", IllegalStateException("429 rate limited"), null)
         assertNull(ReasoningLearning.recall("p1", "gpt-5.6-sol"))

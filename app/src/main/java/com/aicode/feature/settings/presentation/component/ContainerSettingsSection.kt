@@ -575,7 +575,8 @@ private fun profileSubtitle(context: Context, profile: ContainerProfile, connect
 }
 
 /**
- * 添加/编辑镜像的 ModalBottomSheet：顶部标签切换本地镜像 / 远程 SSH。
+ * 添加/编辑镜像的 ModalBottomSheet：顶部标签切换本地镜像 / 远程 SSH（仅添加时可选，编辑时锁定——
+ * 模式创建后不可改，本地切远程会丢本地 rootfs，换模式只能新建）。
  * 本地镜像分支：名称、shell 路径、额外绑定、额外参数、选 tar.gz 文件。
  * 远程 SSH 分支：名称、下拉选工作区已配置的 SFTP 通道、远程工作区路径。
  * 编辑内置 Alpine 时镜像来源保持内置（可选导入新文件覆盖，导入后转为自定义容器）。
@@ -693,7 +694,8 @@ private fun ProfileEditSheet(
                 }
             }
 
-            // 本地镜像 / 远程 SSH 切换：与侧边栏共用同一份滑块分段控件
+            // 本地镜像 / 远程 SSH 切换：与侧边栏共用同一份滑块分段控件。
+            // 仅添加时可选；编辑时锁定——模式一旦创建不可改（本地切远程会丢本地 rootfs），换模式只能新建。
             val modes = listOf(ExecutionMode.LOCAL_PROOT, ExecutionMode.REMOTE_SSH)
             SegmentedTabs(
                 selected = modes.indexOf(mode).coerceAtLeast(0),
@@ -701,7 +703,8 @@ private fun ProfileEditSheet(
                     stringResource(R.string.container_local_image),
                     stringResource(R.string.container_remote_ssh)
                 ),
-                onSelect = { mode = modes[it] }
+                onSelect = { mode = modes[it] },
+                enabled = initial == null
             )
 
             // 中间可滚动表单区域：通过 weight(1f) 撑满剩余高度，杜绝左右 tab 切换时高度跳动

@@ -83,7 +83,7 @@ import com.aicode.feature.agent.presentation.component.AIChatPanel
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
-import com.aicode.feature.disclaimer.presentation.DisclaimerGate
+import com.aicode.feature.agreement.presentation.AgreementGate
 import com.aicode.feature.editor.presentation.CodeEditorScreen
 import com.aicode.feature.editor.presentation.EditorLeaveGuard
 import com.aicode.feature.browser.presentation.BrowserScreen
@@ -159,9 +159,8 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository
 
-    /** 免责声明的同意状态持久化。 */
     @Inject
-    lateinit var disclaimerRepository: com.aicode.feature.disclaimer.data.DisclaimerRepository
+    lateinit var agreementRepository: com.aicode.feature.agreement.data.AgreementRepository
 
     @Inject
     lateinit var browserManager: com.aicode.feature.agent.domain.tool.browser.BrowserManager
@@ -267,13 +266,18 @@ class MainActivity : ComponentActivity() {
                     val bgPath by backgroundSettings.imagePathFlow.collectAsStateWithLifecycle(initialValue = null)
                     val bgAlpha by backgroundSettings.alphaFlow.collectAsStateWithLifecycle(initialValue = BackgroundSettingsRepository.DEFAULT_ALPHA)
                     Box(modifier = Modifier.fillMaxSize()) {
-                        AppNavigation(onboardingRepository = onboardingRepository)
-                        // 全局凭据弹窗：覆盖所有页面，命令行 git 缺凭据在任意页面都能弹。
-                        com.aicode.feature.credentials.presentation.component.GlobalCredentialDialogHost(
-                            bridge = credentialRequestBridge
-                        )
-                        // 首次启动免责声明门控：独立弹窗，覆盖所有页面。
-                        DisclaimerGate(repository = disclaimerRepository)
+                        AgreementGate(repository = agreementRepository) { agreementAccepted ->
+                            AppNavigation(
+                                onboardingRepository = onboardingRepository,
+                                agreementAccepted = agreementAccepted
+                            )
+                            if (agreementAccepted) {
+                                // 全局凭据弹窗：覆盖所有页面，命令行 git 缺凭据在任意页面都能弹。
+                                com.aicode.feature.credentials.presentation.component.GlobalCredentialDialogHost(
+                                    bridge = credentialRequestBridge
+                                )
+                            }
+                        }
                         if (bgPath != null && bgAlpha > 0f) {
                             val screen = LocalView.current
                             val bitmap by produceState<ImageBitmap?>(initialValue = null, bgPath) {
@@ -349,7 +353,8 @@ private const val MAX_PANE_SPLIT = 0.7f
  */
 @Composable
 fun AppNavigation(
-    onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository
+    onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository,
+    agreementAccepted: Boolean
 ) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -384,14 +389,15 @@ fun AppNavigation(
         )
     }
     // 启动判断：IN_PROGRESS 则激活引导。
-    LaunchedEffect(Unit) {
+    LaunchedEffect(agreementAccepted) {
+        if (!agreementAccepted) return@LaunchedEffect
         val status = onboardingRepository.status()
         onboardingCoordinator.initialize(status ?: OnboardingStatus.IN_PROGRESS)
     }
 
     // 自动检查更新：进入主页时异步检测（开关开启且每天最多一次，失败静默）
-    LaunchedEffect(Unit) {
-        settingsViewModel.checkUpdate(manual = false)
+    LaunchedEffect(agreementAccepted) {
+        if (agreementAccepted) settingsViewModel.checkUpdate(manual = false)
     }
 
     // 侧边栏打开时，系统返回键先收起侧边栏。
@@ -944,7 +950,7 @@ fun AppNavigation(
     // 检查更新弹窗（全局宿主：自动检测与关于页手动检查共用，覆盖所有页面）
     val updateCheckState by settingsViewModel.updateCheckState.collectAsStateWithLifecycle()
     val updateCheckVisible by settingsViewModel.updateCheckVisible.collectAsStateWithLifecycle()
-    if (updateCheckVisible && updateCheckState != UpdateCheckUiState.Idle) {
+    if (agreementAccepted && updateCheckVisible && updateCheckState != UpdateCheckUiState.Idle) {
         val version = remember {
             runCatching {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -964,7 +970,7 @@ fun AppNavigation(
     }
 
     // 首次启动引导覆层（覆盖所有路由之上，全程常驻顶层，页面切换平滑过渡绝不闪烁）。
-    if (onboardingUiState.active) {
+    if (agreementAccepted && onboardingUiState.active) {
         OnboardingOverlay(
             stateHolder = onboardingStateHolder,
             coordinator = onboardingCoordinator,

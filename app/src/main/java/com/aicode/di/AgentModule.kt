@@ -466,7 +466,8 @@ object AgentModule {
         eventInjector: AgentEventInjector,
         fileAccess: FileAccessProvider,
         writeLeaseRegistry: WriteLeaseRegistry,
-        interruptedWorkRecorder: InterruptedWorkRecorder
+        interruptedWorkRecorder: InterruptedWorkRecorder,
+        @ApplicationContext context: Context
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             aiProviderRepository,
@@ -494,7 +495,8 @@ object AgentModule {
             eventInjector,
             fileAccess,
             writeLeaseRegistry,
-            interruptedWorkRecorder
+            interruptedWorkRecorder,
+            context
         )
     }
 }

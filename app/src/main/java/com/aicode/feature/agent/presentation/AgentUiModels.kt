@@ -314,3 +314,28 @@ data class SessionGoalUi(
     val status: GoalStatus,
     val turnCount: Int
 )
+
+/** 子代理卡片的运行状态。卡片主体从工具结果渲染，这里只补「本进程内才知道」的实时信息。 */
+enum class SubAgentCardStatus { RUNNING, COMPLETED, FAILED, STOPPED }
+
+/**
+ * 某个子代理的实时卡片状态（按子会话 id 索引）。
+ *
+ * 仅存内存：进程重启后历史消息里的卡片回退为静态展示（agent、任务、档位与模型仍能从工具结果解析），
+ * 不会显示一个假的「运行中」。
+ *
+ * @property excerpt 完成时的结果摘要，与完成通知里的是同一份（[com.aicode.feature.agent.domain.subagent.SubAgentDigester] 产出）。
+ * @property changedFiles 子代理改过的文件，卡片上以 chips 展示。
+ * @property elapsedMs 从派发到结束的耗时；运行中为 null。
+ */
+@Immutable
+data class SubAgentCardState(
+    val subSessionId: String,
+    val agentName: String? = null,
+    val title: String = "",
+    val status: SubAgentCardStatus = SubAgentCardStatus.RUNNING,
+    val excerpt: String? = null,
+    val changedFiles: List<String> = emptyList(),
+    val elapsedMs: Long? = null,
+    val startedAt: Long = System.currentTimeMillis()
+)

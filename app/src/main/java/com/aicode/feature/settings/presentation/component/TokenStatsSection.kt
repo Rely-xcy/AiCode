@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.TokenStatsPalette
 import com.aicode.core.theme.semanticColors
@@ -363,7 +364,7 @@ private fun TokenStatsFilterBar(
                         } else {
                             stringResource(R.string.settings_token_stats_filter_all_providers)
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -372,10 +373,10 @@ private fun TokenStatsFilterBar(
                     Icon(
                         imageVector = FeatherIcons.ChevronDown,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -388,7 +389,9 @@ private fun TokenStatsFilterBar(
                     borderColor = MaterialTheme.semanticColors.subtleBorder,
                     selectedBorderColor = MaterialTheme.colorScheme.primary
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
             )
             DropdownMenu(
                 expanded = providerMenuExpanded,
@@ -431,7 +434,7 @@ private fun TokenStatsFilterBar(
                         } else {
                             stringResource(R.string.settings_token_stats_filter_all_models)
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -440,10 +443,10 @@ private fun TokenStatsFilterBar(
                     Icon(
                         imageVector = FeatherIcons.ChevronDown,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -456,7 +459,9 @@ private fun TokenStatsFilterBar(
                     borderColor = MaterialTheme.semanticColors.subtleBorder,
                     selectedBorderColor = MaterialTheme.colorScheme.primary
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
             )
             DropdownMenu(
                 expanded = modelMenuExpanded,
@@ -492,15 +497,15 @@ private fun TokenStatsFilterBar(
             FilterChip(
                 selected = true,
                 onClick = onClearFilters,
-                label = { Text(stringResource(R.string.settings_token_stats_filter_clear), fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.settings_token_stats_filter_clear), fontSize = 13.sp) },
                 trailingIcon = {
                     Icon(
                         imageVector = FeatherIcons.X,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.semanticColors.cardSurface,
                     selectedLabelColor = MaterialTheme.colorScheme.error
@@ -510,7 +515,8 @@ private fun TokenStatsFilterBar(
                     selected = true,
                     borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f),
                     selectedBorderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
-                )
+                ),
+                modifier = Modifier.height(40.dp)
             )
         }
     }
@@ -905,6 +911,7 @@ private fun CallRecordsTable(
                     TableCell(stringResource(R.string.settings_token_stats_col_provider), mutedColor, COL_PROVIDER_W, FontWeight.Medium)
                     TableCell(stringResource(R.string.settings_token_stats_col_model), mutedColor, COL_MODEL_W, FontWeight.Medium)
                     TableCell(stringResource(R.string.settings_token_stats_col_reasoning_effort), mutedColor, COL_EFFORT_W, FontWeight.Medium)
+                    TableCell(stringResource(R.string.settings_token_stats_col_reasoning_wire), mutedColor, COL_EFFORT_W, FontWeight.Medium)
                     TableCell(stringResource(R.string.settings_token_stats_col_status), mutedColor, COL_STATUS_W, FontWeight.Medium)
                     TableCell(stringResource(R.string.settings_token_stats_col_input), mutedColor, COL_TOKENS_W, FontWeight.Medium)
                     TableCell(stringResource(R.string.settings_token_stats_col_output), mutedColor, COL_TOKENS_W, FontWeight.Medium)
@@ -941,6 +948,14 @@ private fun CallRecordRow(call: RecentCallRecord, cost: Double?, textColor: Colo
         TableCell(call.providerName ?: call.record.providerId ?: stringResource(R.string.settings_token_stats_unknown), textColor, COL_PROVIDER_W)
         TableCell(call.record.model ?: stringResource(R.string.settings_token_stats_unknown), textColor, COL_MODEL_W)
         TableCell(call.record.reasoningEffort ?: "-", mutedColor, COL_EFFORT_W)
+        // 发生降级时显示「原档位 → 实际发出」，否则只显示实际发出的思考参数。
+        TableCell(
+            call.record.reasoningClampedFrom?.let { from -> "$from → ${call.record.reasoningWire}" }
+                ?: call.record.reasoningWire
+                ?: "-",
+            mutedColor,
+            COL_EFFORT_W
+        )
         TableCell(call.record.status, statusColor, COL_STATUS_W, FontWeight.Medium)
         TableCell(call.record.inputTokens.toString(), textColor, COL_TOKENS_W)
         TableCell(call.record.outputTokens.toString(), textColor, COL_TOKENS_W)

@@ -100,6 +100,9 @@ import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
+import com.aicode.feature.agent.domain.provider.ReasoningProtocol
+import com.aicode.feature.agent.domain.provider.reasoningCapabilityOf
+import com.aicode.feature.agent.domain.provider.reasoningProtocolOf
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
@@ -107,6 +110,7 @@ import com.aicode.feature.agent.domain.mention.FileMentionState
 import com.aicode.feature.agent.domain.mention.fileMentionQuery
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.QueuedRequest
+import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.domain.model.modelMetadataKey
@@ -206,6 +210,8 @@ internal fun ChatInputBar(
     forceOpenModelSheet: Boolean = false,
     onSelectModelInOnboarding: (() -> Unit)? = null,
     onModelSheetDismiss: (() -> Unit)? = null,
+    /** 主页模型弹层的连通性测试：null（无设置页 ViewModel 的宿主）时弹层不显示测试按钮。 */
+    onRunModelTest: (suspend (AIProviderConfig, String) -> ModelTestResult)? = null,
     modifier: Modifier = Modifier
 ) {
     val hasContent = value.isNotBlank() || pendingAttachments.isNotEmpty()
@@ -613,6 +619,7 @@ internal fun ChatInputBar(
                             forceOpenSheet = forceOpenModelSheet,
                             onSelectSuccessInOnboarding = onSelectModelInOnboarding,
                             onSheetDismiss = onModelSheetDismiss,
+                            runModelTest = onRunModelTest,
                             modifier = Modifier.onboardingTarget(OnboardingStep.OPEN_MODEL_PICKER)
                         )
 
@@ -626,20 +633,21 @@ internal fun ChatInputBar(
                             )
                         }
 
-                        // 元数据未命中时（如中转站改了模型名）退回全部档位由用户自选：
-                        // 这类模型可能强制开启推理，隐藏按钮会导致无法调档。
-                        val availableEfforts = remember(activeProvider, modelMetadata) {
-                            activeProvider?.let { provider ->
-                                modelMetadata[modelMetadataKey(provider.id, provider.effectiveModel)]?.reasoningEffortOptions
-                                    ?.let { ReasoningEffort.fromValues(it) }
-                            }.orEmpty().ifEmpty { ReasoningEffort.entries }
+                        // 思考能力与实际请求同源：已知就只列真实档位，未知（中转站改名 / 自定义模型）
+                        // 才退回全部档位并由弹层标注「可能不生效」。
+                        val capability = reasoningCapabilityOf(activeProvider, activeProvider?.effectiveModel.orEmpty(), modelMetadata)
+                        val hasReasoningControl = !capability.isKnown ||
+                            capability.levels.isNotEmpty() || capability.canDisable
+                        if (hasReasoningControl) {
+                            ReasoningEffortSelector(
+                                effort = reasoningEffort,
+                                capability = capability,
+                                protocol = activeProvider?.let { reasoningProtocolOf(it) } ?: ReasoningProtocol.OPENAI_CHAT,
+                                model = activeProvider?.effectiveModel.orEmpty(),
+                                onChange = onReasoningEffortChange,
+                                enabled = !isBusy
+                            )
                         }
-                        ReasoningEffortSelector(
-                            effort = reasoningEffort,
-                            availableEfforts = availableEfforts,
-                            onChange = onReasoningEffortChange,
-                            enabled = !isBusy
-                        )
                     }
                     UploadIconButton(
                         enabled = !isBusy,
@@ -1220,7 +1228,8 @@ internal fun PlanApprovalPanel(
     state: PlanApprovalRequest,
     onApprove: () -> Unit,
     onRefine: () -> Unit,
-    forceCollapse: Boolean = false
+    forceCollapse: Boolean = false,
+    sessionTitle: String = ""
 ) {
     var expanded by remember { mutableStateOf(true) }
     // 余额面板展开时同帧收起本面板，避免叠加顶开输入框
@@ -1270,6 +1279,17 @@ internal fun PlanApprovalPanel(
                 exit = fadeOut(tween(140)) + shrinkVertically(tween(180))
             ) {
                 Column {
+                    // 多会话并行时标注这份计划属于哪个会话，避免用户批错对象
+                    if (sessionTitle.isNotBlank()) {
+                        Text(
+                            text = stringResource(R.string.chat_perm_session_label, sessionTitle),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(Spacing.xs))
+                    }
                     if (state.reason.isNotBlank()) {
                         Spacer(Modifier.height(Spacing.xs))
                         SelectionContainer {

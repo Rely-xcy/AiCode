@@ -50,6 +50,7 @@ import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ReasoningEffort
+import com.aicode.feature.agent.domain.provider.reasoningCapabilityOf
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionForm
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
@@ -117,6 +118,18 @@ internal fun SubAgentEditorScreen(
 
     val scope = if (scopeIsGlobal) AgentDefinitionScope.GLOBAL else AgentDefinitionScope.PROJECT
     val canSave = name.isNotBlank() && prompt.isNotBlank()
+
+    // 档位列表跟随「选定的提供商 + 模型」，与聊天页共用同一套能力解析；
+    // 未选模型（继承父会话）或能力未知时列出全部档位，由用户按模型实际支持情况自选。
+    val effortOptions = remember(providerId, model, modelMetadata, providers) {
+        val provider = providers.firstOrNull { it.id == providerId }
+        val capability = provider?.let { reasoningCapabilityOf(it, model, modelMetadata) }
+        when {
+            capability == null || !capability.isKnown -> ReasoningEffort.entries
+            capability.canDisable -> listOf(ReasoningEffort.NONE) + capability.levels
+            else -> capability.levels.ifEmpty { ReasoningEffort.entries }
+        }
+    }
 
     Scaffold(
         containerColor = settingsPageBackground(),
@@ -253,7 +266,7 @@ internal fun SubAgentEditorScreen(
                             effort.takeIf { it.isNotBlank() }
                                 ?.let { value ->
                                     ReasoningEffort.entries.firstOrNull { it.apiValue == value }
-                                        ?.let { stringResource(it.labelRes()) }
+                                        ?.let { it.withApiLabel() }
                                 }
                                 ?: stringResource(R.string.subagent_inherit_parent)
                         )
@@ -405,10 +418,10 @@ internal fun SubAgentEditorScreen(
                             showEffortSheet = false
                         }
                     )
-                    ReasoningEffort.entries.forEach { item ->
+                    effortOptions.forEach { item ->
                         SettingsDivider()
                         PickerRow(
-                            title = stringResource(item.labelRes()),
+                            title = item.withApiLabel(),
                             selected = effort == item.apiValue,
                             onClick = {
                                 effort = item.apiValue
@@ -639,6 +652,11 @@ private fun AgentSaveError.messageRes(): Int = when (this) {
     AgentSaveError.NAME_CONFLICT -> R.string.subagent_editor_error_name_conflict
     AgentSaveError.IO_FAILED -> R.string.subagent_editor_error_io
 }
+
+/** 档位显示名：中文 + 对应接口值（如「最高（max）」）。 */
+@Composable
+private fun ReasoningEffort.withApiLabel(): String =
+    stringResource(R.string.common_label_with_api, stringResource(labelRes()), apiValue)
 
 private fun ReasoningEffort.labelRes(): Int = when (this) {
     ReasoningEffort.NONE -> R.string.chat_reasoning_effort_none

@@ -15,7 +15,8 @@ internal object AgentDefinitionDirectoryScanner {
 
     /**
      * 扫描 [root] 下顶层 `*.md`，每个文件一个定义。目录不存在时返回空列表；
-     * 扫描过程异常（IO 失败、远程工作区未连接等）时降级为空列表并记日志，不向上抛。
+     * 单个文件解析异常（IO 失败、frontmatter 非法等）只跳过该文件，不拖垮整个目录；
+     * 扫描过程整体异常（IO 失败、远程工作区未连接等）时降级为空列表并记日志，不向上抛。
      *
      * [bulk] 可用时一次拿到整根的文件全文，省掉逐文件的 SFTP 往返；不可用时回退逐文件读取。
      */
@@ -38,7 +39,11 @@ internal object AgentDefinitionDirectoryScanner {
             val base = root.trimEnd('/')
             provider.listFiles(root)
                 .filter { !it.isDirectory && it.name.endsWith(".md", ignoreCase = true) }
-                .mapNotNull { entry -> AgentDefinitionParser.parse(provider, "$base/${entry.name}") }
+                .mapNotNull { entry ->
+                    runCatching { AgentDefinitionParser.parse(provider, "$base/${entry.name}") }
+                        .onFailure { FileLogger.w(TAG, "解析子代理定义失败，已跳过: ${entry.name}", it) }
+                        .getOrNull()
+                }
                 .sortedBy { it.name.lowercase() }
         }.getOrElse { e ->
             FileLogger.w(TAG, "扫描子代理定义目录失败: $root", e)
@@ -51,7 +56,11 @@ internal object AgentDefinitionDirectoryScanner {
         val base = root.trimEnd('/')
         return files.asSequence()
             .filter { (relative, _) -> !relative.contains('/') && relative.endsWith(".md", ignoreCase = true) }
-            .mapNotNull { (relative, text) -> AgentDefinitionParser.parseText(text, "$base/$relative") }
+            .mapNotNull { (relative, text) ->
+                runCatching { AgentDefinitionParser.parseText(text, "$base/$relative") }
+                    .onFailure { FileLogger.w(TAG, "解析子代理定义失败，已跳过: $relative", it) }
+                    .getOrNull()
+            }
             .sortedBy { it.name.lowercase() }
             .toList()
     }

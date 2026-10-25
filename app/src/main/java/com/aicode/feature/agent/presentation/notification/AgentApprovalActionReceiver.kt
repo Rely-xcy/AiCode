@@ -14,8 +14,7 @@ import javax.inject.Inject
 /**
  * 审批通知上按钮的接收器：把用户在通知上的选择直接回传给挂起的审批请求，无需回到 App。
  *
- * 仅在 [AgentApprovalNotificationManager] 判定当前只有一个可批准项时才会挂出按钮，
- * 故此处按「唯一待决项」解决，不必携带请求 id。
+ * 按通知绑定的请求 id 回传，过期请求不会影响其它待决审批。
  */
 @AndroidEntryPoint
 class AgentApprovalActionReceiver : BroadcastReceiver() {
@@ -28,17 +27,26 @@ class AgentApprovalActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
-        val kind = intent.getStringExtra(EXTRA_KIND)?.let { ApprovalKind.valueOf(it) } ?: return
+        val kind = intent.getStringExtra(EXTRA_KIND)?.let { value -> ApprovalKind.entries.find { it.name == value } } ?: return
         val choice = intent.getStringExtra(EXTRA_CHOICE) ?: return
+        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
         when (kind) {
-            ApprovalKind.PERMISSION -> toolPermissionManager.resolveEarliest(PermissionChoice.valueOf(choice))
-            ApprovalKind.PLAN -> planApprovalManager.resolve(PlanApprovalChoice.valueOf(choice))
+            ApprovalKind.PERMISSION -> {
+                val permissionChoice = PermissionChoice.entries.find { it.name == choice } ?: return
+                if (permissionChoice != PermissionChoice.ONCE && permissionChoice != PermissionChoice.REJECT) return
+                toolPermissionManager.resolve(requestId, permissionChoice)
+            }
+            ApprovalKind.PLAN -> {
+                val planChoice = PlanApprovalChoice.entries.find { it.name == choice } ?: return
+                planApprovalManager.resolve(requestId, planChoice)
+            }
             ApprovalKind.QUESTION -> Unit
         }
     }
 
     companion object {
         const val ACTION = "com.aicode.action.AGENT_APPROVAL"
+        const val EXTRA_REQUEST_ID = "extra_request_id"
         const val EXTRA_KIND = "extra_kind"
         const val EXTRA_CHOICE = "extra_choice"
     }

@@ -64,29 +64,6 @@ class RemoteSftpFileAccess @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) : FileAccessProvider {
 
-    /** 取一条可用的 SFTP 通道。默认走共享连接；测试可经下方次构造换成桩。 */
-    private var sftpProvider: suspend () -> SFTPClient = { connection.sftp() }
-
-    /** 丢弃当前 SFTP 通道（下次调用自动重建）。默认走共享连接；测试可经下方次构造换成桩。 */
-    private var invalidateChannel: suspend () -> Unit = { connection.invalidateSftp() }
-
-    /**
-     * **测试专用**，勿在注入路径使用：Hilt 一律走 [@Inject] 主构造，两个回调的默认实现与
-     * 不开放这个构造时逐字相同（生产行为零变化）。开这个口子只为在没有真实 SSH 连接的前提下
-     * 验证读写缓冲循环的取消语义（取消点、取消后丢弃通道、不重试）。
-     */
-    @VisibleForTesting
-    internal constructor(
-        connection: RemoteSshConnection,
-        workspaceRepository: WorkspaceRepository,
-        context: Context,
-        sftpProvider: suspend () -> SFTPClient,
-        invalidateChannel: suspend () -> Unit
-    ) : this(connection, workspaceRepository, context) {
-        this.sftpProvider = sftpProvider
-        this.invalidateChannel = invalidateChannel
-    }
-
     private val sftpMutex = Mutex()
 
     /**

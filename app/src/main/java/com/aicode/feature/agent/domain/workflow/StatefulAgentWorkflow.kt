@@ -1,8 +1,11 @@
 package com.aicode.feature.agent.domain.workflow
 
+import android.content.Context
 import android.os.SystemClock
 import android.util.Base64
+import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
@@ -81,6 +84,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
@@ -88,6 +92,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.util.UUID
@@ -124,7 +129,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val eventInjector: AgentEventInjector,
     private val fileAccess: FileAccessProvider,
     private val writeLeaseRegistry: WriteLeaseRegistry,
-    private val interruptedWorkRecorder: InterruptedWorkRecorder
+    private val interruptedWorkRecorder: InterruptedWorkRecorder,
+    @param:ApplicationContext private val appContext: Context
 ) : AgentWorkflow {
 
     private companion object {
@@ -1145,19 +1151,19 @@ class StatefulAgentWorkflow @Inject constructor(
                                         currentContext = newCtx
                                         // system 与 mode 已解耦（SystemPromptProvider 不再注入模式提示词），
                                         // 切换不重建 systemPrompt，避免 system 前缀变化打断缓存；模式状态通过工具结果与下轮消息提醒告知。
-                                        rawResult += buildModeSwitchNotice(newCtx.mode)
+                                        rawResult = appendPlanModeNotice(rawResult, buildModeSwitchNotice(newCtx.mode))
                                     } else {
                                         // 用户选择继续反馈，回滚到 PLAN 模式，修正工具结果让 AI 知道切换被取消并等待用户反馈
                                         currentContext = currentContext.copy(mode = AgentMode.PLAN)
                                         rawResult = ToolResult.Error(
-                                            "用户希望补充说明或调整方案，当前保持在 PLAN 模式。请等待用户输入具体的补充或修改意见，不要自行臆测修改，待用户明确反馈后再继续。",
+                                            appContext.getString(R.string.plan_mode_refinement_requested),
                                             "MODE_SWITCH_REJECTED"
                                         ).toTransportString()
                                         isError = true
                                     }
                                 } else {
                                     currentContext = newCtx
-                                    rawResult += buildModeSwitchNotice(newCtx.mode)
+                                    rawResult = appendPlanModeNotice(rawResult, buildModeSwitchNotice(newCtx.mode))
                                 }
                             }
                             batchResults.add(ToolBatchResult(toolCall.id, toolCall.name, rawResult, isError, runResult.attachments, runResult.images))
@@ -1959,11 +1965,6 @@ class StatefulAgentWorkflow @Inject constructor(
     }
 
     /**
-     * 把待送通知注入工具结果：优先作为 transport JSON 顶层的 `notifications` 字段，结果仍是合法 JSON，
-     * UI 的 formatToolResult（只读 data/message）与各类结构化解析不受影响。
-     * raw 已被模式切换提示等纯文本追加过、不再是合法 JSON 时，退化为文本追加。
-     */
-    /**
      * 取本次应注入的模式提醒：仅当模式与上次注入时不同（含首次）才返回文本并记录，否则为 null。
      */
     private fun takeModeReminderIfChanged(sessionId: String?, mode: AgentMode): String? {
@@ -1973,22 +1974,22 @@ class StatefulAgentWorkflow @Inject constructor(
         return buildModeReminder(mode)
     }
 
-    /** 工具调用成功后拼进 planMode 工具结果的模式状态通知（当轮即可见，无需等下一条用户消息）。 */
+    /** 工具调用成功后写入 planMode 结果 data 的模式状态通知（当轮即可见）。 */
     private fun buildModeSwitchNotice(mode: AgentMode): String = when (mode) {
-        AgentMode.PLAN -> "\n\n" + promptProvider.resolvePrompt(MODE_REMINDER_PLAN_FILE)
+        AgentMode.PLAN -> promptProvider.resolvePrompt(MODE_REMINDER_PLAN_FILE)
             .replace(LEADING_COMMENT, "")
             .trim()
-        AgentMode.BUILD -> "\n\n【模式切换】计划已获用户批准，你已切换到 BUILD（构建）模式，可以开始执行计划。"
-        AgentMode.AUTO -> "\n\n【模式切换】计划已获用户批准，你已恢复到 AUTO（自动）模式，可以开始执行计划（工具调用将自动放行）。"
+        AgentMode.BUILD -> "【模式切换】" + appContext.getString(R.string.plan_mode_approved_build)
+        AgentMode.AUTO -> "【模式切换】" + appContext.getString(R.string.plan_mode_approved_auto)
     }
 
-    /** 用户在外部（界面）手动切换模式时拼进工具结果的提示；与 AI 自切的 [buildModeSwitchNotice] 区分，避免误称「计划已获批准」。 */
+    /** 界面手动切换时写入模式通知 detail 的提示，区分计划审批与用户直接切换。 */
     private fun buildExternalModeSwitchNotice(mode: AgentMode): String = when (mode) {
-        AgentMode.PLAN -> "\n\n" + promptProvider.resolvePrompt(MODE_REMINDER_PLAN_FILE)
+        AgentMode.PLAN -> promptProvider.resolvePrompt(MODE_REMINDER_PLAN_FILE)
             .replace(LEADING_COMMENT, "")
             .trim()
-        AgentMode.BUILD -> "\n\n【模式切换】用户已将模式切换为 BUILD（构建）模式，可以正常执行写操作。"
-        AgentMode.AUTO -> "\n\n【模式切换】用户已将模式切换为 AUTO（自动）模式。"
+        AgentMode.BUILD -> "【模式切换】" + appContext.getString(R.string.plan_mode_external_build)
+        AgentMode.AUTO -> "【模式切换】" + appContext.getString(R.string.plan_mode_external_auto)
     }
 
     /**
@@ -2146,4 +2147,10 @@ internal fun omittedArgumentRejectionOf(toolCall: ToolCall): String? {
     return "参数 `$key` 的值整串是上下文精简留下的占位说明，不是真正文——照它执行会把占位文字写进磁盘，" +
         "所以本次 ${toolCall.name} 调用已被拦下、未执行。请先用 readFile 读取 $target 拿回全文，" +
         "再基于全文重新提交本次调用。"
+}
+
+internal fun appendPlanModeNotice(rawToolResult: String, notice: String): String {
+    val result = Json.parseToJsonElement(rawToolResult).jsonObject
+    val data = result.getValue("data").jsonPrimitive.content
+    return JsonObject(result + ("data" to JsonPrimitive("$data\n\n${notice.trim()}"))).toString()
 }

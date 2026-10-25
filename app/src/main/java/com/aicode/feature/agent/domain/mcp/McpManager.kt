@@ -330,6 +330,17 @@ class McpManager @Inject constructor(
     }
 
     /**
+    /**
+     * 批量删除：一次持锁断开多个 server（列表多选批量删除）。
+     * 逐条调用 [removeServer] 会反复抢 reloadMutex，服务端较多时串行等待明显。
+     */
+    suspend fun removeServers(names: Collection<String>) = reloadMutex.withLock {
+        if (names.isEmpty()) return@withLock
+        names.forEach { teardownServer(it) }
+        _statuses.value = _statuses.value.filterNot { it.name in names }
+    }
+
+    /**
      * 触发某个 server 的 OAuth 授权；成功后立即重连使其工具可用。
      * 授权前因无令牌而失败的连接不会自己恢复，所以这里连一次，没连上再补一次（失败只记日志）。
      * 重连成败随结果一起返回：授权成功但连不上时调用方不能再显示「已连接」。

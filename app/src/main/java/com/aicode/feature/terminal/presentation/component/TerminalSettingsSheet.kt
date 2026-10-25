@@ -36,7 +36,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -63,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * 终端设置底部抽屉面板：配色主题、字号大小、字体与光标样式，提供即时预览。
@@ -78,6 +81,11 @@ fun TerminalSettingsSheet(
     onChangeFontPath: (String) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // 滑块用本地值实时预览，松手（onValueChangeFinished）才落盘并触发一次 PTY resize：
+    // 若每格都调 onChangeFontSize，会连续写 DataStore 并给 shell 连发 SIGWINCH。
+    var sliderFontSize by remember { mutableFloatStateOf(settings.fontSizeSp.toFloat()) }
+    LaunchedEffect(settings.fontSizeSp) { sliderFontSize = settings.fontSizeSp.toFloat() }
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -101,7 +109,7 @@ fun TerminalSettingsSheet(
             Spacer(Modifier.height(Spacing.md))
 
             // 实时预览卡片
-            TerminalPreviewCard(settings = settings)
+            TerminalPreviewCard(settings = settings.copy(fontSizeSp = sliderFontSize.roundToInt()))
 
             Spacer(Modifier.height(Spacing.lg))
 
@@ -145,7 +153,7 @@ fun TerminalSettingsSheet(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${settings.fontSizeSp} sp",
+                    text = "${sliderFontSize.roundToInt()} sp",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
@@ -153,8 +161,9 @@ fun TerminalSettingsSheet(
                 )
             }
             Slider(
-                value = settings.fontSizeSp.toFloat(),
-                onValueChange = { onChangeFontSize(it.toInt()) },
+                value = sliderFontSize,
+                onValueChange = { sliderFontSize = it },
+                onValueChangeFinished = { onChangeFontSize(sliderFontSize.roundToInt()) },
                 valueRange = 5f..22f,
                 steps = 16,
                 modifier = Modifier.fillMaxWidth()

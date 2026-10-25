@@ -27,6 +27,7 @@ final class SubprocessBackend implements SessionBackend {
     private final FileDescriptor mWrappedFd;
     private final InputStream mInputStream;
     private final OutputStream mOutputStream;
+    private volatile boolean mClosed;
 
     SubprocessBackend(String shellPath, String cwd, String[] args, String[] env, int rows, int columns) {
         int[] processId = new int[1];
@@ -72,6 +73,10 @@ final class SubprocessBackend implements SessionBackend {
 
     @Override
     public void close() {
+        // 可能被 finishIfRunning 与 cleanupResources 先后调用，必须幂等：
+        // 重复 close 会二次 JNI.close(mPtyFd)，此时 fd 号可能已被新会话/SSH socket 复用。
+        if (mClosed) return;
+        mClosed = true;
         if (mPid > 0) {
             try {
                 Os.kill(mPid, OsConstants.SIGKILL);

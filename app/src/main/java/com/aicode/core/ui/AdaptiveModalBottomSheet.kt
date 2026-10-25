@@ -41,8 +41,8 @@ import com.aicode.core.theme.Spacing
  * 内容接近全屏高度且有可滚动区域时，快速上滑 fling 到内容边界，未消费的向上速度会传给
  * sheet 的拖拽状态，导致 sheet 反复「向下拖动再弹回」振荡。
  *
- * 挂到可滚动内容外层：sheet 已完全展开时吞掉向上方向的剩余 fling 速度，使速度不再流向
- * sheet 的 AnchoredDraggableState；内容自身的惯性滚动不受影响（只在子滚动消费完后拦截剩余量）。
+ * 挂到可滚动内容外层：sheet 已完全展开时吞掉惯性动画每帧的剩余竖向位移与向上的剩余速度，
+ * 避免驱动 sheet 的 AnchoredDraggableState；仅在子滚动消费后拦截，保留内容惯性和手指拖动。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

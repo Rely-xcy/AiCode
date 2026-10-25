@@ -26,7 +26,7 @@ class SyncEngineIgnoreTest {
     private val syncEngines = mutableListOf<SyncEngine>()
 
     @After
-    fun tearDown() {
+    fun tearDown() = runTest {
         syncEngines.forEach { it.shutdown() }
         syncEngines.clear()
     }

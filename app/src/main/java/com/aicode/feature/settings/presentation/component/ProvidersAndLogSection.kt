@@ -134,7 +134,7 @@ internal fun ProvidersSection(
                 .padding(bottom = Spacing.xl),
             contentPadding = PaddingValues(top = Spacing.sm),
             verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+        ) {
             itemsIndexed(
                 items = providers,
                 key = { _, provider -> provider.id }

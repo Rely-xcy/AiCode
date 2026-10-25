@@ -73,6 +73,7 @@ import com.aicode.feature.backup.domain.WorkspaceSkipReason
 import com.aicode.feature.backup.domain.remote.BackupTarget
 import com.aicode.feature.backup.domain.remote.BackupTargetType
 import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.feature.settings.presentation.component.SettingsEmptyState
 import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
 import com.aicode.feature.settings.presentation.component.SettingsRow
@@ -623,14 +624,19 @@ private fun NetworkBackupTab(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = 96.dp)
     ) {
-        SettingsGroupHeader(text = stringResource(R.string.backup_net_targets))
-        SettingsGroup {
-            if (targets.isEmpty()) {
-                SettingsRow(
-                    title = stringResource(R.string.backup_net_no_target),
-                    enabled = false
-                )
-            } else {
+        if (targets.isEmpty()) {
+            // 空态与 MCP / 凭据页统一：图标 + 标题 + 提示，新增入口收在右上角「+」。
+            SettingsEmptyState(
+                icon = FeatherIcons.UploadCloud,
+                title = stringResource(R.string.backup_net_no_target),
+                hint = stringResource(R.string.backup_net_no_target_hint),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 48.dp)
+            )
+        } else {
+            SettingsGroupHeader(text = stringResource(R.string.backup_net_targets))
+            SettingsGroup {
                 targets.forEachIndexed { index, target ->
                     if (index > 0) SettingsDivider()
                     BackupTargetCard(

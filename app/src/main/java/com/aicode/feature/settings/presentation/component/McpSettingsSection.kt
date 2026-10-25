@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -99,41 +100,14 @@ internal fun McpSection(
         LaunchedEffect(selection.isActive) {
             if (selection.isActive) selection.exit()
         }
-        Box(
+        SettingsEmptyState(
+            icon = FeatherIcons.Terminal,
+            title = stringResource(R.string.mcp_empty),
+            hint = stringResource(R.string.mcp_empty_hint),
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 48.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        FeatherIcons.Terminal,
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.mcp_empty),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.mcp_empty_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+                .padding(vertical = 48.dp)
+        )
         return
     }
 
@@ -153,12 +127,13 @@ internal fun McpSection(
         }
     }
 
+    // 状态按名字建索引：长列表里每行 firstOrNull 扫一遍 statuses 是 O(n*m)，搜索时更明显。
     val statusByName = remember(statuses) { statuses.associateBy { it.name } }
 
     val visibleKeys = remember(filteredEntries) {
         filteredEntries.map { mcpSelectionKey(it.server.name, it.scope) }
     }
-    // key -> (名称, 作用域)，批量操作时把选中集合还原成目标列表；搜索筛掉的条目自然不在表里。
+    // key → (名称, 作用域)，批量操作时把选中集合还原成目标列表；搜索筛掉的条目自然不在表里。
     val keyToTarget = remember(filteredEntries) {
         filteredEntries.associate {
             mcpSelectionKey(it.server.name, it.scope) to (it.server.name to it.scope)
@@ -316,7 +291,7 @@ internal fun McpSection(
     }
 }
 
-/** 多选 key：同名 server 可同时存在于全局层与项目层，必须带作用域前缀。 */
+/** 多选 key：同名 server 可能在不同作用域并存（项目层覆盖全局层），所以必须带作用域前缀。 */
 private fun mcpSelectionKey(name: String, scope: McpScope): String = "${scope.name}:$name"
 
 /**

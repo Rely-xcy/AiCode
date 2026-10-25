@@ -24,6 +24,19 @@ class AgentDefinitionRepository @Inject constructor(
     private val listOrderStore: ListOrderStore,
     private val bulk: BulkFileSource
 ) {
+    /**
+     * 定义内容版本：经本仓库的 save/delete/setDisabled 修改定义后递增。
+     * 系统提示词里的可用清单按它做缓存失效——否则会话中途新建的子代理
+     * 要等到下一个会话才出现在主代理的派发清单里。外部直接改文件不经过这里，
+     * 这部分维持原有的「新会话才刷新」行为。
+     */
+    @Volatile private var definitionsVersionField: Long = 0
+    val definitionsVersion: Long get() = definitionsVersionField
+
+    private fun bumpVersion() {
+        definitionsVersionField++
+    }
+
     /** 不启用远程批量读取缓存的构造（单测与无远端场景）。 */
     internal constructor(
         globalSource: GlobalDirectoryAgentSource,
@@ -32,6 +45,7 @@ class AgentDefinitionRepository @Inject constructor(
         fileAccess: FileAccessProvider,
         listOrderStore: ListOrderStore
     ) : this(globalSource, projectSource, configRepository, fileAccess, listOrderStore, BulkFileSource.Disabled)
+
     /**
      * 全部定义（含来源作用域），未过滤禁用。
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
@@ -71,8 +85,11 @@ class AgentDefinitionRepository @Inject constructor(
     fun isDisabled(name: String): Boolean = name.lowercase() in configRepository.disabledNames()
 
     /** 在指定作用域启用/禁用某个子代理。@return false 表示项目级配置因工作区未就绪被跳过。 */
-    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope): Boolean =
-        configRepository.setDisabled(name, disabled, scope)
+    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope): Boolean {
+        val written = configRepository.setDisabled(name, disabled, scope)
+        bumpVersion()
+        return written
+    }
 
     /**
      * 写入定义文件（新建或编辑）。[originalName] 为编辑前的名称，新建时传 null；
@@ -129,6 +146,7 @@ class AgentDefinitionRepository @Inject constructor(
                 }
             }
             bulk.invalidate()
+            bumpVersion()
             null
         } catch (e: Exception) {
             FileLogger.e(TAG, "保存子代理定义失败: $name", e)
@@ -145,7 +163,10 @@ class AgentDefinitionRepository @Inject constructor(
         val provider = fileAccess
         if (!provider.isFile(filePath)) return false
         val deleted = runCatching { provider.delete(filePath); true }.getOrDefault(false)
-        if (deleted) bulk.invalidate()
+        if (deleted) {
+            bulk.invalidate()
+            bumpVersion()
+        }
         return deleted
     }
 

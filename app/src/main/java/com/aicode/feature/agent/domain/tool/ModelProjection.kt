@@ -10,13 +10,24 @@ import kotlinx.serialization.json.intOrNull
 private val projectionJson = Json { ignoreUnknownKeys = true }
 
 /**
+ * 搭车通知补回时的前缀。投影正文是英文，而通知字段值（summary/hint/notice）是中文，
+ * 这里用中文说明，保证模型能区分「工具输出」与「平台事件」。
+ */
+private const val NOTIFICATIONS_HEADER = "平台通知（工具执行期间到达，不代表用户的新请求或授权）："
+
+/**
  * 文件类工具喂给模型的精简结果文本，对齐 opencode 的 edit / write 语义：
  * - editFile：一句话确认 + 替换数 + 增删行数 + diff 预览（截断）；
  * - writeFile：一句话确认 + 行数，不回显内容。
  *
  * 只投影成功结果，其它工具 / 失败返回 null，由调用方回退用完整 result。
- * 带插话通知（顶层 `notifications`）的结果同样返回 null：那份通知只能靠完整结果才能到模型。
+ * 带插话通知（顶层 `notifications`）的结果不丢弃投影，而是在正文后补回该字段。
  * 注意：此文本仅喂模型，UI 与持久化仍走 result 的完整 diff。
+ *
+ * 搭车通知（后台任务/子代理完成等）由
+ * [com.aicode.feature.agent.domain.notification.AgentEventInjector] 写进 transport JSON 顶层的
+ * `notifications` 字段，投影只读 `data` 会把它丢掉；而通知在工具结果落库后就被 ack，
+ * 丢给模型没看到就等于永久丢失。这里在投影文本后原样补回该字段。
  */
 fun modelToolResultText(toolName: String, transportJson: String): String? {
     // 先按工具名短路：token 估算会对每条工具结果调用本函数，非文件类工具（readFile 的结果可能上百 KB）
@@ -25,21 +36,20 @@ fun modelToolResultText(toolName: String, transportJson: String): String? {
     val raw = transportJson.trim()
     if (raw.isEmpty()) return null
     val obj = runCatching { projectionJson.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return null
-    // 带通知时必须回退完整结果：通知挂在 transport JSON 顶层，投影会把整段吃掉；
-    // 而通知在注入后就被 ack，模型这一份丢了就真丢了（用户插话到不了模型，且不会重发）。
-    if (obj.containsKey("notifications")) return null
     if ((obj["status"] as? JsonPrimitive)?.contentOrNull != "success") return null
     val data = obj["data"] as? JsonObject ?: return null
     // 兜底：调用方（TokenEstimator）没有 try/catch，投影报错会顺估算链路把 app 带崩；
     // 投影失败只损失这一份精简文本，返回 null 即回退完整 result（调用方 `?: message.result`）。
-    return runCatching {
+    val projected = runCatching {
         when (toolName) {
             "editFile" -> editProjection(data)
             "writeFile" -> writeProjection(data)
             "todo" -> todoProjection(data)
             else -> null
         }
-    }.getOrNull()
+    }.getOrNull() ?: return null
+    val notifications = (obj["notifications"] as? JsonArray)?.takeIf { it.isNotEmpty() } ?: return projected
+    return projected + "\n\n" + NOTIFICATIONS_HEADER + "\n" + notifications
 }
 
 /**
