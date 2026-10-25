@@ -124,7 +124,7 @@ data class AgentDefinition(
     }
 
     /** 该定义（不叠加模式约束）是否具备写文件或执行命令的能力。 */
-    fun canModifyOrExecute(): Boolean = (WRITE_TOOLS + EXEC_TOOLS).any { allowsTool(it) }
+    fun canModifyOrExecute(): Boolean = (CAP_WRITE_TOOLS + CAP_EXEC_TOOLS).any { allowsTool(it) }
 
     private fun matches(pattern: String, toolName: String): Boolean {
         val p = pattern.trim()
