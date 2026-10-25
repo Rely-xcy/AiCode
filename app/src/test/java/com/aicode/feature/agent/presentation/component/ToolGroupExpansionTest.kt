@@ -288,34 +288,38 @@ class ToolGroupExpansionTest {
 
     @Test
     fun truncatedWindow_manualExpansionSurvivesToolUpdatesAndWindowShift() {
-        val key = "turn:head:session:s1"
-        val overrides = mapOf(key to true)
-        val windows = listOf(
-            listOf(assistant("a1"), tool("t1"), tool("t2")),
-            listOf(assistant("a1"), tool("t1"), tool("t2"), tool("t3")),
-            listOf(tool("t2"), tool("t3"), tool("t4")),
+        // 块首半轮的折叠头 key 取「块尾消息 id」：窗口向前补加载（新消息插在块首）时块尾不变、
+        // key 不变，手动展开态跟着保住；块尾自己变了（块尾工具还在追加）就是另一截半轮，
+        // 旧 key 的选择不再适用，按默认收起。
+        val overrides = mapOf("turn:head:t4" to true)
+        val shifted = buildChatItems(
+            listOf(tool("t2"), tool("t3"), tool("t4")), emptyMap(), overrides, sessionId = "s1"
+        ).header().turnHeader!!
+        assertEquals("turn:head:t4", shifted.key)
+        assertTrue(shifted.expanded)
+        val prepended = buildChatItems(
             listOf(assistant("older"), tool("t2"), tool("t3"), tool("t4")),
-        )
-        windows.forEach { messages ->
-            val header = buildChatItems(
-                messages, emptyMap(), overrides, sessionId = "s1"
-            ).header().turnHeader!!
-            assertEquals(key, header.key)
-            assertTrue(header.expanded)
-        }
-        val otherSession = buildChatItems(
-            windows.first(), emptyMap(), overrides, sessionId = "s2"
+            emptyMap(), overrides, sessionId = "s1",
         ).header().turnHeader!!
-        assertFalse(otherSession.expanded)
+        assertEquals("turn:head:t4", prepended.key)
+        assertTrue("块尾不变，手动展开态跨窗口保住", prepended.expanded)
+        val grown = buildChatItems(
+            listOf(assistant("a1"), tool("t1"), tool("t2"), tool("t3")),
+            emptyMap(), overrides, sessionId = "s1",
+        ).header().turnHeader!!
+        assertEquals("turn:head:t3", grown.key)
+        assertFalse("块尾变了就是另一截半轮，不继承上一截的展开", grown.expanded)
         val collapsed = buildChatItems(
-            windows.last(), emptyMap(), mapOf(key to false), sessionId = "s1"
+            listOf(assistant("older"), tool("t2"), tool("t3"), tool("t4")),
+            emptyMap(), mapOf("turn:head:t4" to false), sessionId = "s1",
         ).header().turnHeader!!
-        assertFalse(collapsed.expanded)
+        assertFalse("手动收起同样按块尾 key 生效", collapsed.expanded)
     }
 
     @Test
-    fun truncatedWindow_notificationFoldsIntoLeadingProcess() {
-        // 后台通知随过程折叠：折进这一截的折叠头里，不占顶层 item
+    fun truncatedWindow_notificationStaysTopLevelInPlace() {
+        // 后台通知是常显项：留在时间线原位当顶层 item，不折进折叠头（旧实现把它折进轮头，
+        // 结果是通知被藏进「已完成」那一行里）。缺轮首的那一截照旧有折叠头，块尾是通知时 key 取它。
         val notice = AgentUIMessage(id = "n1", role = MessageRole.USER, content = "done")
             .copy(isBackgroundNotification = true)
         val messages = listOf(
@@ -325,10 +329,14 @@ class ToolGroupExpansionTest {
             user("u0"),
         )
         val rendered = items(messages)
-        assertFalse("后台通知折进过程", rendered.any { it.key == "n1" })
+        assertTrue("后台通知常显，占顶层 item", rendered.any { it.key == "n1" })
         val head = rendered.first { it.turnHeader != null }
         assertEquals("turn:head:n1", head.turnHeader!!.key)
-        assertTrue(head.turnProcess.any { it.key == "n1" })
+        assertFalse("通知不进折叠头的过程项", head.turnProcess.any { it.key == "n1" })
+        assertTrue(
+            "通知停在自己的时间线位置：在块首半轮折叠头之后",
+            rendered.indexOfFirst { it.key == "n1" } > rendered.indexOfFirst { it.turnHeader != null }
+        )
     }
 
     @Test
@@ -407,32 +415,50 @@ class ToolGroupExpansionTest {
     }
 
     @Test
-    fun loadingTurnStart_preservesHeaderKeyAndManualExpansion() {
+    fun loadingTurnStart_switchesHeaderKeyToTurnMessageId() {
+        // 缺轮首的那一截（块首半轮）与补进轮首后的完整轮是两种折叠头 key：半轮按块尾消息 id
+        // （turn:head:<块尾 id>），完整轮按轮首用户消息 id（turn:<用户 id>）。reconcile 仍沿用
+        // 半轮时期的 key（交接规则没变），但渲染层的头 key 由消息自己决定，不再按 turnKeys 拼。
         val tail = listOf(assistant("a1"), tool("t1"), tool("t2"))
         val previousKeys = reconcileTurnKeys(tail, emptyMap(), "s1")
         val headKey = previousKeys.getValue("a1")
+        assertEquals("turn:head:session:s1", headKey)
+        val half = buildChatItems(
+            tail, emptyMap(), mapOf("turn:head:t2" to true), sessionId = "s1", turnKeys = previousKeys,
+        )
+        assertEquals("turn:head:t2", half.header().turnHeader!!.key)
+        assertTrue(half.header().turnHeader!!.expanded)
         val full = listOf(user("u0")) + tail
         val nextKeys = reconcileTurnKeys(full, previousKeys, "s1")
         val rendered = buildChatItems(
-            full, emptyMap(), mapOf(headKey to true), sessionId = "s1", turnKeys = nextKeys,
+            full, emptyMap(), mapOf("turn:u0" to true), sessionId = "s1", turnKeys = nextKeys,
         )
-        assertEquals(headKey, rendered.header().turnHeader?.key)
+        assertEquals("turn:u0", rendered.header().turnHeader?.key)
         assertTrue(rendered.header().turnHeader!!.expanded)
+        val collapsed = buildChatItems(
+            full, emptyMap(), mapOf("turn:u0" to false), sessionId = "s1", turnKeys = nextKeys,
+        )
+        assertFalse(collapsed.header().turnHeader!!.expanded)
         assertEquals(previousKeys.getValue("t1"), nextKeys.getValue("t1"))
     }
 
     @Test
-    fun slidingWindow_preservesRunningTurnIdentity() {
+    fun slidingWindow_truncatedRunningTurnBecomesLeadingFragment() {
         val full = listOf(user("u0"), assistant("a1"), tool("t1"))
         val previousKeys = reconcileTurnKeys(full, emptyMap(), "s1")
         val nextKeys = reconcileTurnKeys(full.drop(1) + tool("t2"), previousKeys, "s1")
+        // 窗口滑掉轮首用户行后，reconcile 仍把这一截认在滑动前的那一轮上。
         assertEquals("turn:u0", nextKeys.getValue("t2"))
         val rendered = buildChatItems(
             full.drop(1) + tool("t2"), emptyMap(), activeTurnKey = "turn:u0",
             sessionId = "s1", turnKeys = nextKeys,
         )
-        assertTrue(rendered.header().turnHeader!!.running)
-        assertTrue(rendered.header().turnHeader!!.expanded)
+        // 渲染层不按 turnKeys 拼头 key：缺轮首的这一截是「块首半轮」，头 key 取块尾消息 id，
+        // 且 running 只给带轮首用户行的完整轮，半轮一律按「已完成」收起。
+        val head = rendered.header().turnHeader!!
+        assertEquals("turn:head:t2", head.key)
+        assertFalse(head.running)
+        assertFalse(head.expanded)
     }
 
     @Test
@@ -455,18 +481,21 @@ class ToolGroupExpansionTest {
         val history = mutableMapOf<String, String>()
         val tail = listOf(assistant("a1"), tool("t1"))
         history.putAll(reconcileTurnKeys(tail, history, "s1"))
-        val headKey = history.getValue("a1")
+        val halfKey = history.getValue("a1")
         val full = listOf(user("u1")) + tail
         history.putAll(reconcileTurnKeys(full, history, "s1"))
         val newer = listOf(user("u2"), tool("t2"))
         history.putAll(reconcileTurnKeys(newer, history, "s1"))
         val reloaded = full + newer
         val keys = reconcileTurnKeys(reloaded, history, "s1")
+        // reconcile 的交接不变：轮首补进窗口后仍沿用半轮时期那一套 key。
+        assertEquals(halfKey, keys.getValue("u1"))
+        // 渲染层的整轮折叠头 key 一律是 turn:<轮首用户 id>，与窗口怎么装回来无关：
+        // 被窗口翻出去再装回来时手动展开态仍按这个 key 命中。
         val rendered = flattenChatProcesses(buildChatItems(
-            reloaded, emptyMap(), mapOf(headKey to true), turnKeys = keys,
+            reloaded, emptyMap(), mapOf("turn:u1" to true), turnKeys = keys,
         ))
-        assertEquals(headKey, keys.getValue("u1"))
-        assertTrue(rendered.first { it.turnHeader?.key == headKey }.turnHeader!!.expanded)
+        assertTrue(rendered.first { it.turnHeader?.key == "turn:u1" }.turnHeader!!.expanded)
         assertEquals(rendered.size, rendered.map { it.key }.toSet().size)
     }
 

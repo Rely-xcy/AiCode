@@ -1,10 +1,13 @@
 package com.aicode.feature.agent.domain.tool.mcp
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.feature.agent.domain.mcp.McpAuthConfig
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.tool.ToolResult
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
@@ -14,6 +17,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ManageMcpToolListRedactionTest {
+
+    /**
+     * `execute()` 无论哪个 action 都先取作用域文案（`appContext.getString`），
+     * 严格 mock 下未 stub 会抛 MockKException；list 的输出里用不到它，按实际读到的键精确 stub。
+     */
+    private val appContext = mockk<Context>().apply {
+        every { getString(R.string.mcp_scope_global) } returns "全局"
+    }
 
     @Test
     fun list_hidesAllCredentialBearingTargetsWithoutConfirmation() = runBlocking {
@@ -43,7 +54,7 @@ class ManageMcpToolListRedactionTest {
         val repository = mockk<McpConfigRepository>()
         coEvery { repository.getGlobalServers() } returns servers
 
-        val result = ManageMcpTool(repository, mockk()).execute(mapOf("action" to JsonPrimitive("list")))
+        val result = ManageMcpTool(repository, appContext).execute(mapOf("action" to JsonPrimitive("list")))
 
         assertTrue(result is ToolResult.Success)
         val output = (result as ToolResult.Success).data.jsonPrimitive.content
@@ -64,7 +75,7 @@ class ManageMcpToolListRedactionTest {
             McpServerConfig(name = "file", url = "file:///tmp/sentinel")
         )
 
-        val result = ManageMcpTool(repository, mockk()).execute(mapOf("action" to JsonPrimitive("list")))
+        val result = ManageMcpTool(repository, appContext).execute(mapOf("action" to JsonPrimitive("list")))
         val output = (result as ToolResult.Success).data.jsonPrimitive.content
 
         assertFalse(output.contains("sentinel"))

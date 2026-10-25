@@ -148,8 +148,12 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
         // 护栏（新旧实现都绿，不是本次修复的红/绿证据）：正常配置下这条链一点没变 —— 仍然只发一条
         // 命令，仍然只列该目录的子目录。它防的是「把空路径的短路写宽了，顺手把正常路径也短路掉」。
         assertEquals(1, executedCommands.size)
-        assertTrue(executedCommands.single().contains("ls -d '/srv/ai/code'/*/"))
-        assertFalse(executedCommands.single().contains("ls -d /*/"))
+        val command = executedCommands.single()
+        // 列目录的形态是「先 cd 到工作区根、再用 glob 逐项输出（目录名可含空格，不能交给 ls / xargs 分词）」，
+        // 因此断言看的是「在哪个目录里列」，而不是具体用了哪个命令。
+        assertTrue(command.startsWith("cd '/srv/ai/code' "))
+        assertTrue(command.contains("for d in */"))
+        assertFalse("不能落到远端根目录上去列", command.contains("cd ''"))
         assertEquals(listOf("alpha", "beta"), repo.workspaces.value.map { it.name })
         assertEquals("/srv/ai/code/alpha", repo.workspaces.value.first().path)
     }
