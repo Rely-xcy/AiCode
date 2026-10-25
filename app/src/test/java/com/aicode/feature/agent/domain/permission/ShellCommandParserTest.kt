@@ -83,7 +83,7 @@ class ShellCommandParserTest {
     @Test
     fun blockers_includeRedirectTarget() {
         assertEquals(
-            listOf("输出重定向到绝对路径 /etc/passwd"),
+            listOf("输出重定向到工作区外的路径 /etc/passwd"),
             ShellCommandParser.analyze("echo hi > /etc/passwd").blockers
         )
     }

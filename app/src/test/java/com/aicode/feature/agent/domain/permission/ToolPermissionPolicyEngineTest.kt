@@ -26,6 +26,9 @@ import org.junit.Test
  */
 class ToolPermissionPolicyEngineTest {
 
+    private val planModeDenyReason =
+        "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。"
+
     /**
      * 弹窗标题与说明取自 `strings.xml`，用例只断言「给不给弹窗、能不能记忆、什么标题」，
      * 所以把引擎会读到的键都 stub 成真实中文（严格 mock 未 stub 会抛 MockKException）。
@@ -36,8 +39,7 @@ class ToolPermissionPolicyEngineTest {
         every { getString(R.string.permission_rules_unconfirmed_project_reason) } returns "项目级规则读不到，仅单次放行（测试）"
         every { getString(R.string.permission_rules_unconfirmed_global_title) } returns "全局授权规则暂不可用（测试）"
         every { getString(R.string.permission_rules_unconfirmed_global_reason) } returns "全局级规则读不到，仅单次放行（测试）"
-        every { getString(R.string.permission_plan_mode_deny) } returns
-            "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。"
+        every { getString(R.string.permission_plan_mode_deny) } returns planModeDenyReason
         every { getString(R.string.permission_shizuku_not_rememberable) } returns
             "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
         every { getString(R.string.permission_deny_tool_by_project_rule) } returns "该工具被项目权限规则策略禁止执行"
@@ -45,8 +47,12 @@ class ToolPermissionPolicyEngineTest {
         every { getString(R.string.permission_elevation_title) } returns "高危操作提权确认"
         every { getString(R.string.permission_elevation_not_rememberable) } returns
             "命令命中内置安全防护，提权仅支持单次放行，不可记忆"
-        every { getString(R.string.permission_deny_with_elevate_hint, *anyVararg()) } returns
-            "安全防护：禁止执行高危删除操作（根目录删除）。如确需执行，可在调用时加 `elevate: true` 重试，系统将向用户请求授权。"
+        // 必须真的把 %1$s（拦截原因）与 %2$s（提权参数名）拼进去：真实资源就是这么展开的。
+        // 改成固定串会把拦截原因连同其中的触发构造一起吞掉，断言就看不到原因里说了什么。
+        every { getString(R.string.permission_deny_with_elevate_hint, *anyVararg()) } answers {
+            val hintArgs = secondArg<Array<Any?>>()
+            "${hintArgs[0]}。如确需执行，可在调用时加 `${hintArgs[1]}: true` 重试，系统将向用户请求授权。"
+        }
         every { getString(R.string.permission_non_rememberable_capabilities) } returns
             "该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行"
         every { getString(R.string.permission_rm_unrememberable) } returns
@@ -113,7 +119,8 @@ class ToolPermissionPolicyEngineTest {
         val e = engine()
         val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.PLAN)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
-        assertEquals("resource:${R.string.tool_plan_mode_denied}", r.denyReason)
+        // 引擎返回的是已解析的文案（PLAN 模式专用那条），不再回传 `resource:` 占位符。
+        assertEquals(planModeDenyReason, r.denyReason)
     }
 
     @Test
