@@ -959,8 +959,8 @@ private fun CallRecordRow(call: RecentCallRecord, cost: Double?, textColor: Colo
         TableCell(call.record.status, statusColor, COL_STATUS_W, FontWeight.Medium)
         TableCell(call.record.inputTokens.toString(), textColor, COL_TOKENS_W)
         TableCell(call.record.outputTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(call.record.cachedInputTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(call.record.cacheCreationTokens.toString(), textColor, COL_TOKENS_W)
+        TableCell(formatOptionalTokens(call.record.cachedInputTokens), textColor, COL_TOKENS_W)
+        TableCell(formatOptionalTokens(call.record.cacheCreationTokens), textColor, COL_TOKENS_W)
         TableCell(formatRecordCacheHitRate(call.record), textColor, COL_TOKENS_W)
         TableCell(formatDuration(call.record.ttfbMillis?.toDouble()), mutedColor, COL_DURATION_W)
         TableCell(formatDuration(call.record.durationMillis?.toDouble()), mutedColor, COL_DURATION_W)
@@ -981,7 +981,7 @@ private fun TableCell(text: String, color: Color, width: Dp, fontWeight: FontWei
     )
 }
 
-/** 与对话页头部一致的 token 缩写格式（见 MarkdownContent.formatTokenCount）：1234 -> 1.2k。 */
+/** 与对话页头部一致的 token 缩写格式（见 MarkdownContent.formatTokenCount）：1234 -> 1.2k；读取与写入都为 0 表示渠道没上报，副标题整段显示 -。 */
 private fun formatCache(context: android.content.Context, cachedRead: Long, cachedWrite: Long): String =
     if (cachedRead > 0 || cachedWrite > 0) {
         context.getString(
@@ -990,25 +990,28 @@ private fun formatCache(context: android.content.Context, cachedRead: Long, cach
             formatTokenCount(cachedWrite)
         )
     } else {
-        ""
+        "-"
     }
 
 private fun formatCallTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
-/** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）。 */
-private fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
-    if (call.inputTokens <= 0) return "-"
+/** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）；缓存读取为 0 表示渠道没上报，显示 - 而不是误导性的 0%。 */
+internal fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
+    if (call.inputTokens <= 0 || call.cachedInputTokens <= 0) return "-"
     val rate = min(call.cachedInputTokens * 100.0 / call.inputTokens, 100.0)
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
 
-/** 概览缓存命中率：缓存输入 / 总输入（与单次调用同口径）；clamp 到 100% 兜住个别服务端上报的异常值。 */
-private fun formatCacheHitRate(s: CallSummary): String {
-    if (s.inputTokens <= 0) return "-"
+/** 概览缓存命中率：缓存输入 / 总输入（与单次调用同口径）；clamp 到 100% 兜住个别服务端上报的异常值，缓存为 0 时同样显示 -。 */
+internal fun formatCacheHitRate(s: CallSummary): String {
+    if (s.inputTokens <= 0 || s.cachedInputTokens <= 0) return "-"
     val rate = min(s.cachedInputTokens * 100.0 / s.inputTokens, 100.0)
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
+
+/** 明细表里的缓存 token 列：0 表示渠道没上报，显示 -（与表内其它缺失值口径一致）。 */
+internal fun formatOptionalTokens(value: Int): String = if (value > 0) value.toString() else "-"
 
 private fun formatDuration(ms: Double?): String {
     if (ms == null) return "-"

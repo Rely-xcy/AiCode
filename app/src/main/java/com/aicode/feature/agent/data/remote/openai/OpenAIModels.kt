@@ -90,7 +90,13 @@ data class Usage(
     val prompt_tokens: Int,
     val completion_tokens: Int,
     val total_tokens: Int,
-    val prompt_tokens_details: PromptTokensDetails? = null
+    val prompt_tokens_details: PromptTokensDetails? = null,
+    /** DeepSeek 系把命中数平铺在 usage 顶层（不在 prompt_tokens_details 里）。 */
+    val prompt_cache_hit_tokens: Int? = null,
+    /** DeepSeek 系的「未命中输入量」：与 hit 相加≈prompt_tokens，是补集而非缓存写入，不映射到 cacheCreationTokens。 */
+    val prompt_cache_miss_tokens: Int? = null,
+    /** 部分兼容服务把命中数直接平铺成顶层 cached_tokens，与 details.cached_tokens 同义。 */
+    val cached_tokens: Int? = null
 )
 
 /**

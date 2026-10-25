@@ -120,6 +120,111 @@ class OpenAIAdapterTest {
         assertEquals(3, result.cachedInputTokens)
     }
 
+    // ── 缓存命中 token 的来源优先级：details → 顶层 hit → 顶层 cached_tokens 别名 ──
+
+    @Test
+    fun complete_readsDeepSeekTopLevelCacheHitTokens() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                prompt_cache_hit_tokens = 700,
+                prompt_cache_miss_tokens = 300
+            )
+        )
+
+        val result = adapter(api).complete("", emptyList())
+
+        assertEquals(700, result.cachedInputTokens)
+        // miss 是未命中的输入量，不是缓存写入，不得落到 cacheCreationTokens。
+        assertEquals(0, result.cacheCreationTokens)
+        assertEquals(1_000, result.inputTokens)
+    }
+
+    @Test
+    fun complete_missTokensAloneAreNotTreatedAsCacheHit() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                prompt_cache_miss_tokens = 300
+            )
+        )
+
+        val result = adapter(api).complete("", emptyList())
+
+        assertEquals(0, result.cachedInputTokens)
+        assertEquals(0, result.cacheCreationTokens)
+    }
+
+    @Test
+    fun complete_prefersPromptTokensDetailsOverTopLevelFields() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                prompt_tokens_details = PromptTokensDetails(cached_tokens = 40),
+                prompt_cache_hit_tokens = 700,
+                cached_tokens = 900
+            )
+        )
+
+        assertEquals(40, adapter(api).complete("", emptyList()).cachedInputTokens)
+    }
+
+    @Test
+    fun complete_detailsReportedZero_fallsBackToDeepSeekTopLevelHit() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                prompt_tokens_details = PromptTokensDetails(cached_tokens = 0),
+                prompt_cache_hit_tokens = 600
+            )
+        )
+
+        assertEquals(600, adapter(api).complete("", emptyList()).cachedInputTokens)
+    }
+
+    @Test
+    fun complete_topLevelHitPrecedesTopLevelCachedAlias() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                prompt_cache_hit_tokens = 500,
+                cached_tokens = 300
+            )
+        )
+
+        assertEquals(500, adapter(api).complete("", emptyList()).cachedInputTokens)
+    }
+
+    @Test
+    fun complete_topLevelCachedAliasUsedWhenHitMissing() = runBlocking {
+        val api = api()
+        coEvery { api.createChatCompletion(any(), any(), any(), any()) } returns response(
+            usage = Usage(
+                prompt_tokens = 1_000,
+                completion_tokens = 20,
+                total_tokens = 1_020,
+                cached_tokens = 250
+            )
+        )
+
+        assertEquals(250, adapter(api).complete("", emptyList()).cachedInputTokens)
+    }
+
     @Test
     fun complete_systemRole_usesDeveloperForReasoningModels() = runBlocking {
         val api = api()
@@ -529,6 +634,64 @@ class OpenAIAdapterTest {
         assertEquals(12, final.response.inputTokens)
         assertEquals(6, final.response.outputTokens)
         assertEquals(4, final.response.cachedInputTokens)
+    }
+
+    @Test
+    fun streamChat_readsDeepSeekTopLevelCacheHitTokensFromRawUsage() = runBlocking {
+        val api = api()
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},\"finish_reason\":\"stop\"}]}",
+            "data: {\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"prompt_cache_hit_tokens\":700,\"prompt_cache_miss_tokens\":300}}",
+            "data: [DONE]"
+        )
+
+        val final = adapter(api).completeStream("", emptyList()).toList()
+            .filterIsInstance<AIStreamChunk.Final>().single()
+
+        assertEquals(700, final.response.cachedInputTokens)
+        assertEquals(0, final.response.cacheCreationTokens)
+    }
+
+    @Test
+    fun streamChat_prefersDetailsCacheHitOverTopLevelAliases() = runBlocking {
+        val api = api()
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
+            "data: {\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":40},\"prompt_cache_hit_tokens\":700,\"cached_tokens\":900}}",
+            "data: [DONE]"
+        )
+
+        val final = adapter(api).completeStream("", emptyList()).toList()
+            .filterIsInstance<AIStreamChunk.Final>().single()
+
+        assertEquals(40, final.response.cachedInputTokens)
+    }
+
+    @Test
+    fun streamChat_detailsReportedZero_fallsBackToTopLevelHit() = runBlocking {
+        val api = api()
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
+            "data: {\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":0},\"prompt_cache_hit_tokens\":600}}",
+            "data: [DONE]"
+        )
+
+        val final = adapter(api).completeStream("", emptyList()).toList()
+            .filterIsInstance<AIStreamChunk.Final>().single()
+
+        assertEquals(600, final.response.cachedInputTokens)
+    }
+
+    @Test
+    fun streamChat_topLevelCachedAliasUsedWhenDetailsMissing() = runBlocking {
+        val api = api()
+        every { api.streamChatCompletion(any(), any(), any(), any()) } returns sseCall(
+            "data: {\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"cached_tokens\":250}}",
+            "data: [DONE]"
+        )
+
+        val final = adapter(api).completeStream("", emptyList()).toList()
+            .filterIsInstance<AIStreamChunk.Final>().single()
+
+        assertEquals(250, final.response.cachedInputTokens)
     }
 
     @Test

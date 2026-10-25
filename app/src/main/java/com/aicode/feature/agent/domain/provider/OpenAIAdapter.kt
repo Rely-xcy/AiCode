@@ -33,6 +33,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import com.aicode.feature.agent.data.remote.openai.OpenAIToolCall
 import com.aicode.feature.agent.data.remote.openai.OpenAIToolDefinition
+import com.aicode.feature.agent.data.remote.openai.Usage
 import com.aicode.feature.agent.data.remote.openai.OpenAIFunctionDefinition
 import com.aicode.feature.agent.data.remote.openai.OpenAIImagePart
 import com.aicode.feature.agent.data.remote.openai.StreamOptions
@@ -161,7 +162,7 @@ class OpenAIAdapter @Inject constructor(
             ?: message?.reasoning?.takeIf { it.isNotEmpty() }
         val usage = response.usage
 
-        return AIResponse(content = content, toolCalls = toolCalls, stopReason = finishReason, reasoning = reasoning, inputTokens = usage?.prompt_tokens ?: 0, outputTokens = usage?.completion_tokens ?: 0, cachedInputTokens = usage?.prompt_tokens_details?.cached_tokens ?: 0, cacheCreationTokens = usage?.prompt_tokens_details?.cache_write_tokens ?: 0, images = images)
+        return AIResponse(content = content, toolCalls = toolCalls, stopReason = finishReason, reasoning = reasoning, inputTokens = usage?.prompt_tokens ?: 0, outputTokens = usage?.completion_tokens ?: 0, cachedInputTokens = usage?.cacheHitTokens() ?: 0, cacheCreationTokens = usage?.prompt_tokens_details?.cache_write_tokens ?: 0, images = images)
     }
 
     /**
@@ -424,8 +425,8 @@ class OpenAIAdapter @Inject constructor(
                             obj.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject?.let { u ->
                                 streamInputTokens = u.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamInputTokens
                                 streamOutputTokens = u.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamOutputTokens
-                                streamCachedInputTokens = u.getAsJsonObject("prompt_tokens_details")?.get("cached_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamCachedInputTokens
-                                streamCacheCreationTokens = u.getAsJsonObject("prompt_tokens_details")?.get("cache_write_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamCacheCreationTokens
+                                streamCachedInputTokens = u.cacheHitTokens() ?: streamCachedInputTokens
+                                streamCacheCreationTokens = u.get("prompt_tokens_details")?.takeIf { it.isJsonObject }?.asJsonObject?.get("cache_write_tokens")?.asIntOrNull() ?: streamCacheCreationTokens
                             }
                             val choice = obj.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject ?: continue
                             val delta = choice.getAsJsonObject("delta") ?: continue
@@ -876,3 +877,37 @@ class OpenAIAdapter @Inject constructor(
         )
     }
 }
+
+/**
+ * 缓存命中 token 的读取顺序（遇到第一个正数即止，不相加、不取最大）：
+ * 1. `prompt_tokens_details.cached_tokens`——OpenAI 官方口径；
+ * 2. 顶层 `prompt_cache_hit_tokens`——DeepSeek 平铺在 usage 顶层，不在 details 里；
+ * 3. 顶层 `cached_tokens`——部分兼容服务直接把命中数平铺。
+ * 0 与 null 一律当作「该级没上报」，才继续往下回退：三者都是 0 时返回 0。
+ *
+ * DeepSeek 的 `prompt_cache_miss_tokens` 是未命中的输入量（与 hit 相加≈prompt_tokens），
+ * 不是缓存写入，故不映射到 cacheCreationTokens；各家对 prompt_tokens 是否含缓存部分口径不一，
+ * 相加对不上属正常，因此也不据它修正 hit、不报错。
+ */
+private fun Usage.cacheHitTokens(): Int? {
+    val fromDetails = prompt_tokens_details?.cached_tokens
+    if (fromDetails != null && fromDetails > 0) return fromDetails
+    if (prompt_cache_hit_tokens != null && prompt_cache_hit_tokens > 0) return prompt_cache_hit_tokens
+    if (cached_tokens != null && cached_tokens > 0) return cached_tokens
+    return fromDetails ?: prompt_cache_hit_tokens ?: cached_tokens
+}
+
+/** 流式路径的同一条回退链：usage 来自原始 SSE JSON，Gson 的 details 可能缺字段或类型不符。 */
+private fun com.google.gson.JsonObject.cacheHitTokens(): Int? {
+    val fromDetails = get("prompt_tokens_details")?.takeIf { it.isJsonObject }?.asJsonObject?.get("cached_tokens")?.asIntOrNull()
+    if (fromDetails != null && fromDetails > 0) return fromDetails
+    val deepSeekHit = get("prompt_cache_hit_tokens")?.asIntOrNull()
+    if (deepSeekHit != null && deepSeekHit > 0) return deepSeekHit
+    val topLevelCached = get("cached_tokens")?.asIntOrNull()
+    if (topLevelCached != null && topLevelCached > 0) return topLevelCached
+    return fromDetails ?: deepSeekHit ?: topLevelCached
+}
+
+/** 非原始值（对象/数组/null）与无法转成数字的字符串都返回 null，避免单行 usage 异常拖垮整条流。 */
+private fun com.google.gson.JsonElement?.asIntOrNull(): Int? =
+    this?.takeIf { it.isJsonPrimitive }?.let { runCatching { it.asInt }.getOrNull() }
