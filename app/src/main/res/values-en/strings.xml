@@ -631,6 +631,8 @@
     <string name="backup_net_no_target">No cloud backup target yet</string>
     <string name="backup_net_upload">Upload</string>
     <string name="backup_net_upload_short">Upload</string>
+    <string name="backup_net_upload_password_hint">The backup will be uploaded to the cloud. A password is required (AES-GCM) to keep API keys, SSH credentials, etc. from being exposed in plain text</string>
+    <string name="backup_net_upload_password_required">An encryption password is required for cloud backup</string>
     <string name="backup_net_upload_subtitle">Export the current backup and upload to the selected target</string>
     <string name="backup_net_restore">Restore from cloud</string>
     <string name="backup_net_restore_subtitle">Download a backup from the selected target and restore</string>

@@ -631,6 +631,8 @@
     <string name="backup_net_no_target">尚未添加网络备份目标</string>
     <string name="backup_net_upload">上传到云端</string>
     <string name="backup_net_upload_short">上传</string>
+    <string name="backup_net_upload_password_hint">备份将上传到云端，为避免 API Key、SSH 凭据等明文泄露，必须设置口令加密（AES-GCM）</string>
+    <string name="backup_net_upload_password_required">云端备份必须设置加密口令</string>
     <string name="backup_net_upload_subtitle">导出当前备份并上传到所选目标</string>
     <string name="backup_net_restore">从云端恢复</string>
     <string name="backup_net_restore_subtitle">从所选目标下载备份并还原</string>

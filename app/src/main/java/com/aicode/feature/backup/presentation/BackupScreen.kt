@@ -318,14 +318,11 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传口令
+    // 上传口令（云端上传必须加密：备份默认含解密后的 API Key / SSH 凭据，明文放到远端风险不可控）
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(
-                if (exportOptions.loginSecrets) R.string.backup_password_hint_with_secrets
-                else R.string.backup_password_hint
-            ),
+            subtitle = stringResource(R.string.backup_net_upload_password_hint),
             confirmText = stringResource(R.string.backup_net_upload),
             password = uploadPassword,
             onPasswordChange = { uploadPassword = it },
@@ -334,13 +331,13 @@ internal fun BackupScreen(
                 val pw = uploadPassword
                 uploadTarget = null
                 uploadPassword = ""
-                if (t != null) {
+                if (t != null && pw.isNotEmpty()) {
                     networkWorkingTextRes = R.string.backup_net_uploading
                     viewModel.uploadToTarget(t, pw)
                 }
             },
             onDismiss = { uploadTarget = null; uploadPassword = "" },
-            required = exportOptions.loginSecrets
+            confirmEnabled = uploadPassword.isNotEmpty()
         )
     }
 
@@ -931,7 +928,9 @@ private fun PasswordDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     /** 口令必填（备份要带登录凭据时）：留空不允许确认，并就地说明原因。 */
-    required: Boolean = false
+    required: Boolean = false,
+    /** 额外的确认开关：网络上传无条件要求已填口令（云端绝不能收明文凭据）。 */
+    confirmEnabled: Boolean = true
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -966,7 +965,10 @@ private fun PasswordDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !required || password.isNotBlank()) {
+            TextButton(
+                onClick = onConfirm,
+                enabled = confirmEnabled && (!required || password.isNotBlank())
+            ) {
                 Text(confirmText)
             }
         },

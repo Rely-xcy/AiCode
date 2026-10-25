@@ -183,8 +183,14 @@ class BackupViewModel @Inject constructor(
         }
     }
 
-    /** 导出当前备份并上传到 [target]。 */
+    /** 导出当前备份并上传到 [target]。备份默认含解密后的 API Key / SSH 凭据，禁止明文上传远端。 */
     fun uploadToTarget(target: BackupTarget, password: String) {
+        if (password.isEmpty()) {
+            _networkState.value = NetworkBackupState.Error(
+                context.getString(R.string.backup_net_upload_password_required)
+            )
+            return
+        }
         _networkState.value = NetworkBackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
