@@ -15,23 +15,37 @@ package com.aicode.feature.agent.domain.prompt
 internal object PromptListBudget {
 
     /**
-     * 技能清单预算。实测每条约 60~160 字符；1600 字符约合 400 token，能留下 12~20 条仍有描述的主力清单，
-     * 又不会让「装了上百个技能」的机器把系统提示词的前缀拖长到十几 KB。
+     * 技能清单预算。
+     *
+     * 清单只放用户排在最前面的少数几个技能，其余靠 `loadSkill(keyword=…)` 检索：技能装到几百个时，
+     * 全量列表在固定预算下必然只剩前几条，被砍掉的技能名字也没了，模型既看不到也没法加载。
+     * 1200 字符约合 300 token，按实测每条约 100 字符（名称 + 一行描述，不含末尾摘要行）能放 8~10 条，
+     * 常见场景不必先检索；比改版前的 1600 更省，因为省下的位置不再花在注定被截掉的条目上。
      */
-    const val SKILLS = 1600
+    const val SKILLS = 1200
 
     /**
-     * 子代理清单预算。子代理比技能少、描述更短，但仍要防「每个都写长描述」把尾部撑开，
-     * 取 1200 字符，约为技能预算的四分之三。
+     * 技能清单最多列这么多条。
+     *
+     * 预算按字符算，「描述写得很短」的技能能让几十条挤进同一笔预算里，清单又退回全量枚举；
+     * 条数上限保证它始终只是「最常用的几个」，检索才是找到其余技能的正路。
+     */
+    const val SKILLS_MAX_ITEMS = 10
+
+    /**
+     * 子代理清单预算。子代理比技能少、描述更短，但仍要防「每个都写长描述」把尾部撑开；
+     * 取 1200 字符，与技能清单同一量级——子代理没有检索兜底，删掉的条数就是真的看不到。
      */
     const val SUBAGENTS = 1200
 
     /**
-     * 技能清单的摘要行：必须同时给出「还剩几项、共几项、去哪看」。
-     * 「均可照常加载」不是客套：别处规定了「只能加载清单里的技能」，不写清楚，模型会把未展开的当成不存在。
+     * 技能清单的摘要行：给出「还剩几项、共几项、怎么找回来」。
+     *
+     * 这里不再指路到技能目录：`loadSkill` 只认 frontmatter 里的 name，目录名未必等于技能名，
+     * 照目录名猜必然落空。指路必须指向真正可用的检索入口，否则模型会把未列出的当成不存在。
      */
     fun skillsNote(omitted: Int, total: Int): String =
-        "- 其余 $omitted 个未展开（共 $total 个技能，均可照常加载）：名称见 `~/.aicode/skills/` 或项目 `.aicode/skills/` 下的目录名"
+        "- 其余 $omitted 个未列出（共 $total 个技能，均可检索后按名加载）：用 `loadSkill(keyword=\"关键词\")` 按关键词检索"
 
     /** 子代理清单的摘要行：同上，另点明未展开的仍可派发。 */
     fun subAgentsNote(omitted: Int, total: Int): String =
@@ -39,9 +53,15 @@ internal object PromptListBudget {
 
     /**
      * 逐行填充到预算用完，再补一行摘要 [note]（参数为：未展开条数、总条数）。
-     * 全部放得下时原样返回，不做任何改写——避免正常规模下的字节抖动打断缓存。
+     * 全部放得下时原样返回，不做任何改写——避免正常规模下的字节抖动打断缓存；
+     * 也因此 [maxItems] 只在确定要截断时才生效：整份清单放得下就没有理由少列几条。
      */
-    fun limit(lines: List<String>, budget: Int, note: (omitted: Int, total: Int) -> String): String {
+    fun limit(
+        lines: List<String>,
+        budget: Int,
+        note: (omitted: Int, total: Int) -> String,
+        maxItems: Int = Int.MAX_VALUE
+    ): String {
         if (lines.isEmpty()) return ""
         val full = lines.joinToString("\n")
         if (full.length <= budget) return full
@@ -51,6 +71,7 @@ internal object PromptListBudget {
         val kept = ArrayList<String>()
         var used = 0
         for (line in lines) {
+            if (kept.size >= maxItems) break
             if (used + line.length + 1 + reserve > budget) break
             kept += line
             used += line.length + 1

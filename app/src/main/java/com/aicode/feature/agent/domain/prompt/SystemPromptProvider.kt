@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
+import com.aicode.feature.agent.domain.skill.oneLineDescription
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.InjectPart
@@ -75,12 +76,22 @@ class SystemPromptProvider @Inject constructor(
                 return null
             }
 
-            // 超长清单按预算截断，但保留「共几项、去哪看」：技能装到上百个时整表展开会让系统提示词尾部很长，
-            // 尾部一变，前面几十 KB 的稳定前缀就都白缓存了。正常规模（放得下）时输出与截断前逐字相同。
+            // 超长清单按预算截断，清单只留用户排在最前面的几条（见 PromptListBudget.SKILLS）：
+            // 技能装到几百个时全量展开必然被截，而截掉的不只是描述，连名字也没了——模型既看不到也没法加载，
+            // 因为 loadSkill 只认 frontmatter 里的名字。其余技能由清单末尾的摘要行引向 loadSkill(keyword=…) 检索。
+            val fullLines = skills.map { "- ${it.name}: ${it.description.ifBlank { "（无描述）" } }" }
+            // 放得下就原样全列（技能少的安装字节与改版前完全一致）；放不下才把描述压成一行，
+            // 同一笔预算里多留几个名字——名字才是加载技能时要复述的那个东西。
+            val lines = if (fullLines.joinToString("\n").length <= PromptListBudget.SKILLS) {
+                fullLines
+            } else {
+                skills.map { "- ${it.name}: ${it.oneLineDescription()}" }
+            }
             val content = PromptListBudget.limit(
-                skills.map { "- ${it.name}: ${it.description.ifBlank { "（无描述）" } }" },
+                lines,
                 PromptListBudget.SKILLS,
-                PromptListBudget::skillsNote
+                PromptListBudget::skillsNote,
+                PromptListBudget.SKILLS_MAX_ITEMS
             )
             cachedByKey[key] = content
             trimIfNeeded()

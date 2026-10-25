@@ -78,6 +78,39 @@ class SkillRepository @Inject constructor(
     /** 当前被禁用的技能名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = skillConfigRepository.disabledNames()
 
+    /**
+     * 按关键词检索技能：名称、描述、正文任一包含关键词即算命中，大小写不敏感。
+     *
+     * 为什么要检索引擎而不是让模型看全量清单：技能装到几百个时全量清单在预算里只放得下前几条，
+     * 剩下的连名字都不出现，模型只能猜——而 [loadInstructions] 按名字全等匹配，猜必落空。
+     *
+     * 命中按「名称 > 描述 > 正文」分档排序，同档内保持 [listSkills] 的顺序（即用户拖拽的顺序）：
+     * 名称里带关键词比正文里蹭到一个词更可信，而分档排序必须稳定，否则同一关键词两次检索得到的
+     * 「前 N 条」不一样，模型就拿不到上次看到的名字。
+     *
+     * @param limit 最多返回几条，仅影响 [SkillSearchResult.matches]，[SkillSearchResult.hitCount] 永远是全量
+     */
+    fun searchSkills(keyword: String, limit: Int): SkillSearchResult {
+        val needle = keyword.trim().lowercase()
+        val skills = listSkills()
+        if (needle.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+
+        val ranked = skills.mapNotNull { skill ->
+            val tier = when {
+                skill.name.lowercase().contains(needle) -> TIER_NAME
+                skill.description.lowercase().contains(needle) -> TIER_DESCRIPTION
+                skill.instructions.lowercase().contains(needle) -> TIER_INSTRUCTIONS
+                else -> null
+            }
+            tier?.let { rank -> rank to skill }
+        }.sortedBy { it.first }
+        return SkillSearchResult(
+            matches = ranked.take(limit).map { it.second },
+            hitCount = ranked.size,
+            skillCount = skills.size
+        )
+    }
+
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
     fun loadInstructions(name: String): String? {
         if (name.lowercase() in skillConfigRepository.disabledNames()) return null
@@ -177,6 +210,11 @@ class SkillRepository @Inject constructor(
 
     companion object {
         private const val TAG = "SkillRepository"
+
+        /** 检索命中的三档：名称最可信，描述次之，正文最泛（大段正文里蹭到一个词不算强相关）。 */
+        private const val TIER_NAME = 0
+        private const val TIER_DESCRIPTION = 1
+        private const val TIER_INSTRUCTIONS = 2
 
         /** 新建技能时写入的指令文件名。 */
         private const val INSTRUCTION_FILE = "SKILL.md"

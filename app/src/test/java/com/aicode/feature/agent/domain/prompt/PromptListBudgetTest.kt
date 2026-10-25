@@ -24,20 +24,33 @@ class PromptListBudgetTest {
     }
 
     @Test
-    fun 技能清单超预算_仍写出总数与目录() {
+    fun 技能清单超预算_写出总数与检索入口() {
         assertTrue("前置条件：这批清单确实超过技能预算", fortyLines.joinToString("\n").length > PromptListBudget.SKILLS)
 
         val text = PromptListBudget.limit(fortyLines, PromptListBudget.SKILLS, PromptListBudget::skillsNote)
 
         assertTrue("总项数必须写出来", text.contains("共 40 个技能"))
-        assertTrue("去哪看必须写出来", text.contains("`~/.aicode/skills/`"))
-        assertTrue("未展开的仍属可用，不能读成不存在", text.contains("均可照常加载"))
+        // 未列出的技能只能靠检索找回来：摘要行必须指向那个真的能用的入口，而不是目录名。
+        assertTrue("必须指向检索入口", text.contains("loadSkill(keyword="))
+        assertTrue("未列出的仍属可用，不能读成不存在", text.contains("均可检索后按名加载"))
         assertTrue("截断后不得超过预算", text.length <= PromptListBudget.SKILLS)
         assertTrue("保留的是原清单的前几条且顺序不变", text.startsWith(fortyLines.first()))
         // 最后一行是摘要，它报的省略数加上展示条数必须等于总数（不能把条目算丢）
         val shown = text.lines().size - 1
         val omitted = Regex("其余 (\\d+) 个").find(text)!!.groupValues[1].toInt()
         assertEquals("展示条数 + 省略条数 = 总数", 40, shown + omitted)
+    }
+
+    @Test
+    fun 技能清单受条数上限约束() {
+        val lines = (1..20).map { "- s$it: ${"描述".repeat(3)}" }
+        assertTrue("前置条件：整份清单放不进预算", lines.joinToString("\n").length > 200)
+
+        val text = PromptListBudget.limit(lines, 200, PromptListBudget::skillsNote, maxItems = 4)
+
+        assertEquals("4 条正文 + 1 行摘要", 5, text.lines().size)
+        assertTrue("省略数按总条数算，不按传进来的条数算", text.contains("其余 16 个"))
+        assertTrue(text.contains("共 20 个技能"))
     }
 
     @Test
