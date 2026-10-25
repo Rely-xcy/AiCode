@@ -11,6 +11,7 @@ import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -106,13 +107,15 @@ class BrowserTool @Inject constructor(
 
         return try {
             executeAction(action, tabId, args)
+        } catch (e: TimeoutCancellationException) {
+            ToolResult.Error("操作超时：$action", "TIMEOUT")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: IllegalStateException) {
             FileLogger.e(TAG, "浏览器操作失败: $action", e)
             ToolResult.Error(e.message ?: "浏览器未初始化", "BROWSER_NOT_READY")
         } catch (e: IllegalArgumentException) {
             ToolResult.Error(e.message ?: "参数错误", "INVALID_ARGUMENT")
-        } catch (e: TimeoutCancellationException) {
-            ToolResult.Error("操作超时：$action", "TIMEOUT")
         } catch (e: Exception) {
             FileLogger.e(TAG, "浏览器操作异常: $action", e)
             ToolResult.Error("操作失败：${e.message}", "BROWSER_ERROR")
