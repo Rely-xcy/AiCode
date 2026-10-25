@@ -6,9 +6,11 @@ import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ReasoningEffort
+import com.aicode.feature.agent.domain.schedule.WriteLeaseRegistry
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -68,6 +70,7 @@ class TaskTool @Inject constructor(
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val subagentTierSettings: SubagentTierSettingsRepository,
+    private val writeLeaseRegistry: WriteLeaseRegistry,
     @param:ApplicationContext private val appContext: Context
 ) : AbstractContextualTool() {
 
@@ -130,10 +133,17 @@ class TaskTool @Inject constructor(
             required = false,
             enum = SubagentModelTier.entries.map { it.apiValue }
         ),
+        "writeScope" to ToolParameter(
+            name = "writeScope",
+            type = ParameterType.ARRAY,
+            description = "写范围声明（create 可选）：这个子代理要改的文件或目录，支持 *（匹配一段内的任意字符）与 **（匹配任意层目录），目录写法默认含整个子树。不写表示不声明范围。与其它子代理已持有的范围重叠时，本次创建直接失败且不会启动，需换范围或先停掉占用者。",
+            required = false,
+            itemsSchema = mapOf("type" to "string")
+        ),
         "tasks" to ToolParameter(
             name = "tasks",
             type = ParameterType.ARRAY,
-            description = "批量创建任务列表（create 可选，与单个 prompt 二选一）：每个元素为一个包含 prompt（必填）、description（可选）、agent（可选）、tier（可选）的对象。一次性批量派发多个子代理。",
+            description = "批量创建任务列表（create 可选，与单个 prompt 二选一）：每个元素为一个包含 prompt（必填）、description（可选）、agent（可选）、tier（可选）、writeScope（可选）的对象。一次性批量派发多个子代理。",
             required = false
         ),
         "message" to ToolParameter(
@@ -162,8 +172,24 @@ class TaskTool @Inject constructor(
         val description: String,
         val agent: String?,
         val tier: String?,
+        val writeScope: List<String>,
         val rawArgs: Map<String, JsonElement>
     )
+
+    /** 已解析模型、建好会话实体但尚未落库启动的一项：写范围全部 claim 通过后才统一 upsert + emit。 */
+    private data class PreparedSubagent(
+        val spec: SubagentTaskSpec,
+        val definition: AgentDefinition?,
+        val definitionProviderId: String?,
+        val modelBinding: ResolvedSubagentModel,
+        val subSession: ChatSessionEntity
+    )
+
+    /** `writeScope` 只取字符串数组；非字符串元素与空串丢弃（模型偶尔混入说明文字）。 */
+    private fun parseWriteScope(element: JsonElement?): List<String> =
+        (element as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { s -> s.isNotBlank() } }
+            .orEmpty()
 
     private data class CreatedSubagentInfo(
         val id: String,
@@ -202,6 +228,7 @@ class TaskTool @Inject constructor(
                         description = desc,
                         agent = agent,
                         tier = tier,
+                        writeScope = parseWriteScope(obj["writeScope"]),
                         rawArgs = obj
                     )
                 )
@@ -225,6 +252,7 @@ class TaskTool @Inject constructor(
                     description = description,
                     agent = agent,
                     tier = tier,
+                    writeScope = parseWriteScope(args["writeScope"]),
                     rawArgs = args
                 )
             )
@@ -276,8 +304,13 @@ class TaskTool @Inject constructor(
         // 批量创建会话并启动
         val createdList = mutableListOf<CreatedSubagentInfo>()
         var pendingReserve = specs.size
+        // 本批已登记的写范围持有者：任一冲突则整批释放。不做部分成功——半批子代理已经跑起来、
+        // 半批没派出去，主代理只会在收结果时才发现对不上。
+        val claimedHolders = mutableListOf<String>()
         try {
-            for (spec in specs) {
+            // 先建齐实体再统一 claim：claim 必须早于 upsertSession 与 emit(SPAWNED)，
+            // 否则子代理已经启动才收到冲突，只能去收拾跑了一半的残局。
+            val prepared = specs.map { spec ->
                 val definition = definitions[spec]
                 val definitionProviderId = matchProviderId(definition?.providerId)
                 val modelBinding = resolveModel(
@@ -287,20 +320,57 @@ class TaskTool @Inject constructor(
                     enabledProviderIds = enabledProviderIds,
                     tierSelections = tierSelections
                 )
-                val subSession = sessionUseCase.newSubSessionEntity(
-                    title = spec.description,
-                    parentId = parentSessionId,
-                    parent = parentSession,
-                    subagentType = definition?.name ?: DEFAULT_SUBAGENT_TYPE,
-                    providerId = modelBinding.providerId,
-                    model = modelBinding.model,
-                    reasoningEffort = definition?.reasoningEffort?.let { effort ->
-                        ReasoningEffort.entries.firstOrNull { it.apiValue == effort }?.name
-                    },
-                    mode = definition?.mode
+                PreparedSubagent(
+                    spec = spec,
+                    definition = definition,
+                    definitionProviderId = definitionProviderId,
+                    modelBinding = modelBinding,
+                    subSession = sessionUseCase.newSubSessionEntity(
+                        title = spec.description,
+                        parentId = parentSessionId,
+                        parent = parentSession,
+                        subagentType = definition?.name ?: DEFAULT_SUBAGENT_TYPE,
+                        providerId = modelBinding.providerId,
+                        model = modelBinding.model,
+                        reasoningEffort = definition?.reasoningEffort?.let { effort ->
+                            ReasoningEffort.entries.firstOrNull { it.apiValue == effort }?.name
+                        },
+                        mode = definition?.mode
+                    )
                 )
-                sessionUseCase.upsertSession(subSession)
-                val subSessionId = subSession.id
+            }
+
+            for (item in prepared) {
+                val conflicts = writeLeaseRegistry.claim(
+                    holderId = item.subSession.id,
+                    holderLabel = item.spec.description,
+                    patterns = item.spec.writeScope,
+                    projectRoot = context.projectRoot,
+                    handoverFrom = setOf(parentSessionId)
+                )
+                if (conflicts.isNotEmpty()) {
+                    claimedHolders.forEach { writeLeaseRegistry.release(it) }
+                    // 一个都没启动：整批预留名额还回去，别让这次冲突继续占着并发名额
+                    eventBus.releaseSlots(pendingReserve)
+                    pendingReserve = 0
+                    val requested = item.spec.writeScope.joinToString(", ")
+                    return ToolResult.Error(
+                        "写范围冲突，本批 ${specs.size} 个子代理均未创建（不做部分成功）；" +
+                            "任务「${item.spec.description}」的写范围未能登记：" +
+                            conflicts.joinToString("；") { it.describe(requested) },
+                        "WRITE_SCOPE_CONFLICT"
+                    )
+                }
+                claimedHolders.add(item.subSession.id)
+            }
+
+            for (item in prepared) {
+                val spec = item.spec
+                val definition = item.definition
+                val definitionProviderId = item.definitionProviderId
+                val modelBinding = item.modelBinding
+                val subSessionId = item.subSession.id
+                sessionUseCase.upsertSession(item.subSession)
 
                 eventBus.emit(
                     SubAgentEvent(
