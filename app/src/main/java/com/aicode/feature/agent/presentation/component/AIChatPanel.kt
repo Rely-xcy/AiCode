@@ -357,8 +357,8 @@ internal fun reconcileTurnKeys(
  * 三件事：**整轮任务折叠**、长文拆块、**连续工具调用分组**。
  *
  * 先按「用户消息 → 下一个用户消息之前」切成轮（见 [splitChatTurns]）：每轮依次产出「用户消息」与
- * 轮内按**消息顺序**切出的段与项——连续的过程项聚成一段轮头，遇到常显项（压缩摘要/后台通知/带附件
- * 工具等）或结果消息就在该处切断：常显项与结果正文各自在时间线原位独立成 item，不再被推到该轮最末。
+ * 轮内按**消息顺序**切出的段与项——连续的过程项聚成一段轮头，遇到常显项（带附件的工具）或结果
+ * 消息就在该处切断：常显项与结果正文各自在时间线原位独立成 item，不再被推到该轮最末。
  * 过程项挂在轮头 item 内，整轮展开时随折叠头一起平滑展开；常显项不参与折叠。
  * 结果 = 轮内最后一条有可见正文的普通助手消息（其思考抽为过程项）。
  *
@@ -387,8 +387,17 @@ internal fun buildChatItems(
     // 窗口从某一轮中间切开时，最前面那一截缺轮首、不是完整的轮：它的过程项同样折进一个折叠头，
     // 避免把一段半轮摊在历史最前面；块尾若是上一轮的最终回复则照旧常显，不跟着折起来。
     if (leading.isNotEmpty()) {
-        val headKey = leadingHeadKey(leading.last())
-        val resultId = leading.last().takeIf { it.isResultCandidate() }?.id
+        // 没有轮首时，分页窗口两端都可能随工具输出移动，只能用所属会话保持展开标识稳定；
+        // 窗口里已有这一截的既有 key（reconcileTurnKeys 交接来的）时以它为准。
+        val headKey = turnKeys[leading.last().id] ?: if (turns.isEmpty() && sessionId != null) {
+            "turn:head:session:$sessionId"
+        } else {
+            leadingHeadKey(leading.last())
+        }
+        // 这一截通常结尾就是上一轮的最终回复（窗口从某一轮中间切开）：它照旧常显，
+        // 只有它的思考与更早的过程步骤折进折叠头，与完整轮次的呈现一致。
+        val running = headKey == activeTurnKey
+        val resultId = if (running) null else leading.last().takeIf { it.isResultCandidate() }?.id
         val process = buildTurnProcessItems(leading, resultId, groupOverrides)
         if (process.isNotEmpty()) {
             items += ChatRenderItem(
@@ -398,8 +407,8 @@ internal fun buildChatItems(
                 turnHeader = TurnHeaderState(
                     key = headKey,
                     endMessageId = null,
-                    running = false,
-                    expanded = turnOverrides[headKey] ?: false,
+                    running = running,
+                    expanded = turnOverrides[headKey] ?: running,
                     processCount = process.size,
                 ),
                 turnProcess = process,
@@ -413,7 +422,10 @@ internal fun buildChatItems(
         // 它同样没跑完。只认相等的话，后续轮一落库就会把正在跑的那一轮顶成「已完成」，
         // 进行中的正文也会被当成最终回答（见上面的 activeTurnKey）。
         // 运行中插话不开新轮且不渲染（见 splitChatTurns），不会在这里把本轮顶掉。
-        if (activeTurnKey != null && turn.key == activeTurnKey) runningFromHere = true
+        // 轮 key 以 turnKeys 交接来的为准：分页把轮首补进窗口时 reconcileTurnKeys 沿用了半轮时期的
+        // key，窗口怎么装回来都认得出同一轮（手动展开态、运行中判定都按它命中）。
+        val stableTurnKey = turnKeys[turn.userMessage.id] ?: turn.key
+        if (activeTurnKey != null && stableTurnKey == activeTurnKey) runningFromHere = true
         val running = runningFromHere
         items += messageRenderItems(turn.userMessage)
         val endAssistant = turn.messages.lastOrNull {
@@ -425,10 +437,10 @@ internal fun buildChatItems(
         // LazyColumn 的 item 数骤减、锚定位置失真，视口会直接跳到上面去（反向 bug）。
         // 「滑动时跳顶」的真正原因是贴底校准抢滚动（内层手势未停跟随 + 尾窗盲跑），
         // 已在 nestedScroll.onPostScroll 与校准尾窗处修掉，与本行无关。
-        val expanded = turnOverrides[turn.key] ?: running
+        val expanded = turnOverrides[stableTurnKey] ?: running
         // 轮内按消息顺序产出：连续的过程项聚成一段轮头，遇到常显项或结果消息就在该处切断。
         // 常显项与结果正文因此在时间线原位独立成 item，不再被推到该轮最末（旧实现把它们固定排在轮末，
-        // 晚于通知的助手消息又被折进轮头，结果常显项总沉在列表底部）。同一段内连续工具仍分组。
+        // 晚于常显项的助手消息又被折进轮头，常显项总沉在列表底部）。同一段内连续工具仍分组。
         // 每段的展开态取同一个 expanded：整轮展开/收起对所有段一视同仁。
         var segment = ArrayList<AgentUIMessage>()
         var segmentTail = ArrayList<ChatRenderItem>()
@@ -436,14 +448,14 @@ internal fun buildChatItems(
         var emittedForTurn = false
         fun flushSegment() {
             if (segment.isEmpty() && segmentTail.isEmpty()) return
-            val key = if (headerIndex == 0) "${turn.key}#header" else "${turn.key}#header#$headerIndex"
+            val key = if (headerIndex == 0) "${stableTurnKey}#header" else "${stableTurnKey}#header#$headerIndex"
             headerIndex++
             items += ChatRenderItem(
                 message = turn.userMessage,
                 key = key,
                 contentType = TURN_HEADER_CONTENT_TYPE,
                 turnHeader = TurnHeaderState(
-                    key = turn.key,
+                    key = stableTurnKey,
                     endMessageId = endAssistant?.id,
                     running = running,
                     expanded = expanded,
@@ -487,10 +499,10 @@ internal fun buildChatItems(
         if (running && !emittedForTurn) {
             items += ChatRenderItem(
                 message = turn.userMessage,
-                key = "${turn.key}#header",
+                key = "${stableTurnKey}#header",
                 contentType = TURN_HEADER_CONTENT_TYPE,
                 turnHeader = TurnHeaderState(
-                    key = turn.key,
+                    key = stableTurnKey,
                     endMessageId = endAssistant?.id,
                     running = running,
                     expanded = expanded,
@@ -573,7 +585,7 @@ private class ChatTurn(
  *
  * 后台通知虽可能是 USER 角色，但它是系统注入的提示条而非用户输入，不作为轮起点（归入当前轮内容）。
  * 运行中插话（isInterjection）在入口处整体剔除：忙碌插话落库只为记录与进模型 payload，
- * 不渲染为用户气泡、不进时间线（留在这儿会被当成轮内常显项原位画出来）。
+ * 不渲染为用户气泡、不进时间线（留在这儿会被当成轮内过程项画出来）。
  */
 private fun splitChatTurns(allMessages: List<AgentUIMessage>): Pair<List<AgentUIMessage>, List<ChatTurn>> {
     val messages = allMessages.filterNot { it.isInterjection }
@@ -632,7 +644,7 @@ internal fun actionableResultIds(
  */
 private fun leadingHeadKey(lastMessage: AgentUIMessage): String = "turn:head:${lastMessage.id}"
 
-/** 轮内「常显」项（保持原序）：结果正文（拆块，不重复渲染思考）与压缩卡片 / 通知 / 带附件工具。 */
+/** 轮内「常显」项（保持原序）：结果正文（拆块，不重复渲染思考）与带附件的工具行。 */
 private fun buildTurnPersistentItems(
     messages: List<AgentUIMessage>,
     resultId: String?,
@@ -651,11 +663,12 @@ private fun buildTurnPersistentItems(
 /**
  * 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。
  *
- * 运行中插话（[AgentUIMessage.isInterjection]）不在此列：它落库但 UI 不渲染（splitChatTurns 已剔除），
- * 不作为时间线上的独立气泡出现。
+ * 仅限带附件的工具（sendFile / generateImage 产出的文件行）：文件就是结果本身，折进
+ * 「N 次工具调用」或整轮折叠等于把产出物藏起来。后台通知与压缩卡片是过程性提示，
+ * 随过程一起折叠（见 [isSystemCardInTurn]）。
  */
 private fun AgentUIMessage.isPersistentInTurn(): Boolean =
-    (role == MessageRole.TOOL && attachments.isNotEmpty()) || isSystemCardInTurn()
+    role == MessageRole.TOOL && attachments.isNotEmpty()
 
 /**
  * 系统注入的卡片型消息（后台通知条 / 压缩标记·摘要·失败）：折进轮过程，且不得被选为
@@ -672,8 +685,8 @@ private fun AgentUIMessage.isResultCandidate(): Boolean =
  * 轮内「过程」项（保持原序）：思考、连续工具调用分组、中间助手正文、后台通知条与压缩卡片。
  * 挂在轮头 item 内一起展开。
  *
- * 结果消息的思考归过程（抽为一个 [REASONING_CONTENT_TYPE] 项）。常显项不进过程，由
- * [buildChatItems] 在时间线原位直接产出。
+ * 结果消息的思考归过程（抽为一个 [REASONING_CONTENT_TYPE] 项）；带附件工具常显、不进过程，
+ * 轮内由 [buildChatItems] 在原位直接产出，块首半轮由 [buildTurnPersistentItems] 产出。
  */
 private fun buildTurnProcessItems(
     messages: List<AgentUIMessage>,
