@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.editor
 
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
@@ -25,7 +26,7 @@ class EditFileToolLineEndingTest {
 
     private val fileAccess = TestFileAccessProvider()
     private val versions = FileVersionRegistry()
-    private val tool = EditFileTool(fileAccess, WorkspaceFileLock(), versions)
+    private val tool = EditFileTool(fileAccess, WorkspaceWriteSignal(), WorkspaceFileLock(), versions)
 
     private fun edit(old: String, new: String, replaceAll: Boolean = false) = JsonObject(
         mapOf(
