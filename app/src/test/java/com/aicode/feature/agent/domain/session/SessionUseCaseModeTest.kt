@@ -2,8 +2,11 @@ package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
+import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.model.AgentMode
+import dagger.Lazy
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -18,7 +21,11 @@ class SessionUseCaseModeTest {
 
     private val useCase = SessionUseCase(
         chatSessionDao = mockk<ChatSessionDao>(relaxed = true),
-        agentMessageDao = mockk<AgentMessageDao>(relaxed = true)
+        agentMessageDao = mockk<AgentMessageDao>(relaxed = true),
+        sessionBriefDao = mockk<SessionBriefDao>(relaxed = true),
+        // 本用例只验证 mode 压平与实体构造，这两条依赖不会走到，relaxed mock 即可。
+        messagePersistenceUseCase = mockk<MessagePersistenceUseCase>(relaxed = true),
+        agentEngine = Lazy { mockk<AgentEngine>(relaxed = true) }
     )
 
     @Test

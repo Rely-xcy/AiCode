@@ -6,6 +6,8 @@ import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.RemoteConnectionConfig
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
+import com.aicode.feature.credentials.data.CredentialInjectSettingsRepository
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -106,7 +108,10 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
             remoteSshConnection = remoteSshConnection,
             pathHomeResolver = pathHomeResolver,
             sessionUseCase = mockk<SessionUseCase>(),
-            generalSettingsRepository = generalSettingsRepository
+            generalSettingsRepository = generalSettingsRepository,
+            // 本用例只测远程目标目录取根/短路，凭证注入开关/凭证库都不走到，relaxed mock 即可。
+            credentialInjectSettings = mockk<CredentialInjectSettingsRepository>(relaxed = true),
+            credentialRepository = mockk<CredentialRepository>(relaxed = true)
         )
     }
 

@@ -139,6 +139,8 @@ class AIAgentViewModelBrowseRefreshTest {
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
         terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
+        // 后台命令结束事件流：与 terminalSessionManager 同样桩成空流，本路径不依赖它。
+        terminalSessionProvider = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
         slashCommandRegistry = mockk {
             // init 里 _currentWorkspace.collect 会立刻触发 refresh()：真实实现会走 IO 调度器
             // 真扫技能目录（GlobalDirectorySkillSource → File.walkTopDown）并在 FileLogger 的

@@ -2,6 +2,7 @@ package com.aicode.feature.workspace.domain.remote
 
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import org.junit.After
@@ -26,8 +27,8 @@ class SyncEngineIgnoreTest {
     private val syncEngines = mutableListOf<SyncEngine>()
 
     @After
-    fun tearDown() = runTest {
-        syncEngines.forEach { it.shutdown() }
+    fun tearDown() {
+        runTest { syncEngines.forEach { it.shutdown() } }
         syncEngines.clear()
     }
 
