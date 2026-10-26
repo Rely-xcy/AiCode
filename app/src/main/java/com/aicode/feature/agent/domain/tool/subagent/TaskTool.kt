@@ -144,7 +144,21 @@ class TaskTool @Inject constructor(
             name = "tasks",
             type = ParameterType.ARRAY,
             description = "批量创建任务列表（create 可选，与单个 prompt 二选一）：每个元素为一个包含 prompt（必填）、description（可选）、agent（可选）、tier（可选）、writeScope（可选）的对象。一次性批量派发多个子代理。",
-            required = false
+            required = false,
+            itemsSchema = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "prompt" to mapOf("type" to "string"),
+                    "description" to mapOf("type" to "string"),
+                    "agent" to mapOf("type" to "string"),
+                    "tier" to mapOf("type" to "string"),
+                    "writeScope" to mapOf(
+                        "type" to "array",
+                        "items" to mapOf("type" to "string")
+                    )
+                ),
+                "required" to listOf("prompt")
+            )
         ),
         "message" to ToolParameter(
             name = "message",
