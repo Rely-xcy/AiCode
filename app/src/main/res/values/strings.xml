@@ -622,7 +622,7 @@
     <string name="backup_operation_failed">操作失败</string>
     <string name="backup_import_done">导入完成</string>    <string name="backup_actions">操作</string>
     <string name="backup_import_done_secrets_need_refill">导入完成（有密钥需重填）</string>
-    <string name="backup_select_data">选择导出数据</string>
+    <string name="backup_select_data">数据</string>
     <string name="backup_data_remote">连接与同步</string>
     <string name="backup_data_chat_history">聊天</string>
     <string name="backup_data_mcp">MCP 服务器</string>
@@ -634,7 +634,7 @@
     <string name="backup_data_session_briefs">会话工作状态</string>
     <string name="backup_data_session_briefs_hint">会话摘要与当前进展；默认不导出</string>
     <string name="backup_data_login_secrets">凭据</string>
-    <string name="backup_data_login_secrets_hint_off">不包含 git 令牌、SSH 私钥与登录口令、网络备份目标密钥等</string>
+    <string name="backup_data_login_secrets_hint_off">不包含 git 令牌、SSH 私钥与登录口令、网络备份目标密钥、MCP 授权令牌、AI 供应商 API Key 与代理密码、连接密码</string>
     <string name="backup_data_login_secrets_hint_on">备份文件将包含可用于登录的凭据，请自行妥善保管</string>
     <string name="backup_data_login_secrets_password_hint">已勾选包含登录凭据：导出时必须设置口令，留空将无法导出</string>
     <string name="backup_data_skills_agents">技能与子代理</string>
@@ -663,8 +663,8 @@
     <string name="backup_stat_skill_files">· 技能文件 %1$s 个</string>
     <string name="backup_stat_subagent_files">· 子代理文件 %1$s 个</string>
     <string name="backup_stat_panel_scripts">· 面板脚本 %1$s 个</string>
-    <string name="backup_stat_login_secrets">· 登录凭据 %1$s 项</string>
-    <string name="backup_stat_skipped_login_secrets">· 跳过 %1$s 项登录凭据（写入失败或格式不识别），需在设置里重新填写</string>
+    <string name="backup_stat_login_secrets">· 凭据 %1$s 项</string>
+    <string name="backup_stat_skipped_login_secrets">· 跳过 %1$s 项凭据（写入失败或格式不识别），需在设置里重新填写</string>
     <string name="backup_skills_agents_config_covered">技能与子代理的启停状态已覆盖</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
     <string name="backup_restore_remote_hint">提示：远程聊天记录只在远程模式下显示，连上 SSH 后才能看到。</string>

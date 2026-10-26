@@ -44,6 +44,48 @@ data class BackupTargetDto(
 )
 
 /**
+ * 一个供应商的密钥字段，只在勾选「凭据」且带口令的备份里出现，落在 `secrets/` 段。
+ *
+ * 单独成段而不是留在 metadata.json：这些值能直接用于调用计费接口，旧格式只要勾了
+ * 「AI 供应商配置」就会连密钥一起明文导出，既不在凭据开关下，也没有任何提示。
+ * metadata 现在只保留 name/type/baseUrl 等配置字段。
+ */
+@Serializable
+data class ProviderSecretsDto(
+    val id: String,
+    /** 单 Key 模式的密钥。 */
+    val apiKey: String = "",
+    /** 多 Key 模式的候选列表（换行分隔）。 */
+    val apiKeys: String = "",
+    /** 供应商级代理密码。 */
+    val proxyPassword: String = "",
+    /** 自定义请求头（JSON 编码的 Map）。 */
+    val customHeaders: String = "",
+    /** 自定义面板脚本参数（JSON 编码的 Map）。 */
+    val scriptParams: String = ""
+) {
+    /** 这条记录是否真的带了一项凭据：全空占位行不算，导入摘要按有内容的记录计数。 */
+    fun hasAnyCredential(): Boolean =
+        apiKey.isNotEmpty() || apiKeys.isNotEmpty() || proxyPassword.isNotEmpty() ||
+            customHeaders.isNotEmpty() || scriptParams.isNotEmpty()
+}
+
+/**
+ * 一条远程连接的凭据字段。[authData] 只在 PASSWORD 模式有值（登录密码）；
+ * KEY 模式的 authData 是私钥路径，属于配置，留在 metadata.json。
+ */
+@Serializable
+data class ConnectionSecretsDto(
+    val id: String,
+    val authData: String? = null,
+    /** 私钥口令（KEY 模式）或登录口令的附带口令。 */
+    val passphrase: String? = null
+) {
+    /** 这条记录是否真的带了一项凭据：全空占位行不算，导入摘要按有内容的记录计数。 */
+    fun hasAnyCredential(): Boolean = !authData.isNullOrEmpty() || !passphrase.isNullOrEmpty()
+}
+
+/**
  * SSH 登录密钥条目的原文：`ssh_login_keys` 这份 SharedPreferences 的 key → value 原样搬运。
  *
  * 不按 SshLoginKey 拆字段，是因为口令列以 Keystore 密文存储，而公开接口只返回解密后的值：

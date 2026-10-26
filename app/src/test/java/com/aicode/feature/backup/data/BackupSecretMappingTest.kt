@@ -1,9 +1,13 @@
 package com.aicode.feature.backup.data
 
+import com.aicode.feature.backup.domain.ConnectionSecretsDto
 import com.aicode.feature.backup.domain.ProviderDto
+import com.aicode.feature.backup.domain.ProviderSecretsDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.SecretCipher
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
+import com.aicode.feature.workspace.data.local.entity.RemoteConnectionEntity
+import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -169,6 +173,65 @@ class BackupSecretMappingTest {
         assertEquals("enc1{{\"X\":\"1\"}}", mapped.entity.customHeaders)
     }
 
+    // ── 新格式：密钥拆到凭据段 ─────────────────────────────────────
+
+    @Test
+    fun `新格式有凭据记录时以凭据段为准而不读 metadata 空占位`() {
+        val mapped = dto(apiKey = "", apiKeys = null, scriptParams = null)
+            .toImportedEntity(
+                existing = existingProvider(),
+                cipher = cipher(),
+                secrets = ProviderSecretsDto(
+                    id = "p1",
+                    apiKey = "sk-from-segment",
+                    apiKeys = "k1\nk2",
+                    proxyPassword = "pw-from-segment",
+                    customHeaders = "{\"X\":\"1\"}",
+                    scriptParams = "{\"a\":\"b\"}"
+                ),
+                secretsSegmented = true
+            )
+
+        assertEquals("enc1{sk-from-segment}", mapped.entity.apiKey)
+        assertEquals("enc1{k1\nk2}", mapped.entity.apiKeys)
+        assertEquals("enc1{pw-from-segment}", mapped.entity.proxyPassword)
+        assertEquals("enc1{{\"X\":\"1\"}}", mapped.entity.customHeaders)
+        assertEquals("enc1{{\"a\":\"b\"}}", mapped.entity.scriptParams)
+        assertTrue(mapped.credentialsRestored)
+        assertEquals(0, mapped.undecryptableSecrets)
+    }
+
+    @Test
+    fun `新格式缺凭据记录时沿用本机密钥而不是写成空`() {
+        val mapped = dto(apiKey = "").toImportedEntity(
+            existing = existingProvider(),
+            cipher = cipher(),
+            secrets = null,
+            secretsSegmented = true
+        )
+
+        assertEquals("${PREFIX}old-key", mapped.entity.apiKey)
+        assertEquals("${PREFIX}old-proxy-pw", mapped.entity.proxyPassword)
+        assertEquals("${PREFIX}old-headers", mapped.entity.customHeaders)
+        assertFalse(mapped.credentialsRestored)
+        assertEquals(0, mapped.undecryptableSecrets)
+    }
+
+    @Test
+    fun `新格式凭据记录全空时不算一项凭据但仍会清空`() {
+        val mapped = dto(apiKey = "").toImportedEntity(
+            existing = existingProvider(),
+            cipher = cipher(),
+            secrets = ProviderSecretsDto(id = "p1"),
+            secretsSegmented = true
+        )
+
+        assertEquals("", mapped.entity.apiKey)
+        assertEquals("", mapped.entity.proxyPassword)
+        assertEquals("", mapped.entity.customHeaders)
+        assertFalse(mapped.credentialsRestored)
+    }
+
     // ── 远程连接：同一套密文语义 ─────────────────────────────────────
 
     @Test
@@ -206,6 +269,93 @@ class BackupSecretMappingTest {
         assertEquals("/root/.ssh/id_ed25519", mapped.entity?.authData)
         assertNull(mapped.entity?.passphrase)
         assertEquals(0, mapped.undecryptableSecrets)
+    }
+
+    @Test
+    fun `新格式连接密码从凭据段写回而私钥路径仍在 metadata`() {
+        val password = RemoteConnectionDto(
+            id = "c1",
+            name = "srv",
+            protocol = "SFTP",
+            host = "10.0.0.2",
+            port = 22,
+            username = "root",
+            authType = "PASSWORD",
+            authData = ""
+        ).toImportedEntity(
+            cipher = cipher(),
+            secrets = ConnectionSecretsDto(id = "c1", authData = "secret-pw", passphrase = "pp"),
+            secretsSegmented = true
+        )
+
+        assertEquals("enc1{secret-pw}", password.entity?.authData)
+        assertEquals("enc1{pp}", password.entity?.passphrase)
+        assertTrue(password.credentialsRestored)
+
+        val key = RemoteConnectionDto(
+            id = "c2",
+            name = "srv2",
+            protocol = "SFTP",
+            host = "10.0.0.3",
+            port = 22,
+            username = "root",
+            authType = "KEY",
+            authData = "/root/.ssh/id_ed25519"
+        ).toImportedEntity(
+            cipher = cipher(),
+            secrets = ConnectionSecretsDto(id = "c2", passphrase = "pp2"),
+            secretsSegmented = true
+        )
+
+        assertEquals("/root/.ssh/id_ed25519", key.entity?.authData)
+        assertEquals("enc1{pp2}", key.entity?.passphrase)
+        assertTrue(key.credentialsRestored)
+    }
+
+    @Test
+    fun `新格式缺连接凭据时沿用本机密码与口令`() {
+        val existing = RemoteConnectionEntity(
+            id = "c1",
+            name = "srv",
+            protocol = RemoteProtocol.SFTP,
+            host = "10.0.0.2",
+            port = 22,
+            username = "root",
+            authType = "PASSWORD",
+            authData = "${PREFIX}old-pw",
+            passphrase = "${PREFIX}old-pass"
+        )
+
+        val mapped = RemoteConnectionDto(
+            id = "c1",
+            name = "srv",
+            protocol = "SFTP",
+            host = "10.0.0.2",
+            port = 22,
+            username = "root",
+            authType = "PASSWORD",
+            authData = ""
+        ).toImportedEntity(cipher(), existing = existing, secrets = null, secretsSegmented = true)
+
+        assertEquals("${PREFIX}old-pw", mapped.entity?.authData)
+        assertEquals("${PREFIX}old-pass", mapped.entity?.passphrase)
+        assertFalse(mapped.credentialsRestored)
+        assertEquals(0, mapped.undecryptableSecrets)
+    }
+
+    @Test
+    fun `新格式凭据段里的密文解不开时计入需重填`() {
+        val mapped = dto(apiKey = "")
+            .toImportedEntity(
+                existing = null,
+                cipher = cipher(decryptable = false),
+                secrets = ProviderSecretsDto(id = "p1", apiKey = "${PREFIX}foreign-key"),
+                secretsSegmented = true
+            )
+
+        assertEquals("${PREFIX}foreign-key", mapped.entity.apiKey)
+        assertEquals(1, mapped.undecryptableSecrets)
+        assertTrue(mapped.credentialsRestored)
     }
 
     @Test

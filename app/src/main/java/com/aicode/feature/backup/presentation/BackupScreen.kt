@@ -333,7 +333,7 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传口令（云端上传必须加密：备份默认含解密后的 API Key / SSH 凭据，明文放到远端风险不可控）
+    // 上传口令（云端上传必须加密：备份可能含解密后的 API Key / SSH 凭据，明文放到远端风险不可控）
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
@@ -489,7 +489,57 @@ private fun LocalBackupTab(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = 96.dp)
     ) {
+        // 三组按「数据 / 配置 / 凭据」分开：凭据是否随包走是一个独立的、需要额外口令的决定，
+        // 混在配置里会让人以为导出 API 供应商配置就只是 endpoint 和模型名。
         SettingsGroupHeader(text = stringResource(R.string.backup_select_data))
+        SettingsGroup {
+            // 行本身可点开二级面板，开关单独留在行尾：chevron 由 SettingsRow 依据 onClick 自动补上，
+            // 用户不会把「开/关聊天」误当成「打开面板」。
+            SettingsRow(
+                title = stringResource(R.string.backup_data_chat_history),
+                onClick = onOpenChatOptions,
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.chatHistory,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(chatHistory = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_workspace),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.workspaceFiles,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(workspaceFiles = it)) }
+                    )
+                }
+            )
+            WorkspaceBackupHint()
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_skills_agents),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.skillsAndAgents,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(skillsAndAgents = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_panel_scripts),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.panelScripts,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(panelScripts = it)) }
+                    )
+                }
+            )
+        }
+
+        // 复用供应商编辑页的「配置」文案，避免为一个分组标题新增字符串。
+        SettingsGroupHeader(text = stringResource(R.string.provider_config))
         SettingsGroup {
             SettingsRow(
                 title = stringResource(R.string.common_ai_providers),
@@ -507,19 +557,6 @@ private fun LocalBackupTab(
                     AppSwitch(
                         checked = exportOptions.remoteConnections,
                         onCheckedChange = { onUpdateOptions(exportOptions.copy(remoteConnections = it)) }
-                    )
-                }
-            )
-            SettingsDivider()
-            // 行本身可点开二级面板，开关单独留在行尾：chevron 由 SettingsRow 依据 onClick 自动补上，
-            // 用户不会把「开/关聊天」误当成「打开面板」。
-            SettingsRow(
-                title = stringResource(R.string.backup_data_chat_history),
-                onClick = onOpenChatOptions,
-                trailing = {
-                    AppSwitch(
-                        checked = exportOptions.chatHistory,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(chatHistory = it)) }
                     )
                 }
             )
@@ -553,18 +590,10 @@ private fun LocalBackupTab(
                     )
                 }
             )
-            SettingsDivider()
-            SettingsRow(
-                title = stringResource(R.string.backup_data_workspace),
-                trailing = {
-                    AppSwitch(
-                        checked = exportOptions.workspaceFiles,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(workspaceFiles = it)) }
-                    )
-                }
-            )
-            WorkspaceBackupHint()
-            SettingsDivider()
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.backup_data_login_secrets))
+        SettingsGroup {
             SettingsRow(
                 title = stringResource(R.string.backup_data_login_secrets),
                 trailing = {

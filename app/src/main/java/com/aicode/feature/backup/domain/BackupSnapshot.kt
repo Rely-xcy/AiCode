@@ -117,7 +117,15 @@ data class BackupMetadata(
     /**
      * 技能 / 子代理启停配置原文；null 表示这份备份没带（同 [BackupSnapshot.skillsAgentsConfig]）。
      */
-    val skillsAgentsConfig: SkillsAgentsConfigDto? = null
+    val skillsAgentsConfig: SkillsAgentsConfigDto? = null,
+    /**
+     * 供应商密钥与连接密码是否已拆到 `secrets/` 段（本字段出现之后的导出恒为 true）。
+     *
+     * 旧格式把密钥直接写在 metadata.json 里；新格式这里恒为空。导入侧必须能区分两者：
+     * 把「没带密钥」当成「用户清空了密钥」回写，会让一次配置恢复把本机 API Key 全部抹掉。
+     * 默认 false 表示旧格式，按旧路径从 metadata 读。
+     */
+    val secretsInSeparateSegment: Boolean = false
 )
 
 /**

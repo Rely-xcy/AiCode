@@ -35,12 +35,14 @@ import com.aicode.feature.backup.domain.BackupSnapshot
 import com.aicode.feature.backup.domain.BackupSpace
 import com.aicode.feature.backup.domain.BackupTargetDto
 import com.aicode.feature.backup.domain.ChatSessionDto
+import com.aicode.feature.backup.domain.ConnectionSecretsDto
 import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.GitCredentialDto
 import com.aicode.feature.backup.domain.ImportPreview
 import com.aicode.feature.backup.domain.LoginSecretsPasswordRequiredException
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.ProviderDto
+import com.aicode.feature.backup.domain.ProviderSecretsDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.RemoteMountDto
 import com.aicode.feature.backup.domain.RestoreStats
@@ -434,6 +436,9 @@ class BackupManagerImpl @Inject constructor(
     ): Map<String, Int> {
         // 工作区名 -> 实际写入的文件数：与第一遍的计划分开统计，摘要里「实际写入」以此为准。
         val writtenFiles = mutableMapOf<String, Int>()
+        // 元数据与凭据段必须用同一份读取结果：分两次读可能把同一批供应商写成两套不一致的记录。
+        val providers = if (options.providers) aiProviderDao.getAllProvidersOnce() else emptyList()
+        val connections = if (options.remoteConnections) remoteConnectionDao.getAllConnectionsOnce() else emptyList()
         val stream = object : FilterOutputStream(output) {
             override fun write(bytes: ByteArray, offset: Int, length: Int) {
                 out.write(bytes, offset, length)
@@ -447,9 +452,9 @@ class BackupManagerImpl @Inject constructor(
             GzipCompressorOutputStream(fos).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
-                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan, secrets))
+                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan, providers, connections))
                     if (options.loginSecrets) {
-                        writeLoginSecretEntries(tar, secrets)
+                        writeLoginSecretEntries(tar, options, secrets, providers, connections)
                     }
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar, workspacePlan, writtenFiles)
@@ -507,13 +512,14 @@ class BackupManagerImpl @Inject constructor(
     private suspend fun buildMetadata(
         options: BackupOptions,
         workspacePlan: WorkspaceBackupPlan,
-        secrets: ExportSecretTally
+        providers: List<AIProviderEntity>,
+        connections: List<RemoteConnectionEntity>
     ): BackupMetadata = BackupMetadata(
         schemaVersion = currentSchemaVersion(),
         appVersion = appVersionName(),
         createdAt = System.currentTimeMillis(),
-        providers = if (options.providers) aiProviderDao.getAllProvidersOnce().map { it.toDto(secrets) } else emptyList(),
-        remoteConnections = if (options.remoteConnections) remoteConnectionDao.getAllConnectionsOnce().map { it.toDto(secrets) } else emptyList(),
+        providers = providers.map { it.toDto() },
+        remoteConnections = connections.map { it.toDto() },
         remoteMounts = if (options.remoteConnections) remoteConnectionDao.getAllMountsOnce().map { it.toDto() } else emptyList(),
         mcpServers = if (options.mcpServers) mcpConfigRepository.getGlobalServers() else emptyList(),
         globalPermissionRules = if (options.permissionRules) permissionRulesRepository.getGlobalRulesOnce() else emptyList(),
@@ -557,7 +563,9 @@ class BackupManagerImpl @Inject constructor(
             globalAgents = agentDefinitionConfigRepository.rawConfig(AgentDefinitionScope.GLOBAL),
             projectSkills = skillConfigRepository.rawConfig(SkillScope.PROJECT),
             projectAgents = agentDefinitionConfigRepository.rawConfig(AgentDefinitionScope.PROJECT)
-        ) else null
+        ) else null,
+        // 密钥字段已拆到凭据段：metadata 里这些位置恒为空，导入侧据此不再把它们当真实值回写。
+        secretsInSeparateSegment = true
     )
 
     private fun writeMetadataEntry(tar: TarArchiveOutputStream, metadata: BackupMetadata) {
@@ -900,12 +908,18 @@ class BackupManagerImpl @Inject constructor(
     private fun sshLoginPrefs() = context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE)
 
     /**
-     * 把五类登录凭据写成 `secrets/` 条目。
+     * 把登录凭据写成 `secrets/` 条目。
      *
      * 调用方已保证本次导出带口令（见 [export]）：这些值能直接用于登录，不允许落到明文包里。
      * 与其它段一致，本机解不开的敏感值按原密文导出并计数，不写成空值。
      */
-    private suspend fun writeLoginSecretEntries(tar: TarArchiveOutputStream, secrets: ExportSecretTally) {
+    private suspend fun writeLoginSecretEntries(
+        tar: TarArchiveOutputStream,
+        options: BackupOptions,
+        secrets: ExportSecretTally,
+        providers: List<AIProviderEntity>,
+        connections: List<RemoteConnectionEntity>
+    ) {
         writeJsonlFileEntry(tar, FILE_SECRET_GIT_CREDENTIALS) { writer ->
             // 走仓储读解码后的值：git-credentials 是 base64 再整体反转的混淆格式，解析规则只该有一处。
             credentialRepository.getAll().first().forEach { cred ->
@@ -920,6 +934,22 @@ class BackupManagerImpl @Inject constructor(
         writeJsonlFileEntry(tar, FILE_SECRET_BACKUP_TARGETS) { writer ->
             backupTargetDao.getAllOnce().forEach { entity ->
                 writer.writeLine(json.encodeToString(BackupTargetDto.serializer(), entity.toExportDto(secrets)))
+            }
+        }
+        // 供应商密钥与连接密码：配置本身已在 metadata 里，这里只补密钥字段。
+        // 只写了勾选的段，避免导出包里出现用户没选的数据。
+        if (options.providers && providers.isNotEmpty()) {
+            writeJsonlFileEntry(tar, FILE_SECRET_PROVIDERS) { writer ->
+                providers.forEach { entity ->
+                    writer.writeLine(json.encodeToString(ProviderSecretsDto.serializer(), entity.toSecretDto(secrets)))
+                }
+            }
+        }
+        if (options.remoteConnections && connections.isNotEmpty()) {
+            writeJsonlFileEntry(tar, FILE_SECRET_CONNECTIONS) { writer ->
+                connections.forEach { entity ->
+                    writer.writeLine(json.encodeToString(ConnectionSecretsDto.serializer(), entity.toSecretDto(secrets)))
+                }
             }
         }
         // 口令列在 SharedPreferences 里是 Keystore 密文，而公开接口只返回解密后的值（解不开时是空串）：
@@ -961,6 +991,7 @@ class BackupManagerImpl @Inject constructor(
     private suspend fun restoreLoginSecretEntry(
         tar: TarArchiveInputStream,
         entry: TarArchiveEntry,
+        segmented: SegmentedCredentialSecrets,
         onRestored: (RestoreStats) -> Unit
     ) {
         when {
@@ -968,11 +999,54 @@ class BackupManagerImpl @Inject constructor(
             entry.name == FILE_SECRET_BACKUP_TARGETS -> restoreBackupTargets(tar, onRestored)
             entry.name == FILE_SECRET_SSH_LOGIN_KEYS -> restoreSshLoginKeys(tar, onRestored)
             entry.name == FILE_SECRET_MCP_OAUTH -> restoreMcpOAuthToken(tar, onRestored)
+            entry.name == FILE_SECRET_PROVIDERS -> restoreProviderSecrets(tar, segmented, onRestored)
+            entry.name == FILE_SECRET_CONNECTIONS -> restoreConnectionSecrets(tar, segmented, onRestored)
             entry.name.startsWith(SECRET_SSH_KEYS_PREFIX) -> restoreSshKeyFile(tar, entry, onRestored)
             else -> {
                 FileLogger.w(TAG, "跳过无法识别的凭据条目：${entry.name}")
                 onRestored(RestoreStats(skippedLoginSecrets = 1))
             }
+        }
+    }
+
+    /**
+     * 解析供应商密钥段。认不出的行跳过并计数，不让一条坏行把整次导入废掉；
+     * 已解析出的行照常交给 [restoreMeta] 写回。
+     */
+    private suspend fun restoreProviderSecrets(
+        tar: TarArchiveInputStream,
+        segmented: SegmentedCredentialSecrets,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        val parsed = linkedMapOf<String, ProviderSecretsDto>()
+        // 先挂上容器：即使后面解析失败，「包里带了这一段」这个事实也必须传下去，
+        // 否则导入侧会把 metadata 里的空占位当成真值回写。
+        segmented.providers = parsed
+        runCatching {
+            restoreJsonl(tar, ProviderSecretsDto.serializer()) { dtos ->
+                dtos.forEach { parsed[it.id] = it }
+            }
+        }.onFailure { e ->
+            FileLogger.w(TAG, "解析供应商密钥条目失败，已读出的部分照常写回：${e.message}")
+            onRestored(RestoreStats(skippedLoginSecrets = 1))
+        }
+    }
+
+    /** 解析连接凭据段，容错规则同 [restoreProviderSecrets]。 */
+    private suspend fun restoreConnectionSecrets(
+        tar: TarArchiveInputStream,
+        segmented: SegmentedCredentialSecrets,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        val parsed = linkedMapOf<String, ConnectionSecretsDto>()
+        segmented.connections = parsed
+        runCatching {
+            restoreJsonl(tar, ConnectionSecretsDto.serializer()) { dtos ->
+                dtos.forEach { parsed[it.id] = it }
+            }
+        }.onFailure { e ->
+            FileLogger.w(TAG, "解析连接凭据条目失败，已读出的部分照常写回：${e.message}")
+            onRestored(RestoreStats(skippedLoginSecrets = 1))
         }
     }
 
@@ -1095,6 +1169,7 @@ class BackupManagerImpl @Inject constructor(
 
     private suspend fun restoreFromTar(tar: TarArchiveInputStream, selectedWorkspaces: Set<String>?): RestoreStats {
         val restoreMapping = mutableMapOf<String, Workspace>()
+        val segmentedSecrets = SegmentedCredentialSecrets()
         var metadata: BackupMetadata? = null
         var stats = RestoreStats()
         try {
@@ -1169,7 +1244,7 @@ class BackupManagerImpl @Inject constructor(
                             entry.name.startsWith(ASSET_PREFIX) -> stats += restoreAssetEntry(tar, entry)
                             entry.name.startsWith(MEMORY_PREFIX) -> stats += restoreMemoryEntry(tar, entry)
                             entry.name.startsWith(SECRET_PREFIX) ->
-                                restoreLoginSecretEntry(tar, entry) { stats += it }
+                                restoreLoginSecretEntry(tar, entry, segmentedSecrets) { stats += it }
                         }
                     }
                 }
@@ -1180,7 +1255,7 @@ class BackupManagerImpl @Inject constructor(
                 error("不是有效的 AiCode 备份文件：缺少 metadata.json")
             }
             FileLogger.i(TAG, "tar 解析完成，开始还原元数据段")
-            return stats + restoreMeta(meta)
+            return stats + restoreMeta(meta, segmentedSecrets)
         } catch (e: PartialRestoreException) {
             // 子段（旧格式 / 元数据段）已有自己的计数：合并，别把外层已写的条目丢掉
             throw PartialRestoreException(stats + e.partialStats, e.cause ?: e)
@@ -1278,13 +1353,23 @@ class BackupManagerImpl @Inject constructor(
      *
      * 执行模式（[BackupMetadata.executionMode]）也在这个方法里回写，但只看字段本身：字段有值就说明
      * 导出时确实带了模式，备份是 REMOTE_SSH 就把模式切回去（只切模式，不发起 SSH 连接）。
+     *
+     * 供应商密钥与连接密码在 [BackupMetadata.secretsInSeparateSegment] 为 true 时从凭据段取，
+     * metadata 里对应字段只是空占位；旧包（无该标记）继续按旧路径从 metadata 读。
      */
-    private suspend fun restoreMeta(meta: BackupMetadata): RestoreStats {
+    private suspend fun restoreMeta(
+        meta: BackupMetadata,
+        segmented: SegmentedCredentialSecrets = SegmentedCredentialSecrets()
+    ): RestoreStats {
+        // 新格式：metadata 里供应商密钥 / 连接密码是空占位，真实值在凭据段。
+        // 凭据段是否实际出现也算进判据，兼容没有标记字段的同版本包。
+        val secretsSegmented = meta.secretsInSeparateSegment || segmented.providers != null || segmented.connections != null
         FileLogger.i(
             TAG,
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null} " +
-                "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null} executionMode=${meta.executionMode}"
+                "appSettings=${meta.appSettingsIncluded} skillsAgentsConfig=${meta.skillsAgentsConfig != null} executionMode=${meta.executionMode} " +
+                "secretsSegmented=$secretsSegmented"
         )
         // 逐段计数：中途失败时 partialStats 要能说清哪些段已写入、各多少条。
         var stats = RestoreStats()
@@ -1293,20 +1378,38 @@ class BackupManagerImpl @Inject constructor(
                 // 先取本机现有行：旧备份缺的新字段（代理/请求头）要沿用它们——
                 // insertAllProviders 是 REPLACE，缺字段一律会被写成默认值。
                 val existing = aiProviderDao.getAllProvidersOnce().associateBy { it.id }
-                val mapped = meta.providers.map { it.toImportedEntity(existing[it.id], secretCipher) }
+                val mapped = meta.providers.map { dto ->
+                    dto.toImportedEntity(existing[dto.id], secretCipher, segmented.providers?.get(dto.id), secretsSegmented)
+                }
                 aiProviderDao.insertAllProviders(mapped.map { it.entity })
+                // 凭据段里有、metadata 里没有的供应商：没有宿主记录可写，按未还原的凭据计数，
+                // 不能静默丢弃（否则摘要会说凭据全回来了）。
+                val orphanSecrets = segmented.providers?.keys?.count { id -> meta.providers.none { it.id == id } } ?: 0
                 stats += RestoreStats(
                     providers = meta.providers.size,
-                    undecryptableSecrets = mapped.sumOf { it.undecryptableSecrets }
+                    undecryptableSecrets = mapped.sumOf { it.undecryptableSecrets },
+                    loginSecrets = mapped.count { it.credentialsRestored },
+                    skippedLoginSecrets = orphanSecrets
                 )
+            } else if (segmented.providers?.isNotEmpty() == true) {
+                stats += RestoreStats(skippedLoginSecrets = segmented.providers.orEmpty().size)
             }
             if (meta.remoteConnections.isNotEmpty()) {
-                val mapped = meta.remoteConnections.map { it.toImportedEntity(secretCipher) }
-                remoteConnectionDao.insertAllConnections(mapped.mapNotNull { it.entity })
+                val existing = remoteConnectionDao.getAllConnectionsOnce().associateBy { it.id }
+                val mapped = meta.remoteConnections.map { dto ->
+                    dto.toImportedEntity(secretCipher, existing[dto.id], segmented.connections?.get(dto.id), secretsSegmented)
+                }
+                val written = mapped.filter { it.entity != null }
+                remoteConnectionDao.insertAllConnections(written.mapNotNull { it.entity })
+                val orphanSecrets = segmented.connections?.keys?.count { id -> meta.remoteConnections.none { it.id == id } } ?: 0
                 stats += RestoreStats(
                     remoteConnections = meta.remoteConnections.size,
-                    undecryptableSecrets = mapped.sumOf { it.undecryptableSecrets }
+                    undecryptableSecrets = written.sumOf { it.undecryptableSecrets },
+                    loginSecrets = written.count { it.credentialsRestored },
+                    skippedLoginSecrets = orphanSecrets
                 )
+            } else if (segmented.connections?.isNotEmpty() == true) {
+                stats += RestoreStats(skippedLoginSecrets = segmented.connections.orEmpty().size)
             }
             if (meta.remoteMounts.isNotEmpty()) {
                 // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
@@ -1514,11 +1617,13 @@ class BackupManagerImpl @Inject constructor(
 
     // ── Entity ↔ DTO 转换 ──────────────────────────────────────
 
-    private fun AIProviderEntity.toDto(secrets: ExportSecretTally) = ProviderDto(
+    private fun AIProviderEntity.toDto() = ProviderDto(
         id = id,
         name = name,
         type = type,
-        apiKey = secrets.export(apiKey),
+        // 密钥字段留给凭据段（ProviderSecretsDto）：这里写空占位，导入侧靠
+        // BackupMetadata.secretsInSeparateSegment 分辨「没带」与「清空了」。
+        apiKey = "",
         baseUrl = baseUrl,
         defaultModel = defaultModel,
         models = models,
@@ -1532,26 +1637,43 @@ class BackupManagerImpl @Inject constructor(
         dashboardRefreshInterval = dashboardRefreshInterval,
         sortOrder = sortOrder,
         multiKeyEnabled = multiKeyEnabled,
-        apiKeys = secrets.export(apiKeys),
+        apiKeys = null,
         keyRotationStrategy = keyRotationStrategy,
         keyFailoverThreshold = keyFailoverThreshold,
         keyCooldownMinutes = keyCooldownMinutes,
-        scriptParams = secrets.export(scriptParams),
+        scriptParams = null,
         keySwitchStatusCodes = keySwitchStatusCodes,
         proxyEnabled = proxyEnabled,
         proxyType = proxyType,
         proxyHost = proxyHost,
         proxyPort = proxyPort,
         proxyUsername = proxyUsername,
-        proxyPassword = secrets.export(proxyPassword),
-        customHeaders = secrets.export(customHeaders),
+        proxyPassword = null,
+        customHeaders = null,
         userAgent = userAgent
     )
 
-    private fun RemoteConnectionEntity.toDto(secrets: ExportSecretTally) = RemoteConnectionDto(
+    private fun AIProviderEntity.toSecretDto(secrets: ExportSecretTally) = ProviderSecretsDto(
+        id = id,
+        apiKey = secrets.export(apiKey),
+        apiKeys = secrets.export(apiKeys),
+        proxyPassword = secrets.export(proxyPassword),
+        customHeaders = secrets.export(customHeaders),
+        scriptParams = secrets.export(scriptParams)
+    )
+
+    private fun RemoteConnectionEntity.toDto() = RemoteConnectionDto(
         id, name, protocol.name, host, port, username, authType,
-        secrets.export(authData), passphrase?.let { secrets.export(it) },
-        sortOrder
+        // PASSWORD 模式的 authData 是密码，拆到凭据段；KEY 模式是私钥路径，属于配置。
+        authData = if (authType.equals("PASSWORD", ignoreCase = true)) "" else authData,
+        passphrase = null,
+        sortOrder = sortOrder
+    )
+
+    private fun RemoteConnectionEntity.toSecretDto(secrets: ExportSecretTally) = ConnectionSecretsDto(
+        id = id,
+        authData = if (authType.equals("PASSWORD", ignoreCase = true)) secrets.export(authData) else null,
+        passphrase = passphrase?.let { secrets.export(it) }
     )
 
     private fun RemoteMountEntity.toDto() = RemoteMountDto(id, connectionId, remotePath, localMountPath, isActive, autoConnect)
@@ -1629,6 +1751,9 @@ class BackupManagerImpl @Inject constructor(
         const val FILE_SECRET_BACKUP_TARGETS = "${SECRET_PREFIX}backup-targets.jsonl"
         const val FILE_SECRET_SSH_LOGIN_KEYS = "${SECRET_PREFIX}ssh-login-keys.json"
         const val FILE_SECRET_MCP_OAUTH = "${SECRET_PREFIX}mcp-oauth.json"
+        /** 供应商密钥与连接凭据：metadata 只留配置字段，密钥在这里。 */
+        const val FILE_SECRET_PROVIDERS = "${SECRET_PREFIX}provider-secrets.jsonl"
+        const val FILE_SECRET_CONNECTIONS = "${SECRET_PREFIX}connection-secrets.jsonl"
         const val SECRET_SSH_KEYS_PREFIX = "${SECRET_PREFIX}ssh-keys/"
 
         /** SSH 私钥目录：与 RemoteServerViewModel 写入、SecretEncryptionMigrator 迁移用的是同一处。 */
@@ -1707,3 +1832,12 @@ private enum class AssetKind { SKILL, SUBAGENT, PANEL_SCRIPT }
 
 /** 资产条目的落点：目标容器路径 + 类别。 */
 private class AssetTarget(val path: String, val kind: AssetKind)
+
+/**
+ * 新格式凭据段的解析结果。null 表示包里没有这一段：旧包（密钥可能仍在 metadata 里）
+ * 或这次导出没勾凭据。两个判据合起来决定导入时从哪读密钥，见 BackupManagerImpl.restoreMeta。
+ */
+private class SegmentedCredentialSecrets {
+    var providers: MutableMap<String, ProviderSecretsDto>? = null
+    var connections: MutableMap<String, ConnectionSecretsDto>? = null
+}

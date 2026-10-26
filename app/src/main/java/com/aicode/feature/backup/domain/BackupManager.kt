@@ -70,7 +70,12 @@ data class ImportPreview(
 
 /** 导出数据范围选项；未勾选的段在快照中保持空值，导入时跳过。 */
 data class BackupOptions(
+    /** AI 供应商配置（name/type/baseUrl/models 等）；密钥字段不在这里，见 [loginSecrets]。 */
     val providers: Boolean = true,
+    /**
+     * 连接与同步配置（host/port/username/authType、挂载点，以及 KEY 模式的私钥路径）。
+     * 密码与私钥口令不进本段，见 [loginSecrets]。
+     */
     val remoteConnections: Boolean = true,
     val chatHistory: Boolean = true,
     val mcpServers: Boolean = true,
@@ -86,9 +91,12 @@ data class BackupOptions(
     /** 会话工作状态（`session_briefs` 表）。默认关。 */
     val sessionBriefs: Boolean = false,
     /**
-     * 登录凭据：git 令牌、SSH 私钥文件与登录口令、网络备份目标密钥、MCP 授权令牌。默认关。
+     * 登录凭据：git 令牌、SSH 私钥文件与登录口令、网络备份目标密钥、MCP 授权令牌，
+     * 以及从配置里拆出来的供应商密钥（API Key / 多 Key 列表 / 代理密码 / 自定义请求头 /
+     * 脚本参数）与连接密码（PASSWORD 模式的 authData、私钥口令）。默认关。
      *
-     * 勾选后**必须**提供非空口令：这些值能直接用于登录，不允许写进明文备份里。
+     * 勾选后**必须**提供非空口令：这些值能直接用于登录，不允许写进明文备份里；
+     * 不勾选时上面这些字段不会进导出包（供应商配置与连接配置本身照常导出）。
      */
     val loginSecrets: Boolean = false
 )
@@ -209,8 +217,10 @@ data class RestoreStats(
     /** 本次导入回写的会话工作状态条数。 */
     val sessionBriefs: Int = 0,
     /**
-     * 本次导入实际还原的登录凭据项数：git 凭据、SSH 登录密钥、SSH 私钥文件、网络备份目标、MCP 授权令牌。
-     * 备份没带 `secrets/` 段时为 0，摘要也就不该提凭据。
+     * 本次导入实际还原的登录凭据项数：git 凭据、SSH 登录密钥、SSH 私钥文件、网络备份目标、
+     * MCP 授权令牌、供应商密钥（每个供应商算一项）、连接凭据（每条连接算一项）。
+     * 备份没带 `secrets/` 段时为 0，摘要也就不该提凭据。旧包把密钥放在 metadata.json 里，
+     * 按旧路径读出时不在此计数（与引入本字段之前的行为一致）。
      */
     val loginSecrets: Int = 0,
     /**
