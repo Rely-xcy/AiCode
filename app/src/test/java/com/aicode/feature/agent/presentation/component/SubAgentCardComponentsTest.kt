@@ -169,4 +169,56 @@ class SubAgentCardComponentsTest {
         assertNull(parsed.items[1].subSessionId)
         assertEquals("任务2", parsed.items[1].description)
     }
+
+    /** 单条派发只出 1 个条目：卡片据此走「概览与任务项合并」的单卡分支。 */
+    @Test
+    fun parse_singleDispatchYieldsOneItem() {
+        val content = """
+            {"status":"success","data":{"id":"sub-9","agent":"explorer","state":"running"}}
+        """.trimIndent()
+
+        val parsed = parseSubAgentDispatch(createArgs, content)
+
+        assertEquals(1, parsed!!.items.size)
+        assertEquals("explorer", parsed.items.single().agentName)
+    }
+
+    /** 单条派发时 data.warning 同时落到任务项与 globalWarning：合并卡按内容去重，只显一次。 */
+    @Test
+    fun parse_singleDispatchWarningLandsInItemAndGlobal() {
+        val content = """
+            {"status":"success","data":{"id":"sub-3","agent":"explorer","warning":"该子代理定义里已写死模型"}}
+        """.trimIndent()
+
+        val parsed = parseSubAgentDispatch(createArgs, content)!!
+
+        assertEquals("该子代理定义里已写死模型", parsed.items.single().warning)
+        assertEquals("该子代理定义里已写死模型", parsed.globalWarning)
+        assertEquals(
+            listOf("该子代理定义里已写死模型"),
+            subAgentSingleSummary(parsed.items.single(), parsed.globalWarning, "子代理").warnings
+        )
+    }
+
+    /** 单条合并卡副标题用子代理名；名字缺失或全空白时退回默认名，不能空着。 */
+    @Test
+    fun singleSummary_prefersAgentNameAndFallsBackToDefault() {
+        val named = ParsedSubAgentDispatchItem("sub-1", "explorer", "调研缓存实现", "light", "m1", null)
+        assertEquals("explorer", subAgentSingleSummary(named, null, "子代理").agentName)
+        assertEquals("子代理", subAgentSingleSummary(named.copy(agentName = null), null, "子代理").agentName)
+        assertEquals("子代理", subAgentSingleSummary(named.copy(agentName = "  "), null, "子代理").agentName)
+    }
+
+    /** 任务项自己没有告警时，顶层告警照常显示；两者不同则两条都显示。 */
+    @Test
+    fun singleSummary_keepsGlobalWarningAndKeepsDistinctOnes() {
+        val item = ParsedSubAgentDispatchItem("sub-1", "explorer", "调研缓存实现", null, null, null)
+
+        assertEquals(listOf("顶层告警"), subAgentSingleSummary(item, "顶层告警", "子代理").warnings)
+        assertEquals(
+            listOf("项内告警", "顶层告警"),
+            subAgentSingleSummary(item.copy(warning = "项内告警"), "顶层告警", "子代理").warnings
+        )
+        assertEquals(emptyList<String>(), subAgentSingleSummary(item, null, "子代理").warnings)
+    }
 }
