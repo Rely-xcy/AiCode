@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,8 +80,6 @@ private const val MEMORY_HEADER_LONG_TERM_KEY = "memory_header_long_term"
 private const val MEMORY_LONG_TERM_CARD_KEY = "memory_long_term_card"
 private const val MEMORY_HEADER_SESSION_KEY = "memory_header_session"
 private const val MEMORY_SESSION_CARD_KEY = "memory_session_card"
-private const val MEMORY_SEARCH_STATUS_KEY = "memory_search_status"
-private const val MEMORY_SEARCH_EMPTY_KEY = "memory_search_empty"
 
 /**
  * 记忆页（长期记忆）：主体是当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除），
@@ -153,13 +149,19 @@ internal fun MemorySection(
                         text = stringResource(R.string.memory_group_global_count, globalMemories.size)
                     )
                 }
-                memoryItems(
-                    memories = globalMemories,
+                groupedLazyItems(
+                    items = globalMemories,
                     keyPrefix = MEMORY_GLOBAL_PREFIX,
-                    onOpenDetail = onOpenDetail,
-                    onLongClick = { actionMemory = it },
-                    onDelete = onDelete
-                )
+                    idOf = { it.name },
+                    contentType = "memory-row"
+                ) { memory ->
+                    MemoryRow(
+                        memory = memory,
+                        onOpenDetail = { onOpenDetail(memory) },
+                        onLongClick = { actionMemory = memory },
+                        onDelete = { onDelete(memory) }
+                    )
+                }
             }
             if (projectMemories.isNotEmpty()) {
                 item(key = MEMORY_HEADER_PROJECT_KEY) {
@@ -179,13 +181,19 @@ internal fun MemorySection(
                         )
                     }
                 }
-                memoryItems(
-                    memories = projectMemories,
+                groupedLazyItems(
+                    items = projectMemories,
                     keyPrefix = MEMORY_PROJECT_PREFIX,
-                    onOpenDetail = onOpenDetail,
-                    onLongClick = { actionMemory = it },
-                    onDelete = onDelete
-                )
+                    idOf = { it.name },
+                    contentType = "memory-row"
+                ) { memory ->
+                    MemoryRow(
+                        memory = memory,
+                        onOpenDetail = { onOpenDetail(memory) },
+                        onLongClick = { actionMemory = memory },
+                        onDelete = { onDelete(memory) }
+                    )
+                }
             }
         }
 
@@ -391,7 +399,7 @@ internal fun MemorySearchSection(
     var detailMemory by remember { mutableStateOf<Memory?>(null) }
     var deleteTarget by remember { mutableStateOf<Memory?>(null) }
 
-    // 结果同样是可能上百条的列表，与列表页共用 memoryItems 的懒加载实现，不另写一套布局。
+    // 结果同样是可能上百条的列表：与技能搜索页共用 GroupedLazyList 的分组骨架，不另写一套布局。
     val listState = rememberLazyListState()
     // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
     // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
@@ -399,65 +407,43 @@ internal fun MemorySearchSection(
         if (query.isBlank()) listState.scrollToItem(0)
     }
 
-    LazyColumn(
+    // 只在结果变化时分组，避免每次重组都产生两份新 List。
+    val globalMemories = remember(results) { results.filter { it.scope == MemoryScope.GLOBAL } }
+    val projectMemories = remember(results) { results.filter { it.scope == MemoryScope.PROJECT } }
+
+    GroupedLazyList(
         state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-        // 上下留白走 contentPadding：与原来 verticalScroll 里的 padding 一样随内容滚动，
-        // 否则滚动时顶部会多出一条 8dp 空白带、内容碰不到顶栏
-        contentPadding = PaddingValues(top = Spacing.sm, bottom = Spacing.xl)
-    ) {
-        when {
-            loading -> item(key = MEMORY_SEARCH_STATUS_KEY) { MemoryLoadingPlaceholder() }
-            results.isEmpty() -> item(key = MEMORY_SEARCH_EMPTY_KEY) {
+        sections = listOf(
+            GroupedLazySection(
+                title = stringResource(R.string.memory_group_global_count, globalMemories.size),
+                keyPrefix = MEMORY_GLOBAL_PREFIX,
+                items = globalMemories
+            ),
+            GroupedLazySection(
+                title = stringResource(R.string.memory_group_project_count, projectMemories.size),
+                keyPrefix = MEMORY_PROJECT_PREFIX,
+                items = projectMemories
+            )
+        ),
+        idOf = { it.name },
+        rowContentType = "memory-row",
+        // 首次读盘未完成时结果必为空，但那时不能当「没搜到」：先给正在读取。
+        emptyContent = {
+            if (loading) {
+                MemoryLoadingPlaceholder()
+            } else {
                 SearchEmptyHint(stringResource(R.string.memory_search_empty))
             }
-            else -> {
-                val globalMemories = results.filter { it.scope == MemoryScope.GLOBAL }
-                val projectMemories = results.filter { it.scope == MemoryScope.PROJECT }
-                if (globalMemories.isNotEmpty()) {
-                    item(key = MEMORY_HEADER_GLOBAL_KEY) {
-                        SettingsGroupHeader(
-                            text = stringResource(R.string.memory_group_global_count, globalMemories.size)
-                        )
-                    }
-                    memoryItems(
-                        memories = globalMemories,
-                        keyPrefix = MEMORY_GLOBAL_PREFIX,
-                        onOpenDetail = { detailMemory = it },
-                        onLongClick = {},
-                        onDelete = { deleteTarget = it }
-                    )
-                }
-                if (projectMemories.isNotEmpty()) {
-                    item(key = MEMORY_HEADER_PROJECT_KEY) {
-                        Box(
-                            modifier = if (globalMemories.isNotEmpty()) {
-                                Modifier.padding(top = Spacing.sm)
-                            } else {
-                                Modifier
-                            }
-                        ) {
-                            SettingsGroupHeader(
-                                text = stringResource(
-                                    R.string.memory_group_project_count,
-                                    projectMemories.size
-                                )
-                            )
-                        }
-                    }
-                    memoryItems(
-                        memories = projectMemories,
-                        keyPrefix = MEMORY_PROJECT_PREFIX,
-                        onOpenDetail = { detailMemory = it },
-                        onLongClick = {},
-                        onDelete = { deleteTarget = it }
-                    )
-                }
-            }
+        },
+        row = { memory ->
+            MemoryRow(
+                memory = memory,
+                onOpenDetail = { detailMemory = memory },
+                onLongClick = {},
+                onDelete = { deleteTarget = memory }
+            )
         }
-    }
+    )
 
     detailMemory?.let { memory ->
         MemoryDetailSheet(
@@ -518,42 +504,6 @@ private fun SessionValueText(text: String) {
         textAlign = TextAlign.End,
         modifier = Modifier.padding(start = Spacing.sm)
     )
-}
-
-/**
- * 一栏记忆的懒加载行：每条记忆各自成为 LazyColumn 的一项。[LazyGroupItem] 按行位置补卡片圆角、
- * 行间补分隔线，拼出来的外观与整块 [SettingsGroup] 装下的分组卡片一致。
- *
- * key 带分组前缀：全局与项目两栏各一份列表，同名条目在两侧都可能出现；组内重名已由
- * `MemoryRepository.listMemories` 按 name 去重（项目级优先）。不拼下标——删掉一条后，
- * 其余行的滑动位移状态会错位到别的条目上，用户以为在删 A、实际删掉的是 B。
- */
-private fun LazyListScope.memoryItems(
-    memories: List<Memory>,
-    keyPrefix: String,
-    onOpenDetail: (Memory) -> Unit,
-    onLongClick: (Memory) -> Unit,
-    onDelete: (Memory) -> Unit
-) {
-    itemsIndexed(
-        items = memories,
-        key = { _, memory -> listItemKey(keyPrefix, memory.name) },
-        contentType = { _, _ -> "memory-row" }
-    ) { index, memory ->
-        LazyGroupItem(
-            index = index,
-            lastIndex = memories.lastIndex,
-            // 首行补 8dp：原先由 Column 的 spacedBy(sm) 提供标题与卡片之间的间距
-            modifier = if (index == 0) Modifier.padding(top = Spacing.sm) else Modifier
-        ) {
-            MemoryRow(
-                memory = memory,
-                onOpenDetail = { onOpenDetail(memory) },
-                onLongClick = { onLongClick(memory) },
-                onDelete = { onDelete(memory) }
-            )
-        }
-    }
 }
 
 /** 首次读盘时的占位：不是「没有记忆」，所以不套空态图标与引导文案。 */
