@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +32,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,6 +69,21 @@ import compose.icons.feathericons.User
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+// 记忆列表的项 key：两张设置卡与分组标题用固定 key，条目用「分组前缀 + name」。
+// LazyColumn 要求同一列表里 key 唯一，重复会直接崩；条目不在后面拼下标，
+// 否则删掉一条后其余行的滑动位移状态会错位到别的条目上。
+private const val MEMORY_GLOBAL_PREFIX = "memory_global_"
+private const val MEMORY_PROJECT_PREFIX = "memory_project_"
+private const val MEMORY_STATUS_KEY = "memory_status"
+private const val MEMORY_HEADER_GLOBAL_KEY = "memory_header_global"
+private const val MEMORY_HEADER_PROJECT_KEY = "memory_header_project"
+private const val MEMORY_HEADER_LONG_TERM_KEY = "memory_header_long_term"
+private const val MEMORY_LONG_TERM_CARD_KEY = "memory_long_term_card"
+private const val MEMORY_HEADER_SESSION_KEY = "memory_header_session"
+private const val MEMORY_SESSION_CARD_KEY = "memory_session_card"
+private const val MEMORY_SEARCH_STATUS_KEY = "memory_search_status"
+private const val MEMORY_SEARCH_EMPTY_KEY = "memory_search_empty"
 
 /**
  * 记忆页（长期记忆）：主体是当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除），
@@ -104,40 +123,65 @@ internal fun MemorySection(
     // 自定义治理周期输入弹窗
     var showCustomIntervalDialog by remember { mutableStateOf(false) }
 
-    Column(
+    // 列表走 LazyColumn 只组合可视区的行：记忆条目数不可控（实测到过上百条），
+    // 一次组合全部行会把进页面卡住，而每行还各带一个左滑容器，组合成本比普通行更高。
+    // 滚动位置由 rememberLazyListState 保存；宿主按分区名套了 SaveableStateHolder，
+    // 从编辑页返回时能回到原位置。
+    val listState = rememberLazyListState()
+    LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(horizontal = Spacing.lg),
+        // 底部留白走 contentPadding：与原来 verticalScroll 里的 padding 一样随内容滚动
+        contentPadding = PaddingValues(bottom = Spacing.xl)
     ) {
         // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
         // 空态跟技能页 / MCP 页一样直接排在页内，不套卡片：一张没有分组标题的卡片贴在顶栏下
         // 既没有归属，也跟下面带标题的卡片不是一套节奏。
         if (memories.isEmpty()) {
             // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
-            if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
+            item(key = MEMORY_STATUS_KEY) {
+                if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
+            }
         } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
             val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
             if (globalMemories.isNotEmpty()) {
-                SettingsGroupHeader(
-                    text = stringResource(R.string.memory_group_global_count, globalMemories.size)
-                )
-                MemoryGroup(
+                item(key = MEMORY_HEADER_GLOBAL_KEY) {
+                    SettingsGroupHeader(
+                        text = stringResource(R.string.memory_group_global_count, globalMemories.size)
+                    )
+                }
+                memoryItems(
                     memories = globalMemories,
+                    keyPrefix = MEMORY_GLOBAL_PREFIX,
                     onOpenDetail = onOpenDetail,
                     onLongClick = { actionMemory = it },
                     onDelete = onDelete
                 )
             }
             if (projectMemories.isNotEmpty()) {
-                SettingsGroupHeader(
-                    text = stringResource(R.string.memory_group_project_count, projectMemories.size)
-                )
-                MemoryGroup(
+                item(key = MEMORY_HEADER_PROJECT_KEY) {
+                    // 全局组也在时这一项不是首项，补 8dp；否则顶部会多出一段空白
+                    Box(
+                        modifier = if (globalMemories.isNotEmpty()) {
+                            Modifier.padding(top = Spacing.sm)
+                        } else {
+                            Modifier
+                        }
+                    ) {
+                        SettingsGroupHeader(
+                            text = stringResource(
+                                R.string.memory_group_project_count,
+                                projectMemories.size
+                            )
+                        )
+                    }
+                }
+                memoryItems(
                     memories = projectMemories,
+                    keyPrefix = MEMORY_PROJECT_PREFIX,
                     onOpenDetail = onOpenDetail,
                     onLongClick = { actionMemory = it },
                     onDelete = onDelete
@@ -145,77 +189,84 @@ internal fun MemorySection(
             }
         }
 
-        SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
-        SettingsGroup {
-            // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
-            Text(
-                text = stringResource(R.string.memory_long_term_desc),
-                style = MaterialTheme.typography.bodySmall,
-                // 说明句统一用 onSurfaceVariant（与各项副标题、页脚说明同色）；
-                // subtleText 在本仓只用于取值与箭头这类弱提示
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.memory_active_memory),
-                subtitle = stringResource(R.string.memory_active_memory_desc),
-                subtitleMaxLines = 2,
-                trailing = {
-                    AppSwitch(
-                        checked = activeMemoryEnabled,
-                        onCheckedChange = onToggleActiveMemory
-                    )
-                }
-            )
-            SettingsDivider()
-            // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
-            // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
-            // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.semanticColors.cardSurface)
-                    .padding(horizontal = Spacing.lg, vertical = 12.dp)
-            ) {
+        // 标题与卡片之间原本由 Column 的 spacedBy(sm) 提供间距，换 LazyColumn 后按项补回 8dp。
+        item(key = MEMORY_HEADER_LONG_TERM_KEY) {
+            Box(modifier = Modifier.padding(top = Spacing.sm)) {
+                SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
+            }
+        }
+        item(key = MEMORY_LONG_TERM_CARD_KEY) {
+            SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
+                // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
                 Text(
-                    text = stringResource(R.string.memory_curation_interval),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = stringResource(R.string.memory_long_term_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    // 说明句统一用 onSurfaceVariant（与各项副标题、页脚说明同色）；
+                    // subtleText 在本仓只用于取值与箭头这类弱提示
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
                 )
-                Text(
-                    text = stringResource(R.string.memory_curation_interval_desc),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(Spacing.sm))
-                SegmentedTabs(
-                    selected = curationIntervalIndex(curationIntervalHours),
-                    labels = listOf(
-                        stringResource(R.string.memory_curation_interval_off_short),
-                        stringResource(R.string.memory_curation_interval_1d),
-                        stringResource(R.string.memory_curation_interval_7d),
-                        stringResource(R.string.memory_curation_interval_custom)
-                    ),
-                    onSelect = { index ->
-                        when (index) {
-                            0 -> onSelectCurationInterval(0)
-                            1 -> onSelectCurationInterval(24)
-                            2 -> onSelectCurationInterval(168)
-                            else -> showCustomIntervalDialog = true
-                        }
+                SettingsDivider()
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.memory_active_memory),
+                    subtitle = stringResource(R.string.memory_active_memory_desc),
+                    subtitleMaxLines = 2,
+                    trailing = {
+                        AppSwitch(
+                            checked = activeMemoryEnabled,
+                            onCheckedChange = onToggleActiveMemory
+                        )
                     }
                 )
-                // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
-                val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
-                if (isCustom) {
+                SettingsDivider()
+                // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
+                // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
+                // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.semanticColors.cardSurface)
+                        .padding(horizontal = Spacing.lg, vertical = 12.dp)
+                ) {
                     Text(
-                        text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText,
-                        modifier = Modifier.padding(top = Spacing.xs)
+                        text = stringResource(R.string.memory_curation_interval),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
+                    Text(
+                        text = stringResource(R.string.memory_curation_interval_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    SegmentedTabs(
+                        selected = curationIntervalIndex(curationIntervalHours),
+                        labels = listOf(
+                            stringResource(R.string.memory_curation_interval_off_short),
+                            stringResource(R.string.memory_curation_interval_1d),
+                            stringResource(R.string.memory_curation_interval_7d),
+                            stringResource(R.string.memory_curation_interval_custom)
+                        ),
+                        onSelect = { index ->
+                            when (index) {
+                                0 -> onSelectCurationInterval(0)
+                                1 -> onSelectCurationInterval(24)
+                                2 -> onSelectCurationInterval(168)
+                                else -> showCustomIntervalDialog = true
+                            }
+                        }
+                    )
+                    // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
+                    val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
+                    if (isCustom) {
+                        Text(
+                            text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            modifier = Modifier.padding(top = Spacing.xs)
+                        )
+                    }
                 }
             }
         }
@@ -223,55 +274,61 @@ internal fun MemorySection(
         // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
         // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
         if (shortTerm != null) {
-            SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
-            SettingsGroup {
-                SettingsRow(
-                    icon = null,
-                    title = shortTerm.title,
-                    subtitle = stringResource(R.string.memory_session_card_desc)
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_context_label),
-                    trailing = {
-                        SessionValueText(
-                            stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
-                        )
-                    }
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_session_fold_label),
-                    trailing = {
-                        SessionValueText(
-                            if (shortTerm.foldCount == 0) {
-                                stringResource(R.string.memory_session_no_fold)
-                            } else {
-                                stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
-                            }
-                        )
-                    }
-                )
-                // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
-                if (shortTerm.lastInputTokens > 0) {
+            item(key = MEMORY_HEADER_SESSION_KEY) {
+                Box(modifier = Modifier.padding(top = Spacing.sm)) {
+                    SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
+                }
+            }
+            item(key = MEMORY_SESSION_CARD_KEY) {
+                SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
+                    SettingsRow(
+                        icon = null,
+                        title = shortTerm.title,
+                        subtitle = stringResource(R.string.memory_session_card_desc)
+                    )
                     SettingsDivider()
                     SettingsRow(
                         icon = null,
-                        title = stringResource(R.string.memory_session_input_label),
+                        title = stringResource(R.string.memory_session_context_label),
                         trailing = {
                             SessionValueText(
-                                // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
-                                // 与聊天页指示器的「估算/真实」用同一对文案。
-                                stringResource(
-                                    R.string.memory_session_input_value,
-                                    shortTerm.lastInputTokens,
-                                    stringResource(R.string.common_token_source_reported)
-                                )
+                                stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
                             )
                         }
                     )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = null,
+                        title = stringResource(R.string.memory_session_fold_label),
+                        trailing = {
+                            SessionValueText(
+                                if (shortTerm.foldCount == 0) {
+                                    stringResource(R.string.memory_session_no_fold)
+                                } else {
+                                    stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
+                                }
+                            )
+                        }
+                    )
+                    // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
+                    if (shortTerm.lastInputTokens > 0) {
+                        SettingsDivider()
+                        SettingsRow(
+                            icon = null,
+                            title = stringResource(R.string.memory_session_input_label),
+                            trailing = {
+                                SessionValueText(
+                                    // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
+                                    // 与聊天页指示器的「估算/真实」用同一对文案。
+                                    stringResource(
+                                        R.string.memory_session_input_value,
+                                        shortTerm.lastInputTokens,
+                                        stringResource(R.string.common_token_source_reported)
+                                    )
+                                )
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -307,7 +364,7 @@ internal fun MemorySection(
 /**
  * 记忆搜索二级页：顶栏那一行搜索框由 SettingsScreen 渲染（[SearchTopBarField]），这里只画结果。
  *
- * 结果行直接复用列表的 [MemoryGroup] / [MemoryRow]：图标、作用域徽章、置顶与来源标注全长在行里，
+ * 结果列表复用列表页的同一套懒加载分组与 [MemoryRow]：图标、作用域徽章、置顶与来源标注全长在行里，
  * 另写一套搜索结果行，过一阵就会和列表长得不一样。分组也不拆：命中横跨全局与项目时，
  * 一个作用域小标题比每行再重复两遍徽章更好扫。
  *
@@ -334,45 +391,65 @@ internal fun MemorySearchSection(
     var detailMemory by remember { mutableStateOf<Memory?>(null) }
     var deleteTarget by remember { mutableStateOf<Memory?>(null) }
 
-    val scrollState = rememberScrollState()
+    // 结果同样是可能上百条的列表，与列表页共用 memoryItems 的懒加载实现，不另写一套布局。
+    val listState = rememberLazyListState()
     // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
     // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
     LaunchedEffect(query.isBlank()) {
-        if (query.isBlank()) scrollState.scrollTo(0)
+        if (query.isBlank()) listState.scrollToItem(0)
     }
 
-    Column(
+    LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = Spacing.lg)
-            // 只补一点上边：结果从顶栏下方直接开始，不要在搜索框和第一行之间留一大片空白
-            .padding(top = Spacing.sm, bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .padding(horizontal = Spacing.lg),
+        // 上下留白走 contentPadding：与原来 verticalScroll 里的 padding 一样随内容滚动，
+        // 否则滚动时顶部会多出一条 8dp 空白带、内容碰不到顶栏
+        contentPadding = PaddingValues(top = Spacing.sm, bottom = Spacing.xl)
     ) {
         when {
-            loading -> MemoryLoadingPlaceholder()
-            results.isEmpty() -> SearchEmptyHint(stringResource(R.string.memory_search_empty))
+            loading -> item(key = MEMORY_SEARCH_STATUS_KEY) { MemoryLoadingPlaceholder() }
+            results.isEmpty() -> item(key = MEMORY_SEARCH_EMPTY_KEY) {
+                SearchEmptyHint(stringResource(R.string.memory_search_empty))
+            }
             else -> {
                 val globalMemories = results.filter { it.scope == MemoryScope.GLOBAL }
                 val projectMemories = results.filter { it.scope == MemoryScope.PROJECT }
                 if (globalMemories.isNotEmpty()) {
-                    SettingsGroupHeader(
-                        text = stringResource(R.string.memory_group_global_count, globalMemories.size)
-                    )
-                    MemoryGroup(
+                    item(key = MEMORY_HEADER_GLOBAL_KEY) {
+                        SettingsGroupHeader(
+                            text = stringResource(R.string.memory_group_global_count, globalMemories.size)
+                        )
+                    }
+                    memoryItems(
                         memories = globalMemories,
+                        keyPrefix = MEMORY_GLOBAL_PREFIX,
                         onOpenDetail = { detailMemory = it },
                         onLongClick = {},
                         onDelete = { deleteTarget = it }
                     )
                 }
                 if (projectMemories.isNotEmpty()) {
-                    SettingsGroupHeader(
-                        text = stringResource(R.string.memory_group_project_count, projectMemories.size)
-                    )
-                    MemoryGroup(
+                    item(key = MEMORY_HEADER_PROJECT_KEY) {
+                        Box(
+                            modifier = if (globalMemories.isNotEmpty()) {
+                                Modifier.padding(top = Spacing.sm)
+                            } else {
+                                Modifier
+                            }
+                        ) {
+                            SettingsGroupHeader(
+                                text = stringResource(
+                                    R.string.memory_group_project_count,
+                                    projectMemories.size
+                                )
+                            )
+                        }
+                    }
+                    memoryItems(
                         memories = projectMemories,
+                        keyPrefix = MEMORY_PROJECT_PREFIX,
                         onOpenDetail = { detailMemory = it },
                         onLongClick = {},
                         onDelete = { deleteTarget = it }
@@ -443,28 +520,38 @@ private fun SessionValueText(text: String) {
     )
 }
 
-/** 一栏记忆（全局或项目）：同一个分组里逐行渲染，行间加分隔线。 */
-@Composable
-private fun MemoryGroup(
+/**
+ * 一栏记忆的懒加载行：每条记忆各自成为 LazyColumn 的一项。[LazyGroupItem] 按行位置补卡片圆角、
+ * 行间补分隔线，拼出来的外观与整块 [SettingsGroup] 装下的分组卡片一致。
+ *
+ * key 带分组前缀：全局与项目两栏各一份列表，同名条目在两侧都可能出现；组内重名已由
+ * `MemoryRepository.listMemories` 按 name 去重（项目级优先）。不拼下标——删掉一条后，
+ * 其余行的滑动位移状态会错位到别的条目上，用户以为在删 A、实际删掉的是 B。
+ */
+private fun LazyListScope.memoryItems(
     memories: List<Memory>,
+    keyPrefix: String,
     onOpenDetail: (Memory) -> Unit,
     onLongClick: (Memory) -> Unit,
     onDelete: (Memory) -> Unit
 ) {
-    SettingsGroup {
-        memories.forEachIndexed { index, memory ->
-            // 必须带 key：SwipeToDeleteRow 的滑开位移是行内 remember 的位置状态，
-            // 不带 key 时 Compose 按位置匹配，删掉一条后剩下的行会继承上一条的滑开状态，
-            // 用户以为在删 A、实际删掉的是 B
-            key(memory.name) {
-                if (index > 0) SettingsDivider()
-                MemoryRow(
-                    memory = memory,
-                    onOpenDetail = { onOpenDetail(memory) },
-                    onLongClick = { onLongClick(memory) },
-                    onDelete = { onDelete(memory) }
-                )
-            }
+    itemsIndexed(
+        items = memories,
+        key = { _, memory -> listItemKey(keyPrefix, memory.name) },
+        contentType = { _, _ -> "memory-row" }
+    ) { index, memory ->
+        LazyGroupItem(
+            index = index,
+            lastIndex = memories.lastIndex,
+            // 首行补 8dp：原先由 Column 的 spacedBy(sm) 提供标题与卡片之间的间距
+            modifier = if (index == 0) Modifier.padding(top = Spacing.sm) else Modifier
+        ) {
+            MemoryRow(
+                memory = memory,
+                onOpenDetail = { onOpenDetail(memory) },
+                onLongClick = { onLongClick(memory) },
+                onDelete = { onDelete(memory) }
+            )
         }
     }
 }
