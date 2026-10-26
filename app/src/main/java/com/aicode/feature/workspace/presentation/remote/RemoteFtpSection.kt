@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
@@ -38,6 +40,9 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Spacing
@@ -47,6 +52,8 @@ import com.aicode.feature.settings.presentation.component.settingsLightMode
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Eye
+import compose.icons.feathericons.EyeOff
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Share2
 import kotlinx.coroutines.launch
@@ -68,6 +75,7 @@ fun WiFiFtpServerSection(
     var editPort by remember(port) { mutableStateOf(port.toString()) }
     var editUsername by remember(username) { mutableStateOf(username) }
     var editPassword by remember(password) { mutableStateOf(password) }
+    var passwordVisible by remember { mutableStateOf(false) }
     var editAnonymous by remember(isAnonymous) { mutableStateOf(isAnonymous) }
     var editAutoStart by remember(autoStart) { mutableStateOf(autoStart) }
     var showAnonymousConfirm by remember { mutableStateOf(false) }
@@ -228,6 +236,14 @@ fun WiFiFtpServerSection(
                     onValueChange = { editPassword = it },
                     label = stringResource(R.string.ftp_login_password),
                     modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        val image = if (passwordVisible) FeatherIcons.Eye else FeatherIcons.EyeOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(image, stringResource(R.string.remote_toggle_password), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
                     singleLine = true,
                     enabled = !editAnonymous
                 )
