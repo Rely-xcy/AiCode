@@ -371,6 +371,23 @@ class ToolGroupExpansionTest {
     }
 
     @Test
+    fun expandedGroup_drawsEachToolOnceAsIndependentRow() {
+        // 回归：分组头 item 曾在 AnimatedVisibility 里把成员再画一遍，而 flattenChatProcesses 又为
+        // 每个成员生成独立 item——「2 次工具调用」展开后每条命令出现两行（用户报的「同一个命令显示两次」）。
+        // 成员行只能由独立 item 提供，分组头 item 只画折叠头那一行。
+        val rendered = flattenChatProcesses(items(
+            listOf(user("u0"), tool("t1"), tool("t2")),
+            overrides = mapOf(groupKey to true),
+            turnOverrides = mapOf("turn:u0" to true),
+        ))
+        val head = rendered.single { it.toolGroup != null }
+        assertFalse("分组头 item 不承担成员行", head.groupMember)
+        assertEquals(listOf("t1", "t2"), rendered.filter { it.groupMember }.map { it.key })
+        assertEquals("每条工具行只有一条 item", 1, rendered.count { it.key == "t1" })
+        assertEquals("每条工具行只有一条 item", 1, rendered.count { it.key == "t2" })
+    }
+
+    @Test
     fun shortProcess_usesIndependentItems() {
         val rendered = flattenChatProcesses(items(
             listOf(user("u0"), tool("t1")), activeTurnKey = "turn:u0"

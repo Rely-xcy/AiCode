@@ -2592,8 +2592,8 @@ private class ChatItemEnv(
     val onOpenMessageMenu: (AgentUIMessage) -> Unit,
 )
 
-// 渲染一条 item。轮头 / 工具分组的展开内容与折叠头在同一 Composable 内用 AnimatedVisibility
-// 整体展开（而非逐个列表项各自 placement 动画）：高度平滑撑开、内容跟着一起走，手感是一个整体。
+// 渲染一条 item。轮头与工具分组的展开内容都由 [flattenChatProcesses] 拆成独立列表 item，
+// 这里只画折叠头本身：分组头 item 再画一遍成员，就是同一个工具两行（见 [ChatRenderItem.toolGroup]）。
 @Composable
 private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
     val header = item.turnHeader
@@ -2644,30 +2644,6 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
                     env.onToolItemToggled()
                 }
             )
-            AnimatedVisibility(
-                visible = item.groupExpanded,
-                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-            ) {
-                Column {
-                    group.forEach { member ->
-                        AgentMessageItem(
-                            message = member,
-                            showActions = member.id in env.actionableMessageIds,
-                            liveOutput = env.liveOutputs[member.id],
-                            markdownCache = env.markdownCache,
-                            onRewindClick = { env.viewModel.openRewindMenu(it) },
-                            onMoreClick = { env.onOpenMessageMenu(it) },
-                            toolExpandedOverride = env.toolGroupOverrides[member.id],
-                            onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(member.id, isExpanded) },
-                            onToolToggle = env.onToolItemToggled,
-                            // 分组展开时成员行内缩一级，与分组头区分层级
-                            contentPadding = ToolGroupMemberPadding,
-                            entryDelayMs = env.messageEntryDelays[member.id]
-                        )
-                    }
-                }
-            }
         }
         else -> {
             val message = item.message
@@ -2685,6 +2661,8 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
                 toolExpandedOverride = env.toolGroupOverrides[message.id],
                 onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(message.id, isExpanded) },
                 onToolToggle = env.onToolItemToggled,
+                // 分组展开后的成员行内缩一级，与分组头区分层级（成员行是独立 item，见 [flattenChatProcesses]）
+                contentPadding = if (item.groupMember) ToolGroupMemberPadding else PaddingValues(0.dp),
                 reasoningDurationMs = env.reasoningDurations[message.id],
                 taskDurationMs = env.taskDurations[message.id],
                 turnUsage = env.turnUsages[message.id],
