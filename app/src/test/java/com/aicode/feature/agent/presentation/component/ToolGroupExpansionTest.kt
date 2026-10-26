@@ -340,7 +340,7 @@ class ToolGroupExpansionTest {
             tool("t1"), tool("t2"),
             notice,
         )
-        val keys = reconcileTurnKeys(messages, emptyMap(), "s1")
+        val keys = reconcileTurnKeys(messages, emptyMap())
         val rendered = buildChatItems(messages, emptyMap(), emptyMap(), sessionId = "s1", turnKeys = keys)
         val head = rendered.first { it.turnHeader != null }
         assertEquals("turn:head:session:s1", head.turnHeader!!.key)
@@ -446,16 +446,16 @@ class ToolGroupExpansionTest {
         // 块首半轮的折叠头 key 走 turnKeys 查表（reconcileTurnKeys 的产出），不再按块尾消息 id 现拼成
         // turn:head:<尾 id>：轮首补进窗口时 reconcile 沿用半轮时期那一套 key，渲染层的头 key 因此不变。
         val tail = listOf(assistant("a1"), tool("t1"), tool("t2"))
-        val previousKeys = reconcileTurnKeys(tail, emptyMap(), "s1")
+        // 这一轮此前在窗口里完整出现过（交接表因此记下它的 key），随后窗口向前滑、轮首被翻出去。
+        val previousKeys = reconcileTurnKeys(listOf(user("u0")) + tail, emptyMap())
         val headKey = previousKeys.getValue("a1")
-        assertEquals("turn:head:session:s1", headKey)
         val half = buildChatItems(
             tail, emptyMap(), mapOf(headKey to true), sessionId = "s1", turnKeys = previousKeys,
         )
         assertEquals(headKey, half.header().turnHeader!!.key)
         assertTrue("手动展开按 turnKeys 给出的 key 命中", half.header().turnHeader!!.expanded)
         val full = listOf(user("u0")) + tail
-        val nextKeys = reconcileTurnKeys(full, previousKeys, "s1")
+        val nextKeys = reconcileTurnKeys(full, previousKeys)
         assertEquals("轮首补进来仍沿用半轮时期的 key", headKey, nextKeys.getValue("u0"))
         val rendered = buildChatItems(
             full, emptyMap(), mapOf(headKey to true), sessionId = "s1", turnKeys = nextKeys,
@@ -481,7 +481,7 @@ class ToolGroupExpansionTest {
         assertEquals("turn:u0", half.header().turnHeader!!.key)
         assertTrue(half.header().turnHeader!!.expanded)
         val full = listOf(user("u0")) + tail
-        val nextKeys = reconcileTurnKeys(full, previousKeys, "s1")
+        val nextKeys = reconcileTurnKeys(full, previousKeys)
         assertEquals("turn:u0", nextKeys.getValue("u0"))
         val restored = buildChatItems(
             full, emptyMap(), mapOf("turn:u0" to true), sessionId = "s1", turnKeys = nextKeys,
@@ -493,9 +493,9 @@ class ToolGroupExpansionTest {
     @Test
     fun slidingWindow_truncatedRunningTurnStaysRunning() {
         val full = listOf(user("u0"), assistant("a1"), tool("t1"))
-        val previousKeys = reconcileTurnKeys(full, emptyMap(), "s1")
+        val previousKeys = reconcileTurnKeys(full, emptyMap())
         val window = full.drop(1) + tool("t2")
-        val nextKeys = reconcileTurnKeys(window, previousKeys, "s1")
+        val nextKeys = reconcileTurnKeys(window, previousKeys)
         // 窗口滑掉轮首用户行后，reconcile 仍把这一截认在滑动前的那一轮上。
         assertEquals("turn:u0", nextKeys.getValue("t2"))
         val rendered = buildChatItems(
@@ -520,9 +520,9 @@ class ToolGroupExpansionTest {
     @Test
     fun prependingOtherTurns_keepsTurnIdentitiesSeparate() {
         val tail = listOf(assistant("a1"), tool("t1"), user("u2"), tool("t2"))
-        val previousKeys = reconcileTurnKeys(tail, emptyMap(), "s1")
+        val previousKeys = reconcileTurnKeys(tail, emptyMap())
         val full = listOf(user("u0"), tool("t0"), user("u1")) + tail
-        val nextKeys = reconcileTurnKeys(full, previousKeys, "s1")
+        val nextKeys = reconcileTurnKeys(full, previousKeys)
         assertEquals("turn:u0", nextKeys.getValue("u0"))
         assertEquals(previousKeys.getValue("a1"), nextKeys.getValue("u1"))
         assertEquals("turn:u2", nextKeys.getValue("u2"))
@@ -536,15 +536,19 @@ class ToolGroupExpansionTest {
     fun reloadingEvictedTurn_preservesItsHeaderAndExpansion() {
         val history = mutableMapOf<String, String>()
         val tail = listOf(assistant("a1"), tool("t1"))
-        history.putAll(reconcileTurnKeys(tail, history, "s1"))
-        val halfKey = history.getValue("a1")
         val full = listOf(user("u1")) + tail
-        history.putAll(reconcileTurnKeys(full, history, "s1"))
+        // 窗口先包含轮首：这一轮的 key 记进交接表
+        history.putAll(reconcileTurnKeys(full, history))
+        val halfKey = history.getValue("u1")
+        // 窗口滑开轮首、只剩这一轮的过程尾巴：块内消息仍认在同一个 key 上
+        val evicted = reconcileTurnKeys(tail, history)
+        history.putAll(evicted)
+        assertEquals(halfKey, evicted.getValue("a1"))
         val newer = listOf(user("u2"), tool("t2"))
-        history.putAll(reconcileTurnKeys(newer, history, "s1"))
+        history.putAll(reconcileTurnKeys(newer, history))
         val reloaded = full + newer
-        val keys = reconcileTurnKeys(reloaded, history, "s1")
-        // reconcile 的交接不变：轮首补进窗口后仍沿用半轮时期那一套 key。
+        val keys = reconcileTurnKeys(reloaded, history)
+        // reconcile 的交接不变：轮首装回窗口后仍是同一个 key。
         assertEquals(halfKey, keys.getValue("u1"))
         // 渲染层的轮头 key 取 turnKeys[u1]（= 半轮时期那一套），不再换成 turn:<轮首 id>：
         // 被窗口翻出去再装回来时，手动展开态仍按同一个 key 命中。
@@ -552,6 +556,35 @@ class ToolGroupExpansionTest {
             reloaded, emptyMap(), mapOf(halfKey to true), turnKeys = keys,
         ))
         assertTrue(rendered.first { it.turnHeader?.key == halfKey }.turnHeader!!.expanded)
+        assertEquals(rendered.size, rendered.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun noTurnWindow_doesNotHandOffSessionScopedHeadKey() {
+        // 整窗没有轮首（长工具循环里分页窗口落在某一轮中途）时，折叠头 key 只能用会话级常量——
+        // 它跨轮共用，写进交接表就会被后来的轮继承，两轮撞同一个轮头 key。
+        val keys = reconcileTurnKeys(listOf(tool("t1"), assistant("a2")), emptyMap())
+        assertTrue("整窗没有轮首时不往交接表写会话级 key", keys.isEmpty())
+        val rendered = buildChatItems(
+            listOf(tool("t1"), assistant("a2")), emptyMap(), sessionId = "s1", turnKeys = keys,
+        )
+        assertEquals("turn:head:session:s1", rendered.header().turnHeader!!.key)
+    }
+
+    @Test
+    fun twoHalfTurnsInOneWindow_neverShareHeaderKey() {
+        // 回归：两段「窗口落在某一轮中途」的过程尾巴先后被会话级 key 盖过，之后一个能装下两轮的
+        // 窗口会把两轮都继承成同一个轮头 key——LazyColumn 同 key，展开态也串台。
+        val history = mutableMapOf<String, String>()
+        history.putAll(reconcileTurnKeys(listOf(tool("t1"), tool("t2")), history))
+        history.putAll(reconcileTurnKeys(listOf(tool("t3"), tool("t4")), history))
+        val window = listOf(
+            user("u0"), tool("t1"), tool("t2"),
+            user("u5"), tool("t3"), tool("t4"),
+        )
+        val keys = reconcileTurnKeys(window, history)
+        val rendered = buildChatItems(window, emptyMap(), turnKeys = keys)
+        assertEquals("两轮各自成头", 2, rendered.count { it.turnHeader != null })
         assertEquals(rendered.size, rendered.map { it.key }.toSet().size)
     }
 

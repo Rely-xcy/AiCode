@@ -336,17 +336,18 @@ internal fun findChatMessageIndex(items: List<ChatRenderItem>, messageId: String
 internal fun reconcileTurnKeys(
     messages: List<AgentUIMessage>,
     previousKeys: Map<String, String>,
-    sessionId: String?,
 ): Map<String, String> = buildMap {
     val (leading, turns) = splitChatTurns(messages)
     if (leading.isNotEmpty()) {
+        // 块内已有身份就沿用；整窗连一个轮首都没有的那一帧干脆不写。渲染侧那一帧按会话取常量兜底，
+        // 而常量跨轮共用：写进交接表后，后来的轮会从块内消息把它继承过去，两个轮撞同一个轮头 key。
         val key = leading.asReversed().firstNotNullOfOrNull { previousKeys[it.id] }
-            ?: if (turns.isEmpty() && sessionId != null) {
-                "turn:head:session:$sessionId"
-            } else {
-                leadingHeadKey(leading.last())
-            }
-        leading.forEach { put(it.id, key) }
+        if (key != null) {
+            leading.forEach { put(it.id, key) }
+        } else if (turns.isNotEmpty()) {
+            val blockKey = leadingHeadKey(leading.last())
+            leading.forEach { put(it.id, blockKey) }
+        }
     }
     for (turn in turns) {
         // 分页补齐轮首时，沿用已显示的半轮标识，保留展开选择与列表锚点。
@@ -396,6 +397,7 @@ internal fun buildChatItems(
     if (leading.isNotEmpty()) {
         // 没有轮首时，分页窗口两端都可能随工具输出移动，只能用所属会话保持展开标识稳定；
         // 窗口里已有这一截的既有 key（reconcileTurnKeys 交接来的）时以它为准。
+        // 会话级常量只出现在这一帧的渲染里：交接表不写它，否则多个轮都会继承到同一个轮头 key。
         val headKey = turnKeys[leading.last().id] ?: if (turns.isEmpty() && sessionId != null) {
             "turn:head:session:$sessionId"
         } else {
@@ -522,11 +524,11 @@ internal fun buildChatItems(
 }
 
 /**
- * 保证 LazyColumn item key 全局唯一：库里出现重复消息 id（导入备份后出现过）时，
- * 同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
+ * 保证 LazyColumn item key 全局唯一：同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
+ * 这是兜底而非修复：重复可能来自轮头 key 复用（见 [reconcileTurnKeys]），也可能是别的上游脏 key。
  *
  * 不静默丢弃重复项：保留全部内容，只给后来者补一个后缀（同 key 的后续项用 `#dupN`），
- * 这样用户至少能看到内容、崩溃也不再发生；真正的数据问题留给导入侧修。
+ * 这样用户至少能看到内容、崩溃也不再发生；真正的重复留给上游修。
  */
 private fun List<ChatRenderItem>.withUniqueKeys(): List<ChatRenderItem> {
     val seen = HashSet<String>(size)
@@ -546,7 +548,7 @@ private fun List<ChatRenderItem>.withUniqueKeys(): List<ChatRenderItem> {
         }
     }
     if (hadDup) {
-        FileLogger.w("AIChatPanel", "聊天列表出现重复 item key（消息 id 重复），已加后缀兜住：共 ${out.size} 项")
+        FileLogger.w("AIChatPanel", "聊天列表出现重复 item key，已加后缀兜住：共 ${out.size} 项")
     }
     return out
 }
@@ -1066,7 +1068,7 @@ fun AIChatPanel(
     }
     val stableTurnKeys = remember(messages, currentSessionId, messagesReady) {
         if (messagesReady) {
-            reconcileTurnKeys(messages, turnKeyHistory, currentSessionId)
+            reconcileTurnKeys(messages, turnKeyHistory)
         } else {
             emptyMap()
         }
