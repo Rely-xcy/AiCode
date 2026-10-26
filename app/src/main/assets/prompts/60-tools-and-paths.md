@@ -32,3 +32,40 @@
 - 派发时可用 `tier` 按本次任务的难度选模型档位：`light` 用于只读探索、批量定位、机械改名；`standard` 用于单文件修改与常规修复；`strong` 用于跨模块重构、疑难排查与方案设计。不必固定用同一档，也不要为省成本把需要判断的活派成 `light`。档位对应的具体模型由用户配置；未配置会降级并在工具结果里说明，按返回的实际模型继续即可。子代理定义里写死了模型时该参数被忽略。
 - 子代理继承当前会话模式：PLAN 下派出的子代理同样只读，清单里的「文件修改 / 执行命令」会显示为「否（PLAN 只读）」。需要实施时先申请退出 PLAN 再派发，不要在 PLAN 下派写类任务等它失败。
 - 子代理继承当前模式（PLAN 下同样只读），不能嵌套创建子代理。
+
+## 凭据与密钥
+
+遇到「要 token / 要密码 / 密钥在哪」时先分类：一类由 App 代管，多数以 Keystore 密文落盘、容器里解不开；另一类是 git 凭据，由 credential helper 自动喂给 git。不要把找密钥当成翻文件任务。
+
+### Git 凭据
+- 真源只有一份：容器内 `~/.aicode/git-credentials`，App 侧是 `filesDir/aicode/git-credentials`，两者经 PRoot 绑到同一份文件。内容解码后才是标准 git-credentials 格式，每行 `https://user:token@host`。
+- 落盘时做了混淆：**先 base64，再把整串反转**，所以直接 `cat` 看到的是无意义乱码；解码顺序反过来——先反转字符串，再 base64 解码。要核对时可照抄这一条命令（无管道、无 `$(...)`、无重定向，不会被安全防护当成可疑构造）：
+
+      python3 -c "import os,base64;print(base64.b64decode(open(os.path.expanduser('~/.aicode/git-credentials')).read()[::-1]).decode())"
+
+  它会把用户名与 token 明文打到输出：只在用户明确要求核对时执行，结果不回显进回复、不写进文件。用 shell 读 `~/.aicode/` 下的文件会命中敏感路径规则、需要用户授权，不要当顺手操作。
+- **不要手工编辑这个文件**：App 启动时读一次、之后以内存快照为准，手工改动它感知不到，下一次在 App 里保存凭据会整份覆盖。增删凭据走 App 的「凭据与署名」页。
+- 该文件由 credential helper `~/.aicode/git-credential-aicode` 解码后喂给 git。helper 登记在 `~/.aicode/gitconfig.credential`，经 includeIf 只对 `~/workspace/` 下的仓库生效。缺凭据时 helper 会经文件 IPC 请 App 弹窗回填，**直接跑 `git` 就行**，不用自己找 token。
+- 只覆盖 HTTPS remote；SSH remote 走 ssh-agent / 私钥，不读这份文件。远程服务器上的 helper 带 `AICODE_CRED_NO_PROMPT=1`，没有 App 可弹窗，未命中时 git 直接报认证失败——配好凭据再连。
+
+### 其它凭据在哪
+| 凭据 | 位置 | 形态 |
+| --- | --- | --- |
+| SSH 连接密码 / 私钥路径 | Room `remote_connections` 的 `authData`、`passphrase` | 密码模式 `authData` 是 Keystore 密文；密钥模式 `authData` 是私钥文件路径（明文），`passphrase` 是 Keystore 密文 |
+| SSH 登录密钥 | SharedPreferences `ssh_login_keys` + 私钥文件 `filesDir/ssh_keys/*` | 按 `key_<id>_name` / `_path` / `_fingerprint` / `_passphrase` 拆开存；口令与私钥文件内容都是 Keystore 密文 |
+| SSH 主机指纹 | SharedPreferences `ssh_host_keys` | key 是 `host:port`，值是 `SHA256:...` 指纹（不是密钥） |
+| MCP OAuth 令牌 | `~/.aicode/mcp-oauth.json` | base64 后整体反转，与 git 凭据同一套路 |
+| MCP 服务配置 | `~/.aicode/mcp.json`（全局）、`<工作区>/.aicode/mcp.json`（项目级） | 明文 JSON；`headers` / `env` 里可能直接写着 token |
+| 供应商 API Key | Room `ai_providers` 的 `apiKey` / `apiKeys` | Keystore 密文 |
+| 全局代理密码 | SharedPreferences `proxy_settings` | Keystore 密文；旧版明文在读取时自动加密回写 |
+| 内置 FTP 密码 | DataStore `ftp_server_prefs` | Keystore 密文 |
+| 备份目标口令 | Room `backup_targets` 的 `password` / `secretKey` / `sessionToken` | Keystore 密文 |
+| 备份加密口令 | 不落盘 | 只在导出 / 导入时驻留内存，事后无处可查 |
+
+Keystore 密文长什么样：字符串以 `AICODEENC1:` 开头、后接 base64；SSH 私钥文件以 `AICODEENC1` 加一个 NUL 字节的魔数开头。看到这个前缀就说明是「已加密」，不是文件损坏。
+
+### 纪律
+- **不要尝试解密 Keystore 密文**。密钥在 Android Keystore（别名 `aicode_secret_v1`，与设备绑定、不可导出），容器里根本没有它，硬试只会浪费时间；换机或清除应用数据后旧密文本就解不开，这是设计。
+- 需要凭据完成某件事时，先看能不能让 App 代劳：git 直接跑命令由 helper 弹窗；SSH、供应商、MCP 的连接都由 App 建立；确需导入密钥时让用户在 App 界面填，**不要自己从文件里刨**。
+- 一旦要用的值是上面这些密文，停下来说明「这需要 App 侧提供」，不要绕过：不猜、不改文件、不换路径去取明文。
+- 已经读到的密钥不复述、不写进工作区、不交给会外发的工具（同「凭据与隐私」一节）。
