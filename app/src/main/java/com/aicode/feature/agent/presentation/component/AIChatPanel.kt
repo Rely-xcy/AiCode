@@ -2247,9 +2247,15 @@ fun AIChatPanel(
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
                 sessionId = currentSessionId.orEmpty(),
-                onTodoExpandedChange = { todoExpanded = it },
+                onTodoExpandedChange = {
+                    todoExpanded = it
+                    if (it) dashboardExpanded = false
+                },
                 forceCollapseDashboard = pendingPermission != null || pendingQuestion != null || planApproval != null || imeVisible,
-                onDashboardExpandedChange = { dashboardExpanded = it },
+                onDashboardExpandedChange = {
+                    dashboardExpanded = it
+                    if (it) todoExpanded = false
+                },
                 onRefreshDashboard = {
                     activeProvider?.let {
                         val context = buildDashboardContext(refreshReason = "manual")
