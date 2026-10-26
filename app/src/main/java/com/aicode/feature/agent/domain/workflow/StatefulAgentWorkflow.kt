@@ -404,7 +404,7 @@ class StatefulAgentWorkflow @Inject constructor(
                         keyRotator.markModelUnavailable(config.id, failedKey, config.effectiveModel)
                         val groupText = channelFailure.group?.let { "（group $it）" }.orEmpty()
                         throw AllKeysFailedException(
-                            "「${config.name}」当前 Key 所属分组$groupText没有模型 ${config.effectiveModel} 的可用渠道：" +
+                            "「${config.name}」当前 Key 所属分组${groupText}没有模型 ${config.effectiveModel} 的可用渠道：" +
                                 "该模型可能需要换一个分组的 Key。",
                             error
                         )
