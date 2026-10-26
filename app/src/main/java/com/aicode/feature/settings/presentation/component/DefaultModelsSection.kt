@@ -217,6 +217,8 @@ internal fun DefaultModelsSection(
             SubagentModelTier.entries.forEachIndexed { index, tier ->
                 if (index > 0) SettingsDivider()
                 val selection = subagentTierSelections[tier] ?: SubagentTierSelection()
+                // 同名模型可能同时存在于多个供应商：连供应商名一起显示，否则看不出这一档绑的是哪家的那份。
+                val boundProviderName = providers.firstOrNull { it.id == selection.providerId }?.name
                 SettingsRow(
                     icon = tierIcon(tier),
                     title = stringResource(tierTitleRes(tier)),
@@ -224,7 +226,9 @@ internal fun DefaultModelsSection(
                     trailing = {
                         Text(
                             text = if (selection.isConfigured) {
-                                selection.model
+                                boundProviderName?.let { name ->
+                                    stringResource(R.string.common_provider_with_model, name, selection.model)
+                                } ?: selection.model
                             } else {
                                 stringResource(R.string.settings_subagent_tier_unconfigured)
                             },

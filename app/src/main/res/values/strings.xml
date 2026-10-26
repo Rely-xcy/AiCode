@@ -17,7 +17,11 @@
     <string name="tool_subagent_tier_pinned">该子代理定义里已写死模型（%1$s），请求的「%2$s」档被忽略。</string>
     <string name="tool_subagent_tier_fallback">请求的「%1$s」档未配置或对应提供商不可用，已改用「%2$s」档（%3$s）。</string>
     <string name="tool_subagent_tier_unavailable">请求的「%1$s」档未配置或对应提供商不可用，该子代理将继承当前会话模型。</string>
+    <string name="tool_subagent_tier_default_applied">主代理未指定档位，已按用户在设置里配置的「%1$s」档使用模型「%2$s」。</string>
     <string name="tool_subagent_provider_unresolved">该子代理定义里的 provider「%1$s」未找到（未配置或名称不符），本次将用父会话提供商搭配定义模型「%2$s」，该组合可能无法调用。</string>
+    <string name="tool_subagent_provider_ambiguous">子代理「%1$s」锁定了模型「%2$s」，但没指定供应商，而多个已启用的供应商下都有这个同名模型（%3$s）。为避免用错供应商，本次未派发；请在该子代理定义里指定 provider 后重试。</string>
+    <string name="tool_subagent_pinned_provider_resolved">子代理「%1$s」只写了模型「%2$s」未指定供应商，已按唯一匹配绑定到供应商「%3$s」。</string>
+    <string name="tool_subagent_pinned_provider_unlisted">子代理「%1$s」只写了模型「%2$s」未指定供应商，且没有已启用的供应商声明提供该模型；本次沿用父会话供应商，可能无法调用。</string>
     <!-- 子代理模型档位 -->
     <string name="settings_subagent_tiers_header">子代理模型档位</string>
     <string name="settings_subagent_tier_light">轻量</string>
@@ -408,6 +412,8 @@
     <string name="common_model">模型</string>
     <!-- 档位名后附接口值，如「最高（max）」，便于对照模型文档与报错文案。 -->
     <string name="common_label_with_api">%1$s（%2$s）</string>
+    <!-- 供应商 + 模型同显：同名模型可能存在于多个供应商，只写模型名看不出绑的是哪家的那份。 -->
+    <string name="common_provider_with_model">%1$s · %2$s</string>
     <string name="common_add">添加</string>
     <string name="credential_add">添加凭据</string>
     <string name="common_username">用户名</string>

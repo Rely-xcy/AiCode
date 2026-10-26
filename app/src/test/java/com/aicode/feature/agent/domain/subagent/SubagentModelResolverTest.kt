@@ -28,22 +28,54 @@ class SubagentModelResolverTest {
         definitionModel: String? = null,
         definitionProviderId: String? = null,
         selections: Map<SubagentModelTier, SubagentTierSelection> = allConfigured,
-        unavailableProviders: Set<String> = emptySet()
+        unavailableProviders: Set<String> = emptySet(),
+        unlistedModels: Set<Pair<String, String>> = emptySet()
     ) = SubagentModelResolver.resolve(
         requestedTier = requestedTier,
         definitionModel = definitionModel,
         definitionProviderId = definitionProviderId,
         selections = selections,
-        isProviderAvailable = { it !in unavailableProviders }
+        isProviderAvailable = { it !in unavailableProviders },
+        isModelListed = { providerId, model -> (providerId to model) !in unlistedModels }
     )
 
+    /** 一档都没配时仍然继承父会话（不得因新逻辑把未配置的档位用起来）。 */
     @Test
-    fun noTierRequested_inheritsParent() {
-        val resolved = resolve(null)
+    fun noTierRequestedAndNoTierConfigured_inheritsParent() {
+        val resolved = resolve(requestedTier = null, selections = emptyMap())
 
         assertTrue(resolved.inheritsParent)
         assertNull(resolved.tier)
         assertNull(resolved.fallback)
+    }
+
+    /**
+     * 主代理没传 tier（最常见的情况）时不能直接继承父会话：
+     * 用户在设置里给子代理配的「均衡」档必须生效，否则「改了模型还是继承会话」。
+     */
+    @Test
+    fun noTierRequested_usesConfiguredStandardTier() {
+        val resolved = resolve(requestedTier = null)
+
+        assertEquals("prov-std", resolved.providerId)
+        assertEquals("balanced-model", resolved.model)
+        assertEquals(SubagentModelTier.STANDARD, resolved.tier)
+        assertEquals(SubagentModelFallback.DEFAULT_TIER_APPLIED, resolved.fallback)
+    }
+
+    /** 「均衡」档没配时才回落到继承：主代理不传档位不等于用户可以接受沉默退化。 */
+    @Test
+    fun noTierRequestedWithoutStandardTier_inheritsParent() {
+        val resolved = resolve(
+            requestedTier = null,
+            selections = mapOf(
+                SubagentModelTier.LIGHT to configuredLight,
+                SubagentModelTier.STRONG to configuredStrong
+            )
+        )
+
+        assertTrue(resolved.inheritsParent)
+        assertNull(resolved.tier)
     }
 
     @Test
@@ -152,5 +184,92 @@ class SubagentModelResolverTest {
         assertNull(SubagentModelTier.fromToken("turbo"))
         assertNull(SubagentModelTier.fromToken(""))
         assertNull(SubagentModelTier.fromToken(null))
+    }
+
+    // ------------------------------------------------- 同名模型：档位不能串供应商
+
+    /**
+     * 两个供应商有同名模型时，档位选的是哪家就必须用哪家。
+     *
+     * 这里不能用「模型名去重」的写法偷懒：同名模型是两个不同的可计费端点，
+     * 用错供应商就是拿别家的额度和计费跑任务。
+     */
+    @Test
+    fun sameModelNameInTwoProviders_keepsTheSelectedProvider() {
+        val relay = SubagentTierSelection("prov-relay", "gpt-5.6-sol")
+        val resolved = resolve(
+            requestedTier = SubagentModelTier.STRONG,
+            selections = mapOf(
+                SubagentModelTier.STRONG to relay,
+                SubagentModelTier.STANDARD to SubagentTierSelection("prov-official", "gpt-5.6-sol")
+            )
+        )
+
+        assertEquals("prov-relay", resolved.providerId)
+        assertEquals("gpt-5.6-sol", resolved.model)
+        assertNull(resolved.fallback)
+    }
+
+    /** 档位绑定的模型不在该供应商的模型列表里：运行时仍会回退到默认供应商，所以按不可用降级。 */
+    @Test
+    fun tierModelMissingFromProviderList_fallsBackExplicitly() {
+        val resolved = resolve(
+            requestedTier = SubagentModelTier.STRONG,
+            unlistedModels = setOf("prov-strong" to "strong-model")
+        )
+
+        assertEquals("balanced-model", resolved.model)
+        assertEquals(SubagentModelTier.STANDARD, resolved.tier)
+        assertEquals(SubagentModelFallback.TIER_UNAVAILABLE, resolved.fallback)
+    }
+
+    // ------------------------------------------------- 定义锁定模型的供应商归属
+
+    @Test
+    fun pinnedModelProvider_uniqueOwnerIsResolved() {
+        val resolution = SubagentPinnedModelProvider.resolve(
+            model = "gpt-5.6-sol",
+            providerModels = linkedMapOf(
+                "prov-official" to listOf("gpt-5.6-sol"),
+                "prov-relay" to listOf("other-model")
+            )
+        )
+
+        assertEquals(PinnedModelProvider.Unique("prov-official"), resolution)
+    }
+
+    /** 同名模型同时存在于两家：不得挑第一个，必须让用户明确指定。 */
+    @Test
+    fun pinnedModelProvider_sameNameInTwoProvidersIsAmbiguous() {
+        val resolution = SubagentPinnedModelProvider.resolve(
+            model = "gpt-5.6-sol",
+            providerModels = linkedMapOf(
+                "prov-official" to listOf("gpt-5.6-sol"),
+                "prov-relay" to listOf("gpt-5.6-sol")
+            )
+        )
+
+        assertEquals(PinnedModelProvider.Ambiguous(listOf("prov-official", "prov-relay")), resolution)
+    }
+
+    @Test
+    fun pinnedModelProvider_unknownModelIsUnlisted() {
+        val resolution = SubagentPinnedModelProvider.resolve(
+            model = "gpt-5.6-sol",
+            providerModels = linkedMapOf("prov-official" to listOf("gpt-5.1"))
+        )
+
+        assertEquals(PinnedModelProvider.Unlisted, resolution)
+    }
+
+    /** 只做精确等值：运行时也是精确比对模型列表，忽略大小写绑上去照样会被判失效。 */
+    @Test
+    fun pinnedModelProvider_matchIsExact() {
+        val resolution = SubagentPinnedModelProvider.resolve(
+            model = "gpt-5.6-sol",
+            providerModels = linkedMapOf("prov-relay" to listOf("GPT-5.6-SOL"))
+        )
+
+        assertEquals(PinnedModelProvider.Unlisted, resolution)
     }
 }

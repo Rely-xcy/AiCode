@@ -47,7 +47,8 @@ enum class InjectPart(val token: String) {
  *
  * @param name 唯一标识，`task(agent="<name>")` 用它派发
  * @param description 何时该派这个子代理，注入主代理提示词供其选择
- * @param providerId 绑定的 provider id；null 表示继承父会话
+ * @param providerId 绑定的 provider id；null 时按模型名在可用供应商里找唯一提供者，多家都有同名模型
+ *   会被拒绝派发（宁可报错也不替用户挑一个），没有任何供应商声明提供时才继承父会话
  * @param model 绑定的模型名；null 表示继承父会话
  * @param reasoningEffort 思考强度（low/medium/high）；null 表示继承父会话
  * @param mode 运行模式（build/plan/auto）；null 表示继承父会话

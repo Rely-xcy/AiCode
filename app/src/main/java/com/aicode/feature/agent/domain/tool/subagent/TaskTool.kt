@@ -18,9 +18,11 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEvent
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.subagent.ResolvedSubagentModel
+import com.aicode.feature.agent.domain.subagent.PinnedModelProvider
 import com.aicode.feature.agent.domain.subagent.SubagentModelFallback
 import com.aicode.feature.agent.domain.subagent.SubagentModelResolver
 import com.aicode.feature.agent.domain.subagent.SubagentModelTier
+import com.aicode.feature.agent.domain.subagent.SubagentPinnedModelProvider
 import com.aicode.feature.agent.domain.subagent.SubagentTierSelection
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
@@ -93,7 +95,7 @@ class TaskTool @Inject constructor(
         }
     }
 
-    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列出。子代理拥有独立上下文，按所选代理的工具集工作，不能嵌套创建子代理；全局最多同时运行 5 个（所有会话共享名额）。任务完成后会通知主会话，无需轮询；运行中也可能主动发消息。用 send 可追加指令或继续追问已完成的子代理。创建时可用 tier 按任务难度选择模型档位（light 只读探索与机械活 / standard 单文件修改与常规修复 / strong 跨模块重构与疑难排查）；档位是否可用取决于用户在设置里的配置，未配置时按继承处理。"
+    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列出。子代理拥有独立上下文，按所选代理的工具集工作，不能嵌套创建子代理；全局最多同时运行 5 个（所有会话共享名额）。任务完成后会通知主会话，无需轮询；运行中也可能主动发消息。用 send 可追加指令或继续追问已完成的子代理。创建时可用 tier 按任务难度选择模型档位（light 只读探索与机械活 / standard 单文件修改与常规修复 / strong 跨模块重构与疑难排查）；省略 tier 时按用户在设置里配置的「均衡」档，一档都没配才继承父会话。"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
@@ -129,7 +131,7 @@ class TaskTool @Inject constructor(
         "tier" to ToolParameter(
             name = "tier",
             type = ParameterType.STRING,
-            description = "模型档位（create 可选）：light（只读探索、批量定位、机械改名）/ standard（单文件修改、常规修复）/ strong（跨模块重构、疑难排查、方案设计）。按本次任务的难度选，不必固定用同一个档位。档位对应的具体模型由用户在设置里配置；未配置或对应提供商不可用时会自动降级并在结果里说明。子代理定义里写死了 model 时该参数被忽略。",
+            description = "模型档位（create 可选）：light（只读探索、批量定位、机械改名）/ standard（单文件修改、常规修复）/ strong（跨模块重构、疑难排查、方案设计）。按本次任务的难度选，不必固定用同一个档位。档位对应的具体模型由用户在设置里配置；省略时按「standard」档，未配置或对应供应商不可用时会自动降级并在结果里说明。子代理定义里写死了 model 时该参数被忽略。",
             required = false,
             enum = SubagentModelTier.entries.map { it.apiValue }
         ),
@@ -295,6 +297,48 @@ class TaskTool @Inject constructor(
             definitions[spec] = def
         }
 
+        // 批量创建共用的快照：提供商与三档配置只冷读一次，不随任务数放大。
+        // 放在名额预占之前：「定义只锁模型没锁供应商」的歧义要在占位前判掉，否则还得回滚名额。
+        val allProviders = runCatching { aiProviderRepository.getAllProviders().first() }.getOrDefault(emptyList())
+        // 只有「已启用 + 已填 Key」的供应商能真正跑请求，其余的运行时会被回退到全局默认供应商，
+        // 同名模型就被悄悄换成别家那份。这里先排除，让降级走「档位不可用」的明示路径。
+        val usableProviders = allProviders.filter { it.isEnabled && it.hasUsableApiKey }
+        val usableProviderIds = usableProviders.map { it.id }.toSet()
+        val usableProviderModels = usableProviders.associate { it.id to it.models }
+        val tierSelections = runCatching { subagentTierSettings.snapshot() }.getOrDefault(emptyMap())
+        val matchProviderId: (String?) -> String? = { raw ->
+            if (raw.isNullOrBlank()) null
+            else allProviders.firstOrNull { it.id == raw }?.id
+                ?: allProviders.firstOrNull { it.name.equals(raw, ignoreCase = true) }?.id
+        }
+
+        // 定义只写了模型、没写供应商时，按「哪个可用供应商声明提供这个模型」定位：
+        // 唯一命中才绑定；多家命中直接拒绝派发，绝不替用户在两个同名模型里挑一个。
+        val pinnedProviderIds = mutableMapOf<SubagentTaskSpec, String>()
+        for (spec in specs) {
+            val definition = definitions[spec] ?: continue
+            val pinnedModel = definition.model?.takeIf { it.isNotBlank() } ?: continue
+            if (!definition.providerId.isNullOrBlank()) continue
+            when (val resolution = SubagentPinnedModelProvider.resolve(pinnedModel, usableProviderModels)) {
+                is PinnedModelProvider.Unique -> pinnedProviderIds[spec] = resolution.providerId
+                is PinnedModelProvider.Ambiguous -> {
+                    val names = resolution.providerIds.map { id ->
+                        allProviders.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() } ?: id
+                    }
+                    return ToolResult.Error(
+                        appContext.getString(
+                            R.string.tool_subagent_provider_ambiguous,
+                            definition.name,
+                            pinnedModel,
+                            names.joinToString(", ")
+                        ),
+                        "SUBAGENT_PROVIDER_AMBIGUOUS"
+                    )
+                }
+                PinnedModelProvider.Unlisted -> Unit
+            }
+        }
+
         // 并发上限：检查与占位在同一锁内原子完成。同一批工具是并行执行的，
         // 「先读计数再创建」的写法会让并行的 task(create) 双双通过检查后超额创建。
         if (!eventBus.tryReserveSlots(specs.size)) {
@@ -303,16 +347,6 @@ class TaskTool @Inject constructor(
                 "子代理已达上限（全局最多 ${SubAgentEventBus.MAX_RUNNING} 个同时运行，当前已有 $currentRunning 个在运行），无法再同时派发 ${specs.size} 个，请先等待部分完成或用 stop 停止后再创建",
                 "MAX_SUBAGENTS_REACHED"
             )
-        }
-
-        // 批量创建共用的快照：提供商与三档配置只冷读一次，不随任务数放大
-        val allProviders = runCatching { aiProviderRepository.getAllProviders().first() }.getOrDefault(emptyList())
-        val enabledProviderIds = allProviders.filter { it.isEnabled }.map { it.id }.toSet()
-        val tierSelections = runCatching { subagentTierSettings.snapshot() }.getOrDefault(emptyMap())
-        val matchProviderId: (String?) -> String? = { raw ->
-            if (raw.isNullOrBlank()) null
-            else allProviders.firstOrNull { it.id == raw }?.id
-                ?: allProviders.firstOrNull { it.name.equals(raw, ignoreCase = true) }?.id
         }
 
         // 批量创建会话并启动
@@ -326,12 +360,14 @@ class TaskTool @Inject constructor(
             // 否则子代理已经启动才收到冲突，只能去收拾跑了一半的残局。
             val prepared = specs.map { spec ->
                 val definition = definitions[spec]
-                val definitionProviderId = matchProviderId(definition?.providerId)
+                // 定义里没写 provider 时用「唯一命中」的供应商；歧义已在预检查里拒掉。
+                val definitionProviderId = pinnedProviderIds[spec] ?: matchProviderId(definition?.providerId)
                 val modelBinding = resolveModel(
                     args = spec.rawArgs,
                     definition = definition,
                     definitionProviderId = definitionProviderId,
-                    enabledProviderIds = enabledProviderIds,
+                    usableProviderIds = usableProviderIds,
+                    usableProviderModels = usableProviderModels,
                     tierSelections = tierSelections
                 )
                 PreparedSubagent(
@@ -413,6 +449,28 @@ class TaskTool @Inject constructor(
                             )
                         )
                     }
+                    // 定义只写模型没写供应商：要么已按唯一命中绑定，要么根本没有供应商声明提供它。
+                    // 两种都说清，否则用户会以为用的是自己在别家选好的那份同名模型。
+                    val pinnedModel = definition?.model?.takeIf { it.isNotBlank() }
+                    if (definition != null && pinnedModel != null && definition.providerId.isNullOrBlank()) {
+                        val boundName = allProviders.firstOrNull { it.id == definitionProviderId }?.name
+                        add(
+                            if (boundName != null) {
+                                appContext.getString(
+                                    R.string.tool_subagent_pinned_provider_resolved,
+                                    definition.name,
+                                    pinnedModel,
+                                    boundName
+                                )
+                            } else {
+                                appContext.getString(
+                                    R.string.tool_subagent_pinned_provider_unlisted,
+                                    definition.name,
+                                    pinnedModel
+                                )
+                            }
+                        )
+                    }
                     if (writeCapped) add(appContext.getString(R.string.tool_subagent_plan_readonly_warning))
                     describeModelFallback(modelBinding)?.let { add(it) }
                 }
@@ -479,7 +537,8 @@ class TaskTool @Inject constructor(
         args: Map<String, JsonElement>,
         definition: AgentDefinition?,
         definitionProviderId: String?,
-        enabledProviderIds: Set<String>,
+        usableProviderIds: Set<String>,
+        usableProviderModels: Map<String, List<String>>,
         tierSelections: Map<SubagentModelTier, SubagentTierSelection>
     ): ResolvedSubagentModel {
         val requestedTier = SubagentModelTier.fromToken(
@@ -490,7 +549,12 @@ class TaskTool @Inject constructor(
             definitionModel = definition?.model,
             definitionProviderId = definitionProviderId,
             selections = tierSelections,
-            isProviderAvailable = { id -> id in enabledProviderIds }
+            isProviderAvailable = { id -> id in usableProviderIds },
+            // 模型不在该供应商列表里就当作不可用：绑上去运行时也会失效并回退全局默认供应商，
+            // 那正是「选了中转站的同名模型却跑成官方」的现场。
+            isModelListed = { providerId, model ->
+                usableProviderModels[providerId]?.contains(model) == true
+            }
         )
     }
 
@@ -498,24 +562,34 @@ class TaskTool @Inject constructor(
      * 档位没按请求生效时给主代理的解释。Claude Code 同款做法：不隐藏，讲清请求与实际，
      * 免得主代理以为换了模型还在等它的效果。
      */
-    private fun describeModelFallback(binding: ResolvedSubagentModel): String? {
-        val requested = binding.requestedTier ?: return null
-        val requestedLabel = tierLabel(requested)
-        return when (binding.fallback) {
-            SubagentModelFallback.DEFINITION_PINNED -> appContext.getString(
+    private fun describeModelFallback(binding: ResolvedSubagentModel): String? = when (binding.fallback) {
+        null -> null
+        // 主代理没指定档位、按用户配置的「均衡」档执行：这种情形没有 requestedTier，得单独说。
+        SubagentModelFallback.DEFAULT_TIER_APPLIED -> appContext.getString(
+            R.string.tool_subagent_tier_default_applied,
+            tierLabel(binding.tier ?: SubagentModelTier.STANDARD),
+            binding.model ?: "inherit"
+        )
+        SubagentModelFallback.DEFINITION_PINNED -> binding.requestedTier?.let { requested ->
+            appContext.getString(
                 R.string.tool_subagent_tier_pinned,
                 binding.model ?: "inherit",
-                requestedLabel
+                tierLabel(requested)
             )
-            SubagentModelFallback.TIER_UNAVAILABLE -> binding.tier?.let { applied ->
-                appContext.getString(
+        }
+        SubagentModelFallback.TIER_UNAVAILABLE -> {
+            val requested = binding.requestedTier
+            val applied = binding.tier
+            when {
+                requested == null -> null
+                applied != null -> appContext.getString(
                     R.string.tool_subagent_tier_fallback,
-                    requestedLabel,
+                    tierLabel(requested),
                     tierLabel(applied),
                     binding.model ?: "inherit"
                 )
-            } ?: appContext.getString(R.string.tool_subagent_tier_unavailable, requestedLabel)
-            null -> null
+                else -> appContext.getString(R.string.tool_subagent_tier_unavailable, tierLabel(requested))
+            }
         }
     }
 

@@ -131,6 +131,11 @@ internal fun SubAgentEditorScreen(
         }
     }
 
+    // 同名模型可能同时存在于多个供应商：把绑定的供应商一起显示，否则看不出选的是哪家的那份。
+    val selectedProviderName = remember(providerId, providers) {
+        providers.firstOrNull { it.id == providerId }?.name
+    }
+
     Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
@@ -255,7 +260,15 @@ internal fun SubAgentEditorScreen(
                 SettingsRow(
                     title = stringResource(R.string.subagent_model),
                     onClick = { showModelSheet = true },
-                    trailing = { ValueText(model.ifBlank { stringResource(R.string.subagent_inherit_parent) }) }
+                    trailing = {
+                        ValueText(
+                            model.takeIf { it.isNotBlank() }?.let { modelName ->
+                                selectedProviderName?.let { providerName ->
+                                    stringResource(R.string.common_provider_with_model, providerName, modelName)
+                                } ?: modelName
+                            } ?: stringResource(R.string.subagent_inherit_parent)
+                        )
+                    }
                 )
                 SettingsDivider()
                 SettingsRow(

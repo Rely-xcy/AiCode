@@ -17,7 +17,11 @@
     <string name="tool_subagent_tier_pinned">This subagent pins its model (%1$s), so the requested "%2$s" tier was ignored.</string>
     <string name="tool_subagent_tier_fallback">The requested "%1$s" tier is not configured or its provider is unavailable; using the "%2$s" tier (%3$s) instead.</string>
     <string name="tool_subagent_tier_unavailable">The requested "%1$s" tier is not configured or its provider is unavailable; this subagent will inherit the current session model.</string>
+    <string name="tool_subagent_tier_default_applied">No tier was requested; the model configured for the user's "%1$s" tier is used ("%2$s").</string>
     <string name="tool_subagent_provider_unresolved">The provider "%1$s" in this subagent definition was not found (missing or name mismatch); the parent session provider will be combined with the definition model "%2$s", which may not be callable.</string>
+    <string name="tool_subagent_provider_ambiguous">The subagent "%1$s" pins model "%2$s" but no provider, and several enabled providers offer a model with that same name (%3$s). Nothing was dispatched, to avoid using the wrong provider; set `provider` in the subagent definition and retry.</string>
+    <string name="tool_subagent_pinned_provider_resolved">The subagent "%1$s" sets model "%2$s" without a provider; it was bound to the only provider offering it ("%3$s").</string>
+    <string name="tool_subagent_pinned_provider_unlisted">The subagent "%1$s" sets model "%2$s" without a provider, and no enabled provider lists that model; the parent session provider will be used, which may not be callable.</string>
     <!-- Subagent model tiers -->
     <string name="settings_subagent_tiers_header">Subagent model tiers</string>
     <string name="settings_subagent_tier_light">Light</string>
@@ -408,6 +412,8 @@
     <string name="common_model">Model</string>
     <!-- Level name followed by its API value, e.g. "Max (max)", to match model docs and error text. -->
     <string name="common_label_with_api">%1$s (%2$s)</string>
+    <!-- Provider + model: the same model name can exist under several providers. -->
+    <string name="common_provider_with_model">%1$s · %2$s</string>
     <string name="common_add">Add</string>
     <string name="credential_add">Add Credential</string>
     <string name="common_username">Username</string>
