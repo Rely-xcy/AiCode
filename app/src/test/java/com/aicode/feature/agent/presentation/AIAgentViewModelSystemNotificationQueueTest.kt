@@ -167,8 +167,12 @@ class AIAgentViewModelSystemNotificationQueueTest {
         sessionUseCase = mockk(relaxed = true),
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
-        terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
-        terminalSessionProvider = mockk(relaxed = true) { every { tabFinishedEvents } returns tabFinishedEvents },
+        terminalSessionManager = mockk(relaxed = true).also { m ->
+            every { m.tabFinishedEvents } returns MutableSharedFlow()
+        },
+        terminalSessionProvider = mockk(relaxed = true).also { m ->
+            every { m.tabFinishedEvents } returns tabFinishedEvents
+        },
         slashCommandRegistry = mockk(relaxed = true) {
             // init 里 _currentWorkspace.collect 会立刻触发 refresh()：真实实现会扫技能目录。
             coEvery { refresh() } just runs
