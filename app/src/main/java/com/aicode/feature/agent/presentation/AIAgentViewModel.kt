@@ -1741,6 +1741,10 @@ class AIAgentViewModel @Inject constructor(
      * （[AgentNotificationKind.USER_MESSAGE] 例外：它是用户本人的输入，改为作为一条用户消息在工具结果
      * 之后进上下文）；空闲则以一条消息触发新一轮。后台任务完成、子代理结束、代理间消息、模式切换、
      * 用户插话共用此分发，避免各处重复判断忙碌/空闲。
+     *
+     * 下面的忙碌判断与真正执行之间隔着一次协程派发：期间用户可能刚发出消息、或会话刚被启动。故投递
+     * 系统通知走 [deliverSystemNotifications]，由 [enqueueAgentRequest] 的 systemNotifications 分支
+     * 兜住这段窗口——否则通知会被当成用户待发消息塞进「待发送」面板。
      */
     private fun deliverSystemEvent(sessionId: String, item: PendingNotification) {
         if (sessionJobs[sessionId]?.isActive == true) {
@@ -1754,14 +1758,41 @@ class AIAgentViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            enqueueAgentRequest(
-                request = AgentNotificationFormatter.buildMessage(listOf(item)),
-                projectRoot = _currentWorkspace.value,
-                targetSessionId = sessionId,
-                // 用户插话按界面预生成的 id 落库，乐观气泡与落库行才是同一条；其他类型不带这个 id。
-                clientMessageId = item.clientMessageId
-            )
+            // 用户插话是用户本人的输入：按用户消息投递（带界面预生成的行 id），忙碌时照旧进待发送面板。
+            if (item.kind == AgentNotificationKind.USER_MESSAGE) {
+                enqueueAgentRequest(
+                    request = AgentNotificationFormatter.buildMessage(listOf(item)),
+                    projectRoot = _currentWorkspace.value,
+                    targetSessionId = sessionId,
+                    clientMessageId = item.clientMessageId
+                )
+            } else {
+                deliverSystemNotifications(sessionId, listOf(item))
+            }
         }
+    }
+
+    /**
+     * 投递一批系统通知（后台任务完成、子代理结束、代理间消息、模式切换）。
+     *
+     * 与用户消息的唯一区别在忙碌时：回投 [agentNotificationCenter]，绝不进「待发送」面板——那个面板
+     * 只承载用户消息。空闲时照常以一条消息起一轮。已在中心里的条目（[flushPendingNotifications] 的
+     * peek 结果）先 ack 认领：回投会分配新序号，不摘除旧条目就会两条并存，同一条通知投递两次。
+     */
+    private fun deliverSystemNotifications(sessionId: String, items: List<PendingNotification>) {
+        if (items.isEmpty()) return
+        agentNotificationCenter.ack(sessionId, items.map { it.seq }.filter { it > 0 })
+        FileLogger.d(
+            TAG,
+            "deliverSystemNotifications: sid=$sessionId count=${items.size} kinds=${items.map { it.kind }} " +
+                "busy=${sessionJobs[sessionId]?.isActive == true || sessionId in _runningCommandSessions.value}"
+        )
+        enqueueAgentRequest(
+            request = AgentNotificationFormatter.buildMessage(items),
+            projectRoot = _currentWorkspace.value,
+            targetSessionId = sessionId,
+            systemNotifications = items
+        )
     }
 
     private fun TabFinishedEvent.toPendingNotification() = PendingNotification(
@@ -1781,6 +1812,9 @@ class AIAgentViewModel @Inject constructor(
      * 用户插话不参与合并：混在系统事件里会被统一挂上「[系统通知 - 非用户输入]」围栏，用户亲口说的话
      * 在界面与模型两侧一起降级成提示条。故逐条按用户消息投递（带原 clientMessageId）：第一条起一轮，
      * 余下的在忙碌判定下进队列、由队列面板承载，照样不丢。
+     *
+     * 系统通知一律交 [deliverSystemNotifications]：上面第一条插话已经把会话跑起来了，此刻必然忙碌，
+     * 直接调 [enqueueAgentRequest] 会让通知落进「待发送」面板冒充用户的待发消息。
      */
     private fun flushPendingNotifications(sessionId: String) {
         if (sessionJobs[sessionId]?.isActive == true || sessionId in _runningCommandSessions.value) return
@@ -1800,15 +1834,10 @@ class AIAgentViewModel @Inject constructor(
                     clientMessageId = item.clientMessageId
                 )
             }
-            // 已取出的条目一律 ack：留着会被下一轮 finally 重复 flush，同一个通知投递两次。
-            agentNotificationCenter.ack(sessionId, items.map { it.seq })
-            if (systemItems.isNotEmpty()) {
-                enqueueAgentRequest(
-                    request = AgentNotificationFormatter.buildMessage(systemItems),
-                    projectRoot = _currentWorkspace.value,
-                    targetSessionId = sessionId
-                )
-            }
+            // 已取出的插话一律 ack：留着会被下一轮 finally 重复 flush，同一个通知投递两次。
+            // 系统通知的 ack 交给 deliverSystemNotifications（先认领再回投/直发），不在这里一并摘除。
+            agentNotificationCenter.ack(sessionId, interjections.map { it.seq })
+            deliverSystemNotifications(sessionId, systemItems)
         }
     }
 
@@ -1824,12 +1853,27 @@ class AIAgentViewModel @Inject constructor(
         persistUserMessage: Boolean = true,
         targetSessionId: String? = null,
         /** 调用方（UI）预生成的用户消息行 id：无论本条走直发还是先入队，落库行的主键都用它。 */
-        clientMessageId: String? = null
+        clientMessageId: String? = null,
+        /**
+         * 非 null 表示本条请求投递的是系统通知（[PendingNotification] 原文，而非用户消息）：
+         * 会话忙碌时回投 [agentNotificationCenter]，不进「待发送」面板——那个面板只承载用户消息。
+         * 为空表示用户消息，忙碌时照旧入队等待。
+         */
+        systemNotifications: List<PendingNotification>? = null
     ) {
         val sid = targetSessionId ?: _currentSessionId.value
         val isCurrentRunning = sid != null &&
             (sessionJobs[sid]?.isActive == true || sid in _runningCommandSessions.value)
         if (isCurrentRunning) {
+            if (systemNotifications != null) {
+                systemNotifications.forEach { agentNotificationCenter.enqueue(sid, it) }
+                FileLogger.d(
+                    TAG,
+                    "enqueueAgentRequest: sid=$sid 系统通知回投通知中心 count=${systemNotifications.size} " +
+                        "pending=${agentNotificationCenter.pendingCount(sid)}"
+                )
+                return
+            }
             val req = QueuedRequest(
                 id = UUID.randomUUID().toString(),
                 request = request,
