@@ -10,6 +10,8 @@ import com.aicode.feature.agent.domain.notification.AgentNotificationKind
 import com.aicode.feature.agent.domain.notification.NotificationOutcome
 import com.aicode.feature.agent.domain.notification.PendingNotification
 import com.aicode.feature.terminal.domain.TabFinishedEvent
+import com.aicode.feature.terminal.domain.TerminalSessionManager
+import com.aicode.feature.terminal.domain.TerminalSessionProvider
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import io.mockk.coEvery
 import io.mockk.every
@@ -167,10 +169,10 @@ class AIAgentViewModelSystemNotificationQueueTest {
         sessionUseCase = mockk(relaxed = true),
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
-        terminalSessionManager = mockk(relaxed = true).also { m ->
+        terminalSessionManager = mockk<TerminalSessionManager>(relaxed = true).also { m ->
             every { m.tabFinishedEvents } returns MutableSharedFlow()
         },
-        terminalSessionProvider = mockk(relaxed = true).also { m ->
+        terminalSessionProvider = mockk<TerminalSessionProvider>(relaxed = true).also { m ->
             every { m.tabFinishedEvents } returns tabFinishedEvents
         },
         slashCommandRegistry = mockk(relaxed = true) {
