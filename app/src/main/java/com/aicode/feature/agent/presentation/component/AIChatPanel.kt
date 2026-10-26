@@ -336,17 +336,18 @@ internal fun findChatMessageIndex(items: List<ChatRenderItem>, messageId: String
 internal fun reconcileTurnKeys(
     messages: List<AgentUIMessage>,
     previousKeys: Map<String, String>,
-    sessionId: String?,
 ): Map<String, String> = buildMap {
     val (leading, turns) = splitChatTurns(messages)
     if (leading.isNotEmpty()) {
+        // 块内已有身份就沿用；整窗连一个轮首都没有的那一帧干脆不写。渲染侧那一帧按会话取常量兜底，
+        // 而常量跨轮共用：写进交接表后，后来的轮会从块内消息把它继承过去，两个轮撞同一个轮头 key。
         val key = leading.asReversed().firstNotNullOfOrNull { previousKeys[it.id] }
-            ?: if (turns.isEmpty() && sessionId != null) {
-                "turn:head:session:$sessionId"
-            } else {
-                leadingHeadKey(leading.last())
-            }
-        leading.forEach { put(it.id, key) }
+        if (key != null) {
+            leading.forEach { put(it.id, key) }
+        } else if (turns.isNotEmpty()) {
+            val blockKey = leadingHeadKey(leading.last())
+            leading.forEach { put(it.id, blockKey) }
+        }
     }
     for (turn in turns) {
         // 分页补齐轮首时，沿用已显示的半轮标识，保留展开选择与列表锚点。
@@ -396,6 +397,7 @@ internal fun buildChatItems(
     if (leading.isNotEmpty()) {
         // 没有轮首时，分页窗口两端都可能随工具输出移动，只能用所属会话保持展开标识稳定；
         // 窗口里已有这一截的既有 key（reconcileTurnKeys 交接来的）时以它为准。
+        // 会话级常量只出现在这一帧的渲染里：交接表不写它，否则多个轮都会继承到同一个轮头 key。
         val headKey = turnKeys[leading.last().id] ?: if (turns.isEmpty() && sessionId != null) {
             "turn:head:session:$sessionId"
         } else {
@@ -522,11 +524,11 @@ internal fun buildChatItems(
 }
 
 /**
- * 保证 LazyColumn item key 全局唯一：库里出现重复消息 id（导入备份后出现过）时，
- * 同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
+ * 保证 LazyColumn item key 全局唯一：同 key 会让 Compose 直接抛 “Key ... was already used” 而整页崩。
+ * 这是兜底而非修复：重复可能来自轮头 key 复用（见 [reconcileTurnKeys]），也可能是别的上游脏 key。
  *
  * 不静默丢弃重复项：保留全部内容，只给后来者补一个后缀（同 key 的后续项用 `#dupN`），
- * 这样用户至少能看到内容、崩溃也不再发生；真正的数据问题留给导入侧修。
+ * 这样用户至少能看到内容、崩溃也不再发生；真正的重复留给上游修。
  */
 private fun List<ChatRenderItem>.withUniqueKeys(): List<ChatRenderItem> {
     val seen = HashSet<String>(size)
@@ -546,7 +548,7 @@ private fun List<ChatRenderItem>.withUniqueKeys(): List<ChatRenderItem> {
         }
     }
     if (hadDup) {
-        FileLogger.w("AIChatPanel", "聊天列表出现重复 item key（消息 id 重复），已加后缀兜住：共 ${out.size} 项")
+        FileLogger.w("AIChatPanel", "聊天列表出现重复 item key，已加后缀兜住：共 ${out.size} 项")
     }
     return out
 }
@@ -1066,7 +1068,7 @@ fun AIChatPanel(
     }
     val stableTurnKeys = remember(messages, currentSessionId, messagesReady) {
         if (messagesReady) {
-            reconcileTurnKeys(messages, turnKeyHistory, currentSessionId)
+            reconcileTurnKeys(messages, turnKeyHistory)
         } else {
             emptyMap()
         }
@@ -2592,8 +2594,8 @@ private class ChatItemEnv(
     val onOpenMessageMenu: (AgentUIMessage) -> Unit,
 )
 
-// 渲染一条 item。轮头 / 工具分组的展开内容与折叠头在同一 Composable 内用 AnimatedVisibility
-// 整体展开（而非逐个列表项各自 placement 动画）：高度平滑撑开、内容跟着一起走，手感是一个整体。
+// 渲染一条 item。轮头与工具分组的展开内容都由 [flattenChatProcesses] 拆成独立列表 item，
+// 这里只画折叠头本身：分组头 item 再画一遍成员，就是同一个工具两行（见 [ChatRenderItem.toolGroup]）。
 @Composable
 private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
     val header = item.turnHeader
@@ -2644,30 +2646,6 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
                     env.onToolItemToggled()
                 }
             )
-            AnimatedVisibility(
-                visible = item.groupExpanded,
-                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-            ) {
-                Column {
-                    group.forEach { member ->
-                        AgentMessageItem(
-                            message = member,
-                            showActions = member.id in env.actionableMessageIds,
-                            liveOutput = env.liveOutputs[member.id],
-                            markdownCache = env.markdownCache,
-                            onRewindClick = { env.viewModel.openRewindMenu(it) },
-                            onMoreClick = { env.onOpenMessageMenu(it) },
-                            toolExpandedOverride = env.toolGroupOverrides[member.id],
-                            onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(member.id, isExpanded) },
-                            onToolToggle = env.onToolItemToggled,
-                            // 分组展开时成员行内缩一级，与分组头区分层级
-                            contentPadding = ToolGroupMemberPadding,
-                            entryDelayMs = env.messageEntryDelays[member.id]
-                        )
-                    }
-                }
-            }
         }
         else -> {
             val message = item.message
@@ -2685,6 +2663,8 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
                 toolExpandedOverride = env.toolGroupOverrides[message.id],
                 onToolExpandedChange = { isExpanded -> env.viewModel.setToolExpanded(message.id, isExpanded) },
                 onToolToggle = env.onToolItemToggled,
+                // 分组展开后的成员行内缩一级，与分组头区分层级（成员行是独立 item，见 [flattenChatProcesses]）
+                contentPadding = if (item.groupMember) ToolGroupMemberPadding else PaddingValues(0.dp),
                 reasoningDurationMs = env.reasoningDurations[message.id],
                 taskDurationMs = env.taskDurations[message.id],
                 turnUsage = env.turnUsages[message.id],

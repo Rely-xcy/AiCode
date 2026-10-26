@@ -15,16 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -461,62 +458,41 @@ internal fun SkillSearchSection(
     val projectSkills = remember(results) { results.filter { it.scope == SkillScope.PROJECT } }
     val globalSkills = remember(results) { results.filter { it.scope == SkillScope.GLOBAL } }
 
-    val scrollState = rememberScrollState()
+    // 结果是可能上百条的列表（全量就是 341 条，每行还带左滑容器），走懒加载只组合可视区的行。
+    val listState = rememberLazyListState()
     // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
     // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
     LaunchedEffect(keyword.isBlank()) {
-        if (keyword.isBlank()) scrollState.scrollTo(0)
+        if (keyword.isBlank()) listState.scrollToItem(0)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = Spacing.lg)
-            // 只补一点上边：结果从顶栏下方直接开始，不要在搜索框和第一行之间留一大片空白
-            .padding(top = Spacing.sm, bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        if (results.isEmpty()) {
-            SearchEmptyHint(text = stringResource(R.string.skills_search_empty))
-        } else {
-            if (projectSkills.isNotEmpty()) {
-                SettingsGroupHeader(
-                    text = if (projectName != null) {
-                        stringResource(R.string.perm_current_project, projectName)
-                    } else {
-                        stringResource(R.string.perm_current_project_none)
-                    }
-                )
-                SettingsGroup {
-                    projectSkills.forEachIndexed { index, entry ->
-                        // 带 key：滑开位移是行内 remember 的位置状态，删掉一条后不带 key 会继承上一条的滑开状态
-                        key(skillSelectionKey(entry)) {
-                            if (index > 0) SettingsDivider()
-                            SkillRow(
-                                entry = entry,
-                                onDelete = { onDelete(entry) },
-                                onClick = { onOpenDetail(entry) }
-                            )
-                        }
-                    }
-                }
-            }
-            if (globalSkills.isNotEmpty()) {
-                SettingsGroupHeader(text = stringResource(R.string.perm_global))
-                SettingsGroup {
-                    globalSkills.forEachIndexed { index, entry ->
-                        key(skillSelectionKey(entry)) {
-                            if (index > 0) SettingsDivider()
-                            SkillRow(
-                                entry = entry,
-                                onDelete = { onDelete(entry) },
-                                onClick = { onOpenDetail(entry) }
-                            )
-                        }
-                    }
-                }
-            }
+    GroupedLazyList(
+        state = listState,
+        sections = listOf(
+            GroupedLazySection(
+                title = if (projectName != null) {
+                    stringResource(R.string.perm_current_project, projectName)
+                } else {
+                    stringResource(R.string.perm_current_project_none)
+                },
+                keyPrefix = SKILL_PROJECT_PREFIX,
+                items = projectSkills
+            ),
+            GroupedLazySection(
+                title = stringResource(R.string.perm_global),
+                keyPrefix = SKILL_GLOBAL_PREFIX,
+                items = globalSkills
+            )
+        ),
+        idOf = { it.name },
+        rowContentType = "skill-row",
+        emptyContent = { SearchEmptyHint(text = stringResource(R.string.skills_search_empty)) },
+        row = { entry ->
+            SkillRow(
+                entry = entry,
+                onDelete = { onDelete(entry) },
+                onClick = { onOpenDetail(entry) }
+            )
         }
-    }
+    )
 }

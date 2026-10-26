@@ -180,18 +180,55 @@ internal fun parseSubAgentDispatch(argsJson: String?, content: String?): ParsedS
     )
 }
 
+/** 单条派发合并卡片的文案模型：子代理名已回退，告警已去重。 */
+internal data class SubAgentSingleSummary(
+    val agentName: String,
+    val warnings: List<String> = emptyList()
+)
+
+/**
+ * 汇总单条派发卡片需要的文案。
+ *
+ * 单条派发时 `data.warning` 会被解析器同时写进任务项与 `globalWarning`（见 parseSubAgentDispatch
+ * 的单条分支），两处都渲染就是同一条提示出现两次，所以这里按内容合并。
+ */
+internal fun subAgentSingleSummary(
+    item: ParsedSubAgentDispatchItem,
+    globalWarning: String?,
+    defaultAgentName: String
+): SubAgentSingleSummary = SubAgentSingleSummary(
+    agentName = item.agentName?.takeIf { it.isNotBlank() } ?: defaultAgentName,
+    warnings = listOfNotNull(
+        item.warning?.takeIf { it.isNotBlank() },
+        globalWarning?.takeIf { it.isNotBlank() }
+    ).distinct()
+)
+
 /**
  * 子代理派发卡片（结构对标网络搜索结果卡片）：
  *
- * 顶部概览 Summary 展示图标、标题、数量统计与「已派发」状态药丸；
+ * 多条时：顶部概览 Summary 展示图标、标题、数量统计与「已派发」状态药丸；
  * 下方平铺各子代理任务卡片项（01, 02...），仅展示发出时的状态（代理名称、模型/档位、指令描述与告警），
  * 点击任意子任务项直接进入对应子会话。
+ *
+ * 单条时概览与任务项说的是同一件事，两层面板纯属重复，改由 [SubAgentSingleDispatchCard] 合并成一张卡。
  */
 @Composable
 internal fun SubAgentDispatchCard(dispatch: ParsedSubAgentDispatch) {
     val host = LocalSubAgentCardHost.current
     val items = dispatch.items
     if (items.isEmpty()) return
+
+    if (items.size == 1) {
+        val item = items.first()
+        SubAgentSingleDispatchCard(
+            item = item,
+            globalWarning = dispatch.globalWarning,
+            liveState = item.subSessionId?.let { host?.states?.get(it) },
+            onOpen = { sessionId -> host?.onOpen?.invoke(sessionId) }
+        )
+        return
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -253,6 +290,143 @@ private fun SubAgentDispatchSummary(count: Int) {
             )
         }
         SubAgentDispatchedChip()
+    }
+}
+
+/**
+ * 单条派发的合并卡片：保留概览的形制（图标 + 标题 + 状态药丸），把任务项的身份、描述与
+ * 结果摘要并进来，整卡可点进子会话。
+ *
+ * [liveState] 与任务项卡片同源：状态药丸随子代理生命周期刷新，完成后追加结果摘要与
+ * 改动文件数；为 null（历史回放、进程重启后）时退回静态「已派发」。
+ */
+@Composable
+private fun SubAgentSingleDispatchCard(
+    item: ParsedSubAgentDispatchItem,
+    globalWarning: String?,
+    liveState: SubAgentCardState?,
+    onOpen: (String) -> Unit
+) {
+    val hasSession = item.subSessionId != null
+    val summary = subAgentSingleSummary(
+        item = item,
+        globalWarning = globalWarning,
+        defaultAgentName = stringResource(R.string.subagent_card_default_agent)
+    )
+    val countLabel = stringResource(R.string.subagent_dispatch_count, 1)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.sm),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .then(
+                    if (hasSession) {
+                        Modifier.clickable { onOpen(item.subSessionId!!) }
+                    } else Modifier
+                )
+                .padding(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.Cpu,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+                Spacer(Modifier.width(Spacing.sm))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.subagent_dispatch_title),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "${summary.agentName} · $countLabel",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        modelBadge(item.tier, item.model)?.let { badge ->
+                            Spacer(Modifier.width(Spacing.xs))
+                            Surface(
+                                shape = RoundedCornerShape(Radius.xs),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = badge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                SubAgentStatusChip(liveState?.status)
+                if (hasSession) {
+                    Spacer(Modifier.width(Spacing.xs))
+                    Icon(
+                        imageVector = FeatherIcons.ChevronRight,
+                        contentDescription = stringResource(R.string.subagent_card_open),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            if (item.description.isNotBlank()) {
+                Text(
+                    text = item.description,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            liveState?.excerpt?.takeIf { it.isNotBlank() }?.let { excerpt ->
+                Text(
+                    text = excerpt,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            liveState?.changedFiles?.takeIf { it.isNotEmpty() }?.let { files ->
+                Text(
+                    text = stringResource(R.string.subagent_card_changed_files, files.size),
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            summary.warnings.forEach { warning ->
+                SubAgentWarningBanner(warning)
+            }
+        }
     }
 }
 

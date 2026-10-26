@@ -949,9 +949,10 @@ private fun CallRecordRow(call: RecentCallRecord, cost: Double?, textColor: Colo
         TableCell(call.record.model ?: stringResource(R.string.settings_token_stats_unknown), textColor, COL_MODEL_W)
         TableCell(call.record.reasoningEffort ?: "-", mutedColor, COL_EFFORT_W)
         // 发生降级时显示「原档位 → 实际发出」，否则只显示实际发出的思考参数。
+        // 服务端把思考参数记成 `effort=high` 这种 key=value 形式，表里只要档位本身。
         TableCell(
-            call.record.reasoningClampedFrom?.let { from -> "$from → ${call.record.reasoningWire}" }
-                ?: call.record.reasoningWire
+            call.record.reasoningClampedFrom?.let { from -> "$from → ${wireEffortOnly(call.record.reasoningWire)}" }
+                ?: wireEffortOnly(call.record.reasoningWire)
                 ?: "-",
             mutedColor,
             COL_EFFORT_W
@@ -967,6 +968,13 @@ private fun CallRecordRow(call: RecentCallRecord, cost: Double?, textColor: Colo
         TableCell(if (cost == null) "-" else formatCostUsd(cost), textColor, COL_COST_W)
     }
 }
+
+/**
+ * 服务端把思考参数记成 `effort=high` 这类 key=value 形式；表里只保留档位本身。
+ * 没有 `=` 时原样返回。
+ */
+private fun wireEffortOnly(wire: String?): String? =
+    wire?.takeIf { it.isNotBlank() }?.substringAfter('=')
 
 @Composable
 private fun TableCell(text: String, color: Color, width: Dp, fontWeight: FontWeight = FontWeight.Normal) {
