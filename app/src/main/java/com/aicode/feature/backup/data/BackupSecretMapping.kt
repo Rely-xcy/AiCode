@@ -87,7 +87,10 @@ internal fun ProviderDto.toImportedEntity(
 
     /** 新格式：有对应凭据行就以凭据段为准；没有就沿用本机值，空占位不能当「用户清空」回写。 */
     fun segmented(fromSegment: String?, existingValue: String?): String =
-        if (secrets != null) secret(fromSegment ?: "") else existingValue ?: ""
+        if (secrets != null) {
+            // 凭据段里这一项为空 = 用户就是要清空，落空串即可；过 secret("") 会变成加密后的空串。
+            if (fromSegment.isNullOrEmpty()) "" else secret(fromSegment)
+        } else existingValue ?: ""
 
     val entity = AIProviderEntity(
         id = id,
@@ -164,12 +167,13 @@ internal fun RemoteConnectionDto.toImportedEntity(
         authData = when {
             !passwordAuth -> authData
             !secretsSegmented -> secret(authData)
-            secrets != null -> secret(secrets.authData ?: "")
+            // 凭据段里明确给空 = 用户要清空，不要加密空串。
+            secrets != null -> if (secrets.authData.isNullOrEmpty()) "" else secret(secrets.authData)
             else -> existing?.authData ?: ""
         },
         passphrase = when {
             !secretsSegmented -> passphrase?.let { secret(it) }
-            secrets != null -> secrets.passphrase?.let { secret(it) }
+            secrets != null -> secrets.passphrase?.takeIf { it.isNotEmpty() }?.let { secret(it) }
             else -> existing?.passphrase
         },
         sortOrder = sortOrder ?: 0
