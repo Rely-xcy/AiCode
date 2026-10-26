@@ -14,9 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,7 +47,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.theme.semanticColors
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
@@ -115,6 +122,45 @@ internal fun ChatHairline(modifier: Modifier = Modifier) {
             .height(ChatStyle.hairline)
             .background(chatHairlineColor())
     )
+}
+
+/**
+ * 一轮里自动触发的技能 chip：挂在用户气泡下方的元信息行首。
+ *
+ * 用与相邻小字同级的轻量药丸（不抢主色），只做「这轮为什么多了一段指令」的交代，
+ * 不弹窗、不打断输入；点击行为由调用方决定（目前仅展示）。
+ */
+@Composable
+internal fun ChatTriggeredSkillChip(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = MaterialTheme.semanticColors.cardSurface,
+        modifier = modifier
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp)
+        ) {
+            // 用应用统一的图标集而不是 emoji：emoji 会跟着系统字体变样，且与相邻小字基线对不齐。
+            Icon(
+                imageVector = Icons.Outlined.Extension,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(Spacing.xs))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }
 
 /** 消息下方的时间 / token / 耗时小字，统一 12sp 弱化灰。 */

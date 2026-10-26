@@ -9,6 +9,10 @@ import com.aicode.feature.agent.data.remote.openai.ChatCompletionRequest
 import com.aicode.feature.agent.data.remote.openai.OpenAIChatMessage
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.DisableFieldKind
+import com.aicode.feature.agent.domain.model.ReasoningCapability
+import com.aicode.feature.agent.domain.model.ReasoningPlan
+import com.aicode.feature.agent.domain.model.ReasoningWire
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -29,6 +33,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import com.aicode.feature.agent.data.remote.openai.OpenAIToolCall
 import com.aicode.feature.agent.data.remote.openai.OpenAIToolDefinition
+import com.aicode.feature.agent.data.remote.openai.Usage
 import com.aicode.feature.agent.data.remote.openai.OpenAIFunctionDefinition
 import com.aicode.feature.agent.data.remote.openai.OpenAIImagePart
 import com.aicode.feature.agent.data.remote.openai.StreamOptions
@@ -61,6 +66,13 @@ class OpenAIAdapter @Inject constructor(
 
     // OpenAI 系不发输出上限参数（用服务端默认），仅为接口完整性保留。
     override var maxOutputTokens: Int? = null
+
+    /** 当前模型的思考能力，由工作流按元数据注入；null 时由 [ReasoningResolver] 按模型名兜底。 */
+    override var reasoningCapability: ReasoningCapability? = null
+
+    /** 服务端 400 学到的档位优先于元数据：它反映的是该渠道真实接受的白名单。 */
+    private fun effectiveReasoningCapability(): ReasoningCapability? =
+        ReasoningLearning.recall(providerId, model) ?: reasoningCapability
 
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认。
     override var temperature: Float? = null
@@ -106,11 +118,15 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
+        val reasoningPlan = chatReasoningPlan(reasoningEffort)
+        val disableToggle = reasoningPlan.wire as? ReasoningWire.DisableToggle
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = (reasoningPlan.wire as? ReasoningWire.Effort)?.value,
+            thinking = if (disableToggle?.field == DisableFieldKind.THINKING_TYPE) mapOf("type" to "disabled") else null,
+            enable_thinking = if (disableToggle?.field == DisableFieldKind.ENABLE_THINKING) false else null,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = false,
@@ -131,6 +147,8 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "OpenAI", response, seq)
@@ -144,7 +162,7 @@ class OpenAIAdapter @Inject constructor(
             ?: message?.reasoning?.takeIf { it.isNotEmpty() }
         val usage = response.usage
 
-        return AIResponse(content = content, toolCalls = toolCalls, stopReason = finishReason, reasoning = reasoning, inputTokens = usage?.prompt_tokens ?: 0, outputTokens = usage?.completion_tokens ?: 0, cachedInputTokens = usage?.prompt_tokens_details?.cached_tokens ?: 0, cacheCreationTokens = usage?.prompt_tokens_details?.cache_write_tokens ?: 0, images = images)
+        return AIResponse(content = content, toolCalls = toolCalls, stopReason = finishReason, reasoning = reasoning, inputTokens = usage?.prompt_tokens ?: 0, outputTokens = usage?.completion_tokens ?: 0, cachedInputTokens = usage?.cacheHitTokens() ?: 0, cacheCreationTokens = usage?.prompt_tokens_details?.cache_write_tokens ?: 0, images = images)
     }
 
     /**
@@ -160,18 +178,18 @@ class OpenAIAdapter @Inject constructor(
     }
 
     /**
-     * 思考强度 → OpenAI reasoning_effort。
-     * OpenAI 官方 Chat Completions 的 reasoning_effort 仅接受 low/medium/high（gpt-5 系额外支持
-     * none/minimal，但 o 系列不接受），"none"/"minimal" 原样透传会在多数推理模型上 400。
-     * 这里把 "none"/"minimal" 明确跳过（不发该字段，交由服务端默认），"xhigh"/"max" 归一到 high
-     * （OpenAI 无更高档），low/medium/high 原样透传。与 Anthropic/Gemini 对齐「不可表达即跳过」的策略。
+     * 思考强度 → 请求字段。档位是否支持、能否关闭、该降级到哪一档全部交给 [ReasoningResolver]：
+     * - 支持 max/xhigh 的模型（gpt-5.6、gpt-6、Grok 4.6+ 等）如实透传，不再被压成 high；
+     * - 模型确实不支持的低档位向下取最近档，未知模型按保守集合发送；
+     * - 关闭思考：厂商私有开关走 `thinking` / `enable_thinking`；
+     *   OpenAI 官方在 chat/completions 上只能发 `reasoning_effort="none"`（实测部分服务会当 low 处理，
+     *   真正归零需切到 Responses 端点）。
      */
-    private fun normalizeReasoningEffort(effort: String?): String? = when (effort) {
-        null -> null
-        "none", "minimal" -> null
-        "xhigh", "max" -> "high"
-        else -> effort
-    }
+    private fun chatReasoningPlan(effort: String?): ReasoningPlan =
+        ReasoningResolver.plan(ReasoningProtocol.OPENAI_CHAT, model, effort, effectiveReasoningCapability())
+
+    private fun responsesReasoningPlan(effort: String?): ReasoningPlan =
+        ReasoningResolver.plan(ReasoningProtocol.OPENAI_RESPONSES, model, effort, effectiveReasoningCapability())
 
     /**
      * Responses 请求体。system prompt 作为首个 message item 进 `input`（与顶层 `instructions` 等价，
@@ -203,15 +221,33 @@ class OpenAIAdapter @Inject constructor(
             request["tool_choice"] = "auto"
         }
         if (stream) request["stream"] = true
-        normalizeReasoningEffort(reasoningEffort)?.let { effort ->
-            if (isDeepSeek) {
-                request["reasoning"] = mapOf("effort" to effort)
-            } else {
-                // OpenAI 官方/通用 Responses 规范：显式开启思考总结（summary: "auto"），
-                // 并索取 encrypted_content 密文，供无状态多轮对话连续推理。
-                request["reasoning"] = mapOf("effort" to effort, "summary" to "auto")
-                request["include"] = listOf("reasoning.encrypted_content")
+        // Responses 端点的思考字段：effort 走 reasoning.effort；厂商私有开关走 thinking / enable_thinking。
+        when (val wire = responsesReasoningPlan(reasoningEffort).wire) {
+            is ReasoningWire.Effort -> {
+                if (isDeepSeek) {
+                    request["reasoning"] = mapOf("effort" to wire.value)
+                } else {
+                    // OpenAI 官方/通用 Responses 规范：显式开启思考总结（summary: "auto"），
+                    // 并索取 encrypted_content 密文，供无状态多轮对话连续推理。
+                    request["reasoning"] = mapOf("effort" to wire.value, "summary" to "auto")
+                    request["include"] = listOf("reasoning.encrypted_content")
+                }
             }
+            // OpenAI 官方关闭思考的唯一可靠写法（chat/completions 上 none 常被降成 low）。
+            ReasoningWire.DisableEffortNone -> request["reasoning"] = mapOf("effort" to "none")
+            is ReasoningWire.DisableToggle -> when (wire.field) {
+                DisableFieldKind.THINKING_TYPE -> {
+                    request["thinking"] = mapOf("type" to "disabled")
+                    // 少数厂商关闭时仍需带档位（Anthropic 系），OpenAI 兼容侧一般为空。
+                    effectiveReasoningCapability()?.effortWhileDisabled?.let {
+                        request["reasoning"] = mapOf("effort" to it.apiValue)
+                    }
+                }
+                DisableFieldKind.ENABLE_THINKING -> request["enable_thinking"] = false
+            }
+            ReasoningWire.BetweenTools -> request["thinking"] = mapOf("type" to "between_tools")
+            // 预算型与「不发」在这条端点上没有对应字段，交给服务端默认。
+            is ReasoningWire.Budget, ReasoningWire.Omit -> Unit
         }
         // OpenAI 官方 Responses 原生支持 prompt_cache_key（同会话路由到同一缓存 shard）；
         // 自动管理缓存的服务（如 DeepSeek）会静默忽略该字段，不会报错。
@@ -247,6 +283,8 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "OpenAI", response, seq)
@@ -298,12 +336,15 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
-
+        val streamReasoningPlan = chatReasoningPlan(reasoningEffort)
+        val streamDisableToggle = streamReasoningPlan.wire as? ReasoningWire.DisableToggle
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = (streamReasoningPlan.wire as? ReasoningWire.Effort)?.value,
+            thinking = if (streamDisableToggle?.field == DisableFieldKind.THINKING_TYPE) mapOf("type" to "disabled") else null,
+            enable_thinking = if (streamDisableToggle?.field == DisableFieldKind.ENABLE_THINKING) false else null,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = true,
@@ -384,8 +425,8 @@ class OpenAIAdapter @Inject constructor(
                             obj.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject?.let { u ->
                                 streamInputTokens = u.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamInputTokens
                                 streamOutputTokens = u.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamOutputTokens
-                                streamCachedInputTokens = u.getAsJsonObject("prompt_tokens_details")?.get("cached_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamCachedInputTokens
-                                streamCacheCreationTokens = u.getAsJsonObject("prompt_tokens_details")?.get("cache_write_tokens")?.takeIf { !it.isJsonNull }?.asInt ?: streamCacheCreationTokens
+                                streamCachedInputTokens = u.cacheHitTokens() ?: streamCachedInputTokens
+                                streamCacheCreationTokens = u.get("prompt_tokens_details")?.takeIf { it.isJsonObject }?.asJsonObject?.get("cache_write_tokens")?.asIntOrNull() ?: streamCacheCreationTokens
                             }
                             val choice = obj.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject ?: continue
                             val delta = choice.getAsJsonObject("delta") ?: continue
@@ -482,6 +523,8 @@ class OpenAIAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             // 无论成功/失败/取消，把已收到的原始 SSE 落盘（重试时会从上次中断处续写）。
@@ -608,6 +651,8 @@ class OpenAIAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             sseLog.finish()
@@ -832,3 +877,37 @@ class OpenAIAdapter @Inject constructor(
         )
     }
 }
+
+/**
+ * 缓存命中 token 的读取顺序（遇到第一个正数即止，不相加、不取最大）：
+ * 1. `prompt_tokens_details.cached_tokens`——OpenAI 官方口径；
+ * 2. 顶层 `prompt_cache_hit_tokens`——DeepSeek 平铺在 usage 顶层，不在 details 里；
+ * 3. 顶层 `cached_tokens`——部分兼容服务直接把命中数平铺。
+ * 0 与 null 一律当作「该级没上报」，才继续往下回退：三者都是 0 时返回 0。
+ *
+ * DeepSeek 的 `prompt_cache_miss_tokens` 是未命中的输入量（与 hit 相加≈prompt_tokens），
+ * 不是缓存写入，故不映射到 cacheCreationTokens；各家对 prompt_tokens 是否含缓存部分口径不一，
+ * 相加对不上属正常，因此也不据它修正 hit、不报错。
+ */
+private fun Usage.cacheHitTokens(): Int? {
+    val fromDetails = prompt_tokens_details?.cached_tokens
+    if (fromDetails != null && fromDetails > 0) return fromDetails
+    if (prompt_cache_hit_tokens != null && prompt_cache_hit_tokens > 0) return prompt_cache_hit_tokens
+    if (cached_tokens != null && cached_tokens > 0) return cached_tokens
+    return fromDetails ?: prompt_cache_hit_tokens ?: cached_tokens
+}
+
+/** 流式路径的同一条回退链：usage 来自原始 SSE JSON，Gson 的 details 可能缺字段或类型不符。 */
+private fun com.google.gson.JsonObject.cacheHitTokens(): Int? {
+    val fromDetails = get("prompt_tokens_details")?.takeIf { it.isJsonObject }?.asJsonObject?.get("cached_tokens")?.asIntOrNull()
+    if (fromDetails != null && fromDetails > 0) return fromDetails
+    val deepSeekHit = get("prompt_cache_hit_tokens")?.asIntOrNull()
+    if (deepSeekHit != null && deepSeekHit > 0) return deepSeekHit
+    val topLevelCached = get("cached_tokens")?.asIntOrNull()
+    if (topLevelCached != null && topLevelCached > 0) return topLevelCached
+    return fromDetails ?: deepSeekHit ?: topLevelCached
+}
+
+/** 非原始值（对象/数组/null）与无法转成数字的字符串都返回 null，避免单行 usage 异常拖垮整条流。 */
+private fun com.google.gson.JsonElement?.asIntOrNull(): Int? =
+    this?.takeIf { it.isJsonPrimitive }?.let { runCatching { it.asInt }.getOrNull() }

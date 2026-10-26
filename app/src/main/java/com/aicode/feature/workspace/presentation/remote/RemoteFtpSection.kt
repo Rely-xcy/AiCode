@@ -15,12 +15,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import com.aicode.core.ui.AppTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,6 +40,9 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Spacing
@@ -45,6 +52,8 @@ import com.aicode.feature.settings.presentation.component.settingsLightMode
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Eye
+import compose.icons.feathericons.EyeOff
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Share2
 import kotlinx.coroutines.launch
@@ -66,8 +75,10 @@ fun WiFiFtpServerSection(
     var editPort by remember(port) { mutableStateOf(port.toString()) }
     var editUsername by remember(username) { mutableStateOf(username) }
     var editPassword by remember(password) { mutableStateOf(password) }
+    var passwordVisible by remember { mutableStateOf(false) }
     var editAnonymous by remember(isAnonymous) { mutableStateOf(isAnonymous) }
     var editAutoStart by remember(autoStart) { mutableStateOf(autoStart) }
+    var showAnonymousConfirm by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -225,6 +236,14 @@ fun WiFiFtpServerSection(
                     onValueChange = { editPassword = it },
                     label = stringResource(R.string.ftp_login_password),
                     modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        val image = if (passwordVisible) FeatherIcons.Eye else FeatherIcons.EyeOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(image, stringResource(R.string.remote_toggle_password), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
                     singleLine = true,
                     enabled = !editAnonymous
                 )
@@ -238,7 +257,12 @@ fun WiFiFtpServerSection(
                         Text(text = stringResource(R.string.ftp_allow_anonymous), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                         Text(text = stringResource(R.string.ftp_anonymous_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    AppSwitch(checked = editAnonymous, onCheckedChange = { editAnonymous = it })
+                    AppSwitch(
+                        checked = editAnonymous,
+                        onCheckedChange = { allowed ->
+                            if (allowed) showAnonymousConfirm = true else editAnonymous = false
+                        }
+                    )
                 }
 
                 Row(
@@ -268,5 +292,26 @@ fun WiFiFtpServerSection(
                 }
             }
         }
+    }
+
+    if (showAnonymousConfirm) {
+        AlertDialog(
+            onDismissRequest = { showAnonymousConfirm = false },
+            title = { Text(stringResource(R.string.ftp_anonymous_confirm_title)) },
+            text = { Text(stringResource(R.string.ftp_anonymous_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        editAnonymous = true
+                        showAnonymousConfirm = false
+                    }
+                ) { Text(stringResource(R.string.common_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAnonymousConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
     }
 }

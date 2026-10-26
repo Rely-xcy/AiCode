@@ -62,7 +62,7 @@ class MemoryModuleTest {
     )
 
     /** [MemoryExtractor.parseEntries] 是实例方法（不读仓库、不调模型），给个 relaxed mock 即可。 */
-    private fun parser(): MemoryExtractor = MemoryExtractor(mockk(relaxed = true))
+    private fun parser(): MemoryExtractor = MemoryExtractor(mockk(relaxed = true), mockk(relaxed = true))
 
     @Test
     fun onTurnCompleted_curatesOnceIntervalElapsed() = runTest {
@@ -137,7 +137,8 @@ class MemoryModuleTest {
     fun extract_writesParsedEntriesAsProfileWithSource() = runTest {
         val repository = mockk<MemoryRepository>(relaxed = true)
         every { repository.listMemories(any()) } returns emptyList()
-        val extractor = MemoryExtractor(repository)
+        every { repository.saveMemory(any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns true
+        val extractor = MemoryExtractor(repository, mockk(relaxed = true))
         val output = """
             name: prefers-brief
             description: Prefers brief answers
@@ -170,7 +171,7 @@ class MemoryModuleTest {
     fun extract_ignoresGarbageAndEmptyResults() = runTest {
         val repository = mockk<MemoryRepository>(relaxed = true)
         every { repository.listMemories(any()) } returns emptyList()
-        val extractor = MemoryExtractor(repository)
+        val extractor = MemoryExtractor(repository, mockk(relaxed = true))
 
         val garbage = extractor.extract("/ws", history, MemoryExtractor.SOURCE_AUTO_DISTILL) { "抱歉，这轮没有值得记住的内容。" }
         val empty = extractor.extract("/ws", history, MemoryExtractor.SOURCE_AUTO_DISTILL) { "[]" }

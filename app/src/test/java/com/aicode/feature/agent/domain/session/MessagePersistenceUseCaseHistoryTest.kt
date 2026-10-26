@@ -9,8 +9,8 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.presentation.MessageRole
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -70,7 +70,7 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     @Test
-    fun keepsOnlyLatestCompactionPair() = runTest {
+    fun keepsOnlyLatestCompactionPair() = runBlocking {
         val dao = db.agentMessageDao()
         dao.insertAll(
             listOf(
@@ -98,7 +98,7 @@ class MessagePersistenceUseCaseHistoryTest {
 
     /** 旧单块兼容（foldsUpToTimestamp=0，迁移 62 前的库）：走旧规则只取最新一对，且不重复回放。 */
     @Test
-    fun legacyZeroBoundaryBlockFallsBackToLatestPairOnly() = runTest {
+    fun legacyZeroBoundaryBlockFallsBackToLatestPairOnly() = runBlocking {
         val dao = db.agentMessageDao()
         dao.insertAll(
             listOf(
@@ -123,7 +123,7 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     @Test
-    fun keepsSinglePairWhenPairsShareTimestamps() = runTest {
+    fun keepsSinglePairWhenPairsShareTimestamps() = runBlocking {
         val dao = db.agentMessageDao()
         // 连续折叠的残留形态（旧库）：两对的时间戳完全相同（同一保留区起点），按 ts 比不出先后
         dao.insertAll(
@@ -145,7 +145,7 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     @Test
-    fun synthesizesMarkerWhenLatestSummaryHasNoPairedMarker() = runTest {
+    fun synthesizesMarkerWhenLatestSummaryHasNoPairedMarker() = runBlocking {
         val dao = db.agentMessageDao()
         // 最新摘要的配对 marker 已被标 isCompacted（或缺失）时，回放仍要给它补一条无 id 的 marker
         dao.insertAll(
@@ -165,7 +165,7 @@ class MessagePersistenceUseCaseHistoryTest {
     }
 
     @Test
-    fun contextStatsMatchWhatReplayActuallySends() = runTest {
+    fun contextStatsMatchWhatReplayActuallySends() = runBlocking {
         val dao = db.agentMessageDao()
         dao.insertAll(
             listOf(
@@ -194,7 +194,7 @@ class MessagePersistenceUseCaseHistoryTest {
      * 投影字段已随阶段 3 停止读写；实体上的 modelResult 列仅为兼容存量表结构保留。
      */
     @Test
-    fun legacyProjectionValuesAreIgnoredOnReplay() = runTest {
+    fun legacyProjectionValuesAreIgnoredOnReplay() = runBlocking {
         val dao = db.agentMessageDao()
         val callId = "call-1"
         val bigText = "a".repeat(5_000)

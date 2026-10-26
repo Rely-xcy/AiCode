@@ -95,6 +95,19 @@ class AIProviderRepositoryImpl @Inject constructor(
         aiProviderDao.deleteProvider(id)
     }
 
+    /** 批量删除：单事务提交，任一条失败整体回滚，避免删一半留下脏列表。 */
+    override suspend fun deleteProviders(ids: Collection<String>): Unit = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext
+        FileLogger.i(TAG, "批量删除提供商 ${ids.size} 个: ${ids.joinToString()}")
+        agentDatabase.withTransaction { aiProviderDao.deleteProviders(ids) }
+    }
+
+    override suspend fun setProvidersEnabled(ids: Collection<String>, isEnabled: Boolean): Unit = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext
+        FileLogger.i(TAG, "批量设置提供商状态 ${ids.size} 个 isEnabled=$isEnabled")
+        agentDatabase.withTransaction { aiProviderDao.setProvidersEnabled(ids, isEnabled) }
+    }
+
     override suspend fun setSelectedModel(id: String, model: String) {
         FileLogger.i(TAG, "切换模型 provider=$id model=$model")
         aiProviderDao.setSelectedModel(id, model)

@@ -1,10 +1,10 @@
 package com.aicode.feature.agent.domain.tool.question
 
 import com.aicode.feature.agent.domain.tool.ToolResult
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -27,7 +27,7 @@ class AskUserQuestionToolTest {
     }
 
     @Test
-    fun execute_multiSelectWithCustomText_retainsBothSelectedAndCustom() = runTest {
+    fun execute_multiSelectWithCustomText_retainsBothSelectedAndCustom() = runBlocking {
         val args = mapOf(
             "questions" to buildJsonArray {
                 add(
@@ -78,7 +78,7 @@ class AskUserQuestionToolTest {
     }
 
     @Test
-    fun execute_singleSelectWithPresetOption() = runTest {
+    fun execute_singleSelectWithPresetOption() = runBlocking {
         val args = mapOf(
             "questions" to buildJsonArray {
                 add(
@@ -126,7 +126,7 @@ class AskUserQuestionToolTest {
     }
 
     @Test
-    fun execute_singleSelectWithOnlyCustomText() = runTest {
+    fun execute_singleSelectWithOnlyCustomText() = runBlocking {
         val args = mapOf(
             "questions" to buildJsonArray {
                 add(
@@ -174,7 +174,7 @@ class AskUserQuestionToolTest {
     }
 
     @Test
-    fun execute_userSkipped_returnsSupplementNotice() = runTest {
+    fun execute_userSkipped_returnsSupplementNotice() = runBlocking {
         val args = mapOf(
             "questions" to buildJsonArray {
                 add(

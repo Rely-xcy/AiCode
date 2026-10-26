@@ -1,5 +1,6 @@
 package com.aicode.core.watch
 
+import com.aicode.di.FileChangeHubModule
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
@@ -110,12 +111,13 @@ class FileChangeHubProjectConfigTest {
         every { projectAicodeRoot.forPath(any()) } returns projectDir
         every { projectAicodeRoot.currentOrNull() } returns projectDir
 
+        // 用与生产同一套 DI 绑定构造总线，避免测试里再写一份适配器（写两遍迟早分叉）。
         hub = FileChangeHub(
-            workspaceRepository,
-            containerInstaller,
-            pathMapper,
-            executionModeHolder,
-            remoteSshConnection,
+            FileChangeHubModule.provideFileWatchWorkspaceSource(workspaceRepository),
+            FileChangeHubModule.provideFileWatchAicodeDir(containerInstaller),
+            FileChangeHubModule.provideFileWatchPathMapper(pathMapper),
+            FileChangeHubModule.provideFileWatchModeGate(executionModeHolder),
+            FileChangeHubModule.provideFileWatchRemoteConnection(remoteSshConnection),
             poller
         )
     }

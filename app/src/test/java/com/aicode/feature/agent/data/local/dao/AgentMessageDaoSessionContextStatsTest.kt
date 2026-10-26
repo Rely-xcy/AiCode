@@ -1,12 +1,12 @@
 package com.aicode.feature.agent.data.local.dao
 
 import androidx.room.Room
+import kotlinx.coroutines.runBlocking
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.presentation.MessageRole
-import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
@@ -62,7 +62,7 @@ class AgentMessageDaoSessionContextStatsTest {
     }
 
     @Test
-    fun countsOnlyRowsStillInContext() = runTest {
+    fun countsOnlyRowsStillInContext() = runBlocking {
         dao.insertAll(
             listOf(
                 row("a", timestamp = 1),
@@ -79,7 +79,7 @@ class AgentMessageDaoSessionContextStatsTest {
     }
 
     @Test
-    fun countsEachContextSummaryAsOneFold() = runTest {
+    fun countsEachContextSummaryAsOneFold() = runBlocking {
         dao.insertAll(
             listOf(
                 row("first", timestamp = 1, compacted = true),
@@ -100,7 +100,7 @@ class AgentMessageDaoSessionContextStatsTest {
     }
 
     @Test
-    fun emptySessionReportsZeros() = runTest {
+    fun emptySessionReportsZeros() = runBlocking {
         val stats = dao.sessionContextStats(SESSION)
 
         assertEquals(0, stats.retainedMessages)
@@ -108,7 +108,7 @@ class AgentMessageDaoSessionContextStatsTest {
     }
 
     @Test
-    fun ignoresOtherSessions() = runTest {
+    fun ignoresOtherSessions() = runBlocking {
         dao.insertAll(
             listOf(
                 row("mine", timestamp = 1),
@@ -124,7 +124,7 @@ class AgentMessageDaoSessionContextStatsTest {
     }
 
     @Test
-    fun excludesUsageRowsMarkedContextExcluded() = runTest {
+    fun excludesUsageRowsMarkedContextExcluded() = runBlocking {
         dao.insertAll(
             listOf(
                 row("u1", timestamp = 1),

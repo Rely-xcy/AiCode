@@ -55,8 +55,8 @@ class LanguageSettingsRepository @Inject constructor(
     fun getLanguageSync(): String? = syncPrefs.getString(PREFS_KEY, null)
 
     suspend fun restore(value: String?) {
-        context.languageDataStore.edit {
-            if (value == null) it.remove(LANGUAGE_KEY) else it[LANGUAGE_KEY] = value
-        }
+        // 复用 setLanguage：还原不仅写 DataStore，还须同步 language_prefs_sync，
+        // 否则备份导入后冷启动按旧 tag 设置 locale。
+        setLanguage(value)
     }
 }

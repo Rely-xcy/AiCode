@@ -14,12 +14,22 @@ object LineDiff {
 
     data class DiffLine(val type: LineType, val text: String)
 
+    /**
+     * LCS 表的单元格上限：超过就退回「整段删除 + 整段新增」。
+     * dp 是 n×m 的 IntArray，1 万行×1 万行约 400MB，直接 OOM；2M 单元节约 8MB。
+     */
+    private const val MAX_CELLS = 2_000_000
+
     /** 计算 [oldText] → [newText] 的行级差异。 */
     fun diff(oldText: String, newText: String): List<DiffLine> {
         val a = oldText.split("\n")
         val b = newText.split("\n")
         val n = a.size
         val m = b.size
+
+        if ((n.toLong() + 1) * (m.toLong() + 1) > MAX_CELLS) {
+            return a.map { DiffLine(LineType.REMOVE, it) } + b.map { DiffLine(LineType.ADD, it) }
+        }
 
         // LCS 长度表：dp[i][j] = a[i..] 与 b[j..] 的最长公共子序列长度。
         val dp = Array(n + 1) { IntArray(m + 1) }

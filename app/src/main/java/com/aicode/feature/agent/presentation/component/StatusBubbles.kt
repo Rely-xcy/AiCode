@@ -65,6 +65,7 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.provider.RetryErrorInfo
 import com.aicode.feature.agent.domain.provider.RetryErrorKind
+import com.aicode.feature.agent.domain.workflow.CompactionProgress
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import com.aicode.core.ui.ExpandableChevronIcon
@@ -210,11 +211,22 @@ internal fun ThinkingBubble(label: String) {
     )
 }
 
-/** 上下文压缩期间的临时状态行，不落库。 */
+/**
+ * 上下文压缩期间的临时状态行，不落库。
+ *
+ * 拿到步数时显示「正在整理上下文（2/5）」：分块折叠要跑好几轮摘要调用，只写「正在压缩」
+ * 时用户分不清是慢还是卡死。步数未知（刚开始、或只有一次调用）时退回通用文案。
+ */
 @Composable
-internal fun CompactionProgressBubble() {
+internal fun CompactionProgressBubble(progress: CompactionProgress = CompactionProgress.Idle) {
+    val running = progress as? CompactionProgress.Running
+    val label = if (running != null && running.totalSteps > 0) {
+        stringResource(R.string.chat_compaction_progress, running.step, running.totalSteps)
+    } else {
+        stringResource(R.string.chat_compressing_context)
+    }
     AgentBusyIndicator(
-        label = stringResource(R.string.chat_compressing_context),
+        label = label,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = ChatStyle.toolRowMinHeight),
@@ -375,7 +387,7 @@ private const val TYPEWRITER_DRAIN_HARD_MS = 600L
 private const val TYPEWRITER_RATE_WINDOW_MS = 500L
 
 /** 打字机渲染节流间隔（ms）：~21fps 的快照足够顺滑，同时把流式期间的 md 解析频率压下一半。 */
-private const val TYPEWRITER_RENDER_INTERVAL_MS = 48L
+private const val TYPEWRITER_RENDER_INTERVAL_MS = 24L
 
 /** 按码点数量截断字符串，避免把 emoji 等代理对截成孤立的半个字符。 */
 private fun truncateToCodePoints(text: String, codePoints: Int): String {
@@ -612,7 +624,8 @@ internal fun StreamingBubble(
             text = renderText,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth(),
-            cache = cache
+            cache = cache,
+            streaming = true
         )
         Spacer(Modifier.height(Spacing.xs))
         TypingDots(color = MaterialTheme.colorScheme.primary, dotSize = 5.dp)
@@ -722,6 +735,20 @@ internal fun ReasoningBubble(
         formattedDuration != null -> stringResource(R.string.chat_thinking_done_time, formattedDuration)
         else -> stringResource(R.string.chat_thinking_done)
     }
+    // 推理进行中且未展开时给 3 行预览（只看尾部）：否则长推理期间屏幕上只有一行
+    // 「思考中 12.3 秒」，看起来像卡死。推理结束照旧收起，只留耗时。
+    val livePreview = remember(text, live) {
+        if (!live) {
+            ""
+        } else {
+            text.takeLast(600).lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toList()
+                .takeLast(3)
+                .joinToString("\n")
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -747,6 +774,19 @@ internal fun ReasoningBubble(
                 size = 18.dp
             )
         }
+        if (!expanded && livePreview.isNotEmpty()) {
+            Text(
+                text = livePreview,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, top = 2.dp, bottom = 4.dp)
+                    .clickable { toggleExpanded(true) }
+            )
+        }
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
@@ -762,6 +802,7 @@ internal fun ReasoningBubble(
                     cache = cache,
                     compact = true,
                     lazyScroll = true,
+                    streaming = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = ReasoningWindowMaxHeight)

@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.explorer
 
 import com.aicode.feature.agent.domain.container.CommandEngine
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.container.CommandResult
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
@@ -9,7 +10,6 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -38,7 +38,7 @@ class SearchCodeToolTest {
     private fun tool() = SearchCodeTool(engine, workspace, pathHomeResolver)
 
     @Test
-    fun search_workspaceNotReady_returnsErrorWithoutRunningRg() = runTest {
+    fun search_workspaceNotReady_returnsErrorWithoutRunningRg() = runBlocking {
         // home() 在取工作区路径之前就会被调用（构造 rg 命令），strict mock 下必须 stub
         every { pathHomeResolver.home() } returns "/root"
         coEvery { workspace.awaitCurrentPathOrNull() } returns null
@@ -51,7 +51,7 @@ class SearchCodeToolTest {
     }
 
     @Test
-    fun search_workspaceReady_searchesInWorkspaceDir() = runTest {
+    fun search_workspaceReady_searchesInWorkspaceDir() = runBlocking {
         // 正向对照：落定时 rg 仍以工作区路径为工作目录（闸门不误伤正常路径）
         every { pathHomeResolver.home() } returns "/root"
         coEvery { workspace.awaitCurrentPathOrNull() } returns workPath

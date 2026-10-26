@@ -46,19 +46,20 @@ import javax.inject.Singleton
 class ToolPermissionPolicyEngine @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val rulesRepo: PermissionRulesRepository,
-    private val toolSafetySettings: ToolSafetySettingsRepository
+    private val toolSafetySettings: ToolSafetySettingsRepository,
+    @param:ApplicationContext private val appContext: Context
 ) {
     private companion object {
         const val TAG = "ToolPermission"
 
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
-        val SHELL_TOOLS = setOf("Bash", SHIZUKU_TOOL)
+        val SHELL_TOOLS = setOf("Bash", SHIZUKU_TOOL, ROOT_TOOL)
 
         /** Shizuku 工具：以 adb shell 身份直接操作宿主 Android 系统，按高危处理（一律弹窗、不可记忆）。 */
         const val SHIZUKU_TOOL = "Shizuku"
 
-        const val REASON_SHIZUKU =
-            "Shizuku 直接以 adb shell 身份操作宿主 Android 系统，权限高危，仅支持单次放行，不可记忆"
+        /** Root 工具：以设备 root（uid 0）直接操作宿主 Android 系统，与 Shizuku 同等对待（一律弹窗、不可记忆）。 */
+        const val ROOT_TOOL = "Root"
 
         /**
          * 合并后的终端会话工具：其 `start` 动作承载 shell 命令，需走指令级前缀匹配；
@@ -73,10 +74,12 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         /**
          * 合并后的子代理工具：只读与发消息操作（read/list/send）自动放行，无需弹窗；
-         * 写操作（create/stop）走正常规则评估。
+         * 写操作（create/stop）走正常规则评估；del（删除子会话及全部消息）不可逆，
+         * 只支持单次放行，不落入「始终允许」记忆——否则一次 ALWAYS 会让后续删除全部静默。
          */
         const val TASK_TOOL = "task"
         private val TASK_AUTO_ACTIONS = setOf("read", "list", "send")
+        private const val TASK_DELETE_ACTION = "del"
 
         /**
          * 浏览器工具：navigate/click/fill/select/evaluate/dialog/back/forward/reload/newTab/closeTab/selectTab 为写操作（PLAN 拦截），
@@ -96,13 +99,6 @@ class ToolPermissionPolicyEngine @Inject constructor(
         const val HOME_TOKEN = "\$HOME"
         const val HOME_BRACED = "\${HOME}"
 
-        const val REASON_RM_ROOT = "安全防护：禁止执行高危删除操作（根目录删除）"
-        const val REASON_RM_RELATIVE = "安全防护：禁止执行高危删除操作（全局或相对路径通配删除）"
-        const val REASON_RM_HOME = "安全防护：禁止执行高危删除操作（用户目录删除）"
-        const val REASON_RM_WORKSPACE = "安全防护：禁止执行高危删除操作（工作区根目录删除）"
-        const val REASON_RM_TMP = "安全防护：禁止执行高危删除操作（系统临时目录整体删除）"
-        const val REASON_RM_SYSTEM_DIR = "安全防护：禁止执行高危删除操作（系统关键目录删除）"
-
         /** 相对/通配类删除目标（归一化后判定）：整体删除当前目录或任意内容。 */
         val RELATIVE_WILDCARD_TARGETS = setOf("*", ".*", ".", "..", "../*", "../.*")
 
@@ -117,9 +113,6 @@ class ToolPermissionPolicyEngine @Inject constructor(
             "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/lost+found",
             "/media", "/mnt", "/opt", "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/usr", "/var"
         )
-
-        const val REASON_UNANALYZABLE_DESTRUCTIVE =
-            "安全防护：命令含命令替换、子 shell 或绝对路径重定向等无法静态判定的构造，且疑似破坏性操作，无法确认安全"
 
         /** 疑似破坏性程序（仅在命令不可静态判定时用于保守拦截）。 */
         val DESTRUCTIVE_PROGRAM = Regex(
@@ -152,7 +145,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
     suspend fun evaluate(tool: AgentTool?, toolName: String, args: Map<String, JsonElement>, mode: com.aicode.feature.agent.domain.model.AgentMode): EvalResult {
         val capabilities = tool?.effectiveCapabilities(args).orEmpty()
         if (mode == com.aicode.feature.agent.domain.model.AgentMode.PLAN && isDangerousTool(toolName, args, capabilities)) {
-            return EvalResult(Verdict.DENY, emptyList(), denyReason = "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。请在计划模式下仅调用只读工具探索代码，不要尝试修改文件或执行命令。")
+            return EvalResult(Verdict.DENY, emptyList(), denyReason = context.getString(R.string.permission_plan_mode_deny))
         }
 
         if (mode == com.aicode.feature.agent.domain.model.AgentMode.AUTO) {
@@ -167,13 +160,19 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     // 命令替换/子 shell/绝对路径重定向等无法静态判定的构造，删除目标不可知；
                     // 若同时疑似破坏性，宁可拦下（可提权），避免绕过安全防护。
                     if (!analysis.analyzable && looksDestructive(command)) {
-                        return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args)
+                        return elevationOrDeny(unanalyzableReason(analysis), args)
                     }
                 }
             }
-            // Shizuku 直接操作宿主系统，AUTO 下也不自动放行，仍需逐次确认（除非已开启「禁用安全拦截」）。
-            if (toolName == SHIZUKU_TOOL && !safetyDisabled) {
-                return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = REASON_SHIZUKU)
+            // Shizuku 与 Root 直接操作宿主系统（后者是 uid 0，破坏力更大），AUTO 下也不自动放行，
+            // 仍需逐次确认（除非已开启「禁用安全拦截」）。与下方 forceAsk 的判定同一口径。
+            if ((toolName == SHIZUKU_TOOL || toolName == ROOT_TOOL) && !safetyDisabled) {
+                val reason = if (toolName == ROOT_TOOL) {
+                    context.getString(R.string.permission_root_not_rememberable)
+                } else {
+                    context.getString(R.string.permission_shizuku_not_rememberable)
+                }
+                return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = reason)
             }
             return EvalResult(Verdict.ALLOW, emptyList())
         }
@@ -196,22 +195,37 @@ class ToolPermissionPolicyEngine @Inject constructor(
         // 故项目级规则读不到时也不收紧。
         if (toolName == TASK_TOOL) {
             val action = (args["action"] as? JsonPrimitive)?.content?.trim()?.lowercase() ?: "create"
+            // 只读与发消息动作（read/list/send）：不放行 DENY 规则，其余直接自动放行（不弹窗）。
             if (action in TASK_AUTO_ACTIONS) {
                 val rules = effective.rules.filter { it.toolName == toolName }
                 val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
                 if (whole.any { it.decision == PermissionDecision.DENY }) {
-                    return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
+                    return EvalResult(Verdict.DENY, emptyList(), denyReason = context.getString(R.string.permission_deny_tool_by_project_rule))
                 }
                 return EvalResult(Verdict.ALLOW, emptyList())
+            }
+            if (action == TASK_DELETE_ACTION) {
+                // 删除子会话及其全部消息不可逆：尊重显式 DENY，其余一律单次确认，不提供
+                // 「始终允许」——create/stop 落下的 ALWAYS 记忆不得连带放行删除。
+                val rules = effective.rules.filter { it.toolName == toolName }
+                if (rules.any { it.pattern == PermissionRule.WHOLE_TOOL && it.decision == PermissionDecision.DENY }) {
+                    return EvalResult(Verdict.DENY, emptyList(), denyReason = appContext.getString(R.string.tool_permission_rule_denied))
+                }
+                return EvalResult(
+                    Verdict.ASK,
+                    rememberablePatterns = emptyList(),
+                    rememberDisabledReason = "删除子代理会话及其消息不可逆，仅支持单次放行"
+                )
             }
         }
 
         val rules = effective.rules.filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
             evaluateShell(
+                toolName = toolName,
                 rules = rules,
                 args = args,
-                forceAsk = toolName == SHIZUKU_TOOL,
+                forceAsk = toolName == SHIZUKU_TOOL || toolName == ROOT_TOOL,
                 unconfirmedLayer = unconfirmedLayer
             )
         } else {
@@ -280,6 +294,15 @@ class ToolPermissionPolicyEngine @Inject constructor(
         command.contains('>') || command.contains("-delete") || DESTRUCTIVE_PROGRAM.containsMatchIn(command)
 
     /**
+     * 不可静态判定时的拦截原因：附带具体触发构造。
+     * 只说「无法静态分析」时 AI 不知道是 `$(...)` 还是绝对路径重定向，只能整条反复重试。
+     */
+    private fun unanalyzableReason(analysis: ShellCommandParser.Analysis): String {
+        val constructs = analysis.blockers.joinToString("、").ifEmpty { "未知构造" }
+        return "${context.getString(R.string.permission_rm_deny_unanalyzable)}（触发构造：$constructs）"
+    }
+
+    /**
      * 灾难性删除的裁决：携带提权参数时降级为一次性用户授权（ASK），否则硬拒绝（DENY）
      * 并在原因里提示可提权重试。AUTO 与非 AUTO 模式共用。提权仅对本次调用生效，不可记忆。
      */
@@ -288,14 +311,18 @@ class ToolPermissionPolicyEngine @Inject constructor(
             EvalResult(
                 verdict = Verdict.ASK,
                 rememberablePatterns = emptyList(),
-                askTitle = "高危操作提权确认",
-                rememberDisabledReason = "命令命中内置安全防护，提权仅支持单次放行，不可记忆"
+                askTitle = context.getString(R.string.permission_elevation_title),
+                rememberDisabledReason = context.getString(R.string.permission_elevation_not_rememberable)
             )
         } else {
             EvalResult(
                 Verdict.DENY,
                 emptyList(),
-                denyReason = "$catastrophicReason。如确需执行，可在调用时加 `$ELEVATE_ARG: true` 重试，系统将向用户请求授权。"
+                denyReason = context.getString(
+                    R.string.permission_deny_with_elevate_hint,
+                    catastrophicReason,
+                    ELEVATE_ARG
+                )
             )
         }
 
@@ -373,14 +400,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
         unconfirmedLayer: UnconfirmedLayer?
     ): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
-        if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
+        if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = context.getString(R.string.permission_deny_tool_by_project_rule))
         if (dangerous && unconfirmedLayer != null) return unconfirmedRulesAsk(unconfirmedLayer)
         if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
                 Verdict.ASK,
                 rememberablePatterns = emptyList(),
-                rememberDisabledReason = "该工具会修改 Agent 配置、容器环境或调用外部动态工具，为降低误授权风险，仅支持单次放行"
+                rememberDisabledReason = context.getString(R.string.permission_non_rememberable_capabilities)
             )
         }
         // 走到这里仍可能是「规则读不到」：只读工具不受上面那道收紧影响，但同样不能给「始终允许」。
@@ -405,15 +432,15 @@ class ToolPermissionPolicyEngine @Inject constructor(
         if (raw.isEmpty()) return null
         val path = normalizePath(raw)
         return when {
-            path == "/" || path == "/*" -> REASON_RM_ROOT
-            path in RELATIVE_WILDCARD_TARGETS -> REASON_RM_RELATIVE
-            ROOT_LEVEL_GLOB.matches(path) -> REASON_RM_SYSTEM_DIR
-            path == HOME_DIR || path == "$HOME_DIR/*" -> REASON_RM_HOME
-            path in WORKSPACE_ROOT_TARGETS -> REASON_RM_WORKSPACE
+            path == "/" || path == "/*" -> context.getString(R.string.permission_rm_deny_root)
+            path in RELATIVE_WILDCARD_TARGETS -> context.getString(R.string.permission_rm_deny_relative)
+            ROOT_LEVEL_GLOB.matches(path) -> context.getString(R.string.permission_rm_deny_system_dir)
+            path == HOME_DIR || path == "$HOME_DIR/*" -> context.getString(R.string.permission_rm_deny_home)
+            path in WORKSPACE_ROOT_TARGETS -> context.getString(R.string.permission_rm_deny_workspace)
             // 工作区子目录（构建产物等）属正常操作，置于系统目录判定之前放行
             path.startsWith("$HOME_DIR/workspace/") || path.startsWith("workspace/") -> null
-            path == "/tmp" || path == "/tmp/*" -> REASON_RM_TMP
-            PROTECTED_SYSTEM_DIRS.any { path == it || path.startsWith("$it/") } -> REASON_RM_SYSTEM_DIR
+            path == "/tmp" || path == "/tmp/*" -> context.getString(R.string.permission_rm_deny_tmp)
+            PROTECTED_SYSTEM_DIRS.any { path == it || path.startsWith("$it/") } -> context.getString(R.string.permission_rm_deny_system_dir)
             else -> null
         }
     }
@@ -455,6 +482,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
      *   只有「全部段命中内置只读白名单」才自动放行，其余一律降级为一次性授权。
      */
     private fun evaluateShell(
+        toolName: String,
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
         forceAsk: Boolean = false,
@@ -475,17 +503,45 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
 
         // 1) DENY 优先（含对内置安全白名单的覆盖）：任一段命中 DENY 即拒。
-        if (analysis.segments.any { seg -> deny.any { ShellCommandParser.matches(it.pattern, seg) } }) {
-            return EvalResult(Verdict.DENY, emptyList(), denyReason = "该命令被项目权限规则策略禁止执行")
+        val deniedByPattern = deny.firstOrNull { rule ->
+            analysis.segments.any { seg -> ShellCommandParser.matches(rule.pattern, seg) }
+        }
+        if (deniedByPattern != null) {
+            // 回显命中规则与被拦的段：AI 才知道是哪一段越界，而不是整条命令反复重试。
+            val segment = analysis.segments.first { ShellCommandParser.matches(deniedByPattern.pattern, it) }
+            return EvalResult(
+                Verdict.DENY,
+                emptyList(),
+                denyReason = appContext.getString(
+                    R.string.tool_command_rule_denied_detail,
+                    deniedByPattern.toCompact(),
+                    segment.joinToString(" ")
+                )
+            )
         }
 
-        // 2) Shizuku 高危工具：无论内置白名单或已记忆规则，一律弹窗且不可记忆。
+        // 2) Shizuku / Root 高危工具：无论内置白名单或已记忆规则，一律弹窗且不可记忆。
         if (forceAsk) {
-            return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = REASON_SHIZUKU)
+            val reason = if (toolName == ROOT_TOOL) {
+                context.getString(R.string.permission_root_not_rememberable)
+            } else {
+                context.getString(R.string.permission_shizuku_not_rememberable)
+            }
+            return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = reason)
         }
 
         // 3) 不可静态判定 → 必须弹窗、不可记忆（内置白名单也不适用）。
-        if (!analysis.analyzable) return EvalResult(Verdict.ASK, emptyList())
+        if (!analysis.analyzable) {
+            return EvalResult(
+                Verdict.ASK,
+                emptyList(),
+                // 把触发构造写进弹窗说明：用户与 AI 都能看出这条命令为什么没法自动判定。
+                rememberDisabledReason = appContext.getString(
+                    R.string.tool_command_unanalyzable_reason,
+                    analysis.blockers.joinToString("、")
+                )
+            )
+        }
 
         // 4) 内置安全白名单：每段都命中安全前缀（ls/git status 等）→ 自动放行，不弹窗。
         //    这是代码内置、不可篡改的只读清单，故项目级规则读不到时（第 5 步）仍适用。
@@ -510,7 +566,13 @@ class ToolPermissionPolicyEngine @Inject constructor(
                         false
                     } else if (rmInfo.isRm) {
                         val ruleRmInfo = ShellCommandParser.parseRmInfo(rule.pattern.split(Regex("\\s+")))
-                        ruleRmInfo.targetPaths.isNotEmpty() && (!rmInfo.isRecursive || ruleRmInfo.isRecursive)
+                        ruleRmInfo.targetPaths.isNotEmpty() &&
+                            (!rmInfo.isRecursive || ruleRmInfo.isRecursive) &&
+                            // 目标必须落在规则授权范围内：`rm -rf app/tmp/../../x` 不能靠前缀命中
+                            // 已记忆的 `rm -rf app/tmp`。路径先折叠 `..` 再按段比较。
+                            rmInfo.targetPaths.all { target ->
+                                ruleRmInfo.targetPaths.any { allowed -> isPathWithin(target, allowed) }
+                            }
                     } else {
                         true
                     }
@@ -527,11 +589,18 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(
                 verdict = Verdict.ASK,
                 rememberablePatterns = emptyList(),
-                rememberDisabledReason = "高风险删除操作（递归/通配/强制批量删除），为确保数据安全不可记忆，仅可单次放行"
+                rememberDisabledReason = context.getString(R.string.permission_rm_unrememberable)
             )
         }
 
         val rememberable = analysis.segments.mapNotNull { ShellCommandParser.rememberablePrefix(it) }.distinct()
         return EvalResult(Verdict.ASK, rememberable)
+    }
+
+    private fun isPathWithin(target: String, allowed: String): Boolean {
+        val t = normalizePath(target)
+        val a = normalizePath(allowed)
+        if (a.isEmpty() || a == ".") return false
+        return t == a || t.startsWith("$a/")
     }
 }

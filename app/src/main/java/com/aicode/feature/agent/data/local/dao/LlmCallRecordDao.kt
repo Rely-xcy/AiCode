@@ -91,6 +91,26 @@ interface LlmCallRecordDao {
     suspend fun deleteAll()
 
     /**
+     * 清理 [cutoff] 之前只用于单次诊断的字段，保留所有聚合统计需要的数据。
+     * 已清理行不会再次命中，重复执行返回 0。
+     */
+    @Query(
+        """
+        UPDATE llm_call_records
+        SET sessionId = NULL,
+            reasoningEffort = NULL,
+            errorMessage = NULL,
+            stopReason = NULL
+        WHERE createdAt < :cutoff
+          AND (sessionId IS NOT NULL
+               OR reasoningEffort IS NOT NULL
+               OR errorMessage IS NOT NULL
+               OR stopReason IS NOT NULL)
+        """
+    )
+    suspend fun compactDetailsBefore(cutoff: Long): Int
+
+    /**
      * 按天聚合（本地时区：把 createdAt 平移 [tzOffsetMillis] 后再按 86400000 取整切天）。
      * [tzOffsetMillis] 由调用方按当前系统时区提供（TimeZone.getDefault().getOffset(now)）。
      */

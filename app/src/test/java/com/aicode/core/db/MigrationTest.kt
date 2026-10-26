@@ -122,4 +122,23 @@ class MigrationTest {
             tables.contains("backup_targets")
         )
     }
+
+    @Test
+    fun migrate_65_to_66_adds_session_briefs() {
+        helper.createDatabase(dbName, 65).close()
+
+        val db = Room.databaseBuilder(context, AgentDatabase::class.java, dbName)
+            .addMigrations(*MigrationLoader.loadMigrations(context))
+            .build()
+        val tables = mutableSetOf<String>()
+        db.openHelper.writableDatabase
+            .query("SELECT name FROM sqlite_master WHERE type='table'")
+            .use { cursor -> while (cursor.moveToNext()) tables += cursor.getString(0) }
+        db.close()
+
+        assertTrue(
+            "迁移 66 应新增 session_briefs 表，实际表：$tables",
+            tables.contains("session_briefs")
+        )
+    }
 }

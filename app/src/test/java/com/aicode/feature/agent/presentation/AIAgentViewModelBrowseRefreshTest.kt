@@ -1,9 +1,14 @@
 package com.aicode.feature.agent.presentation
 
 import androidx.lifecycle.viewModelScope
+import com.aicode.feature.agent.domain.container.ContainerProfile
+import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
+import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.just
+import io.mockk.runs
 import io.mockk.mockk
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -13,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -91,8 +97,8 @@ class AIAgentViewModelBrowseRefreshTest {
         assertSame("进行中帧必须原样复用上一份树，不能替换 nodes", first.nodes, refreshing.nodes)
 
         releaseRefresh.countDown()
-        val updated = awaitSuccess(frames) { !it.refreshing && it.nodes.size == secondTree.size + 1 }
-        assertEquals(secondTree.size + 1, updated.nodes.size)
+        val updated = awaitSuccess(frames) { !it.refreshing && it.nodes.size == secondTree.size + 2 }
+        assertEquals(secondTree.size + 2, updated.nodes.size)
         assertTrue("新树与旧树不是同一份", updated.nodes !== first.nodes)
         collectJob.cancel()
     }
@@ -133,7 +139,17 @@ class AIAgentViewModelBrowseRefreshTest {
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
         terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
-        slashCommandRegistry = mockk(relaxed = true),
+        // 后台命令结束事件流：与 terminalSessionManager 同样桩成空流，本路径不依赖它。
+        terminalSessionProvider = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
+        slashCommandRegistry = mockk {
+            // init 里 _currentWorkspace.collect 会立刻触发 refresh()：真实实现会走 IO 调度器
+            // 真扫技能目录（GlobalDirectorySkillSource → File.walkTopDown）并在 FileLogger 的
+            // 真后台线程上落盘——异常一旦逃逸就会挂在同 JVM 随后开跑的 runTest 上（CI 上
+            // GitRepositoryTest 的 UncaughtExceptionsBeforeTest 即此因）。stub 掉，让 init 的
+            // collect 只验证“收到工作区变化”这件事本身。
+            coEvery { refresh() } just runs
+        },
+        fileMentionRepository = mockk(relaxed = true),
         checkpointManager = mockk(relaxed = true),
         checkpointDao = mockk(relaxed = true),
         backupManager = mockk(relaxed = true),
@@ -147,8 +163,25 @@ class AIAgentViewModelBrowseRefreshTest {
         todoItemDao = mockk(relaxed = true),
         fileAccess = fileAccess,
         fileChangeHub = mockk(relaxed = true),
-        workspaceWriteSignal = mockk(relaxed = true),
+        workspaceWriteSignal = mockk(relaxed = true) { every { writes } returns MutableSharedFlow() },
         contextUsageHolder = mockk(relaxed = true),
+        // 容器根行依赖这两个流：桩成会发值，否则 containerRootNode 永不产出、browseState 也就永不发帧。
+        containerSettingsRepository = mockk(relaxed = true) {
+            every { activeProfileFlow } returns MutableStateFlow(
+                ContainerProfile(
+                    id = "builtin",
+                    name = "Alpine",
+                    rootfsSource = RootfsSource.Asset("alpine-rootfs.bin"),
+                    shellPath = null,
+                    isBuiltin = true
+                )
+            )
+        },
+        containerOsDetector = mockk(relaxed = true) { every { osMap } returns MutableStateFlow(emptyMap()) },
+        liveNotificationSettings = mockk(relaxed = true) { every { enabledFlow } returns MutableStateFlow(false) },
+        agentLiveNotificationManager = mockk(relaxed = true),
+        approvalNotificationSettings = mockk(relaxed = true) { every { enabledFlow } returns MutableStateFlow(false) },
+        agentApprovalNotificationManager = mockk(relaxed = true),
         context = mockk(relaxed = true)
     )
 }

@@ -102,8 +102,13 @@ class StdioTransport(
         ensureStarted()
         val payload = JsonRpcNotification(method = method, params = params)
         FileLogger.d(TAG, "→ notify [$serverName] $method")
-        runCatching { writeLine(json.encodeToString(JsonRpcNotification.serializer(), payload)) }
-            .onFailure { FileLogger.w(TAG, "[$serverName] 发送通知 $method 失败: ${it.message}") }
+        try {
+            writeLine(json.encodeToString(JsonRpcNotification.serializer(), payload))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "[$serverName] 发送通知 $method 失败: ${e.message}")
+        }
     }
 
     override fun close() {

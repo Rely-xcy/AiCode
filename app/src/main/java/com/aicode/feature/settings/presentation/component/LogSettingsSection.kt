@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -43,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -112,28 +114,12 @@ internal fun LogSection(
                 title = stringResource(R.string.log_level),
                 onClick = { showLevelSheet = true },
                 trailing = {
-                    Surface(
-                        shape = RoundedCornerShape(Radius.pill),
-                        color = logLevelColor(current).copy(alpha = 0.15f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(logLevelColor(current), RoundedCornerShape(Radius.pill))
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = current.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium,
-                                color = logLevelColor(current)
-                            )
-                        }
-                    }
+                    McpPill(
+                        text = current.name,
+                        textColor = logLevelColor(current),
+                        backgroundColor = logLevelColor(current).copy(alpha = 0.15f),
+                        leadingDotColor = logLevelColor(current)
+                    )
                 }
             )
             SettingsDivider()
@@ -288,9 +274,22 @@ private fun LogContent(
             val listState = rememberLazyListState()
             val clipboard = LocalClipboard.current
             val scope = rememberCoroutineScope()
-            var copiedIndex by remember { mutableStateOf<Int?>(null) }
-            var menuIndex by remember { mutableStateOf<Int?>(null) }
+            var copiedEntry by remember { mutableStateOf<LogEntry?>(null) }
+            var menuEntry by remember { mutableStateOf<LogEntry?>(null) }
             var followLatest by remember { mutableStateOf(true) }
+
+            // 用户往上翻看历史时立刻停跟随；滑回底部再恢复。
+            // 以前只靠开关，往上翻之后每 3 秒刷新都会把视口拽回最后一行。
+            LaunchedEffect(listState) {
+                listState.interactionSource.interactions.collect { interaction ->
+                    if (interaction is DragInteraction.Start) followLatest = false
+                }
+            }
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.canScrollForward }.collect { canScroll ->
+                    if (!canScroll) followLatest = true
+                }
+            }
 
             // 实时滚动：开启时每 3 秒静默刷新，跟随最新日志
             LaunchedEffect(followLatest, state.selectedFileName, state.filterServerName) {
@@ -305,10 +304,10 @@ private fun LogContent(
             LaunchedEffect(entries.size, state.selectedFileName, state.filterServerName, followLatest) {
                 if (followLatest && entries.isNotEmpty()) listState.scrollToItem(entries.lastIndex)
             }
-            LaunchedEffect(copiedIndex) {
-                if (copiedIndex != null) {
+            LaunchedEffect(copiedEntry) {
+                if (copiedEntry != null) {
                     delay(1500)
-                    copiedIndex = null
+                    copiedEntry = null
                 }
             }
 
@@ -358,42 +357,47 @@ private fun LogContent(
                     state = listState,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(entries) { index, entry ->
+                    itemsIndexed(entries) { _, entry ->
                         LogLine(
                             entry = entry,
-                            copied = copiedIndex == index,
+                            copied = copiedEntry == entry,
                             onClick = {
                                 copyLog(entry.raw)
-                                copiedIndex = index
+                                copiedEntry = entry
                             },
-                            onLongClick = { menuIndex = index }
+                            onLongClick = { menuEntry = entry }
                         )
                     }
                 }
             }
 
-            // 长按自定义复制：本条 / 本条及堆栈 / 消息内容
-            menuIndex?.let { index ->
-                val entry = entries.getOrNull(index) ?: return@let
-                val stackLines = entries.drop(index + 1).takeWhile { it.level == null }
+            // 长按自定义复制：本条 / 本条及堆栈 / 消息内容。
+            // 菜单认条目本体而不认下标：列表每 3 秒整份替换，下标会漂到另一行（复制到错内容）。
+            menuEntry?.let { entry ->
+                val index = entries.indexOf(entry)
+                val stackLines = if (index >= 0) {
+                    entries.drop(index + 1).takeWhile { it.level == null }
+                } else {
+                    emptyList()
+                }
                 LogLineActionsSheet(
                     hasStack = stackLines.isNotEmpty(),
                     onCopyLine = {
                         copyLog(entry.raw)
-                        copiedIndex = index
-                        menuIndex = null
+                        copiedEntry = entry
+                        menuEntry = null
                     },
                     onCopyWithStack = {
                         copyLog((listOf(entry) + stackLines).joinToString("\n") { it.raw })
-                        copiedIndex = index
-                        menuIndex = null
+                        copiedEntry = entry
+                        menuEntry = null
                     },
                     onCopyMessage = {
                         copyLog(entry.message)
-                        copiedIndex = index
-                        menuIndex = null
+                        copiedEntry = entry
+                        menuEntry = null
                     },
-                    onDismiss = { menuIndex = null }
+                    onDismiss = { menuEntry = null }
                 )
             }
         }

@@ -1,6 +1,9 @@
 package com.aicode.feature.agent.domain.tool
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver
@@ -27,7 +30,8 @@ data class StoredToolOutput(
 class ToolOutputStore @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val fileAccess: FileAccessProvider,
-    private val pathHomeResolver: PathHomeResolver
+    private val pathHomeResolver: PathHomeResolver,
+    @param:ApplicationContext private val appContext: Context
 ) {
     private companion object {
         const val TAG = "ToolOutputStore"
@@ -130,17 +134,13 @@ class ToolOutputStore @Inject constructor(
     private fun buildPreview(text: String, outputPath: String?): String {
         val omitted = text.length - HEAD_CHARS - TAIL_CHARS
         val storageHint = if (outputPath != null) {
-            "完整内容已保存到 $outputPath"
+            appContext.getString(R.string.tool_output_saved_hint, outputPath)
         } else {
-            "完整内容保存失败"
+            appContext.getString(R.string.tool_output_unsaved_hint)
         }
         return buildString {
             append(text.take(HEAD_CHARS))
-            append("\n\n...[输出过长，已省略中间 ")
-            append(omitted)
-            append(" 个字符；")
-            append(storageHint)
-            append("]...\n\n")
+            append(appContext.getString(R.string.tool_output_omitted, omitted, storageHint))
             append(text.takeLast(TAIL_CHARS))
         }
     }

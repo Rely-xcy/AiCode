@@ -8,8 +8,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerProfile
+import com.aicode.feature.agent.domain.container.versionFromDownloadFileName
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -29,6 +31,12 @@ private val Context.containerDataStore by preferencesDataStore(
 data class DownloadedImageRecord(
     val entryId: String,
     val fileUri: String,
+    /**
+     * 下载当时的版本号（如 `3.21.8` / `12.15`）。
+     * 目录版本会随上游刷新，而磁盘上的文件不会跟着变，靠它才能判断「已下载的是不是旧补丁」。
+     * 空串表示升级前留下的旧记录，此时由 [effectiveVersion] 退回文件名解析。
+     */
+    val version: String = "",
     val installed: Boolean = false
 )
 
@@ -107,6 +115,14 @@ internal fun removeDownloadedImageEntry(
 ): List<DownloadedImageRecord> = current.filterNot { it.entryId == entryId }
 
 /**
+ * 磁盘上这份下载文件的版本号：记录字段优先；升级前的旧记录没有该字段，
+ * 退回从下载文件名解析（文件名一直带版本号），这样旧记录也能正确提示「有新版」，不必做数据迁移。
+ * 两者都拿不到时返回空串，调用方按「不知道版本」处理，不误报。
+ */
+fun DownloadedImageRecord.effectiveVersion(): String =
+    version.takeIf { it.isNotBlank() } ?: versionFromDownloadFileName(entryId, fileUri)
+
+/**
  * 持久化当前选中的容器 profile 与用户自定义 profile 列表。
  *
  * DataStore 用法与 [ThemeSettingsRepository] 一致（构造注入即可，无需 DI module）。
@@ -145,6 +161,16 @@ class ContainerSettingsRepository @Inject constructor(
      */
     val customProfilesFlow: Flow<List<ContainerProfile>> = context.containerDataStore.data.map { prefs ->
         decodeProfiles(prefs[CUSTOM_PROFILES_KEY]) ?: emptyList()
+    }
+
+    /**
+     * 当前选中的 profile。id 在列表中已不存在（被删除）时回退列表首项，列表为空回退内置 Alpine，
+     * 保证调用方总能拿到一个可用 profile。
+     */
+    val activeProfileFlow: Flow<ContainerProfile> = combine(activeProfileIdFlow, customProfilesFlow) { id, profiles ->
+        profiles.firstOrNull { it.id == id }
+            ?: profiles.firstOrNull()
+            ?: ContainerProfile.BUILTIN_ALPINE
     }
 
     suspend fun setActiveProfile(id: String) {

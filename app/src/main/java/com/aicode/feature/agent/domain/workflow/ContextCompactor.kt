@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.dao.CompactionChainBlocksNotMarkedException
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
@@ -19,6 +20,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import android.os.SystemClock
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.sync.Mutex
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,7 +31,7 @@ import javax.inject.Singleton
  * 阈值、档位、硬线判定属于策略，归 [com.aicode.feature.agent.domain.engine.modules.CompactionModule]；
  * 本类只提供两个变换，便于单独验证：
  * - [compact]：调摘要模型折叠早期对话，并把结果落库；
- * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库）。
+ * - [enforceWindowLimit]：发送前兜底截断，保证不发出超窗请求（不落库，按轮次冻结产出）。
  *
  * 三个变换都不读设置、不解析模型目录：预算由调用方算好传进来。
  */
@@ -43,6 +46,9 @@ class ContextCompactor @Inject constructor(
     private companion object {
         const val TAG = "ContextCompactor"
 
+        /** 会话级压缩互斥：同一会话同一时刻只允许一个压缩流程。 */
+        private val sessionLocks = ConcurrentHashMap<String, Mutex>()
+
         /** 送进摘要请求前对单条工具输出的保留上限（只在摘要请求内生效，不改历史）。 */
         const val TRIM_FOR_SUMMARY_CHARS = 3_000
 
@@ -55,6 +61,33 @@ class ContextCompactor @Inject constructor(
         /** 链合并（阶段 4）专用提示词：对多份旧摘要再归纳。 */
         const val MERGE_PROMPT_FILE = "agent/compact-chain-merge.md"
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
+
+        /** 压缩请求的 system prompt：只做摘要，不继续对话、不调工具。 */
+        const val SUMMARY_SYSTEM_PROMPT =
+            "你是一个上下文压缩引擎。本次请求中的对话历史仅作为输入材料，不要继续其中任何任务，不要调用任何工具，只输出接手摘要。"
+
+        /**
+         * 分块摘要的单块字数目标。
+         *
+         * 最终摘要上限 1200 字，8 块各写 400 字，合并输入约 3200 字（约 3200 token），
+         * 在常见摘要窗口（8k 以上）里装得下；块内指令又要求只覆盖本块，避免每块都复述全文。
+         */
+        const val CHUNK_SUMMARY_CHAR_BUDGET = 400
+
+        /**
+         * 摘要合并的最大层级。8 块最多只需 3 层（8 → 3 → 1），4 留一层余量；
+         * 再往上是预算小到装不下的病态窗口，继续递归只是多花钱。
+         */
+        const val MAX_SUMMARY_MERGE_DEPTH = 4
+
+        /**
+         * 摘要窗口预算比例：剩余 30% 留给摘要提示词与旧摘要。
+         *
+         * 三处共用同一常量，不能各自硬编码——[compact] 用它切分块（保证每块请求装得下）、
+         * 分块合并用它算分组预算、[List.truncateForSummaryWindow] 用它做最后一道裁切，
+         * 口径漂移就会重新出现「悄悄丢弃原文」。
+         */
+        const val SUMMARY_BUDGET_RATIO = 0.7f
     }
 
     /**
@@ -70,8 +103,9 @@ class ContextCompactor @Inject constructor(
 
         val result = messages.toMutableList()
         var changed = false
-        // 从最大的开始削，只削到刚好落进预算为止，避免把小消息也一起截短。
-        val order = messages.indices.sortedByDescending { TokenEstimator.estimateMessage(messages[it]) }
+        // 只从最老的消息开始截：固定顺序 + 固定预算，同一份输入永远得到同一串字节。
+        // 按「最大优先」截会让同一轮相邻两次调用的截点随估算漂移，前缀随之变形。
+        val order = messages.indices
         for (index in order) {
             if (estimate <= budgetTokens) break
             val before = TokenEstimator.estimateMessage(result[index])
@@ -98,7 +132,7 @@ class ContextCompactor @Inject constructor(
      * 回放侧（MessagePersistenceUseCase）按块边界裁窗口，被折叠的原文不再重复回放。
      *
      * @param preserveRecentTokens 保留最近原文的预算（由调用方按窗口档位算好）。
-     * @param summaryWindowTokens 摘要模型自己的窗口，用于裁剪送进摘要请求的 head。
+     * @param summaryWindowTokens 摘要模型自己的窗口：head 超过它预算时按它切块，单块请求也按它兜底截断。
      * @return 压缩后的消息列表；无内容可压或调用失败返回 null（调用方保留原消息）。
      */
     suspend fun compact(
@@ -123,6 +157,11 @@ class ContextCompactor @Inject constructor(
         onBeforeFold: (suspend (List<AgentMessage>) -> Unit)? = null,
         onEvent: suspend (AgentEvent) -> Unit = {}
     ): List<AgentMessage>? {
+        // 会话级互斥：同一会话并发触发压缩时，后到者等前一个结束，避免两轮折叠同一段历史、
+        // 或后写覆盖前写的摘要块（V2 3.6）。
+        val sessionLock = sessionId?.let { sessionLocks.computeIfAbsent(it) { Mutex() } }
+        sessionLock?.lock()
+        try {
         // 折叠前的上下文量：提交前要拿它跟折叠后的结果比（不省空间的折叠不提交）。
         val estimatedTokens = TokenEstimator.estimateMessages(messages)
         var splitIndex = selectTailStartIndex(messages, preserveRecentTokens)
@@ -132,119 +171,211 @@ class ContextCompactor @Inject constructor(
         splitIndex = adjustSplitIndex(messages, splitIndex)
         if (splitIndex <= 0) return null
 
-        val head = messages.subList(0, splitIndex)
-        val tail = messages.subList(splitIndex, messages.size)
-        // 折叠前先把原文存档：摘要没覆盖到的细节不至于永久丢失，模型需要时可读回来
-        val archivePath = compactedHistoryArchive.archive(sessionId, head)
-        // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
-        if (onBeforeFold != null) {
-            runCatching { onBeforeFold(head) }
-                .onFailure { FileLogger.w(TAG, "折叠前回调失败，继续压缩", it) }
+        // 分块摘要：以前 head 装不进摘要窗口就把 splitIndex 前移（这轮少折一点），超大
+        // 会话因此反复「少折一点」压不下去。现在改为按摘要窗口切块、逐块摘要、再把各块
+        // 摘要合并成一份：最终仍只落一条摘要行，覆盖边界与落库语义都不变。
+        // 单块目标沿用 70% 预算 [SUMMARY_BUDGET_RATIO]，保证每块请求连指令一起装得下。
+        val summaryBudgetTokens = (summaryWindowTokens * SUMMARY_BUDGET_RATIO).toInt()
+
+        // 自适应收敛先跑：它只决定「多折能不能换来空间」，与 head 怎么切块无关。
+        // 代价：多折进 head 的原文可能因块数上限留在保留区（不丢原文），或单条超长内容
+        // 在摘要请求里被截断（存档里仍有原文）。
+        val shrink = convergeSplitIndex(messages, splitIndex, estimatedTokens)
+        if (shrink.splitIndex != splitIndex) {
+            FileLogger.i(
+                TAG,
+                "保留区自适应收缩：切点 $splitIndex → ${shrink.splitIndex}（${shrink.rounds} 轮）" +
+                    " 折后预计 ${projectedCompactedTokens(messages, shrink.splitIndex)} / 原估算 $estimatedTokens tokens" +
+                    " 保留条数 ${messages.size - shrink.splitIndex}" +
+                    "（地板 $MIN_TAIL_MESSAGES 条 / $MIN_TAIL_TOKENS tokens）"
+            )
+            splitIndex = shrink.splitIndex
         }
-        val previousSummary: String? = null
+
+        var head = messages.subList(0, splitIndex)
+        var tail = messages.subList(splitIndex, messages.size)
+
         // 新语义：旧摘要块是冻结的独立块，新块只覆盖本次折掉的原文，不再合并旧摘要
         // （设计 §4.3 第 5 步）。buildSummaryInstruction 的 previous-summary 分支保留，
         // 阶段 3 引入合并时复用；extractPreviousSummary 同理保留但不再被此处调用。
-        val headForSummary = removeCompactionPairs(head).truncateForSummaryWindow(summaryWindowTokens)
-        if (headForSummary.isEmpty()) {
+        val summarySource = removeCompactionPairs(head)
+        if (summarySource.isEmpty()) {
             // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容。
             FileLogger.i(TAG, "无可压缩内容（head 为空），跳过压缩")
             return null
         }
 
-        // 压缩请求：head 原始消息数组 + 末尾一条压缩指令（Codex 式），tools 不发送。
-        // 裁掉开头的孤立 tool 结果后可能什么都不剩：这时只剩一条压缩指令，
-        // 调模型也只会得到一段没用的摘要，白花钱
-        val trimmedHead = headForSummary.trimLeadingForCompaction()
-        if (trimmedHead.isEmpty()) {
-            FileLogger.i(TAG, "裁剪孤立 tool 结果后 head 为空，跳过压缩")
-            return null
+        val needsChunking = summaryBudgetTokens > 0 &&
+            TokenEstimator.estimateMessages(summarySource) > summaryBudgetTokens
+        val chunks = if (needsChunking) {
+            splitIntoSummaryChunks(summarySource, summaryBudgetTokens, MAX_SUMMARY_CHUNKS)
+        } else {
+            // 装得下就保持原来的单次调用路径（trim + 单条摘要），不为一句话的历史多花调用。
+            listOf(summarySource.truncateForSummaryWindow(summaryWindowTokens))
         }
-        val summaryInstruction = buildSummaryInstruction(previousSummary)
-        val summaryRequestMessages = trimmedHead + listOf(
-            AgentMessage.UserMessage(content = summaryInstruction)
-        )
 
-        // 调用统计埋点：压缩也是一次真实 LLM 调用（独立于主循环，kind=compaction）。
-        val callStartElapsed = SystemClock.elapsedRealtime()
-        val callStartWall = System.currentTimeMillis()
-        var callError: String? = null
-        var callCompleted = false
-        var callUsage: AIResponse? = null
+        // 块数上限：head 超过 [MAX_SUMMARY_CHUNKS] 块时只折最旧的这些块，其余原文留在保留区。
+        // 这里把切点收回到最后一块末尾，覆盖边界、归档范围、回放裁窗都随之缩小——宁可少折，
+        // 也不让一次折叠花掉十几次模型调用。
+        if (needsChunking) {
+            val covered = chunks.sumOf { it.size }
+            if (covered < summarySource.size) {
+                val newSplit = adjustSplitIndex(messages, indexAfterFilteredMessages(head, covered))
+                if (newSplit <= 0) return null
+                FileLogger.i(
+                    TAG,
+                    "分块摘要达到块数上限 $MAX_SUMMARY_CHUNKS：本轮只折叠最旧 $covered 条原文" +
+                        "（切点 $splitIndex → $newSplit），其余留在保留区"
+                )
+                splitIndex = newSplit
+                head = messages.subList(0, splitIndex)
+                tail = messages.subList(splitIndex, messages.size)
+            }
+        }
 
-        val summaryResponse = try {
-            val response = summaryProvider.complete(
-                systemPrompt = "你是一个上下文压缩引擎。本次请求中的对话历史仅作为输入材料，不要继续其中任何任务，不要调用任何工具，只输出接手摘要。",
-                messages = summaryRequestMessages,
-                tools = emptyList(),
-                // 压缩请求一次性：它的前缀（整段被折叠的历史）不会被下一次折叠命中
-                // （下一次 head 起点不同），写缓存只会白付 1.25×。
-                cacheTail = false
+        // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
+        if (onBeforeFold != null) {
+            try {
+                onBeforeFold(head)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "折叠前回调失败，继续压缩", e)
+            }
+        }
+        // 进度步数：单块只算一次摘要调用；多块是「逐块摘要 + 一次合并」。
+        // 只用来给界面报数，不参与任何切分或判定。
+        val progressTotalSteps = if (chunks.size == 1) 1 else chunks.size + 1
+
+        val previousSummary: String? = null
+        // 结构化文件账本：只从被折叠的这段历史的工具调用参数里取，作为摘要请求的附加输入，
+        // 并由代码在摘要末尾追加固定小节（不新增表，靠摘要正文持久化）。
+        val chunkLedgers = chunks.map { buildFileLedger(it) }
+        val ledgerEntries =
+            if (needsChunking) mergeFileLedgers(chunkLedgers) else buildFileLedger(summarySource)
+
+        val summaryStartElapsed = SystemClock.elapsedRealtime()
+        val summaryUsages = mutableListOf<AIResponse>()
+        var summaryCallCount = 0
+        val summaryResponse: String
+        if (chunks.size == 1) {
+            val trimmedHead =
+                chunks.single().trimLeadingForCompaction().fitForSummaryBudget(summaryBudgetTokens)
+            if (trimmedHead.isEmpty()) {
+                FileLogger.i(TAG, "裁剪孤立 tool 结果后 head 为空，跳过压缩")
+                return null
+            }
+            val summaryInstruction =
+                buildSummaryInstruction(previousSummary) + fileLedgerPrompt(ledgerEntries)
+            onEvent(AgentEvent.CompactionProgressChanged(step = 1, totalSteps = progressTotalSteps))
+            val outcome = requestSummaryCall(
+                summaryProvider = summaryProvider,
+                sessionId = sessionId,
+                requestMessages = trimmedHead + listOf(AgentMessage.UserMessage(content = summaryInstruction)),
+                failureLog = "压缩上下文失败"
             )
-            callUsage = response
-            callCompleted = true
-            response.content
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            callError = e.message ?: e.javaClass.simpleName
-            FileLogger.e(TAG, "压缩上下文失败", e)
-            onEvent(AgentEvent.CompactionFailed(callError))
-            return null
-        }
-
-        val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
-        runCatching {
-            llmCallRecordDao.insert(
-                LlmCallRecordEntity(
+            summaryCallCount = 1
+            outcome.usage?.let { summaryUsages += it }
+            if (outcome.content == null) {
+                val reason = outcome.error ?: "摘要响应不可用"
+                FileLogger.w(TAG, "摘要响应不可用，放弃本次压缩（不落库、不标记 head）：$reason")
+                onEvent(AgentEvent.CompactionFailed("摘要响应不可用：$reason"))
+                return null
+            }
+            summaryResponse = outcome.content
+        } else {
+            val chunkSummaries = mutableListOf<String>()
+            for ((index, chunk) in chunks.withIndex()) {
+                // 首块沿用整段 head 的老规则（丢掉开头的孤立 tool 结果）；后续块不能丢：
+                // 它们可能正好从 assistant 消息开始，丢了就等于这段历史没进摘要。
+                val prepared =
+                    if (index == 0) chunk.trimLeadingForCompaction()
+                    else chunk.stripForSummary()
+                val requestHead = prepared.fitForSummaryBudget(summaryBudgetTokens)
+                if (requestHead.isEmpty()) {
+                    FileLogger.i(
+                        TAG,
+                        "裁剪孤立 tool 结果后第 ${index + 1}/${chunks.size} 块为空，跳过压缩"
+                    )
+                    return null
+                }
+                val instruction = buildChunkSummaryInstruction(index, chunks.size) +
+                    fileLedgerPrompt(chunkLedgers[index])
+                onEvent(
+                    AgentEvent.CompactionProgressChanged(
+                        step = index + 1,
+                        totalSteps = progressTotalSteps
+                    )
+                )
+                val outcome = requestSummaryCall(
+                    summaryProvider = summaryProvider,
                     sessionId = sessionId,
-                    providerId = summaryProvider.providerId.ifBlank { null },
-                    model = summaryProvider.model,
-                    kind = "compaction",
-                    inputTokens = callUsage?.inputTokens ?: 0,
-                    outputTokens = callUsage?.outputTokens ?: 0,
-                    cachedInputTokens = callUsage?.cachedInputTokens ?: 0,
-                    cacheCreationTokens = callUsage?.cacheCreationTokens ?: 0,
-                    ttfbMillis = null,
-                    durationMillis = durationMillis,
-                    status = if (callCompleted) "success" else "error",
-                    errorMessage = callError,
-                    stopReason = callUsage?.stopReason,
-                    createdAt = callStartWall
+                    requestMessages = requestHead + listOf(AgentMessage.UserMessage(content = instruction)),
+                    failureLog = "分块摘要第 ${index + 1}/${chunks.size} 块调用失败"
+                )
+                summaryCallCount++
+                outcome.usage?.let { summaryUsages += it }
+                if (outcome.content == null) {
+                    val reason = outcome.error ?: "摘要响应不可用"
+                    FileLogger.w(
+                        TAG,
+                        "第 ${index + 1}/${chunks.size} 块摘要不可用，整次折叠放弃（不落库）：$reason"
+                    )
+                    onEvent(
+                        AgentEvent.CompactionFailed(
+                            "分块摘要失败（第 ${index + 1}/${chunks.size} 块）：$reason"
+                        )
+                    )
+                    return null
+                }
+                chunkSummaries += outcome.content
+            }
+            onEvent(
+                AgentEvent.CompactionProgressChanged(
+                    step = chunks.size + 1,
+                    totalSteps = progressTotalSteps
                 )
             )
+            val merged = mergeChunkSummaries(
+                summaries = chunkSummaries,
+                ledgerEntries = ledgerEntries,
+                summaryProvider = summaryProvider,
+                sessionId = sessionId,
+                summaryWindowTokens = summaryWindowTokens
+            )
+            summaryCallCount += merged.callCount
+            summaryUsages += merged.usages
+            if (merged.content == null) {
+                val reason = merged.error ?: "摘要合并失败"
+                FileLogger.w(TAG, "分块摘要合并失败，整次折叠放弃（不落库）：$reason")
+                onEvent(AgentEvent.CompactionFailed("分块摘要合并失败：$reason"))
+                return null
+            }
+            summaryResponse = merged.content
         }
 
-        // 摘要响应校验一：摘要模型也会被自己的输出上限截断、被安全策略中止，
-        // 或干脆不听话去调工具（压缩请求本来就不带工具）。这类响应是「半份摘要」：
-        // 拿它换掉整段历史是负收益——原文进了存档，上下文里只留下残缺说明。
-        // 判据全部来自已有响应对象，不发额外请求。
-        val usage = callUsage
-        val summaryIssue = summaryIssueOf(summaryResponse, usage)
-        if (summaryIssue != null) {
-            FileLogger.w(TAG, "摘要响应不可用，放弃本次压缩（不落库、不标记 head）：$summaryIssue")
-            onEvent(AgentEvent.CompactionFailed("摘要响应不可用：$summaryIssue"))
-            return null
-        }
+        val durationMillis = (SystemClock.elapsedRealtime() - summaryStartElapsed).toInt()
+        val usage = aggregateUsage(summaryUsages)
 
-        FileLogger.i(TAG, "上下文压缩完成，摘要长度：${summaryResponse.length}")
-
-        // 摘要里附上归档路径：这是摘要之外唯一的退路（模型用文件工具就能读）
-        val summaryContent = if (archivePath != null) {
-            "$summaryResponse\n\n（被折叠的历史原文已存档：$archivePath ，需要核对更早的细节时可读取该文件。）"
-        } else {
-            summaryResponse
-        }
+        FileLogger.i(
+            TAG,
+            "上下文压缩完成，摘要长度：${summaryResponse.length} 分块数=${chunks.size} " +
+                "摘要调用次数=$summaryCallCount"
+        )
 
         val markerId = UUID.randomUUID().toString()
         val compactedId = UUID.randomUUID().toString()
+        // 账本固定小节由代码追加：不依赖模型在摘要里复述，也不新增表，随摘要正文一起落库。
+        val ledgerSection = renderFileLedger(ledgerEntries)
+        val summaryForStorage =
+            if (ledgerSection.isBlank()) summaryResponse else "$summaryResponse\n\n$ledgerSection"
         val markerMessage = AgentMessage.UserMessage(
             id = markerId,
             content = CONTEXT_COMPACTION_MARKER
         )
         val compactedMessage = AgentMessage.AssistantMessage(
             id = compactedId,
-            content = summaryContent,
+            content = summaryForStorage,
             toolCalls = emptyList()
         )
 
@@ -269,6 +400,69 @@ class ContextCompactor @Inject constructor(
             return null
         }
 
+        // 活跃摘要是归档文件的引用方：先读一次库，把摘要正文里出现的归档路径交给 prune 避让。
+        // 读库失败/无会话时传 null（prune 整体跳过）——宁可多留几个文件，也不能删掉仍被引用的原文。
+        var dbEntities: List<AgentMessageEntity>? = null
+        var anchorTs: Long? = null
+        var headEndTs = 0L
+        if (sessionId != null) {
+            try {
+                val rows = agentMessageDao.getMessagesBySessionOnce(sessionId)
+                // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
+                // user/assistant 落库是随机 UUID、内存态常为空串。所以逐级兜底匹配，不能只比 id。
+                val anchor = tail.firstNotNullOfOrNull { msg -> resolveRowTimestamp(rows, msg) }
+                // 找不到锚点就放弃这次压缩：只不标记却仍插 marker/summary 会新开一个坑——
+                // 那两条的落点只能取当前时间，会排在全部历史之后，回放变成「原文 + 摘要 + tail」，
+                // head 没被折叠、摘要还被摆到末尾（正是上面注释里警告的「模型把摘要当成自己上一轮」），
+                // 下一轮又会再次触发摘要调用。所以宁可这轮不压（重复总比丢好），直接放弃。
+                if (anchor == null) {
+                    FileLogger.w(TAG, "压缩时匹配不到 tail 对应的库行，放弃本次压缩，会话 $sessionId")
+                    onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
+                    return null
+                }
+                dbEntities = rows
+                anchorTs = anchor
+                val markerTs = (anchor - 2).coerceAtLeast(1L)
+                // 覆盖边界 = head 最后一条消息的库行时间戳：该边界之前的原文由本块代表，
+                // 回放不再重复带上。匹配不到 head 末尾时退到 marker 前一刻，多回放一次好过丢。
+                headEndTs = head.lastOrNull()
+                    ?.let { resolveRowTimestamp(rows, it) }
+                    ?: (markerTs - 1).coerceAtLeast(0L)
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "读取会话消息失败，放弃本次压缩", e)
+                return null
+            }
+        }
+        // 归档目录跨会话共享，引用要按「所有会话的活跃摘要」判：只查本会话会误删别的会话仍在引用的文件。
+        val referencedArchiveFiles = if (sessionId == null) {
+            null
+        } else {
+            try {
+                referencedArchiveFileNames(agentMessageDao.getActiveSummaryContents())
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "读取活跃摘要引用失败，本次跳过归档清理: ${e.message}")
+                null
+            }
+        }
+        // 省空间校验通过后才归档：压缩没换来空间时历史并未离开上下文，提前归档只会留下
+        // 无人引用的孤儿文件。归档失败时 archivePath 为 null，摘要照常落库。
+        val archivePath = compactedHistoryArchive.archive(sessionId, head, referencedArchiveFiles)
+        val summaryWithArchive = if (archivePath != null) {
+            "$summaryResponse\n\n（被折叠的历史原文已存档：$archivePath ，需要核对更早的细节时可读取该文件。）"
+        } else {
+            summaryResponse
+        }
+        // 固定小节放最末：它是代码生成的账本，不依赖模型输出，也不会被模型的收尾句挤到中间。
+        val summaryContent = if (ledgerSection.isBlank()) {
+            summaryWithArchive
+        } else {
+            "$summaryWithArchive\n\n$ledgerSection"
+        }
+        val finalMessage = compactedMessage.copy(content = summaryContent)
+        val finalResult = preservedBlocks + listOf(markerMessage, finalMessage) + tail
+
         // 折叠后的摘要链状态（记账用，见下文日志）：声明在函数体顶层——
         // 落库块在 if(sessionId) 里，而记账日志在它之后的外层，声明在块内会作用域不可见（CI 已踩过）。
         var chainBlockCount = 0
@@ -276,74 +470,47 @@ class ContextCompactor @Inject constructor(
         var stablePrefixTokens = 0
 
         if (sessionId != null) {
-            // marker 已落库的标记：插摘要失败时要能把它删掉。声明在 try 外——catch 看不到 try 内的局部变量。
-            var markerPersisted = false
             try {
-                val dbEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
-                // 内存态消息与库行的 id 不是同一套：tool 行落库是 "tool_<callId>"、内存态是 <callId>；
-                // user/assistant 落库是随机 UUID、内存态常为空串。所以逐级兜底匹配，不能只比 id。
-                val anchorTs = tail.firstNotNullOfOrNull { msg -> resolveRowTimestamp(dbEntities, msg) }
-
-                // 找不到锚点就放弃这次压缩：只不标记却仍插 marker/summary 会新开一个坑——
-                // 那两条的落点只能取当前时间，会排在全部历史之后，回放变成「原文 + 摘要 + tail」，
-                // head 没被折叠、摘要还被摆到末尾（正是上面注释里警告的「模型把摘要当成自己上一轮」），
-                // 下一轮又会再次触发摘要调用。所以宁可这轮不压（重复总比丢好），直接放弃。
-                if (anchorTs == null) {
-                    FileLogger.w(TAG, "压缩时匹配不到 tail 对应的库行，放弃本次压缩，会话 $sessionId")
-                    onEvent(AgentEvent.CompactionFailed("无法定位保留区起点，已跳过本次压缩"))
-                    return null
-                }
-                // 先插 marker + 摘要，摘要没插成功则回滚删 marker（head 不标 isCompacted，
-                // 不存在「标了却没有摘要顶上」的丢失面；插入失败只意味着本轮没折成，原文仍在窗口里）。
+                val rows = dbEntities.orEmpty()
+                val anchor = anchorTs ?: return null
+                // marker + 摘要同一个事务落库：摘要写失败时 marker 一并回滚，
+                // 不会留下孤立 marker（回放会把它当成用户刚问过的那句）。
+                // head 不标 isCompacted，不存在「标了却没有摘要顶上」的丢失面；
+                // 插入失败只意味着本轮没折成，原文仍在窗口里。
                 // 摘要块落点仍在 tail 之前：回放/UI 顺序 = 摘要链 → 剩余窗口。
-                val markerTs = (anchorTs - 2).coerceAtLeast(1L)
+                val markerTs = (anchor - 2).coerceAtLeast(1L)
                 val summaryTs = markerTs + 1
-                // 覆盖边界 = head 最后一条消息的库行时间戳：该边界之前的原文由本块代表，
-                // 回放不再重复带上。匹配不到 head 末尾时退到 marker 前一刻，多回放一次好过丢。
-                val headEndTs = head.lastOrNull()
-                    ?.let { resolveRowTimestamp(dbEntities, it) }
-                    ?: (markerTs - 1).coerceAtLeast(0L)
-                agentMessageDao.insert(
-                    AgentMessageEntity(
-                        id = markerId,
-                        sessionId = sessionId,
-                        role = MessageRole.USER.name,
-                        content = CONTEXT_COMPACTION_MARKER,
-                        timestamp = markerTs,
-                        isCompactionMarker = true
-                    )
+                val markerRow = AgentMessageEntity(
+                    id = markerId,
+                    sessionId = sessionId,
+                    role = MessageRole.USER.name,
+                    content = CONTEXT_COMPACTION_MARKER,
+                    timestamp = markerTs,
+                    isCompactionMarker = true
                 )
-                markerPersisted = true
-                agentMessageDao.insert(
-                    AgentMessageEntity(
-                        id = compactedId,
-                        sessionId = sessionId,
-                        role = MessageRole.ASSISTANT.name,
-                        content = compactedMessage.content,
-                        timestamp = summaryTs,
-                        isContextSummary = true,
-                        foldsUpToTimestamp = headEndTs
-                    )
+                val summaryRow = AgentMessageEntity(
+                    id = compactedId,
+                    sessionId = sessionId,
+                    role = MessageRole.ASSISTANT.name,
+                    content = finalMessage.content,
+                    timestamp = summaryTs,
+                    isContextSummary = true,
+                    foldsUpToTimestamp = headEndTs
                 )
+                agentMessageDao.insertCompactionPair(markerRow, summaryRow)
                 FileLogger.i(TAG, "已持久化摘要块到数据库，会话 $sessionId，覆盖边界=$headEndTs")
 
                 // 记账用：折叠后的摘要链状态。链内块数 = 未淘汰的摘要行数（含本次新插的），
                 // 前缀稳定段 = 摘要块链部分的估算 token（system + 工具定义开销由模块侧另计）。
                 // 查库而不是从内存列表数：上一轮的块只落在库里，内存态 messages 不一定还带着。
-                chainBlockCount = dbEntities.count { it.isContextSummary && !it.isCompacted } + 1
+                chainBlockCount = rows.count { it.isContextSummary && !it.isCompacted } + 1
                 latestBoundary = headEndTs
                 stablePrefixTokens = TokenEstimator.estimateText(
-                    dbEntities.filter { it.isContextSummary && !it.isCompacted }
+                    rows.filter { it.isContextSummary && !it.isCompacted }
                         .joinToString("\n") { it.content }
                 ) + TokenEstimator.estimateMessage(compactedMessage)
             } catch (e: Exception) {
-                // 摘要没插进去 = 本次压缩作废，那先落库的 marker 必须一并删掉：
-                // 回放时它是一条孤立的用户消息「What did we do so far?」——历史没被折叠，
-                // 模型却会以为用户刚问过这句；removeCompactionPairs 只成对清理，认不出这种孤儿。
-                if (markerPersisted) {
-                    runCatching { agentMessageDao.deleteMessageById(markerId) }
-                        .onFailure { FileLogger.w(TAG, "回滚压缩 marker 失败，回放会多出一条孤立 marker", it) }
-                }
+                // 事务已把本次两行一并回滚：不留孤立 marker，也无需再手工补偿。
                 FileLogger.e(TAG, "持久化压缩结果失败，放弃本次压缩（不标记 head）", e)
                 return null
             }
@@ -368,12 +535,12 @@ class ContextCompactor @Inject constructor(
                 " 触发判定=${if (decisionTokens > 0) decisionTokens.toString() else "未提供"}" +
                 " 硬线=$hardThreshold 窗口=$contextLimit " +
                 "折叠后=$compactedTokens " +
-                "摘要输入估算[指令=${TokenEstimator.estimateText(summaryInstruction)} " +
-                "内容=${TokenEstimator.estimateMessages(trimmedHead)}] $usageText " +
-                "耗时=${durationMillis}ms 折叠条数=${trimmedHead.size} 保留条数=${tail.size} " +
+                "$usageText " +
+                "耗时=${durationMillis}ms 折叠条数=${head.size} 保留条数=${tail.size} " +
+                "分块数=${chunks.size} 摘要调用次数=$summaryCallCount 涉及文件=${ledgerEntries.size} " +
                 "摘要长度=${summaryResponse.length}"
         )
-        // 摘要链观测（阶段 0）：块数/边界/前缀稳定段从库行计（dbEntities 含本次新块），见 :629-632。
+        // 摘要链观测（阶段 0）：块数/边界/前缀稳定段从库行计（查询发生在插入前，块数 +1 补本次）。
         if (chainBlockCount > 0) {
             // 摘要链观测值（阶段 0 新增）：块数 k 与最新边界用来观察合并频率（阶段 3 引入合并时的参数依据）；
             // 「前缀稳定段」估算 = 摘要块链部分（S0..Sk）的 token，用于验证缓存收益
@@ -385,7 +552,10 @@ class ContextCompactor @Inject constructor(
             )
         }
 
-        return compactedResult
+        return finalResult
+        } finally {
+            sessionLock?.unlock()
+        }
     }
 
     /**
@@ -401,6 +571,232 @@ class ContextCompactor @Inject constructor(
         usage.isAborted -> "摘要响应被服务端中止（stopReason=${usage.stopReason}）"
         else -> null
     }
+
+    /**
+     * 一次摘要类调用（分块摘要或合并）的归一结果。
+     * [content] 为 null 时 [error] 给出原因；[usage] 用于汇总记账。
+     */
+    private data class SummaryCallOutcome(
+        val content: String?,
+        val usage: AIResponse?,
+        val error: String?
+    )
+
+    private data class SummaryMergeOutcome(
+        val content: String?,
+        val usages: List<AIResponse>,
+        val callCount: Int,
+        val error: String?
+    )
+
+    /**
+     * 发一次压缩类请求并记一笔 kind=compaction 的调用记录。
+     *
+     * 完整性闸门（空 / 无用量 / 带工具调用 / 截断 / 中止）在每次调用后立即判定：
+     * 分块路径上任何一块不合格都不能拿「半份摘要」去换整段历史。
+     */
+    private suspend fun requestSummaryCall(
+        summaryProvider: AIProvider,
+        sessionId: String?,
+        requestMessages: List<AgentMessage>,
+        failureLog: String
+    ): SummaryCallOutcome {
+        val callStartElapsed = SystemClock.elapsedRealtime()
+        val callStartWall = System.currentTimeMillis()
+        var callError: String? = null
+        var callCompleted = false
+        var response: AIResponse? = null
+        val content = try {
+            val completed = summaryProvider.complete(
+                systemPrompt = SUMMARY_SYSTEM_PROMPT,
+                messages = requestMessages,
+                tools = emptyList(),
+                // 压缩请求一次性：它的前缀（整段被折叠的历史）不会被下一次折叠命中
+                // （下一次 head 起点不同），写缓存只会白付 1.25×。
+                cacheTail = false
+            )
+            response = completed
+            callCompleted = true
+            completed.content
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            callError = e.message ?: e.javaClass.simpleName
+            FileLogger.e(TAG, failureLog, e)
+            recordCompactionCall(
+                summaryProvider = summaryProvider,
+                sessionId = sessionId,
+                callStartWall = callStartWall,
+                durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt(),
+                callUsage = null,
+                callCompleted = false,
+                callError = callError
+            )
+            return SummaryCallOutcome(null, null, callError)
+        }
+
+        val usage = response
+        recordCompactionCall(
+            summaryProvider = summaryProvider,
+            sessionId = sessionId,
+            callStartWall = callStartWall,
+            durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt(),
+            callUsage = usage,
+            callCompleted = callCompleted,
+            callError = callError
+        )
+        val issue = summaryIssueOf(content, usage)
+        return SummaryCallOutcome(
+            content = if (issue == null) content else null,
+            usage = usage,
+            error = issue
+        )
+    }
+
+    /**
+     * 分块摘要合并：按顺序把各块摘要归纳成一份。
+     *
+     * 块数不多时就是一次 `compact-chain-merge` 调用；块数多、摘要长到一次装不下时，
+     * 先按预算分组合并，再合并分组结果（层数受 [MAX_SUMMARY_MERGE_DEPTH] 限制）。
+     * 任一次调用失败都返回 null——整次折叠不落库，不会留下半条摘要。
+     */
+    private suspend fun mergeChunkSummaries(
+        summaries: List<String>,
+        ledgerEntries: List<FileLedgerEntry>,
+        summaryProvider: AIProvider,
+        sessionId: String?,
+        summaryWindowTokens: Int
+    ): SummaryMergeOutcome {
+        val usages = mutableListOf<AIResponse>()
+        var callCount = 0
+        var level = summaries
+        var depth = 0
+        val mergeBudgetTokens = (summaryWindowTokens * SUMMARY_BUDGET_RATIO).toInt()
+        while (level.size > 1) {
+            if (depth >= MAX_SUMMARY_MERGE_DEPTH) {
+                return SummaryMergeOutcome(
+                    null, usages, callCount,
+                    "摘要合并层数超过上限 $MAX_SUMMARY_MERGE_DEPTH"
+                )
+            }
+            // 分组预算按「带账本」的最坏情况算：最终合并会带账本，中间层不带只会更宽松。
+            val probeInstruction = buildMergeInstruction(level.size)
+            val probeBudget = (
+                mergeBudgetTokens -
+                    TokenEstimator.estimateText(probeInstruction + fileLedgerPrompt(ledgerEntries))
+                ).coerceAtLeast(1)
+            val groups = groupSummaryTexts(level, probeBudget)
+            if (groups.size == level.size) {
+                return SummaryMergeOutcome(
+                    null, usages, callCount,
+                    "摘要窗口装不下两份分块摘要（预算 $mergeBudgetTokens tokens）"
+                )
+            }
+            val finalMerge = groups.size == 1
+            val next = mutableListOf<String>()
+            for (group in groups) {
+                if (group.size == 1) {
+                    next += group.single()
+                    continue
+                }
+                val outcome = requestMergeCall(
+                    summaries = group,
+                    ledgerEntries = ledgerEntries,
+                    includeLedger = finalMerge,
+                    summaryProvider = summaryProvider,
+                    sessionId = sessionId
+                )
+                callCount++
+                outcome.usage?.let { usages += it }
+                if (outcome.content == null) {
+                    return SummaryMergeOutcome(null, usages, callCount, outcome.error)
+                }
+                next += outcome.content
+            }
+            level = next
+            depth++
+        }
+        return SummaryMergeOutcome(level.single(), usages, callCount, null)
+    }
+
+    private suspend fun requestMergeCall(
+        summaries: List<String>,
+        ledgerEntries: List<FileLedgerEntry>,
+        includeLedger: Boolean,
+        summaryProvider: AIProvider,
+        sessionId: String?
+    ): SummaryCallOutcome {
+        val material = summaries.flatMap { text ->
+            listOf(
+                AgentMessage.UserMessage(content = CONTEXT_COMPACTION_MARKER),
+                AgentMessage.AssistantMessage(content = text, toolCalls = emptyList())
+            )
+        }
+        val instruction = buildMergeInstruction(summaries.size) +
+            if (includeLedger) fileLedgerPrompt(ledgerEntries) else ""
+        return requestSummaryCall(
+            summaryProvider = summaryProvider,
+            sessionId = sessionId,
+            requestMessages = material + listOf(AgentMessage.UserMessage(content = instruction)),
+            failureLog = "分块摘要合并调用失败"
+        )
+    }
+
+    /** 按预算把摘要分组；单份超预算时自成一组（下一轮会因无法收敛而整体放弃）。 */
+    private fun groupSummaryTexts(
+        summaries: List<String>,
+        budgetTokens: Int
+    ): List<List<String>> {
+        val groups = mutableListOf<MutableList<String>>()
+        var current = mutableListOf<String>()
+        var currentTokens = 0
+        for (summary in summaries) {
+            val tokens = TokenEstimator.estimateText(summary)
+            if (current.isNotEmpty() && currentTokens + tokens > budgetTokens) {
+                groups.add(current)
+                current = mutableListOf()
+                currentTokens = 0
+            }
+            current.add(summary)
+            currentTokens += tokens
+        }
+        if (current.isNotEmpty()) groups.add(current)
+        return groups
+    }
+
+    private fun aggregateUsage(usages: List<AIResponse>): AIResponse? {
+        if (usages.isEmpty()) return null
+        if (usages.size == 1) return usages.single()
+        return AIResponse(
+            content = "",
+            stopReason = "stop",
+            inputTokens = usages.sumOf { it.inputTokens },
+            outputTokens = usages.sumOf { it.outputTokens },
+            cachedInputTokens = usages.sumOf { it.cachedInputTokens },
+            cacheCreationTokens = usages.sumOf { it.cacheCreationTokens }
+        )
+    }
+
+    private fun promptWithInstruction(file: String, instruction: String): String =
+        systemPromptProvider.resolvePrompt(file)
+            .replace(LEADING_COMMENT, "")
+            .replace("{{INSTRUCTION}}", instruction)
+
+    /** 分块摘要指令：只覆盖本块，长度压到合并预算能装下（块数 × 字数 ≪ 摘要窗口）。 */
+    private fun buildChunkSummaryInstruction(index: Int, total: Int): String =
+        promptWithInstruction(
+            COMPACT_PROMPT_FILE,
+            "请只总结下面这段对话历史（第 ${index + 1}/$total 块，整段被折叠历史的一部分）。" +
+                "只输出这一块的接手摘要，不要合并其它块的内容；控制在 $CHUNK_SUMMARY_CHAR_BUDGET 字以内，" +
+                "本块出现的硬约束、禁止项、例外条件与文件路径必须保留。"
+        )
+
+    private fun buildMergeInstruction(count: Int): String =
+        promptWithInstruction(
+            MERGE_PROMPT_FILE,
+            "请把下面 $count 份分块摘要按时间先后归纳成一份新的接手摘要。" +
+                "这些摘要来自同一段被折叠历史的不同分块，按顺序排列。"
+        )
 
     /** 记录一次压缩类 LLM 调用（折叠与链合并共用，kind=compaction），失败不影响主流程。 */
     private suspend fun recordCompactionCall(
@@ -487,9 +883,9 @@ class ContextCompactor @Inject constructor(
      * 合并产出的新摘要把「各份摘要里引用的归档路径」逐条保留（见 compact-chain-merge.md），
      * 原文退路不变；再归档一次只会重复消耗存储配额（归档目录有 32MB/30 文件的保留上限）。
      *
-     * 失败语义：任何一步失败都返回 null；提交顺序是「先插新块、后标旧块、标失败删新块」，
-     * 任何中间态都不会丢历史。调用方（CompactionModule）在硬折叠判定之前调用本方法，
-     * 失败只记日志、下轮再试，不影响主折叠。
+     * 失败语义：任何一步失败都返回 null；新块两行与旧块标记在同一个事务里（[AgentMessageDao.insertChainMergePair]），
+     * 标记未命中时事务整体回滚，不会留下孤立新块，也不会出现「旧块已标、新摘要缺失」。
+     * 调用方（CompactionModule）在硬折叠判定之前调用本方法，失败只记日志、下轮再试，不影响主折叠。
      *
      * @return 合并后的消息视图；不可合并（块不够、摘要不可用、不省空间）返回 null。
      */
@@ -590,22 +986,20 @@ class ContextCompactor @Inject constructor(
             return null
         }
 
-        // 提交顺序与 compact 同源：先插新块，再标旧块；标旧块失败则删掉刚插的新块恢复原链。
-        // 中间态是「新旧块同时回放」——语义重复但不丢数据；反过来的顺序（先标后插）一旦插入失败
-        // 就会出现「旧块已标、新摘要缺失」的丢失面，回放直接缺掉这段历史。
+        // 提交语义与原先一致：新块与旧块标记在同一个事务里，要么全成、要么全不成。
+        // 先插新块后标旧块仍需保留在事务方法内部——若先标后插且插入失败，
+        // 会出现「旧块已标、新摘要缺失」的丢失面；事务回滚能盖住它，但顺序不改更安全。
         try {
-            agentMessageDao.insert(
-                AgentMessageEntity(
+            agentMessageDao.insertChainMergePair(
+                marker = AgentMessageEntity(
                     id = markerId,
                     sessionId = sessionId,
                     role = MessageRole.USER.name,
                     content = CONTEXT_COMPACTION_MARKER,
                     timestamp = markerTs,
                     isCompactionMarker = true
-                )
-            )
-            agentMessageDao.insert(
-                AgentMessageEntity(
+                ),
+                summary = AgentMessageEntity(
                     id = summaryId,
                     sessionId = sessionId,
                     role = MessageRole.ASSISTANT.name,
@@ -613,26 +1007,16 @@ class ContextCompactor @Inject constructor(
                     timestamp = markerTs + 1,
                     isContextSummary = true,
                     foldsUpToTimestamp = boundary
-                )
+                ),
+                sessionId = sessionId,
+                supersededIds = removedIds.toList()
             )
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "链合并落库新摘要失败，放弃本次合并（旧块未标）", e)
+        } catch (e: CompactionChainBlocksNotMarkedException) {
+            // 旧块可能刚被回退逻辑动过：事务已把新块一并回滚，链保持原样。
+            FileLogger.w(TAG, "链合并标记旧块未命中任何行，事务已回滚，放弃本次合并", e)
             return null
-        }
-        val marked = runCatching { agentMessageDao.markChainBlocksCompacted(sessionId, removedIds.toList()) }
-            .getOrElse {
-                FileLogger.w(TAG, "链合并标记旧块失败，回滚新摘要块", it)
-                runCatching { agentMessageDao.deleteMessageById(markerId) }
-                    .onFailure { FileLogger.w(TAG, "链合并回滚 marker 失败，回放会多出一条孤立 marker", it) }
-                runCatching { agentMessageDao.deleteMessageById(summaryId) }
-                    .onFailure { FileLogger.w(TAG, "链合并回滚摘要失败，会残留一份未标旧块的新摘要", it) }
-                return null
-            }
-        if (marked == 0) {
-            // 标记未命中：旧块可能刚被回退逻辑动过。同样回滚新块，保持链原样。
-            runCatching { agentMessageDao.deleteMessageById(markerId) }
-            runCatching { agentMessageDao.deleteMessageById(summaryId) }
-            FileLogger.w(TAG, "链合并标记旧块未命中任何行，已回滚新块，放弃本次合并")
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "链合并落库失败，事务已回滚（旧块未标）", e)
             return null
         }
 
@@ -712,8 +1096,9 @@ class ContextCompactor @Inject constructor(
      * 工具参数按字段重建：把「能重新读回来」的大块正文换成可读摘录（头尾逐字 + 省略说明 +
      * readFile 回读指针），其它超长值头尾截断，小字段（路径、命令开头这类定位信息）原样保留。
      *
-     * 结果直接写进本副本的 `arguments`：[enforceWindowLimit] 是发送前兜底，产出只活在本次请求里
-     * （不落库）；每次都以原文重算，重复截断是幂等的。
+     * 结果直接写进本副本的 `arguments`：这是发送前兜底，产出本身不落库。
+     * 同一轮内的多次模型调用共用第一份产出（见 CompactionModule 的轮内冻结），旧消息不再重截；
+     * 对同一输入重算也是幂等的，所以缓存与重算得到的是同一串字节。
      *
      * 为什么给摘录而不是整段占位说明：占位说明把「我写过什么」从模型视野里整个抹掉——
      * 模型看不到文件当时的结构与收尾状态，只能整份重新 read 才敢接着改，也更容易把占位文字
@@ -793,31 +1178,6 @@ class ContextCompactor @Inject constructor(
             text.takeLast(tail)
     }
 
-    /**
-     * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
-     *
-     * OpenAI API 要求 role: "tool" 消息必须紧接在包含对应 tool_calls 的 assistant 消息之后。
-     * 如果 tail 以 ToolResultMessage 开头，压缩后其前面的 assistant 消息（摘要）不含 toolCalls，
-     * 该 tool 消息就变成了"孤立"的，API 会报 400 错误。
-     */
-    private fun adjustSplitIndex(messages: List<AgentMessage>, initialSplitIndex: Int): Int {
-        var splitIndex = initialSplitIndex
-
-        while (splitIndex > 0 && messages[splitIndex] is AgentMessage.ToolResultMessage) {
-            splitIndex--
-        }
-
-        if (splitIndex >= 0 && messages[splitIndex] is AgentMessage.AssistantMessage) {
-            val assistantMsg = messages[splitIndex] as AgentMessage.AssistantMessage
-            if (assistantMsg.toolCalls.isNotEmpty()) {
-                // 这个 assistant 和紧随其后的 tool results 必须一起保留在 tail 中
-                return splitIndex
-            }
-        }
-
-        return splitIndex
-    }
-
     private fun selectTailStartIndex(messages: List<AgentMessage>, budgetTokens: Int): Int {
         var total = 0
         var splitIndex = messages.size
@@ -855,15 +1215,40 @@ class ContextCompactor @Inject constructor(
      * 压缩请求前的清理：截断可能丢弃最旧的 user 消息，导致头部出现孤立的 assistant/tool 消息，
      * 丢到第一条 user 为止；去掉图片与超长工具输出，压缩模型按纯文本做摘要。
      */
-    private fun List<AgentMessage>.trimLeadingForCompaction(): List<AgentMessage> {
-        val trimmed = dropWhile { it !is AgentMessage.UserMessage }
-        return trimmed.map { msg ->
-            when {
-                msg is AgentMessage.UserMessage && msg.images.isNotEmpty() -> msg.copy(images = emptyList())
-                msg is AgentMessage.ToolResultMessage && msg.result.length > TRIM_FOR_SUMMARY_CHARS ->
-                    msg.copy(result = msg.result.take(TRIM_FOR_SUMMARY_CHARS) + "\n[Tool output truncated for compaction]")
+    private fun List<AgentMessage>.trimLeadingForCompaction(): List<AgentMessage> =
+        dropWhile { it !is AgentMessage.UserMessage }.stripForSummary()
 
-                else -> msg
+    /**
+     * 去掉图片、截短工具输出（只改发送给摘要模型的副本）。
+     *
+     * 分块路径上非首块不能像 [trimLeadingForCompaction] 那样丢掉开头的 assistant 消息：
+     * 块起点是预算切出来的，可能正好落在 assistant 上，丢掉就等于这段历史没进摘要。
+     */
+    private fun List<AgentMessage>.stripForSummary(): List<AgentMessage> = map { msg ->
+        when {
+            msg is AgentMessage.UserMessage && msg.images.isNotEmpty() -> msg.copy(images = emptyList())
+            msg is AgentMessage.ToolResultMessage && msg.result.length > TRIM_FOR_SUMMARY_CHARS ->
+                msg.copy(
+                    result = msg.result.take(TRIM_FOR_SUMMARY_CHARS) +
+                        "\n[Tool output truncated for compaction]"
+                )
+            else -> msg
+        }
+    }
+
+    /**
+     * 单条消息本身就超过摘要窗口预算时，在发送副本上按预算截断。
+     *
+     * 消息不可再拆，不截断的话这一块请求必然超窗、整次折叠失败；原文仍在归档里，
+     * 摘要只需要能读到可辨认的头尾。
+     */
+    private fun List<AgentMessage>.fitForSummaryBudget(budgetTokens: Int): List<AgentMessage> {
+        if (budgetTokens <= 0) return this
+        return map { msg ->
+            if (TokenEstimator.estimateMessage(msg) > budgetTokens) {
+                truncateMessage(msg, budgetTokens)
+            } else {
+                msg
             }
         }
     }
@@ -916,39 +1301,6 @@ class ContextCompactor @Inject constructor(
         return null
     }
 
-    /**
-     * head 开头的连续摘要块（marker+summary 对与 legacy 前缀摘要）：新语义下它们是冻结的独立块，
-     * 折叠时原样保留在折叠结果的前缀里（新块追加在它们之后），不再被新摘要吸收。
-     */
-    private fun leadingCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
-        val blocks = mutableListOf<AgentMessage>()
-        var index = 0
-        while (index < messages.size) {
-            val current = messages[index]
-            val next = messages.getOrNull(index + 1)
-            if (
-                current is AgentMessage.UserMessage &&
-                current.content == CONTEXT_COMPACTION_MARKER &&
-                next is AgentMessage.AssistantMessage
-            ) {
-                blocks.add(current)
-                blocks.add(next)
-                index += 2
-                continue
-            }
-            if (
-                current is AgentMessage.AssistantMessage &&
-                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
-            ) {
-                blocks.add(current)
-                index++
-                continue
-            }
-            break
-        }
-        return blocks
-    }
-
     private fun String.cleanSummary(): String =
         removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart()
 
@@ -958,7 +1310,7 @@ class ContextCompactor @Inject constructor(
      */
     private fun List<AgentMessage>.truncateForSummaryWindow(contextTokens: Int): List<AgentMessage> {
         if (isEmpty()) return this
-        val budgetTokens = (contextTokens * 0.7f).toInt()
+        val budgetTokens = (contextTokens * SUMMARY_BUDGET_RATIO).toInt()
         var totalTokens = 0
         val kept = mutableListOf<AgentMessage>()
         for (msg in asReversed()) {
@@ -976,6 +1328,264 @@ class ContextCompactor @Inject constructor(
 }
 
 /**
+ * 分块摘要的块数上限。
+ *
+ * 每多一块就多一次摘要调用，而最终摘要仍只有 1200 字预算——超过 8 块后，各块对最终摘要的
+ * 边际贡献趋近于 0，成本却线性上涨。8 块 × 每块 70% 摘要窗口 ≈ 5.6 个摘要窗口的原文，
+ * 足以覆盖一次主窗口折叠（主窗口通常是摘要窗口的 3~6 倍）；更多历史本轮不折，原样留在
+ * 保留区（不丢），等后面的折叠再处理。
+ */
+internal const val MAX_SUMMARY_CHUNKS = 8
+
+/**
+ * 按 token 预算把待摘要原文切成有序块（纯函数，不发请求）。
+ *
+ * 规则：
+ * - 单块累计不超 [budgetTokens]；单条消息本身就超预算时自成一块（消息不可拆）。
+ * - ToolResultMessage 一律并入当前块，绝不作为新块的第一条：它必须紧跟带 toolCalls 的
+ *   assistant，否则分块请求本身就是一段孤儿消息，API 直接 400。
+ * - 块数超过 [maxChunks] 时只保留最旧的这些块，剩余消息不折（调用方把切点收回，原文留在 tail）。
+ *   截断点后紧邻的 tool 结果一并并入最后一块，同样是为了不留下孤儿 tool 消息。
+ */
+internal fun splitIntoSummaryChunks(
+    messages: List<AgentMessage>,
+    budgetTokens: Int,
+    maxChunks: Int = MAX_SUMMARY_CHUNKS
+): List<List<AgentMessage>> {
+    if (messages.isEmpty()) return emptyList()
+    if (budgetTokens <= 0 || maxChunks <= 0) return listOf(messages)
+
+    val chunks = mutableListOf<MutableList<AgentMessage>>()
+    var current = mutableListOf<AgentMessage>()
+    var currentTokens = 0
+    for (message in messages) {
+        val tokens = TokenEstimator.estimateMessage(message)
+        val mustJoinCurrent = current.isEmpty() || message is AgentMessage.ToolResultMessage
+        if (!mustJoinCurrent && currentTokens + tokens > budgetTokens) {
+            chunks.add(current)
+            current = mutableListOf()
+            currentTokens = 0
+        }
+        current.add(message)
+        currentTokens += tokens
+    }
+    if (current.isNotEmpty()) chunks.add(current)
+    if (chunks.size <= maxChunks) return chunks
+
+    val limited = chunks.take(maxChunks).toMutableList()
+    var covered = limited.sumOf { it.size }
+    while (covered < messages.size && messages[covered] is AgentMessage.ToolResultMessage) {
+        limited.last().add(messages[covered])
+        covered++
+    }
+    return limited
+}
+
+/**
+ * 「去掉压缩块后」的前 [coveredFiltered] 条消息，对应回原 head 的哪个下标。
+ *
+ * 块数达到上限时要把 splitIndex 收回到最后一块末尾，而块是在 [removeCompactionPairs]
+ * 之后切的；这里按同一套过滤规则走一遍，保证覆盖边界与归档范围指向同一段原文。
+ */
+internal fun indexAfterFilteredMessages(head: List<AgentMessage>, coveredFiltered: Int): Int {
+    var filtered = 0
+    var index = 0
+    while (index < head.size && filtered < coveredFiltered) {
+        val current = head[index]
+        val next = head.getOrNull(index + 1)
+        when {
+            current is AgentMessage.UserMessage &&
+                current.content == CONTEXT_COMPACTION_MARKER &&
+                next is AgentMessage.AssistantMessage -> index += 2
+
+            current is AgentMessage.AssistantMessage &&
+                current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX) -> index++
+
+            else -> {
+                filtered++
+                index++
+            }
+        }
+    }
+    return index
+}
+
+/**
+ * 调整拆分索引，确保 tail 不是以 ToolResultMessage 开头。
+ *
+ * OpenAI API 要求 role: "tool" 消息必须紧接在包含对应 tool_calls 的 assistant 消息之后。
+ * 如果 tail 以 ToolResultMessage 开头，压缩后其前面的 assistant 消息（摘要）不含 toolCalls，
+ * 该 tool 消息就变成了"孤立"的，API 会报 400 错误。
+ */
+internal fun adjustSplitIndex(messages: List<AgentMessage>, initialSplitIndex: Int): Int {
+    var splitIndex = initialSplitIndex
+
+    while (splitIndex > 0 && messages[splitIndex] is AgentMessage.ToolResultMessage) {
+        splitIndex--
+    }
+
+    if (splitIndex >= 0 && messages[splitIndex] is AgentMessage.AssistantMessage) {
+        val assistantMsg = messages[splitIndex] as AgentMessage.AssistantMessage
+        if (assistantMsg.toolCalls.isNotEmpty()) {
+            // 这个 assistant 和紧随其后的 tool results 必须一起保留在 tail 中
+            return splitIndex
+        }
+    }
+
+    return splitIndex
+}
+
+/**
+ * head 开头的连续摘要块（marker+summary 对与 legacy 前缀摘要）：新语义下它们是冻结的独立块，
+ * 折叠时原样保留在折叠结果的前缀里（新块追加在它们之后），不再被新摘要吸收。
+ */
+internal fun leadingCompactionPairs(messages: List<AgentMessage>): List<AgentMessage> {
+    val blocks = mutableListOf<AgentMessage>()
+    var index = 0
+    while (index < messages.size) {
+        val current = messages[index]
+        val next = messages.getOrNull(index + 1)
+        if (
+            current is AgentMessage.UserMessage &&
+            current.content == CONTEXT_COMPACTION_MARKER &&
+            next is AgentMessage.AssistantMessage
+        ) {
+            blocks.add(current)
+            blocks.add(next)
+            index += 2
+            continue
+        }
+        if (
+            current is AgentMessage.AssistantMessage &&
+            current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)
+        ) {
+            blocks.add(current)
+            index++
+            continue
+        }
+        break
+    }
+    return blocks
+}
+
+/**
+ * 摘要正文长度的保守上界（token）。
+ *
+ * 折叠收益要按「最坏的摘要」预估：摘要模型被要求全文 ≤1200 字（见 `assets/prompts/agent/compact-summary.md`
+ * 的长度预算），中文约 1 字 1 token；再加上存档提示、markdown 结构与「模型轻微超写」的余量，取 1600。
+ * 方向必须偏大：估小了会把「实际更大」的折叠当成更小而放行，最终判据仍然会整体放弃这一轮；
+ * 估大只是多折几条原文进 head（它们本就该折）。
+ */
+internal const val SUMMARY_TOKEN_ESTIMATE = 1_600
+
+/**
+ * 自适应收缩最多迭代几轮。
+ *
+ * 单轮已经按 token 差值一次挪到位，剩下的轮数只是给「tail 起点落在工具消息上要往前回溯」这类
+ * 挪不动 / 挪少了的情况兜底；再多也只会在同样的地板上打转。
+ */
+internal const val MAX_SPLIT_SHRINK_ROUNDS = 3
+
+/**
+ * 保留区地板（条数：一条用户消息 + 助手回复 + 一轮工具调用与结果），也就是「当前这一轮发生了什么」
+ * 的最小单元。再往下缩，接手者连正在做的事都看不到，摘要再准也接不上。
+ */
+internal const val MIN_TAIL_MESSAGES = 4
+
+/**
+ * 保留区地板（token）。
+ *
+ * 最小档位的保留预算 [com.aicode.feature.settings.domain.model.ModelContextPolicy.MIN_PRESERVE_RECENT_TOKENS]
+ * 是 2000，这里允许最多压到它的一半：更早的内容由摘要接手，但最近半档必须仍是原文，
+ * 否则「刚说过的话」要靠摘要转述，精度不够。
+ */
+internal const val MIN_TAIL_TOKENS = 1_000
+
+/** [convergeSplitIndex] 的结果：收缩后的 tail 起点与收敛轮数（0 表示原切点已经是能省空间的）。 */
+internal data class SplitShrink(val splitIndex: Int, val rounds: Int)
+
+/**
+ * 折叠后的预计大小（token）：旧摘要块 + 标记 + 新摘要（取保守上界 [SUMMARY_TOKEN_ESTIMATE]）+ tail。
+ *
+ * 与 [ContextCompactor.compact] 末尾那道最终判据算的是同一组量，区别只在于真实摘要正文此刻还不存在，
+ * 用它长度的保守上界代替。
+ */
+internal fun projectedCompactedTokens(messages: List<AgentMessage>, splitIndex: Int): Int {
+    if (splitIndex <= 0 || splitIndex >= messages.size) return TokenEstimator.estimateMessages(messages)
+    val head = messages.subList(0, splitIndex)
+    val tail = messages.subList(splitIndex, messages.size)
+    return TokenEstimator.estimateMessages(leadingCompactionPairs(head)) +
+        TokenEstimator.estimateMessage(AgentMessage.UserMessage(content = CONTEXT_COMPACTION_MARKER)) +
+        SUMMARY_TOKEN_ESTIMATE +
+        TokenEstimator.estimateMessages(tail)
+}
+
+/**
+ * 保留区起点自适应收敛：折完之后必须真的比原来小，否则整轮压缩会在最终判据那里被整体放弃，
+ * 历史一条不落地留在窗口里——超大会话就是这样永远压不下来的。
+ *
+ * 触发场景：摘要模型窗口把 head 卡得很小，tail 于是占掉几乎整段历史（tail 起点被顶到很靠前），
+ * 折完只是「摘要 + 几乎原样的 tail」。这里把 tail 起点往后挪（多折、少留），直到折完确实更小。
+ *
+ * 纯函数：只读 [messages] 与本地估算，不发请求、不碰 IO，便于单测。实际落库仍由
+ * [ContextCompactor.compact] 的最终判据把守——这里估偏了也只意味着这轮白算一次。
+ */
+internal fun convergeSplitIndex(
+    messages: List<AgentMessage>,
+    initialSplitIndex: Int,
+    estimatedTokens: Int
+): SplitShrink {
+    if (initialSplitIndex <= 0 || initialSplitIndex >= messages.size || estimatedTokens <= 0) {
+        return SplitShrink(initialSplitIndex, 0)
+    }
+    var splitIndex = initialSplitIndex
+    var rounds = 0
+    while (rounds < MAX_SPLIT_SHRINK_ROUNDS) {
+        val projected = projectedCompactedTokens(messages, splitIndex)
+        if (projected < estimatedTokens) break
+        // +1 是要求严格小于：折完与原来持平同样算没省空间。
+        val next = shrinkSplitIndex(messages, splitIndex, projected - estimatedTokens + 1)
+        if (next <= splitIndex) break
+        splitIndex = next
+        rounds++
+    }
+    return SplitShrink(splitIndex, rounds)
+}
+
+/**
+ * 把 tail 起点往后挪，直到从 tail 里挪走至少 [tokensToRemove] token 或撞到地板。
+ *
+ * 两道上限：tail 至少留 [MIN_TAIL_MESSAGES] 条、至少留 [MIN_TAIL_TOKENS] token；挪到的位置还不能是
+ * 孤立的 tool 结果（[adjustSplitIndex] 会往前回溯到配对的 assistant，可能挪得比预期少）。
+ */
+private fun shrinkSplitIndex(
+    messages: List<AgentMessage>,
+    splitIndex: Int,
+    tokensToRemove: Int
+): Int {
+    val limit = minOf(messages.size - MIN_TAIL_MESSAGES, tailFloorIndex(messages))
+    if (limit <= splitIndex) return splitIndex
+    var candidate = splitIndex
+    var removed = 0
+    // 按消息累计而不是按位置比例：单条消息可能就占 tail 的大半，逐条挪才不会一步跨过地板。
+    while (candidate < limit && removed < tokensToRemove) {
+        removed += TokenEstimator.estimateMessage(messages[candidate])
+        candidate++
+    }
+    return adjustSplitIndex(messages, candidate).coerceAtLeast(splitIndex)
+}
+
+/** 满足「tail 至少留 [MIN_TAIL_TOKENS]」的最靠后切点：从末尾往前累计到够数为止。 */
+private fun tailFloorIndex(messages: List<AgentMessage>): Int {
+    var tokens = 0
+    for (index in messages.indices.reversed()) {
+        tokens += TokenEstimator.estimateMessage(messages[index])
+        if (tokens >= MIN_TAIL_TOKENS) return index
+    }
+    return 0
+}
+
+/**
  * 大块正文类参数：这些字段「能重新读回来」，超限时换成本地摘录（省不下时退回占位说明）。
  *
  * 与 [isOmittedArgumentValue]（执行边界的前缀识别）共用同一份清单，避免两处漂移。
@@ -989,6 +1599,182 @@ internal val BULK_ARG_KEYS = setOf(
  * 摘录的回读指针与「近期引用」判据都按它取值，保证两处指向同一个文件。
  */
 private val PATH_ARG_KEYS = setOf("path", "file_path", "filepath", "file")
+
+/** 文件账本里的一次访问类型；label 用于摘要末尾固定小节的展示。 */
+internal enum class FileLedgerOperation(val label: String) {
+    READ("读"),
+    WRITE("写"),
+    EDIT("改"),
+    SEARCH("搜索"),
+    LIST("列目录")
+}
+
+internal data class FileLedgerEntry(val path: String, val operation: FileLedgerOperation)
+
+/**
+ * 账本条数上限：摘要正文本身 ≤1200 字，固定小节最多占一半左右；更多路径是噪声，
+ * 真正需要细节时模型会按路径重新 readFile。
+ */
+internal const val FILE_LEDGER_MAX_ENTRIES = 24
+
+/** 单条路径长度上限：正常容器路径 <100 字符，超长多半是参数异常。 */
+internal const val FILE_LEDGER_MAX_PATH_CHARS = 160
+
+internal const val FILE_LEDGER_HEADING = "## 涉及文件（最近访问优先）"
+
+private val FILE_LEDGER_PATH_TOOLS = mapOf(
+    "readFile" to FileLedgerOperation.READ,
+    "writeFile" to FileLedgerOperation.WRITE,
+    "editFile" to FileLedgerOperation.EDIT
+)
+
+private val FILE_LEDGER_DIRECTORY_TOOLS = mapOf(
+    "search" to FileLedgerOperation.SEARCH,
+    "list" to FileLedgerOperation.LIST
+)
+
+/** rg 中带独立参数值的选项：解析 search 的路径时要跳过它们的值，避免把 pattern 当目录。 */
+private val RG_OPTIONS_WITH_VALUE = setOf(
+    "-e", "--regexp", "-f", "--file", "-g", "--glob", "-t", "--type", "-T", "--type-not",
+    "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context"
+)
+
+/** 用选项给 pattern 时，第一个定位参数就是路径，不能再按「第一个是 pattern」丢掉。 */
+private val RG_PATTERN_OPTIONS = setOf("-e", "--regexp", "-f", "--file")
+
+/**
+ * 从一段历史里的工具调用提取「涉及文件」账本：readFile / writeFile / editFile 的路径，
+ * 以及 search / list 的目录。去重后按最近访问排序（最近的在最前）。
+ *
+ * 只读 assistant 消息的 toolCalls：工具结果里的正文不参与，避免把输出里出现的路径当成访问。
+ */
+internal fun buildFileLedger(messages: List<AgentMessage>): List<FileLedgerEntry> {
+    val latestByPath = LinkedHashMap<String, FileLedgerEntry>()
+    for (message in messages) {
+        if (message !is AgentMessage.AssistantMessage) continue
+        for (call in message.toolCalls) {
+            for (entry in ledgerEntriesOf(call)) {
+                // 重复访问同一路径时先移除再放回：Map 的插入顺序即「最近访问」顺序。
+                latestByPath.remove(entry.path)
+                latestByPath[entry.path] = entry
+            }
+        }
+    }
+    return latestByPath.values.toList().asReversed().take(FILE_LEDGER_MAX_ENTRIES)
+}
+
+/** 合并多段账本（按段从旧到新）：后一段的访问更新，整体仍按最近访问排序。 */
+internal fun mergeFileLedgers(ledgers: List<List<FileLedgerEntry>>): List<FileLedgerEntry> {
+    val latestByPath = LinkedHashMap<String, FileLedgerEntry>()
+    for (ledger in ledgers) {
+        for (entry in ledger.asReversed()) {
+            latestByPath.remove(entry.path)
+            latestByPath[entry.path] = entry
+        }
+    }
+    return latestByPath.values.toList().asReversed().take(FILE_LEDGER_MAX_ENTRIES)
+}
+
+/** 渲染成摘要末尾的固定小节；没有记录时返回空串（调用方不加空小节）。 */
+internal fun renderFileLedger(entries: List<FileLedgerEntry>): String {
+    if (entries.isEmpty()) return ""
+    val shown = entries.take(FILE_LEDGER_MAX_ENTRIES)
+    return buildString {
+        appendLine(FILE_LEDGER_HEADING)
+        for (entry in shown) {
+            append("- ")
+            append(entry.operation.label)
+            append("：")
+            appendLine(entry.path.take(FILE_LEDGER_MAX_PATH_CHARS))
+        }
+        if (entries.size > shown.size) {
+            appendLine("- （共 ${entries.size} 个，仅列最近 ${shown.size} 个）")
+        }
+    }.trimEnd()
+}
+
+/** 账本作为摘要请求的附加输入；空账本不加任何内容。 */
+internal fun fileLedgerPrompt(entries: List<FileLedgerEntry>): String {
+    val section = renderFileLedger(entries)
+    return if (section.isBlank()) "" else "\n\n$section"
+}
+
+private fun ledgerEntriesOf(call: ToolCall): List<FileLedgerEntry> {
+    FILE_LEDGER_PATH_TOOLS[call.name]?.let { operation ->
+        val path = pathArgumentOf(call.arguments) ?: return emptyList()
+        return listOf(FileLedgerEntry(path, operation))
+    }
+    val operation = FILE_LEDGER_DIRECTORY_TOOLS[call.name] ?: return emptyList()
+    val rawArgs = (call.arguments["args"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+    return directoryTargetsOf(call.name, rawArgs).map { FileLedgerEntry(it, operation) }
+}
+
+private fun pathArgumentOf(arguments: Map<String, JsonElement>): String? =
+    arguments.entries
+        .firstOrNull { it.key.lowercase() in PATH_ARG_KEYS }
+        ?.let { (it.value as? JsonPrimitive)?.contentOrNull }
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+/**
+ * search / list 的参数是 ls / rg 风格的字符串，这里只取「显式写出的路径」：
+ * search 的第一个定位参数是 pattern，必须跳过；带独立值的选项（-g/-e 等）的值也跳过。
+ */
+private fun directoryTargetsOf(toolName: String, rawArgs: String): List<String> {
+    val tokens = splitLedgerShellWords(rawArgs)
+    val positional = mutableListOf<String>()
+    var skipNext = false
+    var patternFromOption = false
+    for (token in tokens) {
+        if (skipNext) {
+            skipNext = false
+            continue
+        }
+        if (token.startsWith("-")) {
+            if (token in RG_PATTERN_OPTIONS) patternFromOption = true
+            if (token in RG_OPTIONS_WITH_VALUE) skipNext = true
+            continue
+        }
+        positional += token
+    }
+    val candidates =
+        if (toolName == "search" && !patternFromOption) positional.drop(1) else positional
+    return candidates.filter { looksLikePath(it) }
+}
+
+private fun looksLikePath(token: String): Boolean {
+    if (token.isBlank()) return false
+    return token.startsWith("~") ||
+        token == "." ||
+        token == ".." ||
+        token.startsWith("./") ||
+        token.startsWith("../") ||
+        token.startsWith("/") ||
+        token.contains('/')
+}
+
+/** 轻量分词：只处理空白与成对引号，不解释转义；账本只取路径，够用且不会误执行任何东西。 */
+private fun splitLedgerShellWords(text: String): List<String> {
+    val result = mutableListOf<String>()
+    val current = StringBuilder()
+    var quote: Char? = null
+    for (ch in text) {
+        when {
+            quote != null && ch == quote -> quote = null
+            quote != null -> current.append(ch)
+            ch == '\'' || ch == '"' -> quote = ch
+            ch.isWhitespace() -> {
+                if (current.isNotEmpty()) {
+                    result += current.toString()
+                    current.clear()
+                }
+            }
+            else -> current.append(ch)
+        }
+    }
+    if (current.isNotEmpty()) result += current.toString()
+    return result
+}
 
 /**
  * 旧软精简（已移除）留下的占位说明（整段替换体）；入口指针化省不下时也退回这一形态。

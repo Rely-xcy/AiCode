@@ -5,6 +5,7 @@ import com.aicode.di.CompactionWork
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.LlmCall
+import com.aicode.feature.agent.domain.brief.SessionBriefExtractor
 import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
@@ -39,9 +40,9 @@ import javax.inject.Singleton
  * 1. 硬线（用户设置，默认 85%，档位上限收在 ~90%）：调摘要模型把早期对话折叠成结构化接手摘要；
  * 2. 兜底线（92%）：折叠后仍逼近窗口时，对超长消息本身做硬截断。
  *
- * 旧软精简（40% 线，改写历史工具输出/参数）已随「上下文压缩重设计」阶段 1 移除：
- * 大块参数的瘦身由入口指针化负责（ArgumentProjectionModule，纯函数投影、不落库），
- * 请求链路不再消费软线设置项。
+ * 旧软精简（40% 线，改写历史工具输出/参数）已随「上下文压缩重设计」阶段 1 移除；
+ * 参数投影（ArgumentProjectionModule）也已删除：它每轮改写历史，与前缀缓存互斥。
+ * 现在请求链路不做任何历史改写，缩短上下文只有折叠与兜底硬截断两条路。
  */
 @Singleton
 class CompactionModule @Inject constructor(
@@ -51,6 +52,8 @@ class CompactionModule @Inject constructor(
      */
     private val compactor: Lazy<ContextCompactor>,
     private val memoryExtractor: MemoryExtractor,
+    /** 折叠历史前更新「会话工作状态」：任务理解不能随原文一起被压掉。 */
+    private val sessionBriefExtractor: SessionBriefExtractor,
     /** 同样用 [Lazy]：解析抽取提示词要经 SystemPromptProvider，它又依赖引擎。 */
     private val systemPromptProvider: Lazy<SystemPromptProvider>,
     private val modelMetadataService: ModelMetadataService,
@@ -151,7 +154,7 @@ class CompactionModule @Inject constructor(
 
         // 真实 usage 与本地估算取较大值：lastInputTokens 是上一次请求的值，
         // 本轮新塞入的大内容（文件/工具输出/图片）在旧值里看不到，只信它会把超限请求发出去。
-        val rawEstimate = TokenEstimator.estimateMessages(messages) + call.overheadTokens
+        val rawEstimate = estimateCache.estimate(ctx.sessionId, messages) + call.overheadTokens
         // 增量校准：上一轮的真实 usage 与那一轮的原始估算配对，减掉已确认的高估量（只减不上加，
         // 低估那一头由下面的 max(lastInputTokens, …) 自己兜住）。基线缺一条（该会话首轮、
         // provider 不回传 usage、刚被 onSessionDeleted 清掉）就不校准，判定式与加这功能之前一字不差
@@ -186,7 +189,7 @@ class CompactionModule @Inject constructor(
                 effectiveMessages = merged
                 effectiveCurrentTokens =
                     maxOf(call.lastInputTokens.takeIf { it > 0 } ?: 0,
-                        TokenEstimator.estimateMessages(merged) + call.overheadTokens)
+                        estimateCache.estimate(ctx.sessionId, merged) + call.overheadTokens)
             }
         }
 
@@ -230,10 +233,15 @@ class CompactionModule @Inject constructor(
             )
         }
 
+        // 兜底：system prompt 与工具定义也占窗口，预算里先扣掉。
+        val guardBudget = contextLimit * ModelContextPolicy.GUARD_BUDGET_PERCENT / 100 - call.overheadTokens
+
         // 单条消息也可能本身就超窗：只有估算还没逼近窗口时才允许按条数早退。
         if (!call.force && effectiveMessages.size <= 2 && effectiveCurrentTokens < contextLimit) {
             // 这一轮不改编排，发出去的就是 messages：记下它的量供下一轮校准配对。
             rememberRawEstimate(ctx, rawEstimate)
+            // 这一批消息即将发出去：从这一刻起它们属于「已发出」，本轮后续调用不再重截。
+            freezeTurnSnapshot(ctx, guardBudget, messages)
             return null
         }
 
@@ -287,6 +295,29 @@ class CompactionModule @Inject constructor(
                         if (written > 0) {
                             FileLogger.i(TAG, "折叠前从被压缩历史里捞出 $written 条长期记忆")
                         }
+                        // 同步更新会话工作状态：长期记忆只存「用户是谁」，任务理解（目标/决策/进展）
+                        // 是另一类信息——它不随压缩丢失，才能治住「越聊越傻」。
+                        // 与记忆抽取各自吞自己的失败，任何一个挂了都不影响压缩本身。
+                        ctx.sessionId?.let { sid ->
+                            runCatching {
+                                sessionBriefExtractor.extract(
+                                    sessionId = sid,
+                                    history = folded,
+                                    complete = { userPrompt ->
+                                        summaryProvider.complete(
+                                            systemPrompt = systemPromptProvider.get()
+                                                .resolvePrompt(SessionBriefExtractor.PROMPT_FILE),
+                                            messages = listOf(AgentMessage.UserMessage(content = userPrompt)),
+                                            tools = emptyList(),
+                                            cacheTail = false
+                                        ).content
+                                    }
+                                )
+                            }.onFailure { e ->
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                FileLogger.w(TAG, "折叠前更新会话工作状态失败，继续压缩", e)
+                            }
+                        }
                     },
                     onEvent = call.onEvent
                 )
@@ -299,7 +330,7 @@ class CompactionModule @Inject constructor(
                     ctx.sessionId?.let { foldFailedTokens.remove(it) }
                     // 折叠腾出的空间可能当场被保留区与固定开销吃完（最近原文本身就占满窗口）。
                     // 这里如实记一笔并把位点记住：本轮不再折，接下来几轮也不在原地反复折。
-                    val afterFold = TokenEstimator.estimateMessages(result) + call.overheadTokens
+                    val afterFold = estimateCache.estimate(ctx.sessionId, result) + call.overheadTokens
                     if (afterFold >= hardThreshold) {
                         FileLogger.w(
                             TAG,
@@ -334,15 +365,104 @@ class CompactionModule @Inject constructor(
         }
 
         // 兜底：system prompt 与工具定义也占窗口，预算里先扣掉。
-        val guardBudget = contextLimit * ModelContextPolicy.GUARD_BUDGET_PERCENT / 100 - call.overheadTokens
-        val guarded = compactor.get().enforceWindowLimit(result, budgetTokens = guardBudget)
+        val guarded = enforceTurnGuard(ctx, call.force, result, guardBudget)
 
         if (!compacted && guarded === messages) {
             rememberRawEstimate(ctx, rawEstimate)
             return null
         }
-        rememberRawEstimate(ctx, TokenEstimator.estimateMessages(guarded) + call.overheadTokens)
+        rememberRawEstimate(ctx, estimateCache.estimate(ctx.sessionId, guarded) + call.overheadTokens)
         return call.copy(messages = guarded)
+    }
+
+    /**
+     * 一轮内冻结的兜底投影：已发出的那一段消息（连同当时截出来的字节）+ 当时的预算。
+     *
+     * 相邻两次模型调用之间，估算会因为新消息与真实 usage 抖动；若每次都按当前估值重截，
+     * 同一条旧消息可能这次截 4000 字、下次截 3500 字，已经发出去的前缀跟着变形。
+     * 冻结后只对「冻结之后新长出来的尾部」用剩余预算兜底，旧消息一律沿用第一次的结果。
+     */
+    private class TurnGuardProjection(
+        val turnId: String,
+        val budgetTokens: Int,
+        val snapshot: List<AgentMessage>
+    )
+
+    private val turnGuardProjections = ConcurrentHashMap<String, TurnGuardProjection>()
+
+    /**
+     * 整段消息估算缓存：判定、折叠前后与发送前兜底会反复估算同一段历史，见 [MessageEstimateCache]。
+     *
+     * 只省重复计算，不改判定用的数：命中条件保证列表逐元素同一，缓存值与重算值相等。
+     */
+    private val estimateCache = MessageEstimateCache()
+
+    /**
+     * 发送前兜底：同一轮（[EngineContext.turnId] 相同）里已发出的消息不再重截。
+     *
+     * 边界是一轮 = 一次 `executeEvents`（一次用户请求及其全部工具循环）；刷新一轮就是新的 turnId。
+     * `force` 调用（手动压缩、超窗自愈）不受冻结约束，且会丢弃旧投影——它们本来就是要改写编排的。
+     * 消息列表被硬折叠或自愈换掉时，旧快照对不上前缀，同样重新冻结。
+     */
+    private fun enforceTurnGuard(
+        ctx: EngineContext,
+        force: Boolean,
+        messages: List<AgentMessage>,
+        guardBudget: Int
+    ): List<AgentMessage> {
+        val sessionId = ctx.sessionId
+        val turnId = ctx.turnId
+        if (force || sessionId == null || turnId == null) {
+            if (sessionId != null) turnGuardProjections.remove(sessionId)
+            return compactor.get().enforceWindowLimit(messages, budgetTokens = guardBudget)
+        }
+        var projection = turnGuardProjections[sessionId]
+        if (projection != null && (projection.turnId != turnId || !samePrefix(messages, projection.snapshot))) {
+            projection = null
+        }
+        val frozen = projection?.snapshot
+        if (frozen == null) {
+            val guarded = compactor.get().enforceWindowLimit(messages, budgetTokens = guardBudget)
+            // 这一批即将发出：连未截断的原样也一并冻住，保证本轮后续调用不会再动它们。
+            turnGuardProjections[sessionId] = TurnGuardProjection(turnId, guardBudget, guarded)
+            return guarded
+        }
+        if (messages.size == frozen.size) {
+            // 本轮没有新消息：直接复用上一次的结果，不再算一遍。
+            return if (messages === frozen) messages else frozen
+        }
+        // 保存区（已发出的前缀）占用的预算先从兜底预算里扣掉，只对新增尾部做剩余额度内的截断。
+        val remaining = guardBudget - estimateCache.estimate(ctx.sessionId, frozen)
+        val tail = messages.subList(frozen.size, messages.size)
+        val guardedTail = compactor.get().enforceWindowLimit(tail, budgetTokens = remaining)
+        if (guardedTail === tail) {
+            // 新消息也没被截：同样冻进快照，下一次调用时它们就是「已发出」的前缀。
+            if (messages !== frozen) {
+                turnGuardProjections[sessionId] = TurnGuardProjection(turnId, guardBudget, messages)
+            }
+            return messages
+        }
+        val guarded = frozen + guardedTail
+        turnGuardProjections[sessionId] = TurnGuardProjection(turnId, guardBudget, guarded)
+        return guarded
+    }
+
+    /** 把即将发出去的消息冻成本轮快照（不重截），没有轮次边界时什么也不做。 */
+    private fun freezeTurnSnapshot(ctx: EngineContext, guardBudget: Int, messages: List<AgentMessage>) {
+        val sessionId = ctx.sessionId ?: return
+        val turnId = ctx.turnId ?: return
+        turnGuardProjections[sessionId] = TurnGuardProjection(turnId, guardBudget, messages)
+    }
+
+    /** 当前列表是否以冻结快照为前缀：硬折叠会改掉开头，对不上就只能重新冻结。 */
+    private fun samePrefix(messages: List<AgentMessage>, frozen: List<AgentMessage>): Boolean {
+        if (messages.size < frozen.size) return false
+        for (index in frozen.indices) {
+            val current = messages[index]
+            val expected = frozen[index]
+            if (current !== expected && current != expected) return false
+        }
+        return true
     }
 
     /**
@@ -434,6 +554,8 @@ class CompactionModule @Inject constructor(
         ctx.sessionId?.let { foldFailedTokens.remove(it) }
         ctx.sessionId?.let { lastRawEstimates.remove(it) }
         ctx.sessionId?.let { mergeFailedTokens.remove(it) }
+        ctx.sessionId?.let { turnGuardProjections.remove(it) }
+        ctx.sessionId?.let { estimateCache.remove(it) }
     }
 
     private fun inferProviderType(provider: AIProvider): ProviderType {

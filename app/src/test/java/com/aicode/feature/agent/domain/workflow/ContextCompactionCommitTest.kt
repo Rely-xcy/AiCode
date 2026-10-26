@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.workflow
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
@@ -16,8 +17,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -44,13 +45,14 @@ class ContextCompactionCommitTest {
 
     private val compactor = ContextCompactor(dao, prompts, records, archive)
 
-    private val inserted = slot<AgentMessageEntity>()
+    private val insertedMarker = slot<AgentMessageEntity>()
+    private val insertedSummary = slot<AgentMessageEntity>()
 
     private fun prepare() {
         every { provider.providerId } returns "provider"
         every { provider.model } returns "summary"
         every { prompts.resolvePrompt(any()) } returns "你是一个上下文压缩引擎。{{INSTRUCTION}}"
-        coEvery { dao.insert(capture(inserted)) } just Runs
+        coEvery { dao.insertCompactionPair(capture(insertedMarker), capture(insertedSummary)) } just Runs
         coEvery { dao.getMessagesBySessionOnce("s") } returns rows("a", "b", "c", "goal")
     }
 
@@ -75,7 +77,7 @@ class ContextCompactionCommitTest {
     )
 
     @Test
-    fun `二次折叠时旧块保留且链成两块`() = runTest {
+    fun `二次折叠时旧块保留且链成两块`() = runBlocking {
         prepare()
         stubSummary(AIResponse("Second handoff", stopReason = "stop"))
         // 库里已有上一次折叠的旧块（未淘汰）
@@ -104,8 +106,8 @@ class ContextCompactionCommitTest {
         assertEquals(5, result!!.size)
         assertEquals("旧摘要", (result[1] as AgentMessage.AssistantMessage).content)
         assertTrue((result[3] as AgentMessage.AssistantMessage).content.contains("Second handoff"))
-        // 两次插入：marker + 摘要；不标 head、不回收旧块
-        coVerify(exactly = 2) { dao.insert(any()) }
+        // 一次事务写入 marker + 摘要；不标 head、不回收旧块
+        coVerify(exactly = 1) { dao.insertCompactionPair(any(), any()) }
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
         coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
     }
@@ -134,38 +136,38 @@ class ContextCompactionCommitTest {
     // ---------- 闸门一：响应完整性 ----------
 
     @Test
-    fun `摘要为空时不落库也不标记 head`() = runTest {
+    fun `摘要为空时不落库也不标记 head`() = runBlocking {
         prepare()
         stubSummary(AIResponse(""))
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
     }
 
     @Test
-    fun `摘要被输出上限截断时不落库`() = runTest {
+    fun `摘要被输出上限截断时不落库`() = runBlocking {
         prepare()
         stubSummary(AIResponse("半份摘要", stopReason = "max_tokens"))
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     @Test
-    fun `摘要被服务端中止时不落库`() = runTest {
+    fun `摘要被服务端中止时不落库`() = runBlocking {
         prepare()
         stubSummary(AIResponse("残缺", stopReason = "model_context_window_exceeded"))
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     @Test
-    fun `摘要响应里带工具调用时不落库`() = runTest {
+    fun `摘要响应里带工具调用时不落库`() = runBlocking {
         prepare()
         stubSummary(
             AIResponse(
@@ -176,13 +178,13 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(history()))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     // ---------- 闸门二：必须真的更小 ----------
 
     @Test
-    fun `摘要比被折叠的历史还长时不提交`() = runTest {
+    fun `摘要比被折叠的历史还长时不提交`() = runBlocking {
         prepare()
         coEvery { dao.getMessagesBySessionOnce("s") } returns rows("a", "goal")
         stubSummary(AIResponse("汉".repeat(5_000)))
@@ -193,13 +195,13 @@ class ContextCompactionCommitTest {
 
         assertNull(compact(tinyHead))
         coVerify(exactly = 1) { records.insert(any()) }
-        coVerify(exactly = 0) { dao.insert(any()) }
+        coVerify(exactly = 0) { dao.insertCompactionPair(any(), any()) }
     }
 
     // ---------- 闸门三：提交时写覆盖边界 ----------
 
     @Test
-    fun `提交时追加摘要块并写入覆盖边界`() = runTest {
+    fun `提交时追加摘要块并写入覆盖边界`() = runBlocking {
         prepare()
         stubSummary(AIResponse("Concise handoff", stopReason = "stop"))
 
@@ -210,13 +212,40 @@ class ContextCompactionCommitTest {
         assertEquals(3, result!!.size)
         assertTrue(result[1] is AgentMessage.AssistantMessage)
         assertTrue((result[1] as AgentMessage.AssistantMessage).content.contains("Concise handoff"))
-        coVerify(exactly = 2) { dao.insert(any()) }
+        coVerify(exactly = 1) { dao.insertCompactionPair(any(), any()) }
         // 新语义：head 不标 isCompacted、旧摘要不回收——库对折叠是纯追加
         coVerify(exactly = 0) { dao.markMessagesCompactedBeforeTimestamp(any(), any(), any()) }
         coVerify(exactly = 0) { dao.markSupersededCompactionRows(any(), any(), any()) }
         // 摘要行带覆盖边界（foldsUpToTimestamp），回放据此裁窗口
-        val summaryRow = inserted.captured
+        val summaryRow = insertedSummary.captured
         assertTrue(summaryRow.isContextSummary)
         assertEquals(500L, summaryRow.foldsUpToTimestamp)
+    }
+
+    @Test
+    fun `head 超出摘要窗口时分块折叠，不再前移拆分点`() = runBlocking {
+        prepare()
+        stubSummary(AIResponse("Handoff", stopReason = "stop"))
+
+        // preserveRecentTokens=1 → tail 只留最后一条；summaryWindowTokens=400 → 摘要预算 280 tokens，
+        // 三条 head（600 + 1 + 590 汉字）装不下，按窗口切成三块，再合并成一条摘要。
+        val result = compactor.compact(
+            messages = history(),
+            summaryProvider = provider,
+            sessionId = "s",
+            preserveRecentTokens = 1,
+            summaryWindowTokens = 400,
+            hardThreshold = 40_000,
+            contextLimit = 100_000
+        )
+
+        assertNotNull(result)
+        // 新行为：head 全部折进一条摘要（不再把 590 字那条前移回保留区）。
+        assertEquals(3, result!!.size)
+        assertTrue((result[1] as AgentMessage.AssistantMessage).content.contains("Handoff"))
+        assertFalse(
+            "分块折叠后早期原文应已进入摘要，而不是继续留在 tail",
+            result.filterIsInstance<AgentMessage.UserMessage>().any { it.content == "汉".repeat(590) }
+        )
     }
 }

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.subagent
 
+import com.aicode.feature.agent.domain.container.BulkFileSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -11,11 +12,15 @@ import javax.inject.Singleton
  */
 @Singleton
 class GlobalDirectoryAgentSource @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val bulk: BulkFileSource
 ) : AgentDefinitionSource {
+
+    /** 不启用远程批量读取的构造（单测与本地调用方）。 */
+    internal constructor(fileAccess: FileAccessProvider) : this(fileAccess, BulkFileSource.Disabled)
 
     val agentsRoot: String = "~/.aicode/agents"
 
     override fun listDefinitions(): List<AgentDefinition> =
-        AgentDefinitionDirectoryScanner.scan(fileAccess, agentsRoot)
+        AgentDefinitionDirectoryScanner.scan(fileAccess, agentsRoot, bulk)
 }

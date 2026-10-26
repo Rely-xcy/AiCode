@@ -40,6 +40,25 @@ class AgentEventInjectorTest {
     }
 
     @Test
+    fun inject_modeChangeWithDetail_keepsDetailAndOriginalToolData() {
+        val raw = """{"status":"success","data":"普通工具结果","images":[],"extra":{"request_id":"tool-1"}}"""
+        val detail = "已有切换说明。\n【模式切换】当前为 \"PLAN\" 模式，仅进行只读探索与规划。"
+        val event = modeChange.copy(detail = detail)
+
+        val injected = injector.inject(raw, listOf(event))
+        val obj = Json.parseToJsonElement(injected).jsonObject
+
+        assertEquals(Json.parseToJsonElement(raw).jsonObject, obj.filterKeys { it != "notifications" })
+        assertEquals("普通工具结果", obj["data"]!!.jsonPrimitive.content)
+        val notifications = obj["notifications"] as JsonArray
+        assertEquals(1, notifications.size)
+        val notification = notifications[0].jsonObject
+        assertEquals("mode_change", notification["kind"]!!.jsonPrimitive.content)
+        assertEquals("PLAN", notification["new_mode"]!!.jsonPrimitive.content)
+        assertEquals(detail, notification["detail"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun inject_nonJson_fallsBackToTextAppend() {
         val raw = "tool output is plain text"
 

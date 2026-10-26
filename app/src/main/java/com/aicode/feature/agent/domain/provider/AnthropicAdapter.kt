@@ -10,6 +10,8 @@ import com.aicode.feature.agent.data.remote.anthropic.AnthropicToolDefinition
 import com.aicode.core.util.AILogger
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.ReasoningCapability
+import com.aicode.feature.agent.domain.model.ReasoningWire
 import com.aicode.feature.agent.domain.model.modelFacingContent
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -56,6 +58,13 @@ class AnthropicAdapter @Inject constructor(
     override var customHeaders: Map<String, String> = emptyMap()
 
     override var maxOutputTokens: Int? = null
+
+    /** 当前模型的思考能力，由工作流按元数据注入；null 时由 [ReasoningResolver] 按模型名兜底。 */
+    override var reasoningCapability: ReasoningCapability? = null
+
+    /** 服务端 400 学到的档位优先于元数据：它反映的是该渠道真实接受的白名单。 */
+    private fun effectiveReasoningCapability(): ReasoningCapability? =
+        ReasoningLearning.recall(providerId, model) ?: reasoningCapability
 
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认；开启 thinking 时官方要求必须不带。
     override var temperature: Float? = null
@@ -112,6 +121,8 @@ class AnthropicAdapter @Inject constructor(
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         }
         AILogger.logResponse(logSessionId, "Anthropic", response, seq)
@@ -389,6 +400,8 @@ class AnthropicAdapter @Inject constructor(
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
+            // 400 文案常带白名单：学到之后后续请求直接用，不再重复踩同一个档位。
+            ReasoningLearning.observe(providerId, model, enriched, effectiveReasoningCapability())
             throw enriched
         } finally {
             // 无论成功/失败/取消，把已收到的原始 SSE 落盘（重试时会从上次中断处续写）。
@@ -438,38 +451,34 @@ class AnthropicAdapter @Inject constructor(
     }
 
     /**
-     * 思考强度 → Anthropic thinking 配置。
-     * - 新模型（4.6+/5 系，支持 adaptive）：effort 档位直传 output_config，thinking 用 adaptive+summarized；
-     *   "none" 关闭思考用 disabled；"minimal" 无对应档，归一到 low（官方仅 low/medium/high/xhigh/max）。
-     * - 旧模型（4.5 及更早，仅 budget_tokens）：low/medium/high 映射 1024/4096/8192（须小于 max_tokens），
-     *   minimal 归一到 low，xhigh/max 归一到 high。
+     * 思考强度 → Anthropic thinking 配置，档位与关闭语义由 [ReasoningResolver] 判定：
+     * - 4.6+/5 系（adaptive）：档位直传 `output_config.effort`，thinking 用 adaptive+summarized；
+     * - ≤4.5（仅 budget_tokens）：档位换算成思考预算（见 [ReasoningResolver] 的 ANTHROPIC_BUDGETS）；
+     * - 关闭思考：`thinking.type=disabled`；模型思考恒开时不发关闭（而是已由 resolver 降为最低档），
+     *   Sonnet 5.5 的关闭语义是 `between_tools`。
      */
     private fun buildThinkingConfig(reasoningEffort: String?): Pair<AnthropicThinkingConfig?, AnthropicOutputConfig?> {
-        if (reasoningEffort == null) return null to null
-        if (supportsAdaptiveThinking()) {
-            if (reasoningEffort == "none") {
-                return AnthropicThinkingConfig(type = "disabled") to null
-            }
-            // 官方 effort 无 minimal 档，归一到 low，避免透传非法档位被 400。
-            val effort = if (reasoningEffort == "minimal") "low" else reasoningEffort
-            return AnthropicThinkingConfig(type = "adaptive", display = "summarized") to AnthropicOutputConfig(effort = effort)
-        }
-        val budget = when (reasoningEffort) {
-            // Anthropic 无 minimal 档：归一到最接近的 low（避免同一档位一边 400 一边忽略的分裂）。
-            "minimal", "low" -> 1024
-            "medium" -> 4096
-            "high", "xhigh", "max" -> 8192
-            else -> return null to null
-        }
-        return AnthropicThinkingConfig(type = "enabled", budget_tokens = budget) to null
-    }
+        val plan = ReasoningResolver.plan(ReasoningProtocol.ANTHROPIC, model, reasoningEffort, effectiveReasoningCapability())
+        return when (val wire = plan.wire) {
+            is ReasoningWire.Effort -> AnthropicThinkingConfig(
+                type = "adaptive",
+                display = "summarized"
+            ) to AnthropicOutputConfig(effort = wire.value)
 
-    /** 是否支持 adaptive thinking：4.6+ 及 5 系（claude-<family>-4-6/4-7/4-8 或主版本 5）。 */
-    private fun supportsAdaptiveThinking(): Boolean {
-        val m = Regex("claude-(?:opus|sonnet|haiku|fable|mythos)-(\\d+)(?:-(\\d+))?").find(model)
-        val major = m?.groupValues?.get(1)?.toIntOrNull() ?: return false
-        val minor = m?.groupValues?.get(2)?.toIntOrNull()
-        return major >= 5 || (major == 4 && (minor ?: 0) >= 6)
+            is ReasoningWire.Budget -> AnthropicThinkingConfig(
+                type = "enabled",
+                budget_tokens = wire.tokens
+            ) to null
+
+            is ReasoningWire.DisableToggle,
+            ReasoningWire.DisableEffortNone -> AnthropicThinkingConfig(type = "disabled") to
+                plan.extraEffort?.let { AnthropicOutputConfig(effort = it) }
+
+            ReasoningWire.BetweenTools -> AnthropicThinkingConfig(type = "between_tools") to
+                plan.extraEffort?.let { AnthropicOutputConfig(effort = it) }
+
+            ReasoningWire.Omit -> null to null
+        }
     }
 
     /** 把累积的工具入参 JSON 字符串解析为 JsonObject；为空或非法时回退为空对象。 */

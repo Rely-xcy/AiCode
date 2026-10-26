@@ -1,12 +1,13 @@
 package com.aicode.di
 
 import com.aicode.feature.agent.domain.engine.EngineModule
-import com.aicode.feature.agent.domain.engine.modules.ArgumentProjectionModule
 import com.aicode.feature.agent.domain.engine.modules.CompactionModule
 import com.aicode.feature.agent.domain.engine.modules.MemoryModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentTeamModule
 import com.aicode.feature.agent.domain.engine.modules.TaskModule
+import com.aicode.feature.agent.domain.engine.modules.VirtualScreenModule
+import com.aicode.feature.agent.domain.engine.modules.WorkingStateModule
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -34,10 +35,6 @@ abstract class EngineBindingsModule {
 
     @Binds
     @IntoSet
-    abstract fun bindArgumentProjectionModule(module: ArgumentProjectionModule): EngineModule
-
-    @Binds
-    @IntoSet
     abstract fun bindSubAgentModule(module: SubAgentModule): EngineModule
 
     @Binds
@@ -46,5 +43,13 @@ abstract class EngineBindingsModule {
 
     @Binds
     @IntoSet
+    abstract fun bindWorkingStateModule(module: WorkingStateModule): EngineModule
+
+    @Binds
+    @IntoSet
     abstract fun bindSubAgentTeamModule(module: SubAgentTeamModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindVirtualScreenModule(module: VirtualScreenModule): EngineModule
 }

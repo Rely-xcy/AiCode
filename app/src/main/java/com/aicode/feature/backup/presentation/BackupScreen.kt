@@ -36,8 +36,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.FloatingTabBar
@@ -63,11 +65,15 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
+import com.aicode.feature.backup.domain.WorkspaceSkip
+import com.aicode.feature.backup.domain.WorkspaceSkipReason
 import com.aicode.feature.backup.domain.remote.BackupTarget
 import com.aicode.feature.backup.domain.remote.BackupTargetType
 import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.feature.settings.presentation.component.SettingsEmptyState
 import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
 import com.aicode.feature.settings.presentation.component.SettingsRow
@@ -120,6 +126,7 @@ internal fun BackupScreen(
 
     var editingTarget by remember { mutableStateOf<BackupTarget?>(null) }
     var showTargetSheet by remember { mutableStateOf(false) }
+    var showChatOptionsSheet by remember { mutableStateOf(false) }
     var targetToDelete by remember { mutableStateOf<BackupTarget?>(null) }
     var uploadTarget by remember { mutableStateOf<BackupTarget?>(null) }
     var uploadPassword by remember { mutableStateOf("") }
@@ -196,6 +203,7 @@ internal fun BackupScreen(
                         exportOptions = exportOptions,
                         onUpdateOptions = viewModel::updateExportOptions,
                         working = state is BackupState.Working,
+                        onOpenChatOptions = { showChatOptionsSheet = true },
                         onExport = { pendingAction = PendingAction.ExportPassword },
                         onImport = {
                             pendingAction = PendingAction.Import
@@ -237,11 +245,14 @@ internal fun BackupScreen(
         }
     }
 
-    // 导出：输口令（可留空）
+    // 导出：输口令；勾了「包含登录凭据」时口令必填，留空不允许确认
     if (pendingAction == PendingAction.ExportPassword) {
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(
+                if (exportOptions.loginSecrets) R.string.backup_password_hint_with_secrets
+                else R.string.backup_password_hint
+            ),
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,
             onPasswordChange = { password = it },
@@ -255,7 +266,8 @@ internal fun BackupScreen(
             onDismiss = {
                 password = ""
                 pendingAction = null
-            }
+            },
+            required = exportOptions.loginSecrets
         )
     }
 
@@ -280,6 +292,16 @@ internal fun BackupScreen(
                 pendingAction = null
                 pendingImportUri = null
             }
+        )
+    }
+
+    // 「聊天」二级面板：长期记忆与会话工作状态同属聊天数据的附属产物，
+    // 收进这一层后主列表不再被三个相邻开关切成两段，范围列表一眼能读完。
+    if (showChatOptionsSheet) {
+        ChatBackupOptionsSheet(
+            exportOptions = exportOptions,
+            onUpdateOptions = viewModel::updateExportOptions,
+            onDismiss = { showChatOptionsSheet = false }
         )
     }
 
@@ -311,11 +333,11 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传口令
+    // 上传口令（云端上传必须加密：备份可能含解密后的 API Key / SSH 凭据，明文放到远端风险不可控）
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(R.string.backup_net_upload_password_hint),
             confirmText = stringResource(R.string.backup_net_upload),
             password = uploadPassword,
             onPasswordChange = { uploadPassword = it },
@@ -324,12 +346,13 @@ internal fun BackupScreen(
                 val pw = uploadPassword
                 uploadTarget = null
                 uploadPassword = ""
-                if (t != null) {
+                if (t != null && pw.isNotEmpty()) {
                     networkWorkingTextRes = R.string.backup_net_uploading
                     viewModel.uploadToTarget(t, pw)
                 }
             },
-            onDismiss = { uploadTarget = null; uploadPassword = "" }
+            onDismiss = { uploadTarget = null; uploadPassword = "" },
+            confirmEnabled = uploadPassword.isNotEmpty()
         )
     }
 
@@ -354,17 +377,14 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传完成提示
-    LaunchedEffect(networkState) {
-        val done = networkState as? NetworkBackupState.UploadDone
-        if (done != null) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.backup_net_upload_done, done.targetName),
-                Toast.LENGTH_SHORT
-            ).show()
-            viewModel.dismissNetworkState()
-        }
+    // 上传完成 → 与本地导出同一份摘要（含工作区文件数与被跳过的工作区）
+    val uploadDone = networkState as? NetworkBackupState.UploadDone
+    if (uploadDone != null) {
+        ResultDialog(
+            title = stringResource(R.string.backup_net_upload_done, uploadDone.targetName),
+            message = buildExportSummary(context, uploadDone.stats),
+            onDismiss = { viewModel.dismissNetworkState() }
+        )
     }
 
     if (networkState is NetworkBackupState.Working) {
@@ -408,27 +428,36 @@ internal fun BackupScreen(
         )
     }
 
-    // 导出完成 → 提示并复位
-    LaunchedEffect(state) {
-        if (state is BackupState.ExportDone) {
-            Toast.makeText(context, context.getString(R.string.backup_exported), Toast.LENGTH_SHORT).show()
-            viewModel.reset()
-        }
-    }
-
     if (state is BackupState.Working) {
         ProgressDialog()
     }
 
+    // 导出完成 → 弹摘要对话框（汇总 + 跳过的工作区），用户确认后复位
     when (val current = state) {
+        is BackupState.ExportDone -> ResultDialog(
+            title = stringResource(R.string.backup_exported),
+            message = buildExportSummary(context, current.stats),
+            onDismiss = { viewModel.reset() }
+        )
         is BackupState.Error -> ResultDialog(
             title = stringResource(R.string.backup_operation_failed),
             message = current.message,
             onDismiss = { viewModel.reset() }
         )
         is BackupState.ImportSuccess -> ResultDialog(
-            title = stringResource(R.string.backup_import_done),
+            // 有本机解不开的密钥时标题不能只说「导入完成」：用户需要知道要去重填。
+            title = stringResource(
+                if (current.stats.undecryptableSecrets > 0) R.string.backup_import_done_secrets_need_refill
+                else R.string.backup_import_done
+            ),
             message = buildImportSummary(context, current.stats),
+            // 远程提醒单独成行：与「工作区文件」行下方的说明同款（图标 + 次要色小字），
+            // 不再拼进摘要正文，否则一段纯文本堆在末尾分不出主次。
+            hint = if (shouldShowRemoteRestoreHint(current.stats)) {
+                stringResource(R.string.backup_restore_remote_hint)
+            } else {
+                null
+            },
             onDismiss = { viewModel.reset() }
         )
         is BackupState.WorkspaceSelection -> WorkspaceRestoreDialog(
@@ -449,6 +478,7 @@ private fun LocalBackupTab(
     exportOptions: BackupOptions,
     onUpdateOptions: (BackupOptions) -> Unit,
     working: Boolean,
+    onOpenChatOptions: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit
 ) {
@@ -459,7 +489,57 @@ private fun LocalBackupTab(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = 96.dp)
     ) {
+        // 三组按「数据 / 配置 / 凭据」分开：凭据是否随包走是一个独立的、需要额外口令的决定，
+        // 混在配置里会让人以为导出 API 供应商配置就只是 endpoint 和模型名。
         SettingsGroupHeader(text = stringResource(R.string.backup_select_data))
+        SettingsGroup {
+            // 行本身可点开二级面板，开关单独留在行尾：chevron 由 SettingsRow 依据 onClick 自动补上，
+            // 用户不会把「开/关聊天」误当成「打开面板」。
+            SettingsRow(
+                title = stringResource(R.string.backup_data_chat_history),
+                onClick = onOpenChatOptions,
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.chatHistory,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(chatHistory = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_workspace),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.workspaceFiles,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(workspaceFiles = it)) }
+                    )
+                }
+            )
+            WorkspaceBackupHint()
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_skills_agents),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.skillsAndAgents,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(skillsAndAgents = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_panel_scripts),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.panelScripts,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(panelScripts = it)) }
+                    )
+                }
+            )
+        }
+
+        // 复用供应商编辑页的「配置」文案，避免为一个分组标题新增字符串。
+        SettingsGroupHeader(text = stringResource(R.string.provider_config))
         SettingsGroup {
             SettingsRow(
                 title = stringResource(R.string.common_ai_providers),
@@ -477,16 +557,6 @@ private fun LocalBackupTab(
                     AppSwitch(
                         checked = exportOptions.remoteConnections,
                         onCheckedChange = { onUpdateOptions(exportOptions.copy(remoteConnections = it)) }
-                    )
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                title = stringResource(R.string.backup_data_chat_history),
-                trailing = {
-                    AppSwitch(
-                        checked = exportOptions.chatHistory,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(chatHistory = it)) }
                     )
                 }
             )
@@ -520,17 +590,28 @@ private fun LocalBackupTab(
                     )
                 }
             )
-            SettingsDivider()
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.backup_data_login_secrets))
+        SettingsGroup {
             SettingsRow(
-                title = stringResource(R.string.backup_data_workspace),
+                title = stringResource(R.string.backup_data_login_secrets),
                 trailing = {
                     AppSwitch(
-                        checked = exportOptions.workspaceFiles,
-                        onCheckedChange = { onUpdateOptions(exportOptions.copy(workspaceFiles = it)) }
+                        checked = exportOptions.loginSecrets,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(loginSecrets = it)) }
                     )
                 }
             )
-            WorkspaceBackupHint()
+            BackupOptionHint(
+                text = stringResource(
+                    if (exportOptions.loginSecrets) R.string.backup_data_login_secrets_hint_on
+                    else R.string.backup_data_login_secrets_hint_off
+                )
+            )
+            if (exportOptions.loginSecrets) {
+                SecretPasswordHint()
+            }
         }
 
         SettingsGroupHeader(text = stringResource(R.string.backup_actions))
@@ -572,14 +653,19 @@ private fun NetworkBackupTab(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = 96.dp)
     ) {
-        SettingsGroupHeader(text = stringResource(R.string.backup_net_targets))
-        SettingsGroup {
-            if (targets.isEmpty()) {
-                SettingsRow(
-                    title = stringResource(R.string.backup_net_no_target),
-                    enabled = false
-                )
-            } else {
+        if (targets.isEmpty()) {
+            // 空态与 MCP / 凭据页统一：图标 + 标题 + 提示，新增入口收在右上角「+」。
+            SettingsEmptyState(
+                icon = FeatherIcons.UploadCloud,
+                title = stringResource(R.string.backup_net_no_target),
+                hint = stringResource(R.string.backup_net_no_target_hint),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 48.dp)
+            )
+        } else {
+            SettingsGroupHeader(text = stringResource(R.string.backup_net_targets))
+            SettingsGroup {
                 targets.forEachIndexed { index, target ->
                     if (index > 0) SettingsDivider()
                     BackupTargetCard(
@@ -721,23 +807,130 @@ private fun TargetTypeBadge(type: BackupTargetType) {
 
 @Composable
 private fun WorkspaceBackupHint() {
+    BackupOptionHint(text = stringResource(R.string.backup_workspace_git_hint))
+}
+
+/**
+ * 「聊天」的二级控制面板：长期记忆与会话工作状态属于聊天数据的附属产物，
+ * 收进这一层后主列表保持「一行一件事」，说明小字也跟着开关一起搬进来。
+ * 两个开关直接写回同一个 [BackupOptions]，导出行为与合并前完全一致。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatBackupOptionsSheet(
+    exportOptions: BackupOptions,
+    onUpdateOptions: (BackupOptions) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.backup_data_chat_history),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.md)
+            )
+            SettingsGroup {
+                SettingsRow(
+                    title = stringResource(R.string.backup_data_memory),
+                    trailing = {
+                        AppSwitch(
+                            checked = exportOptions.memoryFiles,
+                            onCheckedChange = { onUpdateOptions(exportOptions.copy(memoryFiles = it)) }
+                        )
+                    }
+                )
+                BackupOptionHint(text = stringResource(R.string.backup_data_memory_hint))
+                SettingsDivider()
+                SettingsRow(
+                    title = stringResource(R.string.backup_data_session_briefs),
+                    trailing = {
+                        AppSwitch(
+                            checked = exportOptions.sessionBriefs,
+                            onCheckedChange = { onUpdateOptions(exportOptions.copy(sessionBriefs = it)) }
+                        )
+                    }
+                )
+                BackupOptionHint(text = stringResource(R.string.backup_data_session_briefs_hint))
+            }
+        }
+    }
+}
+
+/**
+ * 选项行下方提示的统一间距：上侧不再单独留白，靠 [SettingsRow] 自身的 11dp 下内边距
+ * 把提示与其主行分开；下侧只留 [Spacing.xs] 再接分隔线。
+ * 此前每处各写 vertical = Spacing.sm，与行内边距叠加后上下各空出近 20dp，
+ * 看上去像凭空多了一行。
+ */
+private val OptionHintModifier =
+    Modifier.padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.xs)
+
+/**
+ * 备份选项下方的提示行：与「工作区文件」那条同款（14dp 警示图标 + bodySmall 次要色），
+ * 间距统一走 [OptionHintModifier]，避免各处自成一套、空隙越调越大。
+ * [contentColor] 只给需要警示语气的提示（如登录凭据口令）换成错误色。
+ */
+@Composable
+private fun BackupOptionHint(
+    text: String,
+    contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+    HintLine(text = text, modifier = OptionHintModifier, contentColor = contentColor)
+}
+
+/**
+ * 通用提示行：14dp 警示图标 + bodySmall 小字。
+ *
+ * 备份页里与某一行绑定的说明（工作区文件、其它备份选项、导入结果里的远程提醒）都用它，
+ * 避免各处各写一套图标尺寸与字号而慢慢走样。默认次要色，[contentColor] 可换成警示色。
+ */
+@Composable
+private fun HintLine(
+    text: String,
+    modifier: Modifier = Modifier,
+    contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
     Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = FeatherIcons.AlertCircle,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = contentColor,
             modifier = Modifier.size(14.dp)
         )
         Spacer(Modifier.width(Spacing.xs))
         Text(
-            text = stringResource(R.string.backup_workspace_git_hint),
+            text = text,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = contentColor
         )
     }
+}
+
+/**
+ * 勾了「包含登录凭据」后的必读提示：导出入口会强制要求口令，这里提前讲清楚，
+ * 免得用户在口令弹窗里才发现无法导出。几何与其它选项提示一致，只保留错误色以示警示。
+ */
+@Composable
+private fun SecretPasswordHint() {
+    BackupOptionHint(
+        text = stringResource(R.string.backup_data_login_secrets_password_hint),
+        contentColor = MaterialTheme.colorScheme.error
+    )
 }
 
 @Composable
@@ -822,7 +1015,11 @@ private fun PasswordDialog(
     password: String,
     onPasswordChange: (String) -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** 口令必填（备份要带登录凭据时）：留空不允许确认，并就地说明原因。 */
+    required: Boolean = false,
+    /** 额外的确认开关：网络上传无条件要求已填口令（云端绝不能收明文凭据）。 */
+    confirmEnabled: Boolean = true
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -838,15 +1035,32 @@ private fun PasswordDialog(
                 AppTextField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    label = stringResource(R.string.backup_password_label),
+                    label = stringResource(
+                        if (required) R.string.backup_password_label_required else R.string.backup_password_label
+                    ),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = dialogTextFieldColors()
                 )
+                if (required && password.isBlank()) {
+                    Spacer(Modifier.height(Spacing.sm))
+                    Text(
+                        text = stringResource(R.string.backup_secrets_password_required),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = confirmEnabled && (!required || password.isNotBlank())
+            ) {
+                Text(confirmText)
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } }
     )
 }
@@ -895,25 +1109,147 @@ private fun targetSubtitle(target: BackupTarget): String = when (target.type) {
 }
 
 @Composable
-private fun ResultDialog(title: String, message: String, onDismiss: () -> Unit) {
+private fun ResultDialog(title: String, message: String, hint: String? = null, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { Text(message) },
+        text = {
+            Column {
+                Text(message)
+                // 对话框正文没有分组行的内边距可借用，单独隔一个 Spacing.sm。
+                if (hint != null) {
+                    HintLine(
+                        text = hint,
+                        modifier = Modifier.padding(top = Spacing.sm)
+                    )
+                }
+            }
+        },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_got_it)) } }
     )
 }
 
-private fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
+/**
+ * 导出完成摘要：把「真的写进去了多少」与「哪些工作区被跳过、为什么」分开讲。
+ * 导出本身总是产出能拿到的部分（不会因为远程未连接而整包失败），所以这份摘要就是用户唯一的知情渠道。
+ */
+private fun buildExportSummary(context: android.content.Context, stats: ExportStats): String = buildString {
+    if (!stats.workspaceFilesRequested) {
+        append(context.getString(R.string.backup_export_summary_no_workspaces))
+    } else {
+        append(
+            context.getString(
+                R.string.backup_export_stat_workspace_files,
+                stats.workspaceFiles,
+                stats.exportedWorkspaces
+            )
+        )
+        if (stats.skippedWorkspaces.isNotEmpty()) {
+            appendLine()
+            append(
+                context.getString(
+                    R.string.backup_export_stat_skipped_workspaces,
+                    stats.skippedWorkspaces.size,
+                    formatSkippedWorkspaces(context, stats.skippedWorkspaces)
+                )
+            )
+        }
+        // 远程工作区一个文件都没导出时，把「怎么才能拿到」写清楚：连接只是前提，仍需要重新导出一次。
+        if (stats.remoteWorkspaceMissing) {
+            appendLine()
+            appendLine()
+            append(context.getString(R.string.backup_export_remote_workspace_missing))
+        }
+    }
+    // 解不开的密钥是按密文原样进的包：不说清的话，用户在新设备上只会看到一串解不开的密文。
+    // 这一段不能放进上面的工作区分支，不勾工作区文件时也同样要提。
+    if (stats.undecryptableSecrets > 0) {
+        appendLine()
+        appendLine()
+        append(context.getString(R.string.backup_export_stat_undecryptable_secrets, stats.undecryptableSecrets))
+    }
+}
+
+/** 跳过的工作区列表：每项「名字（原因）」，超过 [MAX_SKIPPED_WORKSPACE_NAMES] 个则截断为「…等 M 个」。 */
+private fun formatSkippedWorkspaces(context: android.content.Context, skipped: List<WorkspaceSkip>): String {
+    val separator = context.getString(R.string.backup_export_skipped_name_separator)
+    val shown = skipped.take(MAX_SKIPPED_WORKSPACE_NAMES).joinToString(separator) { skip ->
+        context.getString(
+            R.string.backup_export_skipped_workspace_item,
+            skip.name,
+            context.getString(skip.reason.labelRes())
+        )
+    }
+    return if (skipped.size > MAX_SKIPPED_WORKSPACE_NAMES) {
+        context.getString(R.string.backup_export_skipped_workspaces_more, shown, skipped.size)
+    } else {
+        shown
+    }
+}
+
+/** 跳过原因的文案资源：摘要只用这一处映射，新增原因时漏映射会直接编译失败。 */
+private fun WorkspaceSkipReason.labelRes(): Int = when (this) {
+    WorkspaceSkipReason.REMOTE_NOT_CONNECTED -> R.string.backup_export_skip_remote_not_connected
+    WorkspaceSkipReason.REMOTE_UNSUPPORTED -> R.string.backup_export_skip_remote_unsupported
+    WorkspaceSkipReason.HOST_DIR_MISSING -> R.string.backup_export_skip_host_dir_missing
+    WorkspaceSkipReason.EMPTY -> R.string.backup_export_skip_empty
+    WorkspaceSkipReason.READ_FAILED -> R.string.backup_export_skip_read_failed
+}
+
+/** 摘要里最多逐个列出的跳过工作区数，其余折叠成「等 M 个」。 */
+private const val MAX_SKIPPED_WORKSPACE_NAMES = 3
+
+internal fun buildImportSummary(context: android.content.Context, stats: RestoreStats): String = buildString {
     appendLine(context.getString(R.string.backup_restored_data))
+    append(buildRestoreStatsLines(context, stats))
+    // 密钥行不管有没有问题都要出现：否则用户分不清「全部可用」与「压根没检查过」。
+    // 放在成功摘要而不是 buildRestoreStatsLines 里，是为了不把「已全部恢复」带进部分失败的提示。
+    if (stats.undecryptableSecrets > 0) {
+        appendLine(context.getString(R.string.backup_stat_undecryptable_secrets, stats.undecryptableSecrets))
+    } else {
+        appendLine(context.getString(R.string.backup_stat_secrets_all_restored))
+    }
+    // 跳过的工作区文件不计入已恢复数，单独一行明示：否则「工作区文件 0 个」看起来就像全丢了一样。
+    // 只放在成功摘要里，不进 buildRestoreStatsLines——那行说明的是「已写入」的数据，跳过项不属于该口径。
+    if (stats.skippedWorkspaceFiles > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_workspace_files, stats.skippedWorkspaceFiles))
+    }
+    // 凭据没还原只能靠这一行说清：写盘失败或条目认不出时不会报错，静默跳过就等于骗用户。
+    if (stats.skippedLoginSecrets > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_login_secrets, stats.skippedLoginSecrets))
+    }
+    // 远程提醒不拼进摘要：它在结果对话框里由 [HintLine] 单独成行渲染，与「工作区文件」
+    // 行下方的说明同款；拼进长文本里既分不出主次，也和页面上的提示样式两套。
+    append(context.getString(R.string.backup_settings_covered))
+}
+
+/**
+ * 是否要展示「远程聊天记录只在远程模式下显示」的提醒。
+ *
+ * 只在真跟远程有关系时出现：要么这次把模式切回了远程、要么备份里带了远程连接/挂载。
+ * 本地模式且备份不带远程凭据的用户不该被无用的提示打扰。
+ */
+internal fun shouldShowRemoteRestoreHint(stats: RestoreStats): Boolean =
+    stats.remoteModeRestored || stats.remoteConnections > 0 || stats.remoteMounts > 0
+
+/** 逐行列出还原统计；导入成功摘要与「部分写入」失败提示共用，避免两处口径不一。 */
+internal fun buildRestoreStatsLines(context: android.content.Context, stats: RestoreStats): String = buildString {
     if (stats.providers > 0) appendLine(context.getString(R.string.backup_stat_providers, stats.providers))
     if (stats.remoteConnections > 0) appendLine(context.getString(R.string.backup_stat_remote_connections, stats.remoteConnections))
     if (stats.remoteMounts > 0) appendLine(context.getString(R.string.backup_stat_remote_mounts, stats.remoteMounts))
     if (stats.chatSessions > 0) appendLine(context.getString(R.string.backup_stat_chat_sessions, stats.chatSessions))
     if (stats.agentMessages > 0) appendLine(context.getString(R.string.backup_stat_chat_messages, stats.agentMessages))
     if (stats.todoItems > 0) appendLine(context.getString(R.string.backup_stat_todo_items, stats.todoItems))
+    if (stats.sessionBriefs > 0) appendLine(context.getString(R.string.backup_stat_session_briefs, stats.sessionBriefs))
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
-    append(context.getString(R.string.backup_settings_covered))
+    if (stats.memoryFiles > 0) appendLine(context.getString(R.string.backup_stat_memory_files, stats.memoryFiles))
+    if (stats.skillFiles > 0) appendLine(context.getString(R.string.backup_stat_skill_files, stats.skillFiles))
+    if (stats.subagentFiles > 0) appendLine(context.getString(R.string.backup_stat_subagent_files, stats.subagentFiles))
+    if (stats.panelScriptFiles > 0) appendLine(context.getString(R.string.backup_stat_panel_scripts, stats.panelScriptFiles))
+    if (stats.loginSecrets > 0) appendLine(context.getString(R.string.backup_stat_login_secrets, stats.loginSecrets))
+    if (stats.skippedSecurityEntries > 0) {
+        appendLine(context.getString(R.string.backup_stat_skipped_security, stats.skippedSecurityEntries))
+    }
 }

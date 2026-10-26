@@ -2,26 +2,53 @@ package com.aicode.feature.agent.presentation
 
 import androidx.compose.runtime.Immutable
 import com.aicode.feature.agent.domain.model.AgentImage
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.provider.RetryErrorInfo
 import com.aicode.feature.workspace.domain.FileEntry
 import kotlinx.serialization.Serializable
 
 /**
+ * 侧边栏文件树的根节点：工作区根与当前容器根各一个。
+ * 根节点不可重命名/删除，只能在其下新建。
+ */
+@Immutable
+sealed interface FileTreeRoot {
+    /** 根节点显示名。 */
+    val label: String
+
+    /** 工作区根：显示名固定为 `workspace`，对应容器路径 `~/workspace`。 */
+    data object Workspace : FileTreeRoot {
+        override val label: String = "workspace"
+    }
+
+    /**
+     * 当前容器根，对应容器内 `/`。
+     * 图标与「容器与镜像」列表一致：[osId] 识别到系统时用该系统 logo，
+     * 未识别时 [remote] 为真用服务器图标、为假用硬盘图标。
+     */
+    data class Container(
+        override val label: String,
+        val osId: String?,
+        val remote: Boolean
+    ) : FileTreeRoot
+}
+
+/**
  * 侧边栏文件树的一个可见节点（已按展开状态扁平化，携带 [depth] 供 UI 缩进）。
- * 从工作区根就地展开：只有 [FileBrowseState.Success] 里出现的节点才是当前可见的。
+ * 从工作区根与当前容器根就地展开：只有 [FileBrowseState.Success] 里出现的节点才是当前可见的。
  */
 @Immutable
 data class FileTreeNode(
     val entry: FileEntry,
-    /** 容器绝对路径（如 `~/workspace/app/src`）；[isRoot] 时为工作区根。 */
+    /** 容器绝对路径（如 `~/workspace/app/src`、`/etc/apk`）；根节点为其根路径（`~/workspace`、`/`）。 */
     val path: String,
     /** 缩进层级：根为 0，其直接子项为 1，依此类推。 */
     val depth: Int,
-    /** 工作区根节点：不可重命名/删除，只能在其下新建。 */
-    val isRoot: Boolean,
+    /** 根节点信息；非根节点为 null。 */
+    val root: FileTreeRoot? = null,
     /** 目录是否已展开；非目录恒为 false。 */
     val isExpanded: Boolean,
-    /** 展开该目录时读取子项失败（如权限不足）；根读取失败走 [FileBrowseState.Error]。 */
+    /** 展开该目录时读取子项失败（如权限不足）；工作区根读取失败走 [FileBrowseState.Error]。 */
     val hasError: Boolean = false,
     /** 被工作区根 .gitignore 命中：UI 以橙色弱化显示（类 VSCode）。 */
     val ignored: Boolean = false
@@ -201,7 +228,15 @@ data class ChatMessagesState(
     val messages: List<AgentUIMessage>,
     val loaded: Boolean,
     val hasMore: Boolean = false,
-    val isLoadingMore: Boolean = false
+    val isLoadingMore: Boolean = false,
+    /**
+     * 这份状态对应的分页上限。
+     *
+     * 用它判断「是否已有一次还没产出的上滑加载」：台账 [_messageLimit] 大于它就是在途。
+     * 以前用一个「在途集合」在流产出时清除，一旦某次流没产出（切会话、代际被 flatMapLatest
+     * 换掉）就会永久残留，上滑从此被拦死——改成比较数值后没有任何需要清的状态。
+     */
+    val limit: Int = 0
 )
 
 /**
@@ -266,5 +301,41 @@ data class QueuedRequest(
      * 与「直接执行」得到同一个行 id——UI 的乐观气泡才有唯一稳定的认领判据（文本 + 时间戳认不了：
      * 同文本连发两条会互相顶掉，见 PendingUserMessage）。
      */
-    val clientMessageId: String? = null
+    val clientMessageId: String? = null,
+
+    /** 是否把本轮用户消息落库；goal 续跑等内部轮次置 false，避免污染会话历史。 */
+    val persistUserMessage: Boolean = true
+)
+
+/** 会话级持续目标（goal）的 UI 快照：文本、状态与已续跑轮数。 */
+@Immutable
+data class SessionGoalUi(
+    val text: String,
+    val status: GoalStatus,
+    val turnCount: Int
+)
+
+/** 子代理卡片的运行状态。卡片主体从工具结果渲染，这里只补「本进程内才知道」的实时信息。 */
+enum class SubAgentCardStatus { RUNNING, COMPLETED, FAILED, STOPPED }
+
+/**
+ * 某个子代理的实时卡片状态（按子会话 id 索引）。
+ *
+ * 仅存内存：进程重启后历史消息里的卡片回退为静态展示（agent、任务、档位与模型仍能从工具结果解析），
+ * 不会显示一个假的「运行中」。
+ *
+ * @property excerpt 完成时的结果摘要，与完成通知里的是同一份（[com.aicode.feature.agent.domain.subagent.SubAgentDigester] 产出）。
+ * @property changedFiles 子代理改过的文件，卡片上以 chips 展示。
+ * @property elapsedMs 从派发到结束的耗时；运行中为 null。
+ */
+@Immutable
+data class SubAgentCardState(
+    val subSessionId: String,
+    val agentName: String? = null,
+    val title: String = "",
+    val status: SubAgentCardStatus = SubAgentCardStatus.RUNNING,
+    val excerpt: String? = null,
+    val changedFiles: List<String> = emptyList(),
+    val elapsedMs: Long? = null,
+    val startedAt: Long = System.currentTimeMillis()
 )

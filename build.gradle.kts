@@ -17,6 +17,8 @@ buildscript {
 
 plugins {
     id("com.android.application") version "8.9.3" apply false
+    // com.android.test：:baselineprofile 生成器模块用它（与 application 同属 AGP，版本必须一致）
+    id("com.android.test") version "8.9.3" apply false
     id("org.jetbrains.kotlin.android") version "2.2.21" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.21" apply false
     id("com.google.dagger.hilt.android") version "2.56.1" apply false

@@ -114,13 +114,33 @@ class PromptsViewModel @Inject constructor(
      * 项目层删除被跳（工作区未落定）时给出可见提示。只有项目层会因未落定被拒；全局层的删除不
      * 依赖工作区，返回 false 是别的原因（文件已不在、IO 失败），不套「未就绪」文案。
      */
-    fun deleteFragment(number: Int, scope: PromptFragmentSource) {
+    fun deleteFragment(number: Int, scope: PromptFragmentSource) = deleteFragments(listOf(number to scope))
+
+    /**
+     * 批量删除（列表多选批量操作）：一次 IO 里删完再刷新一次列表。
+     * 逐条调 [deleteFragment] 会各自触发一轮全量重扫，编号多时列表会来回跳。
+     */
+    fun deleteFragments(targets: List<Pair<Int, PromptFragmentSource>>) {
+        if (targets.isEmpty()) return
         viewModelScope.launch {
             val projectRoot = currentProjectRoot()
-            val deleted = withContext(Dispatchers.IO) {
-                catalog.deleteOverride(number, projectRoot, scope)
+            var projectWriteSkipped = false
+            withContext(Dispatchers.IO) {
+                targets.forEach { (number, scope) ->
+                    val deleted = catalog.deleteOverride(number, projectRoot, scope)
+                    if (!deleted && scope == PromptFragmentSource.PROJECT) projectWriteSkipped = true
+                }
             }
-            if (!deleted && scope == PromptFragmentSource.PROJECT) reportConfigWriteSkipped()
+            if (projectWriteSkipped) reportConfigWriteSkipped()
+            refresh()
+        }
+    }
+
+    /** 重置：清空项目层与全局层的所有自定义片段，各编号回落到内置提示词。 */
+    fun resetCustomFragments() {
+        viewModelScope.launch {
+            val projectRoot = currentProjectRoot()
+            withContext(Dispatchers.IO) { catalog.deleteAllCustom(projectRoot) }
             refresh()
         }
     }

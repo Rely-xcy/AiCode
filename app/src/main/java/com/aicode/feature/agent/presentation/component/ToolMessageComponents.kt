@@ -120,10 +120,10 @@ internal val DiffRemoveText: Color
     @Composable get() = MaterialTheme.semanticColors.diffRemove
 
 internal const val DIFF_COLLAPSE_THRESHOLD = 20
-internal const val TOOL_SECTION_LINE_LIMIT = 20
+internal const val TOOL_SECTION_LINE_LIMIT = 200
 
 /** 工具「指令 / 结果」展开窗口的最大高度：超出后在窗口内滚动，不再无限撑高。 */
-private val ToolSectionMaxHeight = 240.dp
+private val ToolSectionMaxHeight = 320.dp
 
 /** 工具窗口底部渐隐遮罩高度（仅当内容还可继续下滚时显示）。 */
 private val ToolSectionFadeHeight = 24.dp
@@ -165,6 +165,10 @@ internal fun ToolMessageBody(
                     } else null,
                     webSearch = if (message.toolName == "websearch" && !running && !message.isError) {
                         parseWebSearchResult(message.content)
+                    } else null,
+                    // task 的卡片连「派发中」也要显示（此时结果还没到，只有参数），故不受 running 限制。
+                    subAgent = if (message.toolName == "task" && !message.isError) {
+                        parseSubAgentDispatch(message.toolArgs, message.content)
                     } else null,
                     notifications = if (!running) parseToolNotifications(message.content) else emptyList(),
                     hasResult = !running && hasToolResult(message.content)
@@ -410,6 +414,12 @@ internal fun ToolMessageBody(
                 }
             }
         }
+        // 子代理派发卡片常显，不跟着「工具行展开」走：这是「谁在做什么、结果如何」的主信息，
+        // 藏进折叠里就失去意义。原始参数/结果仍可通过展开工具行查看。
+        metadata?.subAgent?.let { dispatch ->
+            Spacer(Modifier.height(Spacing.xs))
+            SubAgentDispatchCard(dispatch = dispatch)
+        }
         if (notifications.isNotEmpty()) {
             Spacer(Modifier.height(Spacing.sm))
             notifications.forEach { ToolNotificationRow(it) }
@@ -429,6 +439,7 @@ private data class ToolMessageMetadata(
     val edit: EditDiff?,
     val todo: ParsedTodoResult?,
     val webSearch: ParsedWebSearchResult?,
+    val subAgent: ParsedSubAgentDispatch?,
     val notifications: List<ToolNotificationInfo>,
     val hasResult: Boolean
 )

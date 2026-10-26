@@ -1,9 +1,9 @@
 package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.testutil.TestFileAccessProvider
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.nio.file.Files
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -26,7 +26,7 @@ class InterruptedWorkRecorderTest {
     private val recorder = InterruptedWorkRecorder(TestFileAccessProvider())
 
     @Test
-    fun copiesWrittenFilesAndPublishesNoticeOnce() = runTest {
+    fun copiesWrittenFilesAndPublishesNoticeOnce() = runBlocking {
         val root = tempDir()
         val source = File(root, "src/Foo.kt").apply {
             parentFile?.mkdirs()
@@ -68,7 +68,7 @@ class InterruptedWorkRecorderTest {
     }
 
     @Test
-    fun writesNothingWhenTheWrittenFilesAreGone() = runTest {
+    fun writesNothingWhenTheWrittenFilesAreGone() = runBlocking {
         val root = tempDir()
         val backupRoot = File(root, "backup").absolutePath
 
@@ -87,7 +87,7 @@ class InterruptedWorkRecorderTest {
     }
 
     @Test
-    fun oversizedFileIsRegisteredButNotCopied() = runTest {
+    fun oversizedFileIsRegisteredButNotCopied() = runBlocking {
         val root = tempDir()
         val big = File(root, "big.bin").apply { writeBytes(ByteArray(2 * 1024 * 1024 + 1)) }
         val backupRoot = File(root, "backup").absolutePath
@@ -113,7 +113,7 @@ class InterruptedWorkRecorderTest {
     }
 
     @Test
-    fun noticesFromSeveralRunsAreDeliveredTogether() = runTest {
+    fun noticesFromSeveralRunsAreDeliveredTogether() = runBlocking {
         val root = tempDir()
         val backupRoot = File(root, "backup").absolutePath
         val first = File(root, "a.kt").apply { writeText("a") }

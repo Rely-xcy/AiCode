@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,13 +53,23 @@ import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
+import com.aicode.feature.agent.domain.container.ContainerImageEol
+import com.aicode.feature.agent.domain.container.displayLabel
+import com.aicode.feature.agent.domain.container.eolStatus
+import com.aicode.feature.agent.domain.container.hasNewerVersion
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
+import com.aicode.feature.settings.data.repository.effectiveVersion
 import com.aicode.feature.settings.presentation.ContainerImageDownloadUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.HardDrive
+import compose.icons.feathericons.Trash2
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -89,20 +100,40 @@ private fun distroLogo(distro: String): Painter? = when (distro) {
 @Composable
 internal fun ContainerImageDownloadSection(
     catalog: List<ContainerImageEntry>,
+    imageVersions: Map<String, String>,
     state: ContainerImageDownloadUiState,
     downloadedImages: Map<String, DownloadedImageRecord>,
     sourceUnavailableIds: Set<String>,
     selectedSourceName: String,
+    selection: ListSelectionState,
     onDownload: (ContainerImageEntry) -> Unit,
     onCancel: () -> Unit,
     onImport: (String, String) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onBatchDelete: (Set<String>) -> Unit
 ) {
     val context = LocalContext.current
     var detailEntry by remember { mutableStateOf<ContainerImageEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<ContainerImageEntry?>(null) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     // 只显示当前源下可用的镜像；切源后列表自动过滤
     val visibleCatalog = catalog.filter { it.id !in sourceUnavailableIds }
+    // 只有「已下载且文件在」的条目能删，也就只有它们参与多选。
+    val downloadableIds = remember(visibleCatalog, downloadedImages) {
+        visibleCatalog.filter { entry ->
+            downloadedImages[entry.id]?.let { record ->
+                File(Uri.parse(record.fileUri).path ?: "").exists()
+            } == true
+        }.map { it.id }
+    }
+
+    // 删完 / 换源后剔除已消失的选中项；没有可删条目就退出多选。
+    LaunchedEffect(downloadableIds, selection.isActive) {
+        selection.retainOnly(downloadableIds.toSet())
+        if (selection.isActive && downloadableIds.isEmpty()) selection.exit()
+    }
+
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == downloadableIds.size
 
     Column(
         modifier = Modifier
@@ -111,6 +142,25 @@ internal fun ContainerImageDownloadSection(
             .padding(horizontal = Spacing.lg)
             .padding(bottom = Spacing.xl)
     ) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(downloadableIds)
+                },
+                onExit = { selection.exit() }
+            ) {
+                SelectionActionIconButton(
+                    icon = FeatherIcons.Trash2,
+                    contentDescription = stringResource(R.string.common_batch_delete),
+                    enabled = selection.selectedCount > 0,
+                    onClick = { showBatchDeleteConfirm = true },
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
         SettingsGroupHeader(text = stringResource(R.string.container_download_image))
         if (visibleCatalog.isEmpty()) {
             SettingsGroup {
@@ -129,21 +179,49 @@ internal fun ContainerImageDownloadSection(
                     if (index > 0) SettingsDivider()
                     val record = downloadedImages[entry.id]
                     val fileExists = record?.let { File(Uri.parse(it.fileUri).path ?: "").exists() } == true
+                    // 展示版本以运行时探测值为准（Debian 的补丁号靠它），「有新版」比对也用同一个值
+                    val resolvedVersion = imageVersions[entry.id] ?: entry.version
                     DownloadImageRow(
                         entry = entry,
+                        displayName = entry.displayLabel(imageVersions[entry.id]),
+                        eol = entry.eolStatus(),
+                        hasNewerVersion = hasNewerVersion(record?.effectiveVersion(), resolvedVersion),
                         state = state,
                         isDownloaded = record != null && fileExists,
                         onOpenDetail = { detailEntry = entry },
-                        onDelete = { deleteEntry = entry }
+                        onDelete = { deleteEntry = entry },
+                        selectionMode = selection.isActive,
+                        selected = selection.isSelected(entry.id),
+                        onToggleSelect = { selection.toggle(entry.id) }
                     )
                 }
             }
         }
     }
 
+    if (showBatchDeleteConfirm) {
+        val targets = selection.selectedKeys.toSet()
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.container_download_batch_delete_title),
+            message = stringResource(R.string.container_download_batch_delete_confirm, targets.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(targets)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
+    }
+
     detailEntry?.let { entry ->
         ImageDetailSheet(
             entry = entry,
+            displayName = entry.displayLabel(imageVersions[entry.id]),
+            eol = entry.eolStatus(),
+            hasNewerVersion = hasNewerVersion(
+                downloadedImages[entry.id]?.effectiveVersion(),
+                imageVersions[entry.id] ?: entry.version
+            ),
             state = state,
             record = downloadedImages[entry.id],
             sourceUnavailable = entry.id in sourceUnavailableIds,
@@ -166,12 +244,12 @@ internal fun ContainerImageDownloadSection(
         AlertDialog(
             onDismissRequest = { deleteEntry = null },
             title = { Text(stringResource(R.string.container_download_delete_title)) },
-            text = { Text(stringResource(R.string.container_download_delete_confirm, "${entry.name} ${entry.version}")) },
+            text = { Text(stringResource(R.string.container_download_delete_confirm, entry.displayLabel(imageVersions[entry.id]))) },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(entry.id)
                     deleteEntry = null
-                }) { Text(stringResource(R.string.common_delete)) }
+                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { deleteEntry = null }) { Text(stringResource(R.string.common_cancel)) }
@@ -180,14 +258,61 @@ internal fun ContainerImageDownloadSection(
     }
 }
 
-/** 列表行：图标 + 名称（已下载带徽章）/简介（下载中显示进度条）+ 右箭头；所有行可左滑，未下载时删除按钮禁用。 */
+/** 行内状态徽章：淡色底 + 语义色文字（「已下载」与 EOL 标注共用）。 */
+@Composable
+private fun StatusBadge(text: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    ) {
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
+    }
+}
+
+/** 支持状态文案与配色；无需标注返回 null。行内徽章与详情页共用，避免两处文案漂移。 */
+@Composable
+private fun eolStatusText(entry: ContainerImageEntry, eol: ContainerImageEol): Pair<String, Color>? = when (eol) {
+    ContainerImageEol.SOON ->
+        stringResource(R.string.container_download_eol_soon) to MaterialTheme.semanticColors.warning
+
+    ContainerImageEol.EXTENDED -> {
+        val text = if (entry.supportExtension.isBlank()) {
+            stringResource(R.string.container_download_eol_extended_generic)
+        } else {
+            stringResource(R.string.container_download_eol_extended, entry.supportExtension)
+        }
+        text to MaterialTheme.semanticColors.warning
+    }
+
+    ContainerImageEol.ENDED ->
+        stringResource(R.string.container_download_eol_ended) to MaterialTheme.colorScheme.error
+
+    ContainerImageEol.NONE -> null
+}
+
+/** 分支支持状态徽章；无需标注时什么都不画。 */
+@Composable
+private fun EolBadge(entry: ContainerImageEntry, eol: ContainerImageEol) {
+    val status = eolStatusText(entry, eol) ?: return
+    StatusBadge(text = status.first, color = status.second)
+}
+
+/** 列表行：图标 + 名称（已下载/EOL 带徽章）/简介（下载中显示进度条）+ 右箭头；所有行可左滑，未下载时删除按钮禁用。 */
 @Composable
 private fun DownloadImageRow(
     entry: ContainerImageEntry,
+    displayName: String,
+    eol: ContainerImageEol,
+    hasNewerVersion: Boolean,
     state: ContainerImageDownloadUiState,
     isDownloaded: Boolean,
     onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
 
@@ -196,7 +321,11 @@ private fun DownloadImageRow(
     SwipeToDeleteRow(
         onDelete = onDelete,
         onClick = onOpenDetail,
-        deleteEnabled = isDownloaded
+        deleteEnabled = isDownloaded,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect,
+        selectable = isDownloaded
     ) {
         Row(
             modifier = Modifier
@@ -238,7 +367,7 @@ private fun DownloadImageRow(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "${entry.name} ${entry.version}",
+                        text = displayName,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -246,19 +375,19 @@ private fun DownloadImageRow(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     if (isDownloaded) {
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 6.dp)
-                                .background(MaterialTheme.semanticColors.success.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 1.dp)
-                        ) {
-                            Text(
+                        if (hasNewerVersion) {
+                            StatusBadge(
+                                text = stringResource(R.string.container_download_newer_available),
+                                color = MaterialTheme.semanticColors.warning
+                            )
+                        } else {
+                            StatusBadge(
                                 text = stringResource(R.string.container_download_done),
-                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.semanticColors.success
                             )
                         }
                     }
+                    EolBadge(entry, eol)
                 }
                 downloading?.takeIf { it.entryId == entry.id }?.let { d ->
                     Spacer(modifier = Modifier.height(6.dp))
@@ -307,6 +436,9 @@ private fun DownloadImageRow(
 @Composable
 private fun ImageDetailSheet(
     entry: ContainerImageEntry,
+    displayName: String,
+    eol: ContainerImageEol,
+    hasNewerVersion: Boolean,
     state: ContainerImageDownloadUiState,
     record: DownloadedImageRecord?,
     sourceUnavailable: Boolean,
@@ -364,15 +496,26 @@ private fun ImageDetailSheet(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "${entry.name} ${entry.version}",
+                        text = displayName,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     if (isDownloaded) {
                         Text(
-                            text = stringResource(R.string.container_download_done),
+                            text = stringResource(
+                                if (hasNewerVersion) R.string.container_download_newer_available
+                                else R.string.container_download_done
+                            ),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.success
+                            color = if (hasNewerVersion) MaterialTheme.semanticColors.warning
+                            else MaterialTheme.semanticColors.success
+                        )
+                    }
+                    eolStatusText(entry, eol)?.let { (text, color) ->
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = color
                         )
                     }
                 }
@@ -405,6 +548,21 @@ private fun ImageDetailSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 两级支持周期的确切日期：徽章只说「已进入延长支持」，具体到哪天要能查到
+                if (entry.supportEnds.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.container_download_eol_support_ends, entry.supportEnds),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (entry.eol.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.container_download_eol_fully_ends, entry.eol),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))

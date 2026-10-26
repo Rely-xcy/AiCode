@@ -34,15 +34,21 @@ class SearchCodeTool @Inject constructor(
     }
 
     override val name = "search"
-    override val description = "使用 ripgrep（rg）搜索文本内容。例：args=\"-n \\\"fun main\\\" ~/workspace/app\"。支持追加 `| head [-n N]` 截断输出。"
+    override val description = "使用 ripgrep（rg）搜索文本内容。"
     override val permissionPolicy = ToolPermissionPolicy.AUTO_APPROVE
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
+    override val useWhen =
+        "定位某个符号、字符串或配置「出现在哪些文件」时首选，在陈述文件、符号或调用关系前用它核实"
+    override val avoidWhen =
+        "已知位置、要看上下文时用 readFile 分段读，只想要目录清单用 list，rg 不支持的管道命令（grep/sort/wc）会被拒"
+    override val successCriteria =
+        "返回里 matches 是命中行数、content 是 rg 原始输出（多文件搜索时每行形如 `文件:行号:内容`），matches=0 表示确实无匹配（不是失败），换个关键词或放宽 -g 过滤再搜一次"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "args" to ToolParameter(
             name = "args",
             type = ParameterType.STRING,
-            description = "ripgrep 参数。不填无效。常用：-i -F -e -g --hidden --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令（grep/sort/wc 等）不支持。",
+            description = "ripgrep 参数，如 -n \"fun main\" ~/workspace/app。不填无效。常用：-i -F -e -g --hidden --。支持末尾追加 `| head [-n N]` 截断输出；其它管道命令（grep/sort/wc 等）不支持。",
             required = true
         )
     )

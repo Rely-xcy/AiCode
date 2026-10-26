@@ -6,6 +6,8 @@ import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.RemoteConnectionConfig
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
+import com.aicode.feature.credentials.data.CredentialInjectSettingsRepository
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -14,8 +16,8 @@ import com.aicode.feature.workspace.domain.remote.RemoteAuth
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.test.runTest
 import net.schmizz.sshj.connection.channel.direct.Session
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -106,7 +108,10 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
             remoteSshConnection = remoteSshConnection,
             pathHomeResolver = pathHomeResolver,
             sessionUseCase = mockk<SessionUseCase>(),
-            generalSettingsRepository = generalSettingsRepository
+            generalSettingsRepository = generalSettingsRepository,
+            // 本用例只测远程目标目录取根/短路，凭证注入开关/凭证库都不走到，relaxed mock 即可。
+            credentialInjectSettings = mockk<CredentialInjectSettingsRepository>(relaxed = true),
+            credentialRepository = mockk<CredentialRepository>(relaxed = true)
         )
     }
 
@@ -122,7 +127,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     // ── ② 刷新：目标目录展开后为空时，不许把列远端根目录的那条命令发出去 ──────────
 
     @Test
-    fun refreshAvailability_targetDirIsSlash_issuesNoCommandAndKeepsListEmpty() = runTest {
+    fun refreshAvailability_targetDirIsSlash_issuesNoCommandAndKeepsListEmpty() = runBlocking {
         // 远端根目录下的子目录名，就是旧实现会列成「工作区」的那几个
         val repo = createRepository(config = config("/"), listing = "home\ntmp\netc\n")
 
@@ -135,7 +140,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     }
 
     @Test
-    fun refreshAvailability_configuredTargetDir_listsSubdirsOfThatDir() = runTest {
+    fun refreshAvailability_configuredTargetDir_listsSubdirsOfThatDir() = runBlocking {
         val repo = createRepository(config = config("/srv/ai/code"), listing = "beta\nalpha\n")
 
         repo.refreshAvailability()
@@ -143,8 +148,12 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
         // 护栏（新旧实现都绿，不是本次修复的红/绿证据）：正常配置下这条链一点没变 —— 仍然只发一条
         // 命令，仍然只列该目录的子目录。它防的是「把空路径的短路写宽了，顺手把正常路径也短路掉」。
         assertEquals(1, executedCommands.size)
-        assertTrue(executedCommands.single().contains("ls -d /srv/ai/code/*/"))
-        assertFalse(executedCommands.single().contains("ls -d /*/"))
+        val command = executedCommands.single()
+        // 列目录的形态是「先 cd 到工作区根、再用 glob 逐项输出（目录名可含空格，不能交给 ls / xargs 分词）」，
+        // 因此断言看的是「在哪个目录里列」，而不是具体用了哪个命令。
+        assertTrue(command.startsWith("cd '/srv/ai/code' "))
+        assertTrue(command.contains("for d in */"))
+        assertFalse("不能落到远端根目录上去列", command.contains("cd ''"))
         assertEquals(listOf("alpha", "beta"), repo.workspaces.value.map { it.name })
         assertEquals("/srv/ai/code/alpha", repo.workspaces.value.first().path)
     }
@@ -152,7 +161,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     // ── ① 文案：默认工作区没建出来时，Toast 要说清是路径没配，而不是服务器权限/磁盘 ────
 
     @Test
-    fun initialize_targetDirIsSlash_reportsMissingPathInsteadOfServerPermissions() = runTest {
+    fun initialize_targetDirIsSlash_reportsMissingPathInsteadOfServerPermissions() = runBlocking {
         val repo = createRepository(config = config("/"))
 
         repo.initialize()
@@ -163,7 +172,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     }
 
     @Test
-    fun initialize_withoutRemoteConnection_reportsMissingConnection() = runTest {
+    fun initialize_withoutRemoteConnection_reportsMissingConnection() = runBlocking {
         // 没有已保存的远程连接时连接状态停在 FAILED（监督协程不会去连），这里与之保持一致，
         // 免得 waitForConnection 撞上 5s 等待上限。
         val repo = createRepository(config = null, connectionState = ConnectionState.FAILED)
@@ -193,7 +202,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     // ── ③ 写/删入口：根展开为空时一条远程命令都不许发 ─────────────────────────
 
     @Test
-    fun deleteWorkspace_targetDirIsSlash_issuesNoDeleteCommand() = runTest {
+    fun deleteWorkspace_targetDirIsSlash_issuesNoDeleteCommand() = runBlocking {
         val repo = createRepository(config = config("/"))
 
         repo.deleteWorkspace("home")
@@ -205,7 +214,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     }
 
     @Test
-    fun createWorkspace_targetDirIsSlash_createsNothing() = runTest {
+    fun createWorkspace_targetDirIsSlash_createsNothing() = runBlocking {
         // 远端根目录下没有同名目录（test -d 退出码非 0），旧实现会真的走 mkdir 那一步
         val repo = createRepository(
             config = config("/"),
@@ -225,7 +234,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     // ── 护栏（新旧实现都绿，不是本次修复的红/绿证据）───────────────────────
 
     @Test
-    fun deleteWorkspace_configuredTargetDir_deletesUnderThatDir() = runTest {
+    fun deleteWorkspace_configuredTargetDir_deletesUnderThatDir() = runBlocking {
         // 防的是「把空路径的短路写宽了，顺手把正常删除路径也短路掉」：
         // 正常配置下的删除命令逐字未变，删的仍是该目录下的那一个子目录。
         val repo = createRepository(config = config("/srv/ai/code"))
@@ -236,7 +245,7 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
     }
 
     @Test
-    fun createWorkspace_configuredTargetDir_createsUnderThatDir() = runTest {
+    fun createWorkspace_configuredTargetDir_createsUnderThatDir() = runBlocking {
         // 同上：正常配置下仍然是先 test -d 再 mkdir -p，目标都在该目录下
         val repo = createRepository(
             config = config("/srv/ai/code"),

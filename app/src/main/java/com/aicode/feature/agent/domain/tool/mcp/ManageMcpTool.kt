@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.tool.mcp
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -11,6 +13,7 @@ import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -21,14 +24,56 @@ import kotlinx.serialization.json.jsonPrimitive
 import javax.inject.Inject
 
 class ManageMcpTool @Inject constructor(
-    private val mcpConfigRepository: McpConfigRepository
+    private val mcpConfigRepository: McpConfigRepository,
+    @param:ApplicationContext private val appContext: Context
 ) : AgentTool() {
     private companion object {
         const val TAG = "ManageMcpTool"
     }
 
+    /**
+     * 列出服务器：只给名称、安全端点（仅 scheme/host/port）、键名与开关状态；
+     * stdio 的命令与参数、headers / env 的**值**、URL 的 userinfo / 路径 / query / fragment 一律不回显。
+     *
+     * 该动作走 READ_AGENT_CONFIG 免弹窗，所以输出本身就是「无人工确认也能进上下文」的内容，
+     * 凭据不值得也不需要出现在这里。
+     */
+    private fun describeServers(servers: List<com.aicode.feature.agent.domain.mcp.McpServerConfig>): String {
+        if (servers.isEmpty()) return "（没有已配置的 MCP server）"
+        return servers.joinToString("\n") { server ->
+            val target = if (server.isStdio) {
+                "stdio（命令与参数已隐藏）"
+            } else {
+                safeHttpEndpoint(server.url)
+            }
+            buildString {
+                append("- ").append(server.name)
+                if (!server.enabled) append("（已停用）")
+                append("：").append(target)
+                if (server.headers.isNotEmpty()) {
+                    append("；headers 键：").append(server.headers.keys.joinToString(", "))
+                }
+                if (server.env.isNotEmpty()) {
+                    append("；env 键：").append(server.env.keys.joinToString(", "))
+                }
+                if (server.auth != null) append("；含鉴权配置")
+                if (server.disabledTools.isNotEmpty()) {
+                    append("；已禁用工具 ").append(server.disabledTools.size).append(" 个")
+                }
+            }
+        }
+    }
+
+    private fun safeHttpEndpoint(raw: String?): String {
+        val uri = runCatching { java.net.URI(raw.orEmpty()) }.getOrNull() ?: return "HTTP（地址已隐藏）"
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return "HTTP（地址已隐藏）"
+        return runCatching {
+            java.net.URI(uri.scheme, null, uri.host, uri.port, null, null, null).toASCIIString()
+        }.getOrDefault("HTTP（地址已隐藏）")
+    }
+
     override val name = "manageMcp"
-    override val description = "管理 Model Context Protocol (MCP) 服务器。支持添加、删除与列表查询。添加/删除会修改 Agent 配置，不会自动安装 Node/Python 等运行时。"
+    override val description = "管理 Model Context Protocol (MCP) 服务器。支持添加、删除与列表查询。添加或删除会修改 Agent 配置，下一次会话生效；不会自动安装 Node/Python 等运行时。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.MODIFY_AGENT_CONFIG)
 
@@ -88,7 +133,7 @@ class ManageMcpTool @Inject constructor(
         val action = args["action"]?.jsonPrimitive?.contentOrNull ?: "unknown"
         val server = args["server_name"]?.jsonPrimitive?.contentOrNull ?: "未指定"
         val scope = resolveScope(args)
-        val scopeLabel = if (scope == McpScope.PROJECT) "当前项目" else "全局"
+        val scopeLabel = appContext.getString(if (scope == McpScope.PROJECT) R.string.mcp_scope_project else R.string.mcp_scope_global)
         val summary = when (action) {
             "add_stdio" -> "添加本地 MCP server：$server（$scopeLabel）"
             "add_http" -> "添加 HTTP MCP server：$server（$scopeLabel）"
@@ -109,7 +154,7 @@ class ManageMcpTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val action = args["action"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("缺少必需参数：action")
         val scope = resolveScope(args)
-        val scopeLabel = if (scope == McpScope.PROJECT) "当前项目" else "全局"
+        val scopeLabel = appContext.getString(if (scope == McpScope.PROJECT) R.string.mcp_scope_project else R.string.mcp_scope_global)
 
         suspend fun readServers(): List<McpServerConfig> =
             if (scope == McpScope.PROJECT) mcpConfigRepository.getProjectServers() else mcpConfigRepository.getGlobalServers()
@@ -128,7 +173,9 @@ class ManageMcpTool @Inject constructor(
             when (action) {
                 "list" -> {
                     val servers = readServers()
-                    ToolResult.Success(JsonPrimitive(mcpConfigRepository.serialize(servers)))
+                    // headers / env 里常放 API Key 与 Token，而 list 走 READ_AGENT_CONFIG 免弹窗
+                    // （见 ToolPermissionPolicyEngine），原样回显等于把凭据交给模型、进而进上下文与日志。
+                    ToolResult.Success(JsonPrimitive(describeServers(servers)))
                 }
                 "remove" -> {
                     val name = args["server_name"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("remove 缺少必需参数：server_name")
@@ -160,7 +207,7 @@ class ManageMcpTool @Inject constructor(
                     servers.add(newServer)
                     if (!writeServers(servers)) return projectWriteSkipped
                     
-                    ToolResult.Success(JsonPrimitive("已添加 $scopeLabel 本地 MCP server：$name，配置将在下一次会话生效。若命令依赖 Node/Python 等运行时，请通过命令工具在用户确认后安装。"))
+                    ToolResult.Success(JsonPrimitive(appContext.getString(R.string.tool_mcp_stdio_added, scopeLabel, name)))
                 }
                 "add_http" -> {
                     val name = args["server_name"]?.jsonPrimitive?.contentOrNull ?: return ToolResult.Error("add_http 缺少必需参数：server_name")
@@ -190,7 +237,7 @@ class ManageMcpTool @Inject constructor(
     }
 
     private fun invalidNameMessage(name: String): String =
-        "server_name 只能含 ASCII 字母、数字、下划线与连字符（当前：$name）。server 名称会拼成 mcp__<server_name>__<tool> 送给模型，必须符合工具命名规范。"
+        appContext.getString(R.string.tool_mcp_invalid_name, name)
 
     private fun resolveScope(args: Map<String, JsonElement>): McpScope =
         when (args["scope"]?.jsonPrimitive?.contentOrNull) {

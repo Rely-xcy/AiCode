@@ -37,4 +37,20 @@ class BackupMetadataTest {
         assertFalse(BackupSnapshot(schemaVersion = 55, createdAt = 0).toMetadata().appSettingsIncluded)
         assertTrue(BackupSnapshot(schemaVersion = 55, createdAt = 0, themeMode = "AUTO").toMetadata().appSettingsIncluded)
     }
+
+    @Test
+    fun legacyMetadataReadsSecretsFromMetadataFile() {
+        assertFalse(json.decodeFromString<BackupMetadata>(
+            """{"schemaVersion":55,"createdAt":0}"""
+        ).secretsInSeparateSegment)
+    }
+
+    @Test
+    fun secretsSegmentMarkerRoundTrips() {
+        val metadata = BackupMetadata(schemaVersion = 55, createdAt = 0, secretsInSeparateSegment = true)
+        val restored = json.decodeFromString<BackupMetadata>(
+            json.encodeToString(BackupMetadata.serializer(), metadata)
+        )
+        assertTrue(restored.secretsInSeparateSegment)
+    }
 }

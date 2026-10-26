@@ -1,6 +1,9 @@
 package com.aicode.feature.agent.domain.tool.browser
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.ToolCapability
@@ -8,6 +11,7 @@ import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import android.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -20,7 +24,8 @@ import javax.inject.Inject
 
 class BrowserTool @Inject constructor(
     private val browserManager: BrowserManager,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    @param:ApplicationContext private val appContext: Context
 ) : AgentTool() {
 
     private companion object {
@@ -32,8 +37,7 @@ class BrowserTool @Inject constructor(
     }
 
     override val name = "browser"
-    override val description = "控制内置浏览器执行自动化操作，支持多标签与后台运行。所有操作可带 tabId（缺省作用于当前激活标签）。" +
-        "selector 支持 ref= / text= / text*= / role=button[name=xxx] / xpath= / CSS；getBackbone 返回无障碍树（role/name/ref），ref 可直接用作 selector。" +
+    override val description = "控制内置浏览器执行自动化操作，支持多标签与后台运行。" +
         "需查看页面视觉内容时显式调用 action=\"screenshot\"。"
     override val capabilities = setOf(ToolCapability.NETWORK_READ, ToolCapability.NETWORK_WRITE)
 
@@ -47,11 +51,11 @@ class BrowserTool @Inject constructor(
     private val actionSchema: Map<String, Any> = mapOf(
         "type" to "string",
         "enum" to actionEnum,
-        "description" to "操作类型。navigate=导航URL(支持 http(s)/file:// 与容器路径，非网址输入按搜索关键词处理); evaluate=执行JS(支持 Promise); click/fill/hover/press=交互(兼容 React); select=下拉选择; getText/getHtml=提取内容; getBackbone=无障碍树(role/name/ref); screenshot=截图; console=控制台日志; wait=等待条件; scroll=滚动; dialog=处理confirm/prompt（浏览器面板可见时由用户在界面上处理）; back/forward/reload=导航控制; newTab/closeTab/selectTab/listTabs=标签页管理"
+        "description" to "操作类型。navigate=导航 URL; evaluate=执行 JS; click/fill/hover/press=交互(兼容 React); select=下拉选择; getText/getHtml=提取内容; getBackbone=无障碍树(role/name/ref); screenshot=截图; console=控制台日志; wait=等待条件; scroll=滚动; dialog=处理网页 confirm/prompt（仅面板不可见时使用，面板可见时由用户处理）; back/forward/reload=导航控制; newTab/closeTab/selectTab/listTabs=标签页管理"
     )
 
     override val parameters = mapOf(
-        "action" to ToolParameter("action", ParameterType.STRING, "操作类型，见 enum列表", true),
+        "action" to ToolParameter("action", ParameterType.STRING, "操作类型，见枚举列表", true),
         "tabId" to ToolParameter("tabId", ParameterType.STRING, "目标标签页 ID（如 tab-1），缺省时作用于当前激活的标签页", false),
         "path" to ToolParameter("path", ParameterType.STRING, "screenshot: 截图保存路径（可选，缺省默认保存在 ~/workspace/.aicode/browser-screenshots/）", false),
         "url" to ToolParameter("url", ParameterType.STRING, "navigate/newTab: URL。支持 http(s)；本地文件支持 file:// 或容器路径（~/workspace/…、/etc/…）；无协议头时优先 https，失败回退 http；不像网址的输入则用内置搜索引擎（Bing）搜索", false),
@@ -103,13 +107,15 @@ class BrowserTool @Inject constructor(
 
         return try {
             executeAction(action, tabId, args)
+        } catch (e: TimeoutCancellationException) {
+            ToolResult.Error("操作超时：$action", "TIMEOUT")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: IllegalStateException) {
             FileLogger.e(TAG, "浏览器操作失败: $action", e)
             ToolResult.Error(e.message ?: "浏览器未初始化", "BROWSER_NOT_READY")
         } catch (e: IllegalArgumentException) {
             ToolResult.Error(e.message ?: "参数错误", "INVALID_ARGUMENT")
-        } catch (e: TimeoutCancellationException) {
-            ToolResult.Error("操作超时：$action", "TIMEOUT")
         } catch (e: Exception) {
             FileLogger.e(TAG, "浏览器操作异常: $action", e)
             ToolResult.Error("操作失败：${e.message}", "BROWSER_ERROR")
@@ -282,7 +288,7 @@ class BrowserTool @Inject constructor(
                     ), tabId = tabId)
                     ToolResult.Success(data, images = listOf(image.copy(path = savePath)))
                 } else {
-                    buildError(action, "截图失败：浏览器尺寸为 0 或渲染异常。", "SCREENSHOT_FAILED", tabId = tabId)
+                    buildError(action, appContext.getString(R.string.tool_browser_screenshot_failed), "SCREENSHOT_FAILED", tabId = tabId)
                 }
             }
 
@@ -297,7 +303,7 @@ class BrowserTool @Inject constructor(
                 buildOk(action, mapOf(
                     "condition" to JsonPrimitive(condition),
                     "met" to JsonPrimitive(met),
-                    "message" to JsonPrimitive(if (met) "条件已满足" else "超时未满足")
+                    "message" to JsonPrimitive(appContext.getString(if (met) R.string.tool_browser_condition_met else R.string.tool_browser_wait_timeout))
                 ), tabId = tabId)
             }
 

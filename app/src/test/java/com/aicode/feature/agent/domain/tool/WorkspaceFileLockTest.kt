@@ -1,10 +1,12 @@
 package com.aicode.feature.agent.domain.tool
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +21,7 @@ class WorkspaceFileLockTest {
     private val lock = WorkspaceFileLock()
 
     @Test
-    fun sameKey_serializes() = runTest {
+    fun sameKey_serializes() = runBlocking {
         val concurrent = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
         val order = Collections.synchronizedList(mutableListOf<String>())
@@ -42,7 +44,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun differentKeys_runConcurrently() = runTest {
+    fun differentKeys_runConcurrently() = runBlocking {
         val concurrent = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
 
@@ -62,7 +64,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun entriesAreReclaimedAfterUse() = runTest {
+    fun entriesAreReclaimedAfterUse() = runBlocking {
         lock.withLock("~/workspace/a.kt") { /* 什么都不做 */ }
         assertEquals("无持有者也无等待者时条目应被回收", 0, lock.trackedKeyCount())
 
@@ -71,7 +73,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun entriesSurviveWhileWaiterIsQueued() = runTest {
+    fun entriesSurviveWhileWaiterIsQueued() = runBlocking {
         val started = AtomicInteger(0)
         val first = async {
             lock.withLock("k") {
@@ -95,7 +97,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun exceptionInBlock_stillReleasesLock() = runTest {
+    fun exceptionInBlock_stillReleasesLock() = runBlocking {
         runCatching {
             lock.withLock("k") { throw IllegalStateException("boom") }
         }
@@ -107,7 +109,7 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun multipleKeys_doNotDeadlock() = runTest {
+    fun multipleKeys_doNotDeadlock() = runBlocking {
         // 两个协程以相反顺序请求同一组键：排序获取保证不会互相等死。
         val a = async {
             lock.withLock(listOf("x", "y")) { delay(20) }
@@ -121,10 +123,60 @@ class WorkspaceFileLockTest {
     }
 
     @Test
-    fun blankKeys_areIgnored() = runTest {
+    fun blankKeys_areIgnored() = runBlocking {
         var ran = false
         lock.withLock(listOf(null, "", "  ")) { ran = true }
         assertTrue("全空键等价于不加锁，仍应执行", ran)
         assertEquals(0, lock.trackedKeyCount())
+    }
+
+    /**
+     * 多线程争抢同一条目：条目与引用计数必须一起回收，否则可能出现两把不同的锁同时生效。
+     * 旧实现把 Mutex 与计数分在两个 Map，回收与新获取交错时就能重建出第二把锁。
+     */
+    @Test
+    fun heavyContention_neverOverlapsAndLeavesNoEntries() = runBlocking {
+        val concurrent = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+
+        val jobs = (1..64).map {
+            launch(Dispatchers.Default) {
+                lock.withLock("~/workspace/hot.kt") {
+                    val now = concurrent.incrementAndGet()
+                    maxConcurrent.updateAndGet { maxOf(it, now) }
+                    yield()
+                    concurrent.decrementAndGet()
+                }
+            }
+        }
+        jobs.joinAll()
+
+        assertEquals("同 key 最大并发必须为 1", 1, maxConcurrent.get())
+        assertEquals("全部释放后不应残留条目", 0, lock.trackedKeyCount())
+    }
+
+    /** 等待中被取消的协程必须撤掉自己的引用，否则条目永久滞留。 */
+    @Test
+    fun cancelledWaiter_releasesItsReference() = runBlocking {
+        val holderStarted = AtomicInteger(0)
+        val holder = launch {
+            lock.withLock("k") {
+                holderStarted.incrementAndGet()
+                delay(10_000)
+            }
+        }
+        while (holderStarted.get() == 0) delay(1)
+
+        val waiter = launch { lock.withLock("k") { } }
+        delay(30)
+        assertEquals("持有者 + 等待者应各占一次引用", 1, lock.trackedKeyCount())
+
+        waiter.cancel()
+        waiter.join()
+        assertEquals("等待者取消后条目仍被持有者引用", 1, lock.trackedKeyCount())
+
+        holder.cancel()
+        holder.join()
+        assertEquals("持有者也取消后条目必须回收", 0, lock.trackedKeyCount())
     }
 }

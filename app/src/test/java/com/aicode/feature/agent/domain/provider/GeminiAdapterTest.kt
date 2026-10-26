@@ -1,11 +1,12 @@
 package com.aicode.feature.agent.domain.provider
 
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject as KxJsonObject
 import okhttp3.ResponseBody
 import org.junit.Assert.assertEquals
@@ -94,7 +95,7 @@ class GeminiAdapterTest {
         request?.get("generationConfig") as? Map<*, *> ?: emptyMap<Any, Any>()
 
     @Test
-    fun user_message_text_carries_mode_reminder() = runTest {
+    fun user_message_text_carries_mode_reminder() = runBlocking {
         val api = FakeApi(textResponse())
         val message = AgentMessage.UserMessage(content = "把提醒挪走", modelReminder = "【模式提醒】AUTO 模式正文")
         adapter(api).complete("sys", listOf(message))
@@ -108,18 +109,33 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun max_output_tokens_and_thinking_config_coexist_in_generation_config() = runTest {
+    fun budgetZero_omits_includeThoughts() = runTest {
         val api = FakeApi(textResponse())
-        // 两者曾各自覆盖式写 generationConfig，只会剩下后写的那个。
-        adapter(api, maxOutput = 64000).complete("sys", listOf(user("hi")), reasoningEffort = "high")
+        // Gemini 拒绝 thinkingBudget=0 与 includeThoughts=true 同发（invalid argument），
+        // 关闭思考的 2.5 系模型必须只发预算。
+        adapter(api)
+            .apply { model = "gemini-2.5-flash" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "none")
 
         val config = generationConfig(api.lastRequest)
-        assertEquals(64000, config["maxOutputTokens"])
-        assertEquals(mapOf("thinkingBudget" to 8192, "includeThoughts" to true), config["thinkingConfig"])
+        assertEquals(mapOf("thinkingBudget" to 0), config["thinkingConfig"])
     }
 
     @Test
-    fun max_output_tokens_absent_when_metadata_missing() = runTest {
+    fun max_output_tokens_and_thinking_config_coexist_in_generation_config() = runBlocking {
+        val api = FakeApi(textResponse())
+        // 两者曾各自覆盖式写 generationConfig，只会剩下后写的那个。
+        adapter(api, maxOutput = 64000)
+            .apply { model = "gemini-3-flash-preview" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "high")
+
+        val config = generationConfig(api.lastRequest)
+        assertEquals(64000, config["maxOutputTokens"])
+        assertEquals(mapOf("thinkingLevel" to "high", "includeThoughts" to true), config["thinkingConfig"])
+    }
+
+    @Test
+    fun max_output_tokens_absent_when_metadata_missing() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api, maxOutput = null).complete("sys", listOf(user("hi")))
 
@@ -127,7 +143,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun output_tokens_include_thought_tokens() = runTest {
+    fun output_tokens_include_thought_tokens() = runBlocking {
         val api = FakeApi(textResponse(candidateTokens = 20, thoughtTokens = 30))
         val result = adapter(api).complete("sys", listOf(user("hi")))
 
@@ -137,7 +153,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun max_tokens_finish_reason_marks_response_truncated() = runTest {
+    fun max_tokens_finish_reason_marks_response_truncated() = runBlocking {
         val api = FakeApi(textResponse(finishReason = "MAX_TOKENS"))
         val result = adapter(api).complete("sys", listOf(user("hi")))
 
@@ -146,7 +162,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun safety_finish_reason_marks_response_aborted() = runTest {
+    fun safety_finish_reason_marks_response_aborted() = runBlocking {
         val api = FakeApi(textResponse(finishReason = "SAFETY"))
         val result = adapter(api).complete("sys", listOf(user("hi")))
 
@@ -154,7 +170,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun function_call_id_is_used_as_tool_call_id() = runTest {
+    fun function_call_id_is_used_as_tool_call_id() = runBlocking {
         val api = FakeApi(
             """
             {
@@ -176,7 +192,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun function_call_id_falls_back_to_name() = runTest {
+    fun function_call_id_falls_back_to_name() = runBlocking {
         val api = FakeApi(
             """
             {
@@ -195,7 +211,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun parts_with_signature_are_snapshotted_and_plain_text_is_not() = runTest {
+    fun parts_with_signature_are_snapshotted_and_plain_text_is_not() = runBlocking {
         val withSignature = FakeApi(
             """
             {
@@ -218,7 +234,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun assistant_history_replays_parts_snapshot_verbatim() = runTest {
+    fun assistant_history_replays_parts_snapshot_verbatim() = runBlocking {
         val api = FakeApi(textResponse())
         val snapshot = """[{"text":"上轮答案","thoughtSignature":"sig-a"},""" +
             """{"functionCall":{"id":"call-1","name":"readFile","args":{"path":"a.txt"}}}]"""
@@ -242,7 +258,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun assistant_history_rebuilds_parts_without_snapshot() = runTest {
+    fun assistant_history_rebuilds_parts_without_snapshot() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api).complete(
             "sys",
@@ -259,7 +275,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun function_response_carries_name_and_call_id() = runTest {
+    fun function_response_carries_name_and_call_id() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api).complete(
             "sys",
@@ -282,7 +298,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun legacy_function_response_omits_id_when_it_equals_name() = runTest {
+    fun legacy_function_response_omits_id_when_it_equals_name() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api).complete(
             "sys",
@@ -305,7 +321,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun parallel_tool_results_share_one_user_turn() = runTest {
+    fun parallel_tool_results_share_one_user_turn() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api).complete(
             "sys",
@@ -335,7 +351,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun user_text_after_tool_results_starts_new_turn() = runTest {
+    fun user_text_after_tool_results_starts_new_turn() = runBlocking {
         val api = FakeApi(textResponse())
         adapter(api).complete(
             "sys",
@@ -385,7 +401,7 @@ class GeminiAdapterTest {
     """.trimIndent()
 
     @Test
-    fun interactions_posts_to_the_shared_endpoint_with_model_in_body() = runTest {
+    fun interactions_posts_to_the_shared_endpoint_with_model_in_body() = runBlocking {
         val api = FakeApi(interactionResponse())
         interactionsAdapter(api).complete("sys", listOf(user("hi")))
 
@@ -395,7 +411,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_is_stateless_with_string_system_instruction() = runTest {
+    fun interactions_is_stateless_with_string_system_instruction() = runBlocking {
         val api = FakeApi(interactionResponse())
         interactionsAdapter(api).complete("你是助手", listOf(user("hi")))
 
@@ -407,14 +423,16 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_generation_config_uses_thinking_level_not_budget() = runTest {
+    fun interactions_generation_config_uses_thinking_level_not_budget() = runBlocking {
         val api = FakeApi(interactionResponse())
-        interactionsAdapter(api, maxOutput = 64000).complete("sys", listOf(user("hi")), reasoningEffort = "max")
+        interactionsAdapter(api, maxOutput = 64000)
+            .apply { model = "gemini-3-flash-preview" }
+            .complete("sys", listOf(user("hi")), reasoningEffort = "max")
 
         @Suppress("UNCHECKED_CAST")
         val config = api.lastRequest?.get("generation_config") as Map<*, *>
         assertEquals(64000, config["max_output_tokens"])
-        // thinkingBudget 在 Interactions 里不存在；xhigh/max 归一到 high
+        // thinkingBudget 在 Interactions 里不存在；该模型最高只到 high，max 向下取最近档
         assertEquals("high", config["thinking_level"])
         assertFalse(config.containsKey("thinkingConfig"))
         // 不显式要摘要就拿不到可展示的思考文本
@@ -424,7 +442,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_omits_thinking_fields_for_non_thinking_models() = runTest {
+    fun interactions_omits_thinking_fields_for_non_thinking_models() = runBlocking {
         val api = FakeApi(interactionResponse())
         // 不思考的模型（gemma / 图像 / 音乐）上层不会给思考强度，这两个字段一并不发
         interactionsAdapter(api, maxOutput = 8192).complete("sys", listOf(user("hi")))
@@ -437,7 +455,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_output_tokens_include_thought_tokens() = runTest {
+    fun interactions_output_tokens_include_thought_tokens() = runBlocking {
         val api = FakeApi(interactionResponse())
         val result = interactionsAdapter(api).complete("sys", listOf(user("hi")))
 
@@ -449,7 +467,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_incomplete_status_triggers_continuation() = runTest {
+    fun interactions_incomplete_status_triggers_continuation() = runBlocking {
         val api = FakeApi(interactionResponse(status = "incomplete"))
         val result = interactionsAdapter(api).complete("sys", listOf(user("hi")))
 
@@ -458,7 +476,7 @@ class GeminiAdapterTest {
     }
 
     @Test
-    fun interactions_full_url_is_used_verbatim() = runTest {
+    fun interactions_full_url_is_used_verbatim() = runBlocking {
         val api = FakeApi(interactionResponse())
         interactionsAdapter(api).apply {
             useFullUrl = true

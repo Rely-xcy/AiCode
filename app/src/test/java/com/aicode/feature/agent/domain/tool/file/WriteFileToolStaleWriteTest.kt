@@ -1,13 +1,13 @@
 package com.aicode.feature.agent.domain.tool.file
 
 import com.aicode.feature.agent.domain.model.AgentContext
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.testutil.TestFileAccessProvider
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -49,7 +49,7 @@ class WriteFileToolStaleWriteTest {
     }
 
     @Test
-    fun overwriteAfterExternalChange_isRejected() = runTest {
+    fun overwriteAfterExternalChange_isRejected() = runBlocking {
         val file = tmp.newFile("a.kt").apply { writeText("v1\n") }
         recordCurrentVersion("s1", file)
         file.writeText("v2-changed-by-other\n")
@@ -62,7 +62,7 @@ class WriteFileToolStaleWriteTest {
     }
 
     @Test
-    fun overwriteWithCurrentVersion_succeeds() = runTest {
+    fun overwriteWithCurrentVersion_succeeds() = runBlocking {
         val file = tmp.newFile("a.kt").apply { writeText("v1\n") }
         recordCurrentVersion("s1", file)
 
@@ -73,7 +73,7 @@ class WriteFileToolStaleWriteTest {
     }
 
     @Test
-    fun creatingNewFile_isNotBlockedByRegistry() = runTest {
+    fun creatingNewFile_isNotBlockedByRegistry() = runBlocking {
         // 登记表里有一条同路径记录，但磁盘上文件不存在（如刚被删除）：应视为新建，不拦截。
         val target = File(tmp.root, "new.kt")
         versions.record("s1", fileAccess.toDisplayPath(target.path), "sha256:stale-value")
@@ -85,7 +85,7 @@ class WriteFileToolStaleWriteTest {
     }
 
     @Test
-    fun unreadExistingFile_isAllowedThrough() = runTest {
+    fun unreadExistingFile_isAllowedThrough() = runBlocking {
         val file = tmp.newFile("a.kt").apply { writeText("v1\n") }
 
         val result = tool().executeWithContext(writeArgs(file.path, "v2\n"), context("s-never-read"))
@@ -95,7 +95,7 @@ class WriteFileToolStaleWriteTest {
     }
 
     @Test
-    fun overwriteFalse_stillReportsFileExists() = runTest {
+    fun overwriteFalse_stillReportsFileExists() = runBlocking {
         val file = tmp.newFile("a.kt").apply { writeText("v1\n") }
 
         val result = tool().executeWithContext(writeArgs(file.path, "v2\n", overwrite = false), context("s1"))

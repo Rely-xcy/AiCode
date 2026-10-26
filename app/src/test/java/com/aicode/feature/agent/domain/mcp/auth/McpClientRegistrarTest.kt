@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.mcp.auth
 
 import kotlinx.coroutines.runBlocking
+import io.mockk.mockk
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -11,7 +12,7 @@ class McpClientRegistrarTest {
     private fun tempStore(): Pair<McpTokenStore, File> {
         val file = File.createTempFile("mcp-oauth-reg", ".json")
         file.delete()
-        return McpTokenStore(file) to file
+        return McpTokenStore(file, mockk(relaxed = true)) to file
     }
 
     @Test

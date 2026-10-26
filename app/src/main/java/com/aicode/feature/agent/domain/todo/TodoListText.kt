@@ -23,10 +23,15 @@ object TodoListText {
      */
     const val LIST_ACTION_MESSAGE = "当前清单"
 
-    /** 待办状态标记：[x] 完成 / [~] 进行中 / [ ] 未开始。 */
+    /** 待办状态标记：[x] 完成 / [v] 验证中 / [i] 已实施 / [~] 进行中 / [!] 受阻 / [×] 失败 / [-] 取消 / [ ] 未开始。 */
     fun mark(status: TodoStatus): String = when (status) {
         TodoStatus.COMPLETED -> "[x]"
+        TodoStatus.VERIFYING -> "[v]"
+        TodoStatus.IMPLEMENTED -> "[i]"
         TodoStatus.IN_PROGRESS -> "[~]"
+        TodoStatus.BLOCKED -> "[!]"
+        TodoStatus.FAILED -> "[×]"
+        TodoStatus.CANCELLED -> "[-]"
         TodoStatus.PENDING -> "[ ]"
     }
 
@@ -64,8 +69,9 @@ object TodoListText {
         return if (rest > 0) "$body\n…（另有 $rest 项未列出）" else body
     }
 
-    /** 下一个未完成项：先取进行中的，再取未开始的；都完成时返回 null。 */
+    /** 下一个未完成项：先取进行中的，再取待验证/已实施的，最后取未开始的；都完成时返回 null。 */
     fun nextItem(items: List<TodoItem>): TodoItem? =
         items.firstOrNull { it.status == TodoStatus.IN_PROGRESS }
+            ?: items.firstOrNull { it.status == TodoStatus.VERIFYING || it.status == TodoStatus.IMPLEMENTED }
             ?: items.firstOrNull { it.status == TodoStatus.PENDING }
 }

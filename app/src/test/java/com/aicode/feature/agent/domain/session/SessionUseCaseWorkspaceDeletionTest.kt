@@ -2,16 +2,17 @@ package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -35,7 +36,7 @@ class SessionUseCaseWorkspaceDeletionTest {
     )
 
     @Test
-    fun deleteSessionsByWorkspace_deletesMessagesThenSessions() = runTest {
+    fun deleteSessionsByWorkspace_deletesMessagesThenSessions() = runBlocking {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/a") } returns listOf(
@@ -43,7 +44,7 @@ class SessionUseCaseWorkspaceDeletionTest {
             session("sub", "/ws/a", parentId = "root")
         )
 
-        val useCase = SessionUseCase(chatDao, messageDao, noopPersistence(), emptyEngine())
+        val useCase = SessionUseCase(chatDao, messageDao, mockk<SessionBriefDao>(relaxed = true), noopPersistence(), emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/a")
 
         assertEquals(2, deleted)
@@ -53,12 +54,12 @@ class SessionUseCaseWorkspaceDeletionTest {
     }
 
     @Test
-    fun deleteSessionsByWorkspace_noSessions_skipsDeletion() = runTest {
+    fun deleteSessionsByWorkspace_noSessions_skipsDeletion() = runBlocking {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnce("/ws/empty") } returns emptyList()
 
-        val useCase = SessionUseCase(chatDao, messageDao, noopPersistence(), emptyEngine())
+        val useCase = SessionUseCase(chatDao, messageDao, mockk<SessionBriefDao>(relaxed = true), noopPersistence(), emptyEngine())
         val deleted = useCase.deleteSessionsByWorkspace("/ws/empty")
 
         assertEquals(0, deleted)

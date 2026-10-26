@@ -122,7 +122,7 @@ class AppTerminalViewClient(
         lastFontSizeSp = baseFontSizeSp
     }
 
-    // 捏合：累积增量倍数得到目标字号（钳在 10–22），返回等价预览缩放倍数给视图做画布缩放。
+    // 捏合：累积增量倍数得到目标字号（钳在 5–22），返回等价预览缩放倍数给视图做画布缩放。
     // 这里不改字号、不 resize PTY（避免给 shell 连发 SIGWINCH 导致内容错乱），
     // 手势结束在 onScaleEnd 按最终字号 resize 一次。
     override fun onScale(scale: Float): Float {

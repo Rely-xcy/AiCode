@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.checkpoint
 
 import android.content.ContextWrapper
+import kotlinx.coroutines.runBlocking
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
@@ -9,10 +10,10 @@ import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.FileEntry
 import com.aicode.feature.workspace.domain.sha256Fingerprint
-import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -49,7 +50,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOtherSession_doesNotRevertModifiedFile() = runTest {
+    fun restoringOtherSession_doesNotRevertModifiedFile() = runBlocking {
         val path = File(workspace, "a.txt").apply { writeText("original") }.absolutePath
 
         manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -66,7 +67,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOtherSession_doesNotDeleteCreatedFile() = runTest {
+    fun restoringOtherSession_doesNotDeleteCreatedFile() = runBlocking {
         val path = File(workspace, "new.txt").absolutePath
 
         manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -82,7 +83,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoringOwnSession_revertsAndDeletes() = runTest {
+    fun restoringOwnSession_revertsAndDeletes() = runBlocking {
         val modified = File(workspace, "m.txt").apply { writeText("original") }.absolutePath
         val created = File(workspace, "c.txt").absolutePath
 
@@ -102,7 +103,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreSkipsFileChangedAfterSnapshot() = runTest {
+    fun restoreSkipsFileChangedAfterSnapshot() = runBlocking {
         // 核心场景：本会话「见过」某版本之后，文件又被别的会话改过；此时回滚不能覆盖对方。
         // 守卫依据的是「本会话最后看到的版本」，所以这里要先让本会话登记一个版本
         // （真实流程里由 readFile / 上一次写入完成登记）。
@@ -127,7 +128,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreRevertsOwnChangesEvenWhenTheyDiffer() = runTest {
+    fun restoreRevertsOwnChangesEvenWhenTheyDiffer() = runBlocking {
         // 反向保证：本会话自己改过、且这是本会话见过的版本 → 必须照常回滚（这正是回滚的用途）。
         val path = File(workspace, "mine.txt").apply { writeText("v1") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -152,7 +153,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreRecreatesFileDeletedAfterSnapshot() = runTest {
+    fun restoreRecreatesFileDeletedAfterSnapshot() = runBlocking {
         // MODIFY 快照 + 文件在快照后被删除 → 恢复到快照内容。
         // 这是"本会话自己改/删、用户要撤销"的常规场景，必须能回滚回去。
         val path = File(workspace, "vanished.txt").apply { writeText("v1") }.absolutePath
@@ -169,7 +170,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreIsIdempotent() = runTest {
+    fun restoreIsIdempotent() = runBlocking {
         // 连续回滚两次结果一致：第一次已把文件写回快照内容，第二次不应再改出别的东西。
         val path = File(workspace, "same.txt").apply { writeText("v1") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
@@ -186,7 +187,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun restoreDeletesCreatedFileEvenIfLaterModified() = runTest {
+    fun restoreDeletesCreatedFileEvenIfLaterModified() = runBlocking {
         // 已知局限的显式记录：CREATE 快照拍摄时文件还不存在，因此没记下内容指纹，
         // 无法判断快照之后是否有人往里写过东西——当前实现一律删除。
         // 这个用例把现状钉住：将来若补上「首次写入后记指纹」，本用例应当改成断言 skipped。
@@ -204,7 +205,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun snapshotsAreScopedToOwningSession() = runTest {
+    fun snapshotsAreScopedToOwningSession() = runBlocking {
         val pathA = File(workspace, "a.txt").apply { writeText("a") }.absolutePath
         val pathB = File(workspace, "b.txt").apply { writeText("b") }.absolutePath
 
@@ -219,7 +220,7 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     @Test
-    fun clearingSessionDropsItsActiveCheckpoint() = runTest {
+    fun clearingSessionDropsItsActiveCheckpoint() = runBlocking {
         val path = File(workspace, "a.txt").apply { writeText("original") }.absolutePath
         val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
 
@@ -228,6 +229,104 @@ class CheckpointManagerSessionIsolationTest {
 
         assertTrue(dao.getFileSnapshotsForCheckpoint(cpA.id).isEmpty())
     }
+
+    /**
+     * 一次修改前的检查点只允许读一遍文件。原实现是 exists + fingerprint + readFile 三次独立访问，
+     * 远程 SFTP 下同一个文件被完整传输三遍，而三份结果只能是同一时刻的同一内容。
+     */
+    @Test
+    fun beforeFileModifiedReadsFileOnce() = runBlocking {
+        val path = File(workspace, "once.txt").apply { writeText("original") }.absolutePath
+        val cp = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+
+        val before = accessCounts()
+        manager.beforeFileModified("sessionA", path)
+        val delta = accessCounts().zip(before) { after, prev -> after - prev }
+
+        // 顺序：readBytes / readFile / fingerprint / exists
+        assertEquals("存在性、原文、指纹必须来自同一次读取", listOf(1, 0, 0, 0), delta)
+        assertEquals("MODIFY", dao.getFileSnapshotsForCheckpoint(cp.id).single().changeType)
+    }
+
+    /**
+     * 文件不存在时是一次失败的读取加一次存在性确认（两个 stat，没有内容传输），仍记为 CREATE。
+     */
+    @Test
+    fun beforeFileModifiedRecordsCreateForMissingFile() = runBlocking {
+        val path = File(workspace, "absent.txt").absolutePath
+        val cp = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+
+        val before = accessCounts()
+        manager.beforeFileModified("sessionA", path)
+        val delta = accessCounts().zip(before) { after, prev -> after - prev }
+
+        assertEquals(listOf(1, 0, 0, 1), delta)
+        val snapshot = dao.getFileSnapshotsForCheckpoint(cp.id).single()
+        assertEquals("CREATE", snapshot.changeType)
+        assertNull("新建没有内容版本可言", snapshot.fingerprint)
+    }
+
+    /**
+     * 快照指纹必须与 [FileAccessProvider.fingerprint] 同口径：回滚守卫比的是
+     * 「本会话见过的指纹」与「当前指纹」，口径不一致会让两者永远不等，本会话自己的改动也会被当成外部改动跳过。
+     */
+    @Test
+    fun snapshotFingerprintMatchesFileAccessDigest() = runBlocking {
+        val path = File(workspace, "digest.txt").apply { writeText("内容 v1") }.absolutePath
+        val cp = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+
+        manager.beforeFileModified("sessionA", path)
+
+        assertEquals(
+            fileAccess.fingerprint(path),
+            dao.getFileSnapshotsForCheckpoint(cp.id).single().fingerprint
+        )
+    }
+
+    /**
+     * 快照之后由外部（非本会话）做的改动必须仍被识别：这是快照口径从「三次读」换成「一次读」后
+     * 最容易碎掉的一条语义。
+     */
+    @Test
+    fun externalChangeAfterSnapshotIsStillRejected() = runBlocking {
+        val path = File(workspace, "outside.txt").apply { writeText("v1") }.absolutePath
+        val cpA = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+        manager.beforeFileModified("sessionA", path)
+        recordSeenVersion("sessionA", path) // 本会话读到过 v1
+
+        File(path).writeText("v2-changed-by-other")
+
+        val result = manager.restoreCodeToCheckpoint("sessionA", cpA.id)
+
+        assertEquals("外部改动必须保留", 0, result.restored)
+        assertEquals(1, result.skipped.size)
+        assertEquals("v2-changed-by-other", File(path).readText())
+    }
+
+    /**
+     * 文件存在但读不出全文（远端超上限、权限不足、目录）：不能记一条空内容的 MODIFY
+     * ——回滚会把文件写空；也不能当成新建——回滚会把本就存在的路径删掉。只能跳过并放行写入。
+     */
+    @Test
+    fun unreadableExistingFileSkipsSnapshot() = runBlocking {
+        val path = File(workspace, "unreadable.txt").apply { writeText("original") }.absolutePath
+        val cp = manager.createCheckpoint("sessionA", "msgA", "A 的请求")
+
+        fileAccess.failReadBytes = true
+        manager.beforeFileModified("sessionA", path)
+        fileAccess.failReadBytes = false
+
+        assertTrue("读不出全文时不能留下快照", dao.getFileSnapshotsForCheckpoint(cp.id).isEmpty())
+        assertEquals("更不能用空内容覆盖原文件", "original", File(path).readText())
+    }
+
+    /** 顺序：readBytes / readFile / fingerprint / exists。 */
+    private fun accessCounts(): List<Int> = listOf(
+        fileAccess.readBytesCalls,
+        fileAccess.readFileCalls,
+        fileAccess.fingerprintCalls,
+        fileAccess.existsCalls
+    )
 
     private class FakeContext(private val dir: File) : ContextWrapper(null) {
         override fun getFilesDir(): File = dir
@@ -278,13 +377,26 @@ class CheckpointManagerSessionIsolationTest {
     }
 
     private class LocalFileAccess : FileAccessProvider {
-        override fun readFile(path: String): String = File(path).readText()
+        // 访问次数：用来钉住「一次快照只读一遍文件」这个约定。
+        var readBytesCalls = 0
+        var readFileCalls = 0
+        var fingerprintCalls = 0
+        var existsCalls = 0
+        var failReadBytes = false
+
+        override fun readFile(path: String): String {
+            readFileCalls++
+            return File(path).readText()
+        }
         override fun writeFile(path: String, content: String, overwrite: Boolean, encoding: Charset) {
             File(path).parentFile?.mkdirs()
             File(path).writeText(content, encoding)
         }
 
-        override fun exists(path: String): Boolean = File(path).exists()
+        override fun exists(path: String): Boolean {
+            existsCalls++
+            return File(path).exists()
+        }
         override fun delete(path: String) {
             File(path).delete()
         }
@@ -297,13 +409,20 @@ class CheckpointManagerSessionIsolationTest {
 
         /** 真实实现而非抛异常：checkpoint 回滚前要按指纹判断文件是否已被其他会话改动。 */
         override fun fingerprint(path: String): String? {
+            fingerprintCalls++
             val file = File(path)
             if (!file.isFile) return null
             return sha256Fingerprint(file.readBytes())
         }
         override fun permissions(path: String): String = throw UnsupportedOperationException()
         override fun listFiles(path: String): List<FileEntry> = throw UnsupportedOperationException()
-        override fun readBytes(path: String): ByteArray = throw UnsupportedOperationException()
+        override fun readBytes(path: String): ByteArray {
+            readBytesCalls++
+            if (failReadBytes) throw java.io.IOException("模拟读失败")
+            val file = File(path)
+            if (!file.exists()) throw java.nio.file.NoSuchFileException(path)
+            return file.readBytes()
+        }
         override fun writeBytes(path: String, bytes: ByteArray, overwrite: Boolean) {
             File(path).parentFile?.mkdirs()
             File(path).writeBytes(bytes)

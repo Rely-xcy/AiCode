@@ -87,6 +87,28 @@ class ModelMetadataMergeTest {
     }
 
     @Test
+    fun prefixedModelWithoutCustom_preservesOriginalId() {
+        val auto = meta(inputCost = 5.0).copy(id = "deepseek-flash")
+
+        val merged = mergeModelMetadata("deepseek/deepseek-flash", auto, null)
+
+        assertEquals("deepseek/deepseek-flash", merged.id)
+        assertEquals(auto.copy(id = "deepseek/deepseek-flash"), merged)
+    }
+
+    @Test
+    fun prefixedModelWithCustom_preservesOriginalIdAndCustomPrices() {
+        val auto = meta(inputCost = 5.0).copy(id = "deepseek-flash")
+        val custom = meta(inputCost = 1.0).copy(id = "deepseek/deepseek-flash")
+
+        val merged = mergeModelMetadata("deepseek/deepseek-flash", auto, custom)
+
+        assertEquals("deepseek/deepseek-flash", merged.id)
+        assertEquals(1.0, merged.inputCostUsdPerM!!, 0.0)
+        assertEquals(auto.contextTokens, merged.contextTokens)
+    }
+
+    @Test
     fun noCustom_returnsAutoUnchanged() {
         val auto = meta(inputCost = 5.0, outputCost = 25.0, cacheReadCost = 0.5)
 

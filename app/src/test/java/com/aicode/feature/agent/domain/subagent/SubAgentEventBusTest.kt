@@ -85,4 +85,77 @@ class SubAgentEventBusTest {
 
         assertEquals(setOf("sub-2"), bus.activeSubSessionIds.value)
     }
+
+    // ── 预留槽位：task(create) 的「检查+占位」必须原子，否则同一批并行工具会超额创建 ──
+
+    @Test
+    fun reserve_countsAgainstLimitUntilSpawned() {
+        val bus = SubAgentEventBus()
+        assertTrue(bus.tryReserveSlots(3))
+
+        // 预留未落地时 active 集合还是空，但计数必须把预留算进去，否则并行的创建会双双通过检查
+        assertEquals(0, bus.activeSubSessionIds.value.size)
+        assertEquals(3, bus.activeCount)
+        assertFalse("3 预留 + 3 再要 > 5，应拒绝", bus.tryReserveSlots(3))
+        assertTrue("3 预留 + 2 再要 = 5，应允许", bus.tryReserveSlots(2))
+    }
+
+    @Test
+    fun spawned_consumesOneReservation() {
+        val bus = SubAgentEventBus()
+        bus.tryReserveSlots(2)
+
+        spawn(bus, "sub-1")
+
+        // 1 个已落地 + 1 个尚未落地的预留，都算在占用里
+        assertEquals(2, bus.activeCount)
+        spawn(bus, "sub-2")
+        assertEquals(2, bus.activeCount)
+        // 无预留时 SPAWNED 不应把计数减到负数
+        spawn(bus, "sub-3")
+        assertEquals(3, bus.activeCount)
+    }
+
+    @Test
+    fun releaseSlots_returnsUnusedReservations() {
+        val bus = SubAgentEventBus()
+        bus.tryReserveSlots(3)
+        spawn(bus, "sub-1")
+
+        bus.releaseSlots(2)
+
+        assertEquals(1, bus.activeCount)
+        // 归还多余的不应减到负
+        bus.releaseSlots(10)
+        assertEquals(1, bus.activeCount)
+    }
+
+    @Test
+    fun reserve_beyondMaxIsRejected() {
+        val bus = SubAgentEventBus()
+        assertFalse(bus.tryReserveSlots(SubAgentEventBus.MAX_RUNNING + 1))
+        assertTrue(bus.tryReserveSlots(SubAgentEventBus.MAX_RUNNING))
+    }
+
+    /** 并发 reserve 总占位不会超过上限：串行循环里每次读到的都是最新计数。 */
+    @Test
+    fun reserve_concurrentRequestsDoNotOversubscribe() {
+        val bus = SubAgentEventBus()
+        val acquired = java.util.concurrent.atomic.AtomicInteger()
+        val threads = (1..20).map {
+            Thread {
+                // 每个线程反复抢 1 个名额再立即归还，与其它线程交错执行
+                repeat(50) {
+                    if (bus.tryReserveSlots(1)) bus.releaseSlots(1)
+                }
+                // 最后真实占住：全部线程占完后总数不得超过上限
+                if (bus.tryReserveSlots(1)) acquired.incrementAndGet()
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        assertEquals("并发下恰好只有 5 个线程能占住名额", SubAgentEventBus.MAX_RUNNING, acquired.get())
+        assertEquals(SubAgentEventBus.MAX_RUNNING, bus.activeCount)
+    }
 }

@@ -66,6 +66,10 @@ internal fun SkillEditorScreen(
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
     var description by rememberSaveable { mutableStateOf(initial?.description ?: "") }
     var instructions by rememberSaveable { mutableStateOf(initial?.instructions ?: "") }
+    // 触发词用逗号分隔输入（中文逗号也接受），保存时切分、展示时拼回。
+    var triggersText by rememberSaveable {
+        mutableStateOf(initial?.triggers?.joinToString("，") ?: "")
+    }
     var scopeIsGlobal by rememberSaveable {
         mutableStateOf(initial?.scope?.let { it == SkillScope.GLOBAL } ?: (defaultScope == SkillScope.GLOBAL))
     }
@@ -108,7 +112,10 @@ internal fun SkillEditorScreen(
                                     name = name.trim(),
                                     description = description.trim(),
                                     instructions = instructions.trim(),
-                                    requiredTools = initial?.requiredTools ?: emptyList()
+                                    requiredTools = initial?.requiredTools ?: emptyList(),
+                                    triggers = triggersText.split(',', '，', '、')
+                                        .map { it.trim() }
+                                        .filter { it.isNotEmpty() }
                                 ),
                                 scope
                             )
@@ -165,6 +172,16 @@ internal fun SkillEditorScreen(
                         singleLine = false,
                         minLines = 2,
                         maxLines = 4
+                    )
+                    AppTextField(
+                        value = triggersText,
+                        onValueChange = { triggersText = it },
+                        label = stringResource(R.string.skills_triggers_label),
+                        placeholder = stringResource(R.string.skills_triggers_hint),
+                        singleLine = true,
+                        supportingText = {
+                            Text(stringResource(R.string.skills_triggers_help))
+                        }
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

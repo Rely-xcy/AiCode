@@ -16,12 +16,14 @@ import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
+import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.agent.domain.container.SshHostKeyPendingException
+import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -29,11 +31,12 @@ import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
-import com.aicode.feature.agent.domain.mcp.auth.McpOAuthCancelledException
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
+import com.aicode.feature.agent.domain.vscreen.RootShell
+import com.aicode.feature.agent.domain.vscreen.VscreenAccessibilityBridge
 import com.aicode.feature.agent.domain.skill.SkillForm
 import com.aicode.feature.agent.domain.skill.SkillImportError
 import com.aicode.feature.agent.domain.skill.SkillImportReport
@@ -46,9 +49,12 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.agent.domain.subagent.AgentSaveError
 import com.aicode.feature.agent.domain.subagent.InjectPart
+import com.aicode.feature.agent.domain.subagent.SubagentModelTier
+import com.aicode.feature.agent.domain.subagent.SubagentTierSelection
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
+import com.aicode.feature.settings.data.remote.ContainerImageVersionProbe
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.data.remote.ApkDownloadResult
@@ -61,19 +67,24 @@ import com.aicode.feature.settings.data.remote.UpdateCheckResult
 import com.aicode.feature.settings.data.remote.UpdateCheckService
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
+import com.aicode.feature.settings.domain.disconnectQuietly
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
+import com.aicode.feature.settings.data.repository.effectiveVersion
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.SubagentTierSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.repository.ProxyConfig
@@ -160,7 +171,10 @@ data class McpAuthUiState(
     val serverName: String? = null,
     val inProgress: Boolean = false,
     val error: String? = null,
-    val success: Boolean = false
+    val success: Boolean = false,
+    // 授权后的重连结果：true 已连接、false 未连上、null 未尝试或拿不到结果；
+    // 只有 true 才可以宣称「已连接」。
+    val connected: Boolean? = null
 )
 
 data class McpImportUiState(
@@ -276,6 +290,9 @@ private data class ModelStatsPaging(
 )
 
 /** 技能列表页的 UI 状态：技能 + 来源作用域 + 启停状态。 */
+/** 设置 → 软件权限：「设备 root 通道」的探测状态。 */
+enum class VscreenRootChannelState { UNKNOWN, PROBING, AVAILABLE, UNAVAILABLE }
+
 data class SkillUiEntry(
     val name: String,
     val description: String,
@@ -283,7 +300,9 @@ data class SkillUiEntry(
     val disabled: Boolean,
     val instructions: String,
     /** 手写技能里的 `required_tools`，编辑页不展示，保存时原样写回。 */
-    val requiredTools: List<String> = emptyList()
+    val requiredTools: List<String> = emptyList(),
+    /** 自然语言触发词：消息中空格分隔独立出现即自动注入正文。 */
+    val triggers: List<String> = emptyList()
 )
 
 /** 子代理列表页的 UI 状态：定义内容 + 来源作用域 + 启停状态。 */
@@ -377,6 +396,8 @@ private data class CompactionThresholdInputs(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    /** 虚拟屏 root 通道探测（「工具授权」页用）：只读探一次 `su -c id`。 */
+    private val rootShell: RootShell,
     private val repository: AIProviderRepository,
     private val modelApiService: ModelApiService,
     private val modelMetadataService: ModelMetadataService,
@@ -386,6 +407,8 @@ class SettingsViewModel @Inject constructor(
     private val keepaliveSettingsRepository: KeepaliveSettingsRepository,
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
+    private val liveNotificationSettingsRepository: LiveNotificationSettingsRepository,
+    private val approvalNotificationSettingsRepository: ApprovalNotificationSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val languageSettingsRepository: LanguageSettingsRepository,
     private val mcpConfigRepository: McpConfigRepository,
@@ -401,10 +424,12 @@ class SettingsViewModel @Inject constructor(
     private val imageGenModelSettingsRepository: ImageGenModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val titleModelSettingsRepository: TitleModelSettingsRepository,
+    private val subagentTierSettingsRepository: SubagentTierSettingsRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val containerImageCatalog: ContainerImageCatalog,
     private val containerImageDownloader: ContainerImageDownloader,
+    private val containerImageVersionProbe: ContainerImageVersionProbe,
     private val containerInstaller: ContainerInstaller,
     private val containerOsDetector: ContainerOsDetector,
     private val executionModeRepository: ExecutionModeRepository,
@@ -428,10 +453,18 @@ class SettingsViewModel @Inject constructor(
     private companion object {
         const val MAX_LOG_LINES = 1200
 
-        /** 正式包的 applicationId：只有它能应用内覆盖安装 GitHub Releases 里的包。 */
-        const val RELEASE_APPLICATION_ID = "com.aicode"
+        /**
+         * 本站点会发的包的 applicationId：只有它们能应用内覆盖安装自己那份包。
+         * 之前这里写的是上游的 `com.aicode`，而本 fork 的实际 applicationId 是 `Rely.aicode`，
+         * 导致 `inAppInstallSupported` 对所有变体恒 false —— 更新弹窗的下载按钮永远走不通。
+         * debug 包仍然不给入口：它覆盖安装会与正式包冲突。
+         */
+        val RELEASE_APPLICATION_IDS = setOf("Rely.aicode", "Rely.aicode.beta")
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
+
+        /** 90 天前只保留聚合所需字段，不删除调用统计行。 */
+        const val CALL_RECORD_RETENTION_DAYS = 90L
         /** 背景透明度停止拖动后的落盘延迟。 */
         const val BACKGROUND_ALPHA_WRITE_DEBOUNCE_MS = 80L
 
@@ -535,6 +568,16 @@ class SettingsViewModel @Inject constructor(
     private val _titleModel = MutableStateFlow("")
     val titleModel: StateFlow<String> = _titleModel.asStateFlow()
 
+    /**
+     * 子代理模型档位：三档各一对 (providerId, model)，空串即该档未配置。
+     * 映射始终包含全部档位，UI 直接按档位取用，不必判空。
+     */
+    private val _subagentTierSelections = MutableStateFlow(
+        SubagentModelTier.entries.associateWith { SubagentTierSelection() }
+    )
+    val subagentTierSelections: StateFlow<Map<SubagentModelTier, SubagentTierSelection>> =
+        _subagentTierSelections.asStateFlow()
+
     /** 生图专用模型选择：providerId 为空即未配置（生图不跟随聊天模型）。 */
     private val _imageGenProviderId = MutableStateFlow("")
     val imageGenProviderId: StateFlow<String> = _imageGenProviderId.asStateFlow()
@@ -578,6 +621,12 @@ class SettingsViewModel @Inject constructor(
 
     private val _agentSoundEnabled = MutableStateFlow(false)
     val agentSoundEnabled: StateFlow<Boolean> = _agentSoundEnabled.asStateFlow()
+
+    private val _liveNotificationEnabled = MutableStateFlow(false)
+    val liveNotificationEnabled: StateFlow<Boolean> = _liveNotificationEnabled.asStateFlow()
+
+    private val _approvalNotificationEnabled = MutableStateFlow(false)
+    val approvalNotificationEnabled: StateFlow<Boolean> = _approvalNotificationEnabled.asStateFlow()
 
     private val _autoRemoveStaleModels = MutableStateFlow(true)
     val autoRemoveStaleModels: StateFlow<Boolean> = _autoRemoveStaleModels.asStateFlow()
@@ -642,6 +691,12 @@ class SettingsViewModel @Inject constructor(
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
 
+    private val _goalMaxTurns = MutableStateFlow(GeneralSettingsRepository.DEFAULT_GOAL_MAX_TURNS)
+    val goalMaxTurns: StateFlow<Int> = _goalMaxTurns.asStateFlow()
+
+    private val _goalMaxTokens = MutableStateFlow(GeneralSettingsRepository.DEFAULT_GOAL_MAX_TOKENS)
+    val goalMaxTokens: StateFlow<Int> = _goalMaxTokens.asStateFlow()
+
     private val _deleteExternalWorkspaceSessions = MutableStateFlow(false)
     val deleteExternalWorkspaceSessions: StateFlow<Boolean> = _deleteExternalWorkspaceSessions.asStateFlow()
 
@@ -675,15 +730,45 @@ class SettingsViewModel @Inject constructor(
     private val _skills = MutableStateFlow<List<SkillUiEntry>>(emptyList())
     val skills: StateFlow<List<SkillUiEntry>> = _skills.asStateFlow()
 
+    private val _vscreenRootChannel = MutableStateFlow(VscreenRootChannelState.UNKNOWN)
+
+    /** 虚拟屏 root 通道状态（设置 → 工具授权）：未检测 / 检测中 / 可用 / 不可用。 */
+    val vscreenRootChannel: StateFlow<VscreenRootChannelState> = _vscreenRootChannel.asStateFlow()
+
+    private val _vscreenAccessibilityEnabled =
+        MutableStateFlow(VscreenAccessibilityBridge.isReady)
+
+    /** 无障碍读屏服务是否已开启（设置 → 工具授权）：虚拟屏的控件树观察依赖它。 */
+    val vscreenAccessibilityEnabled: StateFlow<Boolean> = _vscreenAccessibilityEnabled.asStateFlow()
+
+    /** 探测设备 root 是否可用（虚拟屏创建需要）。探测在 IO 线程跑 `su -c id`，结果常驻到下次探测。 */
+    fun probeVscreenRootChannel() {
+        if (_vscreenRootChannel.value == VscreenRootChannelState.PROBING) return
+        _vscreenRootChannel.value = VscreenRootChannelState.PROBING
+        viewModelScope.launch {
+            val available = runCatching { rootShell.isAvailable() }.getOrDefault(false)
+            _vscreenRootChannel.value =
+                if (available) VscreenRootChannelState.AVAILABLE else VscreenRootChannelState.UNAVAILABLE
+        }
+    }
+
+    /** 刷新无障碍服务状态（从系统无障碍设置页返回时调用）。 */
+    fun refreshVscreenAccessibility() {
+        _vscreenAccessibilityEnabled.value = VscreenAccessibilityBridge.isReady
+    }
+
     private val _skillSaveState = MutableStateFlow<SkillSaveState>(SkillSaveState.Idle)
     val skillSaveState: StateFlow<SkillSaveState> = _skillSaveState.asStateFlow()
 
     private val _skillImportState = MutableStateFlow<SkillImportState>(SkillImportState.Idle)
     val skillImportState: StateFlow<SkillImportState> = _skillImportState.asStateFlow()
 
-    /** 正在删除的技能名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
-    private val _skillDeleting = MutableStateFlow<String?>(null)
-    val skillDeleting: StateFlow<String?> = _skillDeleting.asStateFlow()
+    /**
+     * 正在删除的技能名集合（空集合表示没有删除在进行）。
+     * 用集合而非单个名字：批量删除时逐条删除、逐条移除，UI 可据此显示进度并保持弹窗转圈。
+     */
+    private val _skillDeleting = MutableStateFlow<Set<String>>(emptySet())
+    val skillDeleting: StateFlow<Set<String>> = _skillDeleting.asStateFlow()
 
     private val _subAgents = MutableStateFlow<List<SubAgentUiEntry>>(emptyList())
     val subAgents: StateFlow<List<SubAgentUiEntry>> = _subAgents.asStateFlow()
@@ -691,9 +776,9 @@ class SettingsViewModel @Inject constructor(
     private val _subAgentSaveState = MutableStateFlow<SubAgentSaveState>(SubAgentSaveState.Idle)
     val subAgentSaveState: StateFlow<SubAgentSaveState> = _subAgentSaveState.asStateFlow()
 
-    /** 正在删除的子代理名（非 null 表示删除进行中，用于弹窗转圈与禁用按钮）。 */
-    private val _subAgentDeleting = MutableStateFlow<String?>(null)
-    val subAgentDeleting: StateFlow<String?> = _subAgentDeleting.asStateFlow()
+    /** 正在删除的子代理名集合（空集合表示没有删除在进行，语义同 [skillDeleting]）。 */
+    private val _subAgentDeleting = MutableStateFlow<Set<String>>(emptySet())
+    val subAgentDeleting: StateFlow<Set<String>> = _subAgentDeleting.asStateFlow()
 
     val mcpStatuses: StateFlow<List<McpServerStatus>> = mcpManager.statuses
 
@@ -882,12 +967,26 @@ class SettingsViewModel @Inject constructor(
     private val _sourceUnavailableIds = MutableStateFlow<Set<String>>(emptySet())
     val sourceUnavailableIds: StateFlow<Set<String>> = _sourceUnavailableIds.asStateFlow()
 
+    /**
+     * 运行时探测到的精确版本（entryId → 版本号，如 Debian 的 `12.15`）。
+     * 只有配了 versionPath 且探测成功的条目会出现在表中；其余条目 UI 回退到内置版本号。
+     */
+    private val _imageVersions = MutableStateFlow<Map<String, String>>(emptyMap())
+    val imageVersions: StateFlow<Map<String, String>> = _imageVersions.asStateFlow()
+
     private val _containerImageDownload = MutableStateFlow<ContainerImageDownloadUiState>(ContainerImageDownloadUiState.Idle)
     val containerImageDownload: StateFlow<ContainerImageDownloadUiState> = _containerImageDownload.asStateFlow()
 
     /** 正在重置的容器（含已删条目数），为 null 说明不在重置。UI 据此弹进度框。 */
     private val _containerReset = MutableStateFlow<ContainerResetUiState?>(null)
     val containerReset: StateFlow<ContainerResetUiState?> = _containerReset.asStateFlow()
+
+    /**
+     * 手动「重新安装当前镜像」的进度；null 表示没在重装。
+     * 直接复用 [ContainerInitState]：清理与解压阶段由 ContainerInstaller 上报，界面不必再维护一套阶段枚举。
+     */
+    private val _containerReinstall = MutableStateFlow<ContainerInitState?>(null)
+    val containerReinstall: StateFlow<ContainerInitState?> = _containerReinstall.asStateFlow()
 
     /** 当前下载任务句柄，取消下载时 cancel 它（底层 OkHttp call 同步中断）。 */
     private var downloadJob: kotlinx.coroutines.Job? = null
@@ -940,10 +1039,20 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
-        _imageCatalog.value = containerImageCatalog.load()
-        _imageSourceOptions.value = containerImageCatalog.sourceIds
-        _selectedImageSource.value = containerImageCatalog.sourceIds.firstOrNull { it == "official" }
-            ?: containerImageCatalog.sourceIds.firstOrNull() ?: "official"
+        // 先同步拿本地目录（内存 → 磁盘缓存 → 内置 assets），保证首帧就有列表、断网也不为空
+        containerImageCatalog.load()
+        // 目录快照变化时同步刷新列表与源选项：启动预热从仓库拉到最新版本号后会在这里反映出来
+        viewModelScope.launch {
+            containerImageCatalog.catalog.collect { data ->
+                _imageCatalog.value = data.images
+                _imageSourceOptions.value = data.sources.keys.toList()
+                // 仅在当前选中源已不存在时才回退（否则会把用户刚切的源重置掉）
+                if (_selectedImageSource.value !in data.sources) {
+                    _selectedImageSource.value = data.sources.keys.firstOrNull { it == "official" }
+                        ?: data.sources.keys.firstOrNull() ?: "official"
+                }
+            }
+        }
         // 已下载/已安装记录跨重启保留
         viewModelScope.launch {
             containerSettingsRepository.downloadedImagesFlow.collect { records ->
@@ -956,6 +1065,20 @@ class SettingsViewModel @Inject constructor(
                 entries.filter { containerImageCatalog.urlFor(it, sourceId, ContainerImageCatalog.CURRENT_ABI) == null }
                     .map { it.id }.toSet()
             }.collect { _sourceUnavailableIds.value = it }
+        }
+        // 精确版本探测：Debian 之类的条目内置值只有主版本，而 rootfs 内容随上游滚动，
+        // 故按「当前源 + 当前架构」读版本文件补上补丁号。失败静默保留内置版本；
+        // 切源后重探（版本文件 URL 随源变化），collectLatest 顺带取消上一轮未完成的探测。
+        viewModelScope.launch {
+            combine(_imageCatalog, _selectedImageSource) { entries, sourceId -> entries to sourceId }
+                .collectLatest { (entries, sourceId) ->
+                    _imageVersions.value = entries.mapNotNull { entry ->
+                        val url = containerImageCatalog.versionUrlFor(
+                            entry, sourceId, ContainerImageCatalog.CURRENT_ABI
+                        ) ?: return@mapNotNull null
+                        containerImageVersionProbe.probe(url)?.let { entry.id to it }
+                    }.toMap()
+                }
         }
         // 公告按「内容哈希比对」判断是否弹出：首次（无哈希）或内容更新（哈希不一致）即弹。
         viewModelScope.launch {
@@ -1016,6 +1139,15 @@ class SettingsViewModel @Inject constructor(
                 }
             }
 
+            // 三档子代理模型：任一档变化即刷新快照，UI 按档位渲染。
+            SubagentModelTier.entries.forEach { tier ->
+                launch {
+                    subagentTierSettingsRepository.selectionFlow(tier).collectLatest { selection ->
+                        _subagentTierSelections.value = _subagentTierSelections.value + (tier to selection)
+                    }
+                }
+            }
+
             launch {
                 imageGenModelSettingsRepository.providerIdFlow.collectLatest {
                     _imageGenProviderId.value = it
@@ -1049,6 +1181,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 agentSoundSettingsRepository.enabledFlow.collectLatest {
                     _agentSoundEnabled.value = it
+                }
+            }
+
+            launch {
+                liveNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _liveNotificationEnabled.value = it
+                }
+            }
+
+            launch {
+                approvalNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _approvalNotificationEnabled.value = it
                 }
             }
 
@@ -1100,6 +1244,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.sendFileMaxSizeMbFlow.collectLatest {
                     _sendFileMaxSizeMb.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTurnsFlow.collectLatest {
+                    _goalMaxTurns.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTokensFlow.collectLatest {
+                    _goalMaxTokens.value = it
                 }
             }
 
@@ -1414,11 +1570,7 @@ class SettingsViewModel @Inject constructor(
             }
             _mcpAuthState.value = McpAuthUiState(serverName = config.name, inProgress = true)
             val result = mcpManager.authorize(config.name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = config.name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = config.name, error = result.exceptionOrNull()?.message)
-            }
+            _mcpAuthState.value = mcpAuthUiState(config.name, result)
         }
     }
 
@@ -1436,6 +1588,60 @@ class SettingsViewModel @Inject constructor(
             _mcpReloading.value = true
             try {
                 mcpManager.removeServer(name)
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /**
+     * 批量删除 MCP server（列表多选批量操作）。
+     * 配置按作用域分组写：同作用域只读一次、写一次；写文件不能逐条做，否则 N 条就是 N 次全量重写。
+     * 删完一次性断开（[McpManager.removeServers]），避免反复抢连接锁。
+     */
+    fun deleteMcpServers(targets: List<Pair<String, McpScope>>) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+                val updated = base.filterNot { it.name in nameSet }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    written = mcpConfigRepository.setProjectServers(updated) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            _mcpReloading.value = true
+            try {
+                mcpManager.removeServers(targets.map { it.first })
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
+    /** 批量启用 / 停用 MCP server：配置按作用域分组各写一次，再逐个重连（停用的会落到 DISABLED 状态）。 */
+    fun setMcpServersEnabled(targets: List<Pair<String, McpScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            targets.groupBy({ it.second }, { it.first }).forEach { (scope, names) ->
+                val nameSet = names.toSet()
+                val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
+                val updated = base.map { if (it.name in nameSet) it.copy(enabled = enabled) else it }
+                if (scope == McpScope.GLOBAL) {
+                    mcpConfigRepository.setGlobalServers(updated)
+                } else {
+                    written = mcpConfigRepository.setProjectServers(updated) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            _mcpReloading.value = true
+            try {
+                targets.map { it.first }.distinct().forEach { mcpManager.reloadServer(it) }
             } finally {
                 _mcpReloading.value = false
             }
@@ -1462,17 +1668,26 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量重连 MCP server（多选后一次性刷新连接状态）。 */
+    fun reconnectMcpServers(names: Collection<String>) {
+        if (names.isEmpty()) return
+        viewModelScope.launch {
+            _mcpReloading.value = true
+            try {
+                names.distinct().forEach { mcpManager.reloadServer(it) }
+            } finally {
+                _mcpReloading.value = false
+            }
+        }
+    }
+
     /** 触发某个 server 的 OAuth 授权，结果（含失败原因）写入 [mcpAuthState] 供编辑弹窗展示。 */
     fun authorizeMcpServer(name: String) {
         if (_mcpAuthState.value.inProgress) return
         viewModelScope.launch {
             _mcpAuthState.value = McpAuthUiState(serverName = name, inProgress = true)
             val result = mcpManager.authorize(name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = name, error = result.exceptionOrNull()?.message)
-            }
+            _mcpAuthState.value = mcpAuthUiState(name, result)
         }
     }
 
@@ -1567,7 +1782,8 @@ class SettingsViewModel @Inject constructor(
                         scope = entry.scope,
                         disabled = entry.skill.name.lowercase() in disabled,
                         instructions = entry.skill.instructions,
-                        requiredTools = entry.skill.requiredTools
+                        requiredTools = entry.skill.requiredTools,
+                        triggers = entry.skill.triggers
                     )
                 }
             }
@@ -1583,19 +1799,45 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用技能（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSkillsEnabled(targets: List<Pair<String, SkillScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) ->
+                    written = skillRepository.setSkillDisabled(name, !enabled, scope) && written
+                }
+            }
+            if (!written) reportConfigWriteSkipped()
+            refreshSkills()
+        }
+    }
+
     /**
      * 删除指定作用域的技能（删除其目录，不可恢复），完成后刷新列表。
      * 删除本体在 IO 线程跑（远程模式经 SFTP 递归删，不能在主线程）；期间 [skillDeleting] 置名供 UI 转圈。
      */
-    fun deleteSkill(name: String, scope: SkillScope) {
-        if (_skillDeleting.value != null) return
-        _skillDeleting.value = name
+    fun deleteSkill(name: String, scope: SkillScope) = deleteSkills(listOf(name to scope))
+
+    /**
+     * 批量删除技能（列表多选批量操作）。逐条串行删除，每删完一条从 [skillDeleting] 集合里移出；
+     * 远程模式下 SFTP 递归删除较慢，串行可避免把连接压满，界面也能看出删到哪了。
+     */
+    fun deleteSkills(targets: List<Pair<String, SkillScope>>) {
+        if (targets.isEmpty() || _skillDeleting.value.isNotEmpty()) return
+        _skillDeleting.value = targets.map { it.first }.toSet()
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { skillRepository.deleteSkill(name, scope) }
+                withContext(Dispatchers.IO) {
+                    targets.forEach { (name, scope) ->
+                        skillRepository.deleteSkill(name, scope)
+                        _skillDeleting.value = _skillDeleting.value - name
+                    }
+                }
                 refreshSkills()
             } finally {
-                _skillDeleting.value = null
+                _skillDeleting.value = emptySet()
             }
         }
     }
@@ -1715,11 +1957,25 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
-    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；项目级被跳过时提示并刷新回磁盘状态。 */
+    /** 切换子代理启用/禁用（写入对应作用域的 agents.json）；禁用后不再进主代理的可派发清单。 */
     fun setSubAgentEnabled(name: String, enabled: Boolean, scope: AgentDefinitionScope) {
         viewModelScope.launch {
             val written = withContext(Dispatchers.IO) { agentDefinitionRepository.setDisabled(name, !enabled, scope) }
+            if (!written) reportConfigWriteSkipped()
+            refreshSubAgents()
+        }
+    }
+
+    /** 批量启用 / 停用子代理（列表多选批量操作）：一次 IO 写完后只刷新一次列表。 */
+    fun setSubAgentsEnabled(targets: List<Pair<String, AgentDefinitionScope>>, enabled: Boolean) {
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            var written = true
+            withContext(Dispatchers.IO) {
+                targets.forEach { (name, scope) ->
+                    written = agentDefinitionRepository.setDisabled(name, !enabled, scope) && written
+                }
+            }
             if (!written) reportConfigWriteSkipped()
             refreshSubAgents()
         }
@@ -1756,15 +2012,26 @@ class SettingsViewModel @Inject constructor(
     /** 当前已注册的全部工具名（含 MCP 动态工具），供编辑页勾选工具白名单与黑名单。 */
     fun availableToolNames(): List<String> = toolRegistry.getAvailableTools().map { it.name }
 
-    fun deleteSubAgent(name: String, scope: AgentDefinitionScope) {
-        if (_subAgentDeleting.value != null) return
-        _subAgentDeleting.value = name
+    /** 删除指定作用域的子代理定义文件（不可恢复），随后立即刷新列表。 */
+    fun deleteSubAgent(name: String, scope: AgentDefinitionScope) = deleteSubAgents(listOf(name to scope))
+
+    /**
+     * 批量删除子代理（列表多选批量操作）。语义同 [deleteSkills]：串行删、逐条报进度。
+     */
+    fun deleteSubAgents(targets: List<Pair<String, AgentDefinitionScope>>) {
+        if (targets.isEmpty() || _subAgentDeleting.value.isNotEmpty()) return
+        _subAgentDeleting.value = targets.map { it.first }.toSet()
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { agentDefinitionRepository.delete(name, scope) }
+                withContext(Dispatchers.IO) {
+                    targets.forEach { (name, scope) ->
+                        agentDefinitionRepository.delete(name, scope)
+                        _subAgentDeleting.value = _subAgentDeleting.value - name
+                    }
+                }
                 refreshSubAgents()
             } finally {
-                _subAgentDeleting.value = null
+                _subAgentDeleting.value = emptySet()
             }
         }
     }
@@ -1809,9 +2076,13 @@ class SettingsViewModel @Inject constructor(
                 _updateCheckVisible.value = true
                 _updateCheckState.value = UpdateCheckUiState.Checking
             }
-            // fork 专属：数据源换成自建接口，并把本机 versionName 传进去——服务里从 `+g<短哈希>`
-            // 与站点包名里的哈希比对，相等才算最新（见 ForkUpdateCheckService.hasNewVersion）
-            val result = forkUpdateCheckService.checkForUpdate(currentVersionName())
+            // fork 专属：数据源换成自建接口，按当前通道 + 本机 versionCode 问服务端；
+            // 新旧由服务端判（见 ForkUpdateCheckService）
+            val result = forkUpdateCheckService.checkForUpdate(
+                localVersionName = currentVersionName(),
+                localVersionCode = currentVersionCode(),
+                channel = updateCheckSettingsRepository.channel
+            )
             _updateCheckState.value = when (result) {
                 is UpdateCheckResult.UpToDate -> {
                     if (manual) UpdateCheckUiState.UpToDate else UpdateCheckUiState.Idle
@@ -1849,7 +2120,7 @@ class SettingsViewModel @Inject constructor(
      * 包名自检也会把它拦下——索性不给下载入口，省掉一次十几 MB 的白下载。
      */
     val inAppInstallSupported: Boolean
-        get() = context.packageName == RELEASE_APPLICATION_ID
+        get() = context.packageName in RELEASE_APPLICATION_IDS
 
     /**
      * 下载并安装（更新弹窗主按钮）。
@@ -1979,7 +2250,7 @@ class SettingsViewModel @Inject constructor(
         _updateCheckEnabled.value = enabled
     }
 
-    /** 更新通道：稳定版 / 最新版。 */
+    /** 更新通道：稳定版 / 测试版 / rc / 开发版 / 调试版。 */
     fun setUpdateCheckChannel(channel: UpdateChannel) {
         updateCheckSettingsRepository.channel = channel
         _updateCheckChannel.value = channel
@@ -1994,6 +2265,17 @@ class SettingsViewModel @Inject constructor(
     private fun currentVersionName(): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }.getOrDefault("unknown")
+
+    /** 本机 versionCode，传给更新接口用于服务端判新旧；读不到时给 0（服务端按内容比对）。 */
+    private fun currentVersionCode(): Int = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            info.longVersionCode.toInt()
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode
+        }
+    }.getOrDefault(0)
 
     /**
      * 判断日志行是否属于某个 MCP server：只认 MCP 组件写下的日志（tag 以 `Mcp` 开头，
@@ -2114,6 +2396,18 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setLiveNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            liveNotificationSettingsRepository.setEnabled(enabled)
+        }
+    }
+
+    fun setApprovalNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            approvalNotificationSettingsRepository.setEnabled(enabled)
+        }
+    }
+
     /** 拉取模型成功后是否自动移除远端已不存在的本地模型。 */
     fun setAutoRemoveStaleModels(enabled: Boolean) {
         viewModelScope.launch {
@@ -2167,6 +2461,20 @@ class SettingsViewModel @Inject constructor(
     fun setSendFileMaxSizeMb(mb: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setSendFileMaxSizeMb(mb)
+        }
+    }
+
+    /** goal 自主循环最大续跑轮数（不小于 1）。 */
+    fun setGoalMaxTurns(turns: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTurns(turns)
+        }
+    }
+
+    /** goal 自主循环 token 预算（不小于 1000）。 */
+    fun setGoalMaxTokens(tokens: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTokens(tokens)
         }
     }
 
@@ -2261,6 +2569,10 @@ class SettingsViewModel @Inject constructor(
             ExecutionMode.LOCAL_PROOT -> {
                 executionModeRepository.setExecutionMode(ExecutionMode.LOCAL_PROOT)
                 executionModeHolder.setMode(ExecutionMode.LOCAL_PROOT)
+                // 只改模式不会让远程连接停下：模式一变，AIEditorApp 那边的重连监督与前台保活
+                // 都不再成立，但已建立的 transport 与 30s keepalive 会一直跑。断开必须自己发，
+                // 且放在模式落定之后——先断开的话，还没被停掉的重连监督会把它重新连回来。
+                remoteSshConnection.disconnectQuietly()
             }
 
             ExecutionMode.REMOTE_SSH -> {
@@ -2283,6 +2595,37 @@ class SettingsViewModel @Inject constructor(
                 containerInstaller.resetRootfs(profile, onProgress)
             }
         }
+    }
+
+    /**
+     * 手动重新安装当前镜像：清掉 rootfs 后按当前导入文件重新解压。
+     *
+     * 覆盖场景：同名镜像文件被新内容替换但自动识别没命中（例如同大小又同修改时间的内容变更命中
+     * 了进程内指纹缓存），或用户主动想回到干净镜像。只对本地导入镜像生效：内置走 INSTALL_VERSION
+     * 判定（它一改就是所有老用户被清空重装，不能由这里间接触发），远程 SSH 没有本地 rootfs。
+     */
+    fun reinstallContainerImage(profile: ContainerProfile) {
+        if (_containerReinstall.value != null) return
+        if (profile.isBuiltin || profile.rootfsSource !is RootfsSource.LocalFile) return
+        viewModelScope.launch {
+            _containerReinstall.value = ContainerInitState.CleaningOldRootfs(0)
+            try {
+                containerInstaller.resetRootfs(profile) { deleted ->
+                    _containerReinstall.value = ContainerInitState.CleaningOldRootfs(deleted)
+                }
+                // 标记与 rootfs 已被删掉，installRootfsIfNeed 会走真正的解压分支并逐阶段上报进度
+                containerInstaller.installRootfsIfNeed(profile) { state -> _containerReinstall.value = state }
+                _containerReinstall.value = null
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "重新安装镜像失败：${profile.id}", e)
+                _containerReinstall.value = ContainerInitState.Failed(e.message ?: "")
+            }
+        }
+    }
+
+    /** 关闭重装失败提示；重装进行中不给关（进度框没有关闭按钮）。 */
+    fun dismissContainerReinstall() {
+        if (_containerReinstall.value is ContainerInitState.Failed) _containerReinstall.value = null
     }
 
     /** 删 profile 附带的 rootfs 清理，带进度；内置与远程 SSH 没本地 rootfs 可删，不弹进度框。 */
@@ -2388,20 +2731,26 @@ class SettingsViewModel @Inject constructor(
             url.endsWith(".tgz") -> "tgz"
             else -> "tar.gz"
         }
-        val fileName = "download_${entry.id}_${entry.version}_${System.currentTimeMillis()}.$suffix"
+        // 记录里存「探测到的精确版本」（如 Debian 的 12.15），文件名与后续展示都以此为准，
+        // 避免用户下载到 12.15 却在文件名/容器名里看到 12。
+        val version = _imageVersions.value[entry.id] ?: entry.version
+        val fileName = "download_${entry.id}_${version}_${System.currentTimeMillis()}.$suffix"
+        // 目录里带了官方校验和就校验（Alpine/Ubuntu 有，Debian 没有 → 传 null 跳过）
+        val expectedSha256 = containerImageCatalog.sha256For(entry, ContainerImageCatalog.CURRENT_ABI)
         downloadJob = viewModelScope.launch {
             _containerImageDownload.value =
-                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, entry.version, sourceId, 0, 0)
+                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, version, sourceId, 0, 0)
             try {
-                val uri = containerImageDownloader.download(url, fileName) { read, total ->
+                val uri = containerImageDownloader.download(url, fileName, expectedSha256) { read, total ->
                     _containerImageDownload.value = ContainerImageDownloadUiState.Downloading(
-                        entry.id, entry.name, entry.version, sourceId, read, total
+                        entry.id, entry.name, version, sourceId, read, total
                     )
                 }
-                // 下载完成即持久化记录，安装与否都保留，跨重启可见。
-                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri))
+                // 下载完成即持久化记录，安装与否都保留，跨重启可见。版本一并记下，
+                // 之后上游发新补丁时列表才能提示「有新版」而不是一直显示「已下载」。
+                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri, version = version))
                 _containerImageDownload.value =
-                    ContainerImageDownloadUiState.Done(entry.id, entry.name, entry.version, uri)
+                    ContainerImageDownloadUiState.Done(entry.id, entry.name, version, uri)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _containerImageDownload.value = ContainerImageDownloadUiState.Idle
                 throw e
@@ -2423,34 +2772,59 @@ class SettingsViewModel @Inject constructor(
      */
     fun importDownloadedImage(entryId: String, fileUri: String) {
         val entry = _imageCatalog.value.firstOrNull { it.id == entryId } ?: return
+        val record = _downloadedImages.value[entryId]
         viewModelScope.launch {
             val profile = ContainerProfile(
                 id = "custom-${System.currentTimeMillis()}",
-                name = "${entry.name} ${entry.version}",
+                // 用**磁盘上这份文件的实际版本**命名：记录字段优先，升级前的旧记录退回文件名解析，
+                // 都拿不到才用目录当前版本。否则会出现「名字写着 3.21.8、实际解压的是 3.21.7」。
+                name = entry.displayLabel(
+                    record?.effectiveVersion()?.takeIf { it.isNotBlank() } ?: _imageVersions.value[entry.id]
+                ),
                 rootfsSource = RootfsSource.LocalFile(fileUri),
                 shellPath = null,
                 extraArgs = ContainerProfile.DEFAULT_PROOT_ARGS,
                 isBuiltin = false
             )
             containerSettingsRepository.upsertCustomProfile(profile)
-            // 保留已下载记录，仅标记已导入；UI 状态不消失。
-            containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entryId, fileUri, installed = true))
+            // 保留已下载记录（含下载时的版本号，供「有新版」判定），仅标记已导入；UI 状态不消失。
+            // 旧记录在这里顺带把文件名解析出的版本回写进去，下次就不必再解析。
+            containerSettingsRepository.upsertDownloadedImage(
+                DownloadedImageRecord(
+                    entryId = entryId,
+                    fileUri = fileUri,
+                    version = record?.effectiveVersion().orEmpty(),
+                    installed = true
+                )
+            )
             _containerImageDownload.value = ContainerImageDownloadUiState.Idle
         }
     }
 
     /** 删除已下载的镜像：清记录 + 删下载文件（仅限 rootfs_images 目录，防误删）；若正在下载该条目先取消。 */
-    fun deleteDownloadedImage(entryId: String) {
-        val record = _downloadedImages.value[entryId] ?: return
-        if ((_containerImageDownload.value as? ContainerImageDownloadUiState.Downloading)?.entryId == entryId) {
+    fun deleteDownloadedImage(entryId: String) = deleteDownloadedImages(setOf(entryId))
+
+    /**
+     * 批量删除已下载镜像（列表多选批量操作）。逐条清记录 + 删文件；
+     * 正在下载的条目若在选中集合里，先取消下载再删。
+     */
+    fun deleteDownloadedImages(entryIds: Set<String>) {
+        if (entryIds.isEmpty()) return
+        val downloadingEntryId = (_containerImageDownload.value as? ContainerImageDownloadUiState.Downloading)?.entryId
+        if (downloadingEntryId != null && downloadingEntryId in entryIds) {
             cancelContainerImageDownload()
         }
         viewModelScope.launch {
-            runCatching {
-                val file = java.io.File(Uri.parse(record.fileUri).path ?: return@runCatching)
-                if (file.parentFile?.name == "rootfs_images") file.delete()
+            withContext(Dispatchers.IO) {
+                entryIds.forEach { entryId ->
+                    val record = _downloadedImages.value[entryId] ?: return@forEach
+                    runCatching {
+                        val file = java.io.File(Uri.parse(record.fileUri).path ?: return@runCatching)
+                        if (file.parentFile?.name == "rootfs_images") file.delete()
+                    }
+                    containerSettingsRepository.removeDownloadedImage(entryId)
+                }
             }
-            containerSettingsRepository.removeDownloadedImage(entryId)
         }
     }
 
@@ -2496,6 +2870,24 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 设置某子代理模型档位绑定的模型；两个参数都留空等同 [clearSubagentTier]。 */
+    fun setSubagentTierModel(tier: SubagentModelTier, providerId: String, model: String) {
+        viewModelScope.launch {
+            if (providerId.isBlank() || model.isBlank()) {
+                subagentTierSettingsRepository.clear(tier)
+            } else {
+                subagentTierSettingsRepository.setSelection(tier, providerId, model)
+            }
+        }
+    }
+
+    /** 清空某档位——该档回退到「未配置」，派发时按降级链处理。 */
+    fun clearSubagentTier(tier: SubagentModelTier) {
+        viewModelScope.launch {
+            subagentTierSettingsRepository.clear(tier)
+        }
+    }
+
     /** 设置生图专用模型；providerId 留空等同 [clearImageGenModel]（未配置）。 */
     fun setImageGenModel(providerId: String, model: String) {
         viewModelScope.launch {
@@ -2507,6 +2899,23 @@ class SettingsViewModel @Inject constructor(
     fun clearImageGenModel() {
         viewModelScope.launch {
             imageGenModelSettingsRepository.clear()
+        }
+    }
+
+    private var oldCallDetailsCompacted = false
+
+    /** 进入 Token 统计页时清理过期诊断字段；统计、费用与趋势所需字段永久保留。 */
+    fun compactOldCallDetails() {
+        if (oldCallDetailsCompacted) return
+        oldCallDetailsCompacted = true
+        viewModelScope.launch {
+            val cutoff = System.currentTimeMillis() - CALL_RECORD_RETENTION_DAYS * 86_400_000L
+            runCatching { llmCallRecordDao.compactDetailsBefore(cutoff) }
+                .onSuccess { if (it > 0) FileLogger.i(TAG, "清理过期调用明细 $it 条") }
+                .onFailure {
+                    oldCallDetailsCompacted = false
+                    FileLogger.w(TAG, "清理过期调用明细失败", it)
+                }
         }
     }
 
@@ -2610,6 +3019,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 批量启用 / 停用提供商（列表多选批量操作）。 */
+    fun setProvidersEnabled(ids: Collection<String>, isEnabled: Boolean) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.setProvidersEnabled(ids, isEnabled)
+        }
+    }
+
     fun saveProvider(provider: AIProviderConfig) {
         viewModelScope.launch {
             val removedModels = (repository.getProviderById(provider.id)?.models ?: emptyList())
@@ -2654,11 +3071,21 @@ class SettingsViewModel @Inject constructor(
         ) {
             titleModelSettingsRepository.clear()
         }
+        // 档位绑定的是 provider + model，提供商整个被删时按 provider 直接清档。
+        subagentTierSettingsRepository.clearTiersUsingProvider(provider.id)
     }
 
     fun deleteProvider(id: String) {
         viewModelScope.launch {
             repository.deleteProvider(id)
+        }
+    }
+
+    /** 批量删除提供商（列表多选批量操作）。Room 单事务提交，删完 Flow 自动刷新列表。 */
+    fun deleteProviders(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.deleteProviders(ids)
         }
     }
 
@@ -2860,6 +3287,14 @@ class SettingsViewModel @Inject constructor(
             _testing.update { it - model }
         }
     }
+
+    /**
+     * 主页模型弹层用：直接跑一次连通性测试并返回结果。
+     * 不落 ViewModel 状态——弹层跨多个 provider，同名模型会撞 key，
+     * 测试中的行集合与结果由弹层自己按 provider+模型持有。
+     */
+    suspend fun runModelTest(provider: AIProviderConfig, model: String): ModelTestResult =
+        modelApiService.testModel(provider.baseUrl, provider.firstUsableApiKey, provider.type, provider.useFullUrl, provider.useResponseApi, model, provider.customHeaders)
 
     fun clearTestResults() {
         _testResults.value = emptyMap()

@@ -33,14 +33,22 @@ class ProjectMemorySource(
 
     override fun listMemories(): List<Memory> {
         if (projectRoot.isBlank() || !memoryRoot.exists()) return emptyList()
-        val files = memoryRoot.listFiles { file -> file.isFile && file.extension == "md" } ?: return emptyList()
-        
-        return files.mapNotNull { file -> MemoryParser.parse(file, MemoryScope.PROJECT) }
-            .sortedBy { it.name.lowercase() }
+        return MemoryListCache.list(memoryRoot) {
+            val files = memoryRoot.listFiles { file -> file.isFile && file.extension == "md" }
+                ?: return@list emptyList()
+            files.mapNotNull { file -> MemoryFileCache.parse(file, MemoryScope.PROJECT) }
+                .sortedBy { it.name.lowercase() }
+        }
     }
 
     override fun loadContent(name: String): String? {
         if (projectRoot.isBlank()) return null
+        // 快路径：落盘文件名就是 sanitizeName(name) 的结果，读一条不必扫整个目录
+        val direct = MemorySource.resolveMemoryFile(memoryRoot, name)
+        MemoryFileCache.parse(direct, MemoryScope.PROJECT)
+            ?.takeIf { it.name.equals(name, ignoreCase = true) }
+            ?.let { return it.content }
+        // 文件名与 frontmatter 里的 name 不一致（手工改过文件）时按原名回退全量扫描
         return listMemories()
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?.content
@@ -80,6 +88,7 @@ class ProjectMemorySource(
                     )
                 )
             }
+            MemoryListCache.invalidate(memoryRoot)
             true
         } catch (e: Exception) {
             FileLogger.e("ProjectMemorySource", "Failed to save memory: $name", e)
@@ -93,12 +102,14 @@ class ProjectMemorySource(
         // 重拼文件名会找不到文件 → 删除静默失败（列表刷新后条目还在）
         val file = existingMemoryFile(name) ?: MemorySource.resolveMemoryFile(memoryRoot, name)
         if (!file.exists()) return false
-        return MemorySource.withFileLock(file) {
+        val deleted = MemorySource.withFileLock(file) {
             // 删除同样留底：用户在记忆页删、模型调 memory(action=delete) 删，都是不可逆动作，
             // 覆盖/编辑/治理都归档，删除没理由例外（旧版本进 .superseded/，随目录限量清理）
             MemorySource.archiveBeforeOverwrite(memoryRoot, file)
             file.delete()
         }
+        MemoryListCache.invalidate(memoryRoot)
+        return deleted
     }
 
     /** 按解析出的名字找已有文件；找不到返回 null（调用方回退到 sanitize 拼路径）。 */

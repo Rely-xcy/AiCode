@@ -1,9 +1,12 @@
 package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.toolCallsFrozenForHistory
+import com.aicode.feature.agent.domain.model.toolCallsJsonForStorage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -110,7 +113,13 @@ class MessagePersistenceUseCase @Inject constructor(
                 role = role.name,
                 content = sanitizeContent(content),
                 timestamp = nextTimestamp(),
-                toolCallsJson = if (toolCalls.isNotEmpty()) capBytes(json.encodeToString(toolCalls), MAX_SNAPSHOT_BYTES) else null,
+                // 工具参数在写入这一刻定型（摘录 + JSON 合法的大小收敛），此后任何一轮请求都不再改写：
+                // 请求时再投影会让同一条历史消息在不同轮次变形，使前缀缓存整段失效。
+                toolCallsJson = if (toolCalls.isNotEmpty()) {
+                    toolCallsJsonForStorage(toolCalls, MAX_SNAPSHOT_BYTES, json)
+                } else {
+                    null
+                },
                 toolCallId = toolCallId,
                 toolName = toolName,
                 toolArgs = toolArgs?.let { capBytes(it, MAX_TOOL_ARGS_BYTES) },
@@ -139,9 +148,27 @@ class MessagePersistenceUseCase @Inject constructor(
      * content 保持用户原话，界面与回放都不认它，只在组装请求时拼回模型侧文本。
      * 按快照上限截断：提醒文本来自可被用户自定义覆盖的 prompts 文件，不能任由它撑大单行。
      */
-    suspend fun attachModelReminder(messageId: String, reminder: String) {
-        agentMessageDao.updateModelReminder(messageId, capBytes(reminder, MAX_SNAPSHOT_BYTES))
+    suspend fun attachModelReminder(messageId: String, reminder: String): String {
+        val stored = capBytes(reminder, MAX_SNAPSHOT_BYTES)
+        agentMessageDao.updateModelReminder(messageId, stored)
+        return stored
     }
+
+    /**
+     * 一条消息在落库那一刻的形态。发送侧必须先过这里再拼请求，落库与发送才是同一串字节。
+     *
+     * 库里读回来的是截断后的正文/思考与「摘录 + 合法 JSON」的工具参数；若本轮发的是内存原文，
+     * 下一轮从库里重建历史时这条消息就变形了，它之后的前缀全部未命中。
+     * 这里调用的都是常量上限下的纯函数，且对已经处理过的消息幂等，所以同一消息在任何一轮都得到同一结果。
+     */
+    fun frozenForHistory(message: AgentMessage): AgentMessage = frozenForHistory(message, json)
+
+    /**
+     * 保留具体类型的重载：调用方（插话列表、`ToolBatchFinished`）要的是 `UserMessage`，
+     * 泛型版本返回 `AgentMessage` 会让上游的 `List<UserMessage>` 参数与 `content/modelReminder` 解析失败。
+     */
+    fun frozenForHistory(message: AgentMessage.UserMessage): AgentMessage.UserMessage =
+        frozenForHistory(message as AgentMessage, json) as AgentMessage.UserMessage
 
     companion object {
         /**
@@ -183,6 +210,26 @@ class MessagePersistenceUseCase @Inject constructor(
         /** UTF-8 单字符最多占 3 字节，故 [String.length] 的三倍不超上限时无需实际编码即可放行。 */
         private fun definitelyFits(raw: String, maxBytes: Int): Boolean =
             raw.length.toLong() * 3 <= maxBytes
+
+        /**
+         * [frozenForHistory] 的纯函数体：与落库共用同一个 [Json] 配置与同一组上限常量。
+         * 对已经是冻结形态的消息幂等——第二次调用不会再改任何字节。
+         */
+        internal fun frozenForHistory(message: AgentMessage, json: Json): AgentMessage = when (message) {
+            is AgentMessage.UserMessage -> message.copy(
+                content = sanitizeContent(message.content),
+                modelReminder = message.modelReminder?.let { capBytes(it, MAX_SNAPSHOT_BYTES) }
+            )
+            is AgentMessage.AssistantMessage -> message.copy(
+                content = sanitizeContent(message.content),
+                // 工具参数按落库快照回解：截断始终发生在 JSON 字符串值内部，结构本身保持合法。
+                toolCalls = toolCallsFrozenForHistory(message.toolCalls, MAX_SNAPSHOT_BYTES, json),
+                reasoning = sanitizeContent(message.reasoning),
+                signature = capBytes(message.signature, MAX_SNAPSHOT_BYTES),
+                thinkingBlocksJson = capBytes(message.thinkingBlocksJson, MAX_SNAPSHOT_BYTES)
+            )
+            is AgentMessage.ToolResultMessage -> message.copy(result = sanitizeContent(message.result))
+        }
 
         /**
          * 落库前的内容净化，为所有 provider/模型提供统一兜底防线：
@@ -284,7 +331,22 @@ class MessagePersistenceUseCase @Inject constructor(
         // 残留对共享边界时把新折进去的原文误裁掉，所以旧块一律不参与边界计算。
         val allSummaryPairs = collectSummaryPairs(allEntities)
         val modernSummaryPairs = allSummaryPairs.filter { it.summary.foldsUpToTimestamp > 0L }
-        val boundary = modernSummaryPairs.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L
+        var boundary = modernSummaryPairs.maxOfOrNull { it.summary.foldsUpToTimestamp } ?: 0L
+        // 边界异常钳制：备份导入等场景下 timestamp 可能重复/乱序，摘要块的覆盖边界若反而晚于
+        // 窗口内普通行的最新时间戳，上面的 `timestamp > boundary` 会把边界之后的原文也全滤掉
+        // ——模型上下文只剩摘要、UI 整轮不显示（用户实测「压缩后啥也不显示，直接继续任务」）。
+        // 钳到普通行的最新时间戳之前：宁可多回放一次重复，也不丢原文。
+        val latestNormalTs = allEntities
+            .filter { !it.isCompactionMarker && !it.isContextSummary }
+            .maxOfOrNull { it.timestamp } ?: 0L
+        if (latestNormalTs in 1..boundary) {
+            FileLogger.w(
+                "MessagePersistenceUseCase",
+                "摘要覆盖边界异常（boundary=$boundary ≥ 最新普通行 ts=$latestNormalTs），已钳制到 latestNormalTs-1：" +
+                    "可能是备份导入导致时间戳乱序"
+            )
+            boundary = latestNormalTs - 1
+        }
 
         // 保留原文：边界之后的普通行（非摘要/marker）。悬挂 tool 配对过滤在下面第二遍完成。
         val entities = orderHistoryEntities(

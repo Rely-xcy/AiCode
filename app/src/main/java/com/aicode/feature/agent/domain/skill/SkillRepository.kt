@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.skill
 
 import com.aicode.core.datastore.ListOrderStore
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.container.BulkFileSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import java.io.InputStream
 import javax.inject.Inject
@@ -20,29 +21,95 @@ class SkillRepository @Inject constructor(
     private val projectDirectorySkillSource: ProjectDirectorySkillSource,
     private val skillConfigRepository: SkillConfigRepository,
     private val fileAccess: FileAccessProvider,
-    private val listOrderStore: ListOrderStore
+    private val listOrderStore: ListOrderStore,
+    private val bulk: BulkFileSource
 ) {
+    /** 不启用远程批量读取缓存的构造（单测与无远端场景）。 */
+    internal constructor(
+        globalDirectorySkillSource: GlobalDirectorySkillSource,
+        projectDirectorySkillSource: ProjectDirectorySkillSource,
+        skillConfigRepository: SkillConfigRepository,
+        fileAccess: FileAccessProvider,
+        listOrderStore: ListOrderStore
+    ) : this(
+        globalDirectorySkillSource,
+        projectDirectorySkillSource,
+        skillConfigRepository,
+        fileAccess,
+        listOrderStore,
+        BulkFileSource.Disabled
+    )
     /**
      * 全部技能（含来源作用域），未过滤禁用；同名技能项目级优先（与 MCP 两级配置一致）。
      * 顺序：全局在前、项目在后，各自按用户拖拽排的顺序表排（没排过的按名称）。
      */
-    fun listAllSkills(): List<SkillEntry> {
-        val merged = mergeAll(globalDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills())
-        return listOrderStore.sort(
-            merged.filter { it.scope == SkillScope.GLOBAL },
-            ListOrderStore.KEY_SKILLS_GLOBAL
-        ) { it.skill.name } + listOrderStore.sort(
-            merged.filter { it.scope == SkillScope.PROJECT },
-            ListOrderStore.KEY_SKILLS_PROJECT
-        ) { it.skill.name }
+    fun listAllSkills(): List<SkillEntry> =
+        sortEntries(mergeAll(globalDirectorySkillSource.listSkills(), projectDirectorySkillSource.listSkills()))
+
+    /**
+     * 同 [listAllSkills]，但任一来源读取失败时返回 null：注入系统提示词的调用方据此避免把一次
+     * 读失败缓存成「本会话没有技能」。
+     */
+    fun listAllSkillsOrNull(): List<SkillEntry>? {
+        val global = globalDirectorySkillSource.listSkillsOrNull() ?: return null
+        val project = projectDirectorySkillSource.listSkillsOrNull() ?: return null
+        return sortEntries(mergeAll(global, project))
     }
 
     /** 启用的技能列表（注入系统提示词用），禁用技能被过滤。 */
     fun listSkills(): List<Skill> =
         filterDisabled(listAllSkills(), skillConfigRepository.disabledNames()).map { it.skill }
 
+    /** 同 [listSkills]，但任一来源读取失败时返回 null（读失败不该被当成「没有技能」缓存下来）。 */
+    fun listSkillsOrNull(): List<Skill>? =
+        listAllSkillsOrNull()?.let { entries ->
+            filterDisabled(entries, skillConfigRepository.disabledNames()).map { it.skill }
+        }
+
+    private fun sortEntries(merged: List<SkillEntry>): List<SkillEntry> =
+        listOrderStore.sort(
+            merged.filter { it.scope == SkillScope.GLOBAL },
+            ListOrderStore.KEY_SKILLS_GLOBAL
+        ) { it.skill.name } + listOrderStore.sort(
+            merged.filter { it.scope == SkillScope.PROJECT },
+            ListOrderStore.KEY_SKILLS_PROJECT
+        ) { it.skill.name }
+
     /** 当前被禁用的技能名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = skillConfigRepository.disabledNames()
+
+    /**
+     * 按关键词检索技能：名称、描述、正文任一包含关键词即算命中，大小写不敏感。
+     *
+     * 为什么要检索引擎而不是让模型看全量清单：技能装到几百个时全量清单在预算里只放得下前几条，
+     * 剩下的连名字都不出现，模型只能猜——而 [loadInstructions] 按名字全等匹配，猜必落空。
+     *
+     * 命中按「名称 > 描述 > 正文」分档排序，同档内保持 [listSkills] 的顺序（即用户拖拽的顺序）：
+     * 名称里带关键词比正文里蹭到一个词更可信，而分档排序必须稳定，否则同一关键词两次检索得到的
+     * 「前 N 条」不一样，模型就拿不到上次看到的名字。
+     *
+     * @param limit 最多返回几条，仅影响 [SkillSearchResult.matches]，[SkillSearchResult.hitCount] 永远是全量
+     */
+    fun searchSkills(keyword: String, limit: Int): SkillSearchResult {
+        val needle = keyword.trim().lowercase()
+        val skills = listSkills()
+        if (needle.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+
+        val ranked = skills.mapNotNull { skill ->
+            val tier = when {
+                skill.name.lowercase().contains(needle) -> TIER_NAME
+                skill.description.lowercase().contains(needle) -> TIER_DESCRIPTION
+                skill.instructions.lowercase().contains(needle) -> TIER_INSTRUCTIONS
+                else -> null
+            }
+            tier?.let { rank -> rank to skill }
+        }.sortedBy { it.first }
+        return SkillSearchResult(
+            matches = ranked.take(limit).map { it.second },
+            hitCount = ranked.size,
+            skillCount = skills.size
+        )
+    }
 
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
     fun loadInstructions(name: String): String? {
@@ -87,6 +154,7 @@ class SkillRepository @Inject constructor(
             name = name,
             description = form.description,
             requiredTools = form.requiredTools,
+            triggers = form.triggers,
             instructions = form.instructions
         )
 
@@ -96,6 +164,7 @@ class SkillRepository @Inject constructor(
             provider.mkdirs(dir)
             val target = instructionFile(provider, dir) ?: "${dir.trimEnd('/')}/$INSTRUCTION_FILE"
             provider.writeFile(target, text, overwrite = true)
+            bulk.invalidate()
             null
         } catch (e: Exception) {
             FileLogger.e(TAG, "保存技能失败: $name", e)
@@ -117,10 +186,12 @@ class SkillRepository @Inject constructor(
      */
     fun importMarkdown(text: String, fallbackName: String, scope: SkillScope): SkillImportReport =
         SkillImporter.importMarkdown(fileAccess, skillsRoot(scope), existingNamesIn(scope), text, fallbackName)
+            .also { bulk.invalidate() }
 
     /** 从 zip 输入流导入技能（可含多个技能目录）到指定作用域。 */
     fun importZip(input: InputStream, fallbackName: String, scope: SkillScope): SkillImportReport =
         SkillImporter.importArchive(fileAccess, skillsRoot(scope), existingNamesIn(scope), input, fallbackName)
+            .also { bulk.invalidate() }
 
     /** 指定作用域下已有技能名（小写），供导入查重。 */
     private fun existingNamesIn(scope: SkillScope): Set<String> =
@@ -132,11 +203,18 @@ class SkillRepository @Inject constructor(
             it.skill.name.equals(name, ignoreCase = true) && it.scope == scope
         } ?: return false
         val dirPath = entry.skill.dirPath ?: return false
-        return safeDeleteSkillDir(fileAccess, dirPath)
+        val deleted = safeDeleteSkillDir(fileAccess, dirPath)
+        if (deleted) bulk.invalidate()
+        return deleted
     }
 
     companion object {
         private const val TAG = "SkillRepository"
+
+        /** 检索命中的三档：名称最可信，描述次之，正文最泛（大段正文里蹭到一个词不算强相关）。 */
+        private const val TIER_NAME = 0
+        private const val TIER_DESCRIPTION = 1
+        private const val TIER_INSTRUCTIONS = 2
 
         /** 新建技能时写入的指令文件名。 */
         private const val INSTRUCTION_FILE = "SKILL.md"
@@ -163,8 +241,21 @@ class SkillRepository @Inject constructor(
         /** 合并两级来源：同名项目级覆盖全局，按名称排序。 */
         internal fun mergeAll(global: List<Skill>, project: List<Skill>): List<SkillEntry> {
             val byName = LinkedHashMap<String, SkillEntry>()
-            global.forEach { byName[it.name.lowercase()] = SkillEntry(it, SkillScope.GLOBAL) }
-            project.forEach { byName[it.name.lowercase()] = SkillEntry(it, SkillScope.PROJECT) }
+            fun put(skill: Skill, scope: SkillScope) {
+                val previous = byName.put(skill.name.lowercase(), SkillEntry(skill, scope))
+                // 覆盖是既定语义（项目级优先），但静默覆盖会让一个技能凭空消失：列表里名字与描述
+                // 来自 A、正文却取自 B 时几乎查不出来。留一条带两个来源路径的 warn 才定位得到。
+                if (previous != null) {
+                    FileLogger.w(
+                        TAG,
+                        "技能重名，${scope.name} 覆盖 ${previous.scope.name}: " +
+                            "${previous.skill.name} (${previous.skill.dirPath ?: "无目录"}) <- " +
+                            "${skill.name} (${skill.dirPath ?: "无目录"})"
+                    )
+                }
+            }
+            global.forEach { put(it, SkillScope.GLOBAL) }
+            project.forEach { put(it, SkillScope.PROJECT) }
             return byName.values.sortedBy { it.skill.name.lowercase() }
         }
 

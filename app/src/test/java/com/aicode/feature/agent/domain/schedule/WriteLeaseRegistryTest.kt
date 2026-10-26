@@ -197,4 +197,25 @@ class WriteLeaseRegistryTest {
         // 主代理那边是「照常执行 + 警告」，不能说成已被拒绝
         assertFalse(message, message.contains("已拒绝"))
     }
+
+    @Test
+    fun claimForWrite_concurrentClaimantsOnlyOneWins() {
+        // 同批两个子代理同时认领同一文件：必须恰好一个成功。以前「查冲突 → 认领」分两步做，
+        // 两边可能都通过检查再各自写入，正好放过它要防的那种静默覆盖。
+        val reg = registry()
+        val winners = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val barrier = java.util.concurrent.CyclicBarrier(2)
+        val threads = (1..2).map { index ->
+            Thread {
+                barrier.await()
+                if (reg.claimForWrite("holder-$index", "子代理$index", "app/src/Concurrent.kt", ROOT) == null) {
+                    winners.add("holder-$index")
+                }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        assertEquals("恰好一个持有者应当认领成功", 1, winners.size)
+    }
 }

@@ -1,7 +1,11 @@
 package com.aicode.feature.agent.domain.tool
 
 import com.aicode.feature.agent.domain.permission.PermissionChoice
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -15,6 +19,7 @@ import org.junit.Test
  * 侧边栏据 [ToolPermissionManager.awaitingSessionIds] 点亮，弹窗按插入顺序逐个展示，
  * resolve 按请求 id 精确唤醒对应会话。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ToolPermissionManagerTest {
 
     private fun req(id: String, sessionId: String) = PendingToolPermission(
@@ -54,6 +59,37 @@ class ToolPermissionManagerTest {
         mgr.resolve("id1", PermissionChoice.ALWAYS)
         assertEquals(PermissionChoice.ALWAYS, d1.await())
 
+        assertNull(mgr.pendingRequest.value)
+        assertTrue(mgr.awaitingSessionIds.value.isEmpty())
+    }
+
+    @Test
+    fun cancelledRequest_oldIdDoesNotApproveSameSessionReplacement() = runTest {
+        val mgr = ToolPermissionManager()
+        val oldRequest = req("old-id", "s1")
+        val old = async { mgr.awaitApproval(oldRequest) }
+        runCurrent()
+        assertEquals(oldRequest, mgr.pendingRequest.value)
+
+        old.cancelAndJoin()
+        assertNull(mgr.pendingRequest.value)
+        assertTrue(mgr.awaitingSessionIds.value.isEmpty())
+
+        val replacementRequest = req("new-id", "s1")
+        val replacement = async { mgr.awaitApproval(replacementRequest) }
+        runCurrent()
+        assertEquals(oldRequest.toolName, replacementRequest.toolName)
+
+        mgr.resolve(oldRequest.id, PermissionChoice.ONCE)
+        runCurrent()
+
+        assertTrue(replacement.isActive)
+        assertEquals(replacementRequest, mgr.pendingRequest.value)
+        assertEquals(replacementRequest, mgr.pendingForSession("s1"))
+        assertEquals(setOf("s1"), mgr.awaitingSessionIds.value)
+
+        mgr.resolve(replacementRequest.id, PermissionChoice.ONCE)
+        assertEquals(PermissionChoice.ONCE, replacement.await())
         assertNull(mgr.pendingRequest.value)
         assertTrue(mgr.awaitingSessionIds.value.isEmpty())
     }

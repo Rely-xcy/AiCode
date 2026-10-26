@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,6 +49,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Surface
@@ -58,6 +61,7 @@ import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -102,9 +106,11 @@ import com.aicode.feature.agent.presentation.ChatSearchState
 import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
+import com.aicode.feature.agent.presentation.FileTreeRoot
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.core.ui.containerOsLogo
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -117,7 +123,9 @@ import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Server
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
@@ -236,63 +244,76 @@ fun ChatDrawerContent(
                 shape = RoundedCornerShape(Radius.mdLarge),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
+                CompositionLocalProvider(
+                    LocalMinimumInteractiveComponentSize provides 0.dp
                 ) {
-                    IconButton(
-                        onClick = {
-                            isSelectionMode = false
-                            selectedSessionIds.clear()
-                        },
-                        modifier = Modifier.size(32.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .padding(horizontal = Spacing.md),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_cancel),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(Modifier.width(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
-                        val ids = mutableListOf<String>()
-                        sessions.forEach { s ->
-                            ids.add(s.id)
-                            subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                        IconButton(
+                            onClick = {
+                                isSelectionMode = false
+                                selectedSessionIds.clear()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.common_cancel),
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                        ids
-                    }
-                    val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
-                    TextButton(onClick = {
-                        if (allSelected) {
-                            selectedSessionIds.clear()
-                        } else {
-                            selectedSessionIds.clear()
-                            selectedSessionIds.addAll(allSessionIds)
-                        }
-                    }) {
-                        Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
-                    }
-                    IconButton(
-                        onClick = { showBatchDeleteConfirm = true },
-                        enabled = selectedSessionIds.isNotEmpty(),
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Trash2,
-                            contentDescription = stringResource(R.string.chat_batch_delete_title),
-                            modifier = Modifier.size(18.dp),
-                            tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
                         )
+                        val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
+                            val ids = mutableListOf<String>()
+                            sessions.forEach { s ->
+                                ids.add(s.id)
+                                subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                            }
+                            ids
+                        }
+                        val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
+                        TextButton(
+                            onClick = {
+                                if (allSelected) {
+                                    selectedSessionIds.clear()
+                                } else {
+                                    selectedSessionIds.clear()
+                                    selectedSessionIds.addAll(allSessionIds)
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        Spacer(Modifier.width(Spacing.xs))
+                        IconButton(
+                            onClick = { showBatchDeleteConfirm = true },
+                            enabled = selectedSessionIds.isNotEmpty(),
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Trash2,
+                                contentDescription = stringResource(R.string.chat_batch_delete_title),
+                                modifier = Modifier.size(18.dp),
+                                tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            )
+                        }
                     }
                 }
             }
@@ -915,11 +936,9 @@ private fun FileBrowserTab(
                 val maxContentPx = remember(state.nodes, textStyle) {
                     with(density) {
                         val widest = state.nodes.maxByOrNull { node ->
-                            val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
-                            node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
+                            node.depth * 4 + node.displayName.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
                         } ?: return@with 0
-                        val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
-                        val textW = textMeasurer.measure(label, textStyle).size.width
+                        val textW = textMeasurer.measure(widest.displayName, textStyle).size.width
                         (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
                     }
                 }
@@ -1020,12 +1039,12 @@ private fun FileBrowserTab(
             clipboard = clipboard,
             onNewFile = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FILE)
             },
             onNewFolder = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FOLDER)
             },
             onRename = {
@@ -1186,7 +1205,7 @@ private fun FileTreeActionSheet(
                 .padding(bottom = Spacing.xl)
         ) {
             Text(
-                text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+                text = node.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1218,7 +1237,7 @@ private fun FileTreeActionSheet(
                     onClick = onNewFolder
                 )
             }
-            if (!node.isRoot) {
+            if (node.root == null) {
                 SheetActionRow(
                     icon = FeatherIcons.Copy,
                     label = stringResource(R.string.common_copy),
@@ -1272,7 +1291,7 @@ private fun FileTreeRow(
             showExpanding = false
         }
     }
-    val isDotfile = !node.isRoot && node.entry.name.startsWith(".")
+    val isDotfile = node.root == null && node.entry.name.startsWith(".")
     val decorationColor: Color? = when {
         node.hasError -> MaterialTheme.colorScheme.error
         node.ignored -> FileTreeIgnoredColor
@@ -1322,7 +1341,7 @@ private fun FileTreeRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+            text = node.displayName,
             style = MaterialTheme.typography.bodyMedium,
             color = decorationColor ?: MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
@@ -1331,9 +1350,31 @@ private fun FileTreeRow(
     }
 }
 
-/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。[decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
+/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。容器根用「容器与镜像」列表同款图标。
+ * [decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
 @Composable
 private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
+    val containerRoot = node.root as? FileTreeRoot.Container
+    if (containerRoot != null) {
+        val tint = decorationColor ?: MaterialTheme.colorScheme.primary
+        val logo = containerOsLogo(containerRoot.osId)
+        if (logo != null) {
+            Icon(
+                painter = logo,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        } else {
+            Icon(
+                imageVector = if (containerRoot.remote) FeatherIcons.Server else FeatherIcons.HardDrive,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        }
+        return
+    }
     val vector = if (node.entry.isDirectory) {
         FeatherIcons.Folder
     } else {
@@ -1352,8 +1393,8 @@ private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
 /** .gitignore 命中条目的弱化色（橙，类 VSCode）。 */
 private val FileTreeIgnoredColor = Color(0xFFCC8844)
 
-/** 文件树根节点显示名，对应容器路径 `~/workspace`。 */
-private const val WORKSPACE_LABEL = "workspace"
+/** 文件树一行的显示名：根节点用根标签（工作区根 `workspace` / 当前容器名），其余用条目名。 */
+private val FileTreeNode.displayName: String get() = root?.label ?: entry.name
 
 /** 文件树一行除缩进与文本外的固定宽度开销（start 8 + 箭头 16 + 4 + 图标 20 + 8 + end 12），供预算整树统一行宽。 */
 private val FILE_TREE_ROW_OVERHEAD = 68.dp

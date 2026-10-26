@@ -6,7 +6,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aicode.R
 import com.aicode.core.datastore.preferencesCorruptionHandler
+import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -21,16 +23,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.ftpserver.FtpServer
 import org.apache.ftpserver.FtpServerFactory
+import org.apache.ftpserver.ftplet.Authentication
+import org.apache.ftpserver.ftplet.AuthenticationFailedException
 import org.apache.ftpserver.ftplet.Authority
+import org.apache.ftpserver.ftplet.User
+import org.apache.ftpserver.ftplet.UserManager
 import org.apache.ftpserver.listener.ListenerFactory
-import org.apache.ftpserver.usermanager.ClearTextPasswordEncryptor
-import org.apache.ftpserver.usermanager.PropertiesUserManagerFactory
+import org.apache.ftpserver.usermanager.AnonymousAuthentication
+import org.apache.ftpserver.usermanager.UsernamePasswordAuthentication
 import org.apache.ftpserver.usermanager.impl.BaseUser
 import org.apache.ftpserver.usermanager.impl.ConcurrentLoginPermission
+import org.apache.ftpserver.usermanager.impl.TransferRatePermission
 import org.apache.ftpserver.usermanager.impl.WritePermission
 import java.io.File
 import java.net.Inet4Address
+import java.security.SecureRandom
 import java.net.NetworkInterface
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,6 +54,17 @@ class FtpServerManager @Inject constructor(
 ) {
     private companion object {
         const val TAG = "FtpServerManager"
+
+        /** 旧版本内置的固定弱口令；读到即视为「未设置」，改用随机口令。 */
+        const val LEGACY_DEFAULT_PASSWORD = "123456"
+
+        private const val PASSWORD_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+        fun generateRandomPassword(): String {
+            val random = SecureRandom()
+            return (1..10).map { PASSWORD_ALPHABET[random.nextInt(PASSWORD_ALPHABET.length)] }.joinToString("")
+        }
+
         val PORT_KEY = intPreferencesKey("port")
         val USERNAME_KEY = stringPreferencesKey("username")
         val PASSWORD_KEY = stringPreferencesKey("password")
@@ -64,7 +84,7 @@ class FtpServerManager @Inject constructor(
     private val _username = MutableStateFlow("aicode")
     val username: StateFlow<String> = _username.asStateFlow()
 
-    private val _password = MutableStateFlow("123456")
+    private val _password = MutableStateFlow(generateRandomPassword())
     val password: StateFlow<String> = _password.asStateFlow()
 
     private val _isAnonymous = MutableStateFlow(false)
@@ -88,7 +108,15 @@ class FtpServerManager @Inject constructor(
             val prefs = context.ftpServerDataStore.data.first()
             _port.value = prefs[PORT_KEY] ?: 2121
             _username.value = prefs[USERNAME_KEY] ?: "aicode"
-            _password.value = prefs[PASSWORD_KEY] ?: "123456"
+            val storedPassword = prefs[PASSWORD_KEY]?.let { KeystoreCipher.decryptString(it) }
+            // 从未设置或仍是旧版固定弱口令时，改用随机口令并在 UI 展示供用户复制，避免默认 123456 被同网段利用。
+            _password.value = if (storedPassword.isNullOrBlank() || storedPassword == LEGACY_DEFAULT_PASSWORD) {
+                generateRandomPassword().also { fresh ->
+                    context.ftpServerDataStore.edit { it[PASSWORD_KEY] = KeystoreCipher.encryptString(fresh) }
+                }
+            } else {
+                storedPassword
+            }
             _isAnonymous.value = prefs[ANONYMOUS_KEY] ?: false
             _autoStart.value = prefs[AUTO_START_KEY] ?: false
 
@@ -141,7 +169,7 @@ class FtpServerManager @Inject constructor(
         context.ftpServerDataStore.edit { prefs ->
             prefs[PORT_KEY] = port
             prefs[USERNAME_KEY] = username
-            prefs[PASSWORD_KEY] = password
+            prefs[PASSWORD_KEY] = KeystoreCipher.encryptString(password)
             prefs[ANONYMOUS_KEY] = isAnonymous
             prefs[AUTO_START_KEY] = autoStart
         }
@@ -175,26 +203,70 @@ class FtpServerManager @Inject constructor(
             _errorMessage.value = null
             stopServerInternal()
 
+            val legacyUserFile = File(context.cacheDir, "ftp_users.properties")
+            check(!legacyUserFile.exists() || legacyUserFile.delete()) {
+                context.getString(R.string.ftp_user_cache_cleanup_failed)
+            }
+
+            if (!_isAnonymous.value && _username.value == "anonymous") {
+                _errorMessage.value = context.getString(R.string.ftp_reserved_username)
+                _isRunning.value = false
+                return false
+            }
+            if (!_isAnonymous.value && (_username.value.isBlank() || _password.value.isBlank())) {
+                _errorMessage.value = context.getString(R.string.ftp_password_required)
+                _isRunning.value = false
+                return false
+            }
+
             val serverFactory = FtpServerFactory()
             val listenerFactory = ListenerFactory()
             listenerFactory.port = _port.value
             serverFactory.addListener("default", listenerFactory.createListener())
 
-            val userManagerFactory = PropertiesUserManagerFactory()
-            val propFile = File(context.cacheDir, "ftp_users.properties")
-            if (!propFile.exists()) {
-                propFile.createNewFile()
+            val anonymousAllowed = _isAnonymous.value
+            val userManager = object : UserManager {
+                private val users = ConcurrentHashMap<String, User>()
+
+                override fun getUserByName(name: String): User? = users[name]?.let { BaseUser(it) }
+
+                override fun getAllUserNames(): Array<String> = users.keys.toTypedArray()
+
+                override fun delete(name: String) {
+                    users.remove(name)
+                }
+
+                override fun save(user: User) {
+                    users[user.name] = BaseUser(user)
+                }
+
+                override fun doesExist(name: String): Boolean = users.containsKey(name)
+
+                override fun authenticate(authentication: Authentication): User {
+                    val user = when (authentication) {
+                        is UsernamePasswordAuthentication -> authentication.username?.let { users[it] }?.takeIf {
+                            it.name != "anonymous" && !it.password.isNullOrBlank() &&
+                                it.password == authentication.password
+                        }
+                        is AnonymousAuthentication -> if (anonymousAllowed) users["anonymous"] else null
+                        else -> null
+                    }
+                    if (user == null || !user.enabled) throw AuthenticationFailedException()
+                    return BaseUser(user)
+                }
+
+                override fun getAdminName(): String? = null
+
+                override fun isAdmin(name: String): Boolean = false
             }
-            userManagerFactory.file = propFile
-            userManagerFactory.passwordEncryptor = ClearTextPasswordEncryptor()
-            val userManager = userManagerFactory.createUserManager()
 
             val authorities = ArrayList<Authority>()
             authorities.add(WritePermission())
             authorities.add(ConcurrentLoginPermission(20, 20))
+            authorities.add(TransferRatePermission(0, 0))
 
             // 正常用户
-            if (_username.value.isNotBlank()) {
+            if (_username.value.isNotBlank() && _username.value != "anonymous" && _password.value.isNotBlank()) {
                 val user = BaseUser()
                 user.name = _username.value
                 user.password = _password.value
@@ -204,7 +276,7 @@ class FtpServerManager @Inject constructor(
             }
 
             // 匿名用户
-            if (_isAnonymous.value) {
+            if (anonymousAllowed) {
                 val anonUser = BaseUser()
                 anonUser.name = "anonymous"
                 anonUser.homeDirectory = defaultSharedPath

@@ -15,7 +15,9 @@ data class TodoItemEntity(
     val priority: Int = 0,
     val order: Int = 0,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** 父任务 id；顶层任务为 null。子任务完成不代表父任务完成（V2 8.6）。 */
+    val parentId: String? = null
 ) {
     fun toDomain(): TodoItem = TodoItem(
         id = id,
@@ -26,7 +28,8 @@ data class TodoItemEntity(
         priority = priority,
         order = order,
         createdAt = createdAt,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        parentId = parentId
     )
 
     companion object {
@@ -39,7 +42,8 @@ data class TodoItemEntity(
             priority = item.priority,
             order = item.order,
             createdAt = item.createdAt,
-            updatedAt = item.updatedAt
+            updatedAt = item.updatedAt,
+            parentId = item.parentId
         )
     }
 }

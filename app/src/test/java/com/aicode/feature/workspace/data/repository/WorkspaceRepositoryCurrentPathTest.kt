@@ -5,14 +5,16 @@ import com.aicode.R
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
+import com.aicode.feature.credentials.data.CredentialInjectSettingsRepository
+import com.aicode.feature.credentials.domain.repository.CredentialRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.PathHomeResolver
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -65,7 +67,10 @@ class WorkspaceRepositoryCurrentPathTest {
             remoteSshConnection = remoteSshConnection,
             pathHomeResolver = mockk<PathHomeResolver>(),
             sessionUseCase = mockk<SessionUseCase>(),
-            generalSettingsRepository = generalSettingsRepository
+            generalSettingsRepository = generalSettingsRepository,
+            // 本用例只测路径语义，凭证注入开关/凭证库都不走到，relaxed mock 即可。
+            credentialInjectSettings = mockk<CredentialInjectSettingsRepository>(relaxed = true),
+            credentialRepository = mockk<CredentialRepository>(relaxed = true)
         )
     }
 
@@ -121,7 +126,7 @@ class WorkspaceRepositoryCurrentPathTest {
     // ── awaitCurrentPathOrNull()：等到上限仍是 null，不无限等待 ──────────
 
     @Test
-    fun awaitCurrentPathOrNull_notSettled_returnsNullInsteadOfHanging() = runTest {
+    fun awaitCurrentPathOrNull_notSettled_returnsNullInsteadOfHanging() = runBlocking {
         val repo = createRepository()
         assertNull(repo.awaitCurrentPathOrNull())
     }
@@ -129,7 +134,7 @@ class WorkspaceRepositoryCurrentPathTest {
     // ── 落定后：currentPath() == currentPathOrNull()，且不是工作区父目录 ──
 
     @Test
-    fun initialize_localSettles_currentPathIsWorkspaceNotParentDir() = runTest {
+    fun initialize_localSettles_currentPathIsWorkspaceNotParentDir() = runBlocking {
         val repo = createRepository()
         repo.initialize()
 

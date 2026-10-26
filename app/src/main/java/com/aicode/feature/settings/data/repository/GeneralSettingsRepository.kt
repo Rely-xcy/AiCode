@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aicode.core.datastore.preferencesCorruptionHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -13,7 +14,10 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private val Context.generalDataStore by preferencesDataStore(name = "general_prefs")
+private val Context.generalDataStore by preferencesDataStore(
+    name = "general_prefs",
+    corruptionHandler = preferencesCorruptionHandler
+)
 
 /** App 启动（含切换工作区）时进入哪个会话。 */
 enum class StartupSessionMode {
@@ -48,6 +52,8 @@ class GeneralSettingsRepository @Inject constructor(
         val COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("compaction_threshold_percent")
         val SOFT_COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("soft_compaction_threshold_percent")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
+        val GOAL_MAX_TURNS_KEY = intPreferencesKey("goal_max_turns")
+        val GOAL_MAX_TOKENS_KEY = intPreferencesKey("goal_max_tokens")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
         val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
@@ -79,6 +85,12 @@ class GeneralSettingsRepository @Inject constructor(
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
+
+        /** goal 自主循环最大续跑轮数默认 50。 */
+        const val DEFAULT_GOAL_MAX_TURNS = 50
+
+        /** goal 自主循环 token 预算默认 500k（按输入+输出累计）。 */
+        const val DEFAULT_GOAL_MAX_TOKENS = 500_000
     }
 
     /** 拉取模型后自动对齐本地列表的开关流；未设置时回退到 true（默认开启）。 */
@@ -223,6 +235,30 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun setSendFileMaxSizeMb(mb: Int) {
         context.generalDataStore.edit { it[SENDFILE_MAX_SIZE_MB_KEY] = mb.coerceAtLeast(1) }
     }
+
+    /** goal 自主循环最大续跑轮数；默认 50，下限 1。 */
+    val goalMaxTurnsFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[GOAL_MAX_TURNS_KEY] ?: DEFAULT_GOAL_MAX_TURNS).coerceAtLeast(1)
+    }
+
+    suspend fun setGoalMaxTurns(turns: Int) {
+        context.generalDataStore.edit { it[GOAL_MAX_TURNS_KEY] = turns.coerceAtLeast(1) }
+    }
+
+    /** 启动 goal 循环前读取一次轮次上限。 */
+    suspend fun goalMaxTurns(): Int = goalMaxTurnsFlow.first()
+
+    /** goal 自主循环 token 预算（输入+输出累计）；默认 500000，下限 1000。 */
+    val goalMaxTokensFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[GOAL_MAX_TOKENS_KEY] ?: DEFAULT_GOAL_MAX_TOKENS).coerceAtLeast(1000)
+    }
+
+    suspend fun setGoalMaxTokens(tokens: Int) {
+        context.generalDataStore.edit { it[GOAL_MAX_TOKENS_KEY] = tokens.coerceAtLeast(1000) }
+    }
+
+    /** 启动 goal 循环前读取一次 token 预算。 */
+    suspend fun goalMaxTokens(): Int = goalMaxTokensFlow.first()
 
     /** 执行 sendFile 前读取一次单个文件大小上限（MB）。 */
     suspend fun sendFileMaxSizeMb(): Int = sendFileMaxSizeMbFlow.first()

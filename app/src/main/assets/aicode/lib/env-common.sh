@@ -451,8 +451,8 @@ setup_apk_mirror() {
     mkdir -p /etc/apk
     # Alpine 大版本分支从镜像自身动态读取，兼容用户导入的不同版本 Alpine 镜像：
     # 1) 优先从现有 repositories 提取（官方源 / 已换过的源都含 `alpine/<分支>/`，edge 也能拿到）；
-    # 2) 读不到再回退到 /etc/os-release 的 VERSION_ID（如 3.21.3 → v3.21）；
-    # 3) 最后兜底 v3.21（与内置 Alpine 一致）。
+    # 2) 读不到再回退到 /etc/os-release 的 VERSION_ID（如 3.24.2 → v3.24）；
+    # 3) 最后兜底 v3.24（与内置 Alpine 一致）。
     branch=""
     if [ -f /etc/apk/repositories ]; then
         branch=$(sed -n 's#.*alpine/\([^/]*\)/.*#\1#p' /etc/apk/repositories 2>/dev/null | head -1)
@@ -463,7 +463,7 @@ setup_apk_mirror() {
             branch="v$(echo "$VERSION_ID" | cut -d. -f1-2)"
         fi
     fi
-    [ -z "$branch" ] && branch="v3.21"
+    [ -z "$branch" ] && branch="v3.24"
     cat > /etc/apk/repositories <<EOF
 http://$MIRROR/alpine/$branch/main
 http://$MIRROR/alpine/$branch/community

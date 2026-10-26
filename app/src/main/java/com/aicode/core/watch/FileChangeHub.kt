@@ -2,12 +2,6 @@ package com.aicode.core.watch
 
 import android.os.FileObserver
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.container.ContainerInstaller
-import com.aicode.feature.agent.domain.container.RemoteSshConnection
-import com.aicode.feature.settings.data.repository.ExecutionMode
-import com.aicode.feature.settings.data.repository.ExecutionModeHolder
-import com.aicode.feature.workspace.data.repository.WorkspaceRepository
-import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -28,12 +22,58 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * 总线对「当前工作区」的唯一需求：一条随工作区切换推送最新宿主路径的流。
+ *
+ * 只暴露路径而不是工作区对象：总线拿它去拼监听目录，别的一概不看。实现见 `di/FileChangeHubModule`。
+ */
+fun interface FileWatchWorkspaceSource {
+    fun currentPathFlow(): Flow<String?>
+}
+
+/**
+ * 总线对执行模式的最小需求：订阅建立时同步判一次是否远端，外加模式变化的通知流。
+ *
+ * 模式在总线的用法里只有「是否远端」两态，故用布尔承载而非枚举：本地 / 远端两个取值映射到
+ * true / false 是一一对应，StateFlow 两侧的去重与发射次数不变。
+ */
+interface FileWatchModeGate {
+    fun isRemoteSsh(): Boolean
+
+    /** 每切换一次模式发一个布尔（是否远端）；与 [isRemoteSsh] 读同一份缓存。 */
+    val remoteSshChanges: Flow<Boolean>
+}
+
+/**
+ * 总线对远端 SSH 连接的最小需求。
+ *
+ * [connectionChanges] 只用于让远端订阅重建（状态值本身不被读取）：远端 home 要连上才知道。
+ */
+interface FileWatchRemoteConnection {
+    /** 连接状态每变一次发一个信号，值无意义。 */
+    val connectionChanges: Flow<Unit>
+
+    /** 服务器上的真实 home，未连上时为 null。 */
+    val remoteHome: String?
+}
+
+/** 总线对 AI 配置目录位置的需求：容器内 `/root/.aicode` 对应的宿主目录。 */
+fun interface FileWatchAicodeDir {
+    fun dir(): File
+}
+
+/** 总线对「容器路径 / 宿主路径」互转的需求。 */
+interface FileWatchPathMapper {
+    fun toHostFile(path: String): File
+
+    fun toContainerPath(hostPath: String): String
+}
 
 /**
  * App 级文件变更监听中心：监听当前活动工作区与 `~/.aicode` 两个根（也可订阅任意宿主目录），
@@ -55,11 +95,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class FileChangeHub @Inject constructor(
-    private val workspaceRepository: WorkspaceRepository,
-    private val containerInstaller: ContainerInstaller,
-    private val pathMapper: WorkspacePathMapper,
-    private val executionModeHolder: ExecutionModeHolder,
-    private val remoteSshConnection: RemoteSshConnection,
+    private val workspaceSource: FileWatchWorkspaceSource,
+    private val aicodeDirSource: FileWatchAicodeDir,
+    private val pathMapper: FileWatchPathMapper,
+    private val modeGate: FileWatchModeGate,
+    private val remoteConnection: FileWatchRemoteConnection,
     private val remoteFileWatchPoller: RemoteFileWatchPoller
 ) {
     companion object {
@@ -89,11 +129,14 @@ class FileChangeHub @Inject constructor(
         /** 待广播批次队列上限；超出时丢弃最旧批次。 */
         private const val MAX_PENDING_BATCHES = 256
 
-        /** AI 看到的工作区根路径。 */
-        const val CONTAINER_ROOT = WorkspacePathMapper.CONTAINER_ROOT
+        /**
+         * AI 看到的工作区根路径。与 `WorkspacePathMapper.CONTAINER_ROOT` 必须同值：core 不能反向
+         * 依赖 feature，这里保有一份字面量，改动时两处一起改。
+         */
+        const val CONTAINER_ROOT = "~/workspace"
 
-        /** AI 配置目录在容器内的根路径。 */
-        const val AICODE_ROOT = WorkspacePathMapper.AICODE_ROOT
+        /** AI 配置目录在容器内的根路径。与 `WorkspacePathMapper.AICODE_ROOT` 必须同值（同上）。 */
+        const val AICODE_ROOT = "/root/.aicode"
 
         /** AI 配置目录在宿主/服务器上的目录名：容器内 `/root/.aicode` 与远端 `$HOME/.aicode` 都是它。 */
         private const val AICODE_DIR_NAME = ".aicode"
@@ -173,12 +216,11 @@ class FileChangeHub @Inject constructor(
         fallbackPoll: Boolean = true,
         batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
         domain: ChangeDomain = ChangeDomain.WORKSPACE_FILE
-    ): Flow<FileChangeBatch> = workspaceRepository.current
-        .map { workspaceRepository.currentPathOrNull() }
+    ): Flow<FileChangeBatch> = workspaceSource.currentPathFlow()
         .distinctUntilChanged()
         .flatMapLatest { workspacePath ->
             if (workspacePath == null) return@flatMapLatest emptyFlow()
-            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+            if (modeGate.isRemoteSsh()) {
                 // 远端：容器路径直接拼到远端工作区根上（严格用已落定的工作区路径，不回退父目录）。
                 val remoteDir = remoteDirOrNull(workspacePath, containerSubPath)
                     ?: return@flatMapLatest emptyFlow()
@@ -209,7 +251,7 @@ class FileChangeHub @Inject constructor(
     /**
      * 容器路径 → 远端绝对目录；不属于当前工作区（`~/workspace` 之外）时返回 null。
      *
-     * 只认 [WorkspacePathMapper.CONTAINER_ROOT] 前缀（消费方给的都是这个形式）；`/root/.aicode`、
+     * 只认 [CONTAINER_ROOT] 前缀（消费方给的都是这个形式）；`/root/.aicode`、
      * rootfs 路径等既不在远端工作区里、也没有对应的远端目录，一律不订阅。
      */
     private fun remoteDirOrNull(workspacePath: String, containerSubPath: String): String? {
@@ -243,7 +285,7 @@ class FileChangeHub @Inject constructor(
     ): Flow<FileChangeBatch> {
         val sub = containerSubPath.trim('/')
         val local = watchHostDir(
-            hostDir = if (sub.isEmpty()) containerInstaller.aicodeDir else File(containerInstaller.aicodeDir, sub),
+            hostDir = if (sub.isEmpty()) aicodeDirSource.dir() else File(aicodeDirSource.dir(), sub),
             containerRootPath = if (sub.isEmpty()) AICODE_ROOT else "$AICODE_ROOT/$sub",
             root = ChangeRoot.AICODE,
             recursive = recursive,
@@ -259,7 +301,7 @@ class FileChangeHub @Inject constructor(
         // 只在订阅整个 aicode 目录时附带，否则 watchAicode("skills") 这类子目录订阅会让同一批事件投两遍。
         val projects = if (sub.isEmpty()) {
             watchHostDir(
-                hostDir = File(containerInstaller.aicodeDir, PROJECTS_DIR),
+                hostDir = File(aicodeDirSource.dir(), PROJECTS_DIR),
                 // 就在 aicode 目录下，容器路径交给 pathMapper 还原成 `/root/.aicode/projects/...`
                 containerRootPath = null,
                 root = ChangeRoot.AICODE,
@@ -273,11 +315,12 @@ class FileChangeHub @Inject constructor(
             emptyFlow()
         }
         val remote = combine(
-            executionModeHolder.mode,
-            remoteSshConnection.connectionState
-        ) { mode, _ -> mode }
-            .flatMapLatest { mode ->
-                val remoteDir = remoteAicodeDirOrNull(mode, sub) ?: return@flatMapLatest emptyFlow()
+            modeGate.remoteSshChanges,
+            remoteConnection.connectionChanges
+        ) { remoteSsh, _ -> remoteSsh }
+            .flatMapLatest { remoteSsh ->
+                if (!remoteSsh) return@flatMapLatest emptyFlow()
+                val remoteDir = remoteAicodeDirOrNull(sub) ?: return@flatMapLatest emptyFlow()
                 remoteFileWatchPoller.watch(
                     remoteDir = remoteDir,
                     // 容器路径用远端自身路径：`~/.aicode` 在远端模式下就是服务器上的这个目录。
@@ -294,18 +337,17 @@ class FileChangeHub @Inject constructor(
      * 远端模式下 AI 看到的 `~/.aicode[/sub]` 在服务器上的绝对路径；本地模式或远端 home 未探到时返回 null。
      *
      * home 直接拼而不是走 `pathMapper`：`~` 在远端展开成哪是服务器的事（root 是 `/root`、普通用户是 `/home/xxx`），
-     * 宿主这边只有 [RemoteSshConnection.remoteHome] 知道；拼出来的路径也不能带 `~`，远端命令会给它加单引号。
+     * 宿主这边只有 [FileWatchRemoteConnection.remoteHome] 知道；拼出来的路径也不能带 `~`，远端命令会给它加单引号。
      */
-    private fun remoteAicodeDirOrNull(mode: ExecutionMode, sub: String): String? {
-        if (mode != ExecutionMode.REMOTE_SSH) return null
-        val home = remoteSshConnection.remoteHome?.trim()?.trimEnd('/').orEmpty()
+    private fun remoteAicodeDirOrNull(sub: String): String? {
+        val home = remoteConnection.remoteHome?.trim()?.trimEnd('/').orEmpty()
         if (home.isEmpty()) return null
         return if (sub.isEmpty()) "$home/$AICODE_DIR_NAME" else "$home/$AICODE_DIR_NAME/$sub"
     }
 
     /**
      * 订阅任意宿主目录（如同步引擎的本地镜像目录）。[containerRootPath] 为 null 时容器路径由
-     * [WorkspacePathMapper.toContainerPath] 反推。目录尚不存在时不放弃订阅——等它出现后再挂 watch，
+     * [FileWatchPathMapper.toContainerPath] 反推。目录尚不存在时不放弃订阅——等它出现后再挂 watch，
      * 并把「目录出现」当作一次变更上报（项目级 `.aicode/skills` 这类目录经常是后建的）。
      *
      * [domain] 默认 [ChangeDomain.OTHER]（未标注）：调用方如果不清楚自己属于哪个域，保持默认即可。

@@ -7,8 +7,10 @@ import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
+import com.aicode.feature.agent.domain.tool.file.readFileSnapshot
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -91,33 +93,40 @@ class CheckpointManager @Inject constructor(
             return@withContext
         }
 
+        // 一次整篇读取同时给出「是否存在」「原始内容」「内容指纹」。原本这里是 exists + fingerprint
+        // + readFile 三次访问，远程 SFTP 下同一个文件被完整传输了 3 遍，而三份结果必然是同一时刻的
+        // 同一内容——检查点要的就是那一刻的原文与版本。
+        val snapshot = try {
+            readFileSnapshot(fileAccess, filePath)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 读失败（超过远端上限、瞬时 IO）不往外抛：检查点只是回滚用的备份，
+            // 它自己失败不该让这次写入连坐失败。
+            FileLogger.w(TAG, "快照读取失败，跳过本次检查点记录: $filePath", e)
+            null
+        }
+
+        // 存在却读不出全文（目录、权限不足、超过远端 8MB 上限）：没有可回滚的内容。
+        // 此时既不能记 MODIFY（空内容会被当成原文，回滚时把文件写空），也不该当成新建
+        // （回滚会把本来就存在的路径删掉），只能跳过。
+        if (snapshot == null && fileAccess.exists(filePath)) {
+            FileLogger.w(TAG, "文件存在但读不出全文，跳过检查点快照: $filePath")
+            return@withContext
+        }
+
         val snapshotDir = File(baseCheckpointDir, "$sessionId/$checkpointId")
         if (!snapshotDir.exists()) {
             snapshotDir.mkdirs()
         }
 
-        val exists = fileAccess.exists(filePath)
-        val changeType = if (exists) "MODIFY" else "CREATE"
+        val changeType = if (snapshot != null) "MODIFY" else "CREATE"
         val snapshotFileName = "${UUID.randomUUID()}_${File(filePath).name}"
         val snapshotFile = File(snapshotDir, snapshotFileName)
 
-        // 记下拍摄时的内容指纹，供回滚前判断「这文件在快照之后是否被别人改过」。
-        // 算不出来（文件过大、IO 异常）就留 null，回滚时按「未知版本」放行——
-        // 版本信息是锦上添花，不能因为它拿不到就让快照本身失败。
-        val fingerprint = if (exists) {
-            runCatching { fileAccess.fingerprint(filePath) }
-                .onFailure { FileLogger.w(TAG, "快照指纹计算失败，按未知版本记录: $filePath", it) }
-                .getOrNull()
-        } else {
-            null
-        }
-
-        if (changeType == "MODIFY") {
-            val originalContent = fileAccess.readFile(filePath)
-            snapshotFile.writeText(originalContent)
-        } else {
-            snapshotFile.writeText("") // 标示创建空记录
-        }
+        // 指纹按读到的原始字节算（[readFileSnapshot]），与 [FileAccessProvider.fingerprint] 同一口径，
+        // 回滚前「本会话见过的版本 vs 当前指纹」的比对才等价。新建时没有原文，备份写成空文件作标记。
+        snapshotFile.writeText(snapshot?.text.orEmpty())
 
         val snapshotEntity = CheckpointFileSnapshotEntity(
             id = UUID.randomUUID().toString(),
@@ -125,7 +134,7 @@ class CheckpointManager @Inject constructor(
             filePath = filePath,
             snapshotRelativePath = "$sessionId/$checkpointId/$snapshotFileName",
             changeType = changeType,
-            fingerprint = fingerprint
+            fingerprint = snapshot?.fingerprint
         )
         checkpointDao.insertFileSnapshot(snapshotEntity)
         FileLogger.i(TAG, "快照: session=$sessionId cp=$checkpointId type=$changeType path=$filePath")
@@ -207,9 +216,8 @@ class CheckpointManager @Inject constructor(
                     fileLock.withLock(displayPath) {
                         fileAccess.writeFile(snapshot.filePath, snapshotContent, overwrite = true)
                     }
-                    // 回滚是一次「外部写入」：所有会话手上的版本都过期了
-                    fileAccess.fingerprint(snapshot.filePath)
-                        ?.let { versions.recordExternal(displayPath, it) }
+                    // 回滚是一次外部写入：所有已有会话必须重新读取后才能覆盖。
+                    versions.markExternalChange(displayPath)
                     restoredFileCount++
                     FileLogger.i(TAG, "还原覆盖: cp=${cp.id} path=$displayPath")
                 } else if (snapshot.changeType == "CREATE") {

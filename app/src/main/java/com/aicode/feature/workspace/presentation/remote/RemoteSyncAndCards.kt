@@ -84,7 +84,7 @@ fun SyncSettingsSheet(
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.semanticColors.pageBackground
     ) {
         Column(
             modifier = Modifier

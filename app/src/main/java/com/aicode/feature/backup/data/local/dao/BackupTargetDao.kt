@@ -12,6 +12,10 @@ interface BackupTargetDao {
     @Query("SELECT * FROM backup_targets ORDER BY createdAt ASC, rowid ASC")
     fun getAll(): Flow<List<BackupTargetEntity>>
 
+    /** 一次性快照：备份导出要按流式打包，不能挂在 Flow 上等首个值。 */
+    @Query("SELECT * FROM backup_targets ORDER BY createdAt ASC, rowid ASC")
+    suspend fun getAllOnce(): List<BackupTargetEntity>
+
     @Query("SELECT * FROM backup_targets WHERE id = :id")
     suspend fun getById(id: String): BackupTargetEntity?
 

@@ -96,9 +96,7 @@
     "baseUrl": "https://api.xiaomimimo.com/v1",
     "isRecommended": false,
     "badge": null,
-    "websiteUrl": "https://platform.xiaomimimo.com?ref=66QSUD",
-    "tags": [
-      "注册送10元"
-    ]
+    "websiteUrl": null,
+    "tags": []
   }
 ]

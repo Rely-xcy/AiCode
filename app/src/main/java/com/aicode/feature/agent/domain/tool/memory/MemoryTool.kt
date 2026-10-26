@@ -1,6 +1,9 @@
 package com.aicode.feature.agent.domain.tool.memory
 
+import android.content.Context
+import com.aicode.R
 import com.aicode.core.util.FileLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.memory.MemoryEdit
 import com.aicode.feature.agent.domain.memory.MemoryEditResult
 import com.aicode.feature.agent.domain.memory.MemoryRepository
@@ -23,7 +26,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import javax.inject.Inject
 
 class MemoryTool @Inject constructor(
-    private val memoryRepository: MemoryRepository
+    private val memoryRepository: MemoryRepository,
+    @param:ApplicationContext private val appContext: Context
 ) : AbstractContextualTool() {
     private companion object {
         const val TAG = "MemoryTool"
@@ -82,7 +86,7 @@ class MemoryTool @Inject constructor(
         "description" to ToolParameter(
             name = "description",
             type = ParameterType.STRING,
-            description = "一句话摘要（save 必填，将出现在系统提示词的记忆清单中）。",
+            description = "一句话摘要（save 必填），用于系统提示词中的记忆清单；需要正文时用 read 加载。",
             required = false
         ),
         "content" to ToolParameter(
@@ -172,7 +176,7 @@ class MemoryTool @Inject constructor(
             FileLogger.i(TAG, "保存记忆成功: $name (${scope.name.lowercase()})")
             ToolResult.Success(JsonPrimitive(buildString {
                 // 说明文案要写对：写入会通知注入方清缓存，下一轮就会带上它（不是「下次会话」）
-                append("已保存记忆「$name」到 ${scope.name.lowercase()} 作用域，下一轮起会出现在你的记忆清单里。")
+                append(appContext.getString(R.string.tool_memory_saved, name, scope.name.lowercase()))
                 if (scope == MemoryScope.GLOBAL && hasProjectShadow(projectRoot, name)) {
                     append("注意：当前项目里已有同名记忆，项目级优先——之后 read 到的是项目级那条，")
                     append("要改它请用 scope=project，或换个名字。")

@@ -98,17 +98,28 @@ class PromptFragmentCatalog @Inject constructor(
     )
 
     /** 静态基线正文：所有生效片段去掉前导注释后按编号拼接。 */
-    fun renderStatic(projectRoot: String?): String =
-        list(projectRoot)
-            .mapNotNull { it.content.replace(LEADING_COMMENT, "").trim().takeIf { text -> text.isNotEmpty() } }
-            .joinToString("\n\n")
+    fun renderStatic(projectRoot: String?): String = joinBodies(staticBodies(projectRoot))
 
     /** 「仅自定义片段」模式：只取项目层与全局层的自定义片段正文。 */
-    fun renderCustomOnly(projectRoot: String?): String =
-        list(projectRoot)
-            .filter { it.source == PromptFragmentSource.PROJECT || it.source == PromptFragmentSource.GLOBAL }
-            .mapNotNull { it.content.replace(LEADING_COMMENT, "").trim().takeIf { text -> text.isNotEmpty() } }
-            .joinToString("\n\n")
+    fun renderCustomOnly(projectRoot: String?): String = joinBodies(staticBodies(projectRoot).filter { it.customOnly })
+
+    /**
+     * 静态基线按片段拆开的正文，与 [renderStatic] 的拼接结果逐段对应：
+     * 段级哈希要按片段取，又不能与拼接逻辑各写一份（两处一漂移，日志就对着错内容说「没变」）。
+     */
+    fun staticBodies(projectRoot: String?): List<FragmentBody> =
+        list(projectRoot).mapNotNull { fragment ->
+            val body = fragment.content.replace(LEADING_COMMENT, "").trim()
+            if (body.isEmpty()) null else FragmentBody(fragment, body)
+        }
+
+    /** 一个片段在拼接中真正贡献的正文；[customOnly] 与「仅自定义片段」模式的筛选条件同源。 */
+    data class FragmentBody(val fragment: PromptFragment, val body: String) {
+        val customOnly: Boolean
+            get() = fragment.source == PromptFragmentSource.PROJECT || fragment.source == PromptFragmentSource.GLOBAL
+    }
+
+    private fun joinBodies(bodies: List<FragmentBody>): String = bodies.joinToString("\n\n") { it.body }
 
     /** 是否存在「完全禁用内置提示词」标记（全局层）。 */
     fun isBuiltinDisabled(): Boolean = PromptFragmentResolver.isBuiltinDisabled(globalDir)
@@ -206,6 +217,27 @@ class PromptFragmentCatalog @Inject constructor(
             else -> null
         }
         return numberedFragments(dir)[number]?.delete() ?: false
+    }
+
+    /**
+     * 清空所有自定义提示词：删掉项目层与全局层里的全部 `<两位数字>-*.md`，
+     * 各编号随即回落到内置 / 本地层，等于把提示词「重置」回默认。
+     *
+     * 只删带编号的片段文件，全局层里的「完全禁用内置提示词」标记等其它文件原样保留。
+     * @return 实际删除的文件数。
+     */
+    fun deleteAllCustom(projectRoot: String?): Int {
+        val dirs = listOfNotNull(projectDir(projectRoot), globalDir).distinct()
+        var deleted = 0
+        dirs.forEach { dir ->
+            dir.listFiles()?.forEach { file ->
+                if (file.isFile && PromptFragmentResolver.parseNumber(file.name) != null && file.delete()) {
+                    deleted++
+                }
+            }
+        }
+        FileLogger.i(TAG, "已清空自定义提示词，删除 $deleted 个文件")
+        return deleted
     }
 
     /** 切换「完全禁用内置提示词」标记（全局层）。 */

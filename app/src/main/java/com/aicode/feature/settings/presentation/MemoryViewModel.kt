@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +57,49 @@ class MemoryViewModel @Inject constructor(
 
     private val _memories = MutableStateFlow<List<Memory>>(emptyList())
     val memories: StateFlow<List<Memory>> = _memories.asStateFlow()
+
+    /**
+     * 搜索词放这里而不是 Composable 的 remember：旋转屏幕或进出详情页回来时要保留用户输入。
+     */
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    /**
+     * 过滤后的可见列表：只在已经读进内存的 [memories] 上做字符串匹配，每敲一个字都不会重扫记忆目录。
+     *
+     * 名称或正文任一命中即保留；记忆名多是英文 slug，大小写敏感会让「全小写」搜不到。
+     * 描述不参与匹配：需求口径就是名称 + 正文，而描述通常只是正文的一句话摘要，
+     * 正文里真出现过的词照样能命中。
+     */
+    val visibleMemories: StateFlow<List<Memory>> =
+        combine(_memories, _searchQuery) { memories, query ->
+            val keyword = query.trim()
+            if (keyword.isEmpty()) {
+                memories
+            } else {
+                memories.filter { memory ->
+                    memory.name.contains(keyword, ignoreCase = true) ||
+                        memory.content.contains(keyword, ignoreCase = true)
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * 首次读盘尚未完成：列表此时必然为空，界面据此渲染「正在读取」而不是「没有记忆」。
+     * 不这样做时，进页面会先闪一下空态、过一会才变成列表，看起来像加载失败。
+     *
+     * 只在**记忆清单**读完时置 false，不等顶部那张短期卡片：清单才是用户进这页要看的，
+     * 短期卡片是只读状态条，没理由让它拖着一整页的「正在读取」。
+     */
+    private val _loading = MutableStateFlow(true)
+    val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    /** 重入护栏：init 与「每次进分区」都会调 [refresh]，不挡的话首次进入会连扫两遍。 */
+    private var inFlight = false
 
     private val _shortTermSession = MutableStateFlow<SessionShortTermState?>(null)
 
@@ -101,16 +145,36 @@ class MemoryViewModel @Inject constructor(
     }
 
     fun refresh() {
+        if (inFlight) return
+        inFlight = true
         viewModelScope.launch {
-            // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
-            val projectRoot = workspaceRepository.currentPathOrNull()
-            _memories.value = withContext(Dispatchers.IO) {
-                memoryRepository.listMemories(projectRoot)
-            }
-            _shortTermSession.value = if (projectRoot == null) {
-                null
-            } else {
-                withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+            try {
+                // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
+                // 纯 StateFlow 读，不是 IO。
+                val projectRoot = workspaceRepository.currentPathOrNull()
+                try {
+                    val loaded = withContext(Dispatchers.IO) {
+                        memoryRepository.listMemories(projectRoot)
+                    }
+                    // 内容没变就不写：每次进分区都会 refresh，而重扫出来的清单往往与手上这份逐条相等。
+                    // 不写这一下就不依赖 StateFlow 对「相等的新值」是否去重——无论它去不去，
+                    // 界面都拿不到新对象，也就不会把整屏记忆行（每行带滑动状态）重绘一遍。
+                    if (loaded != _memories.value) _memories.value = loaded
+                } finally {
+                    // 清单到手就先放开「正在读取」：短期卡片要查库，不该让列表等它。
+                    // 仍然等第一次读盘结束才置 false，「正在读取」与「没有记忆」不会混。
+                    _loading.value = false
+                }
+                // 短期卡片后到：它只是顶部一张只读卡，慢在这一步不影响列表已经可用。
+                _shortTermSession.value = if (projectRoot == null) {
+                    null
+                } else {
+                    withContext(Dispatchers.IO) { loadShortTerm(projectRoot) }
+                }
+            } finally {
+                inFlight = false
+                // 兜底：中途抛错 / 取消也要放开「正在读取」，别让界面永远停在占位态。
+                _loading.value = false
             }
         }
     }

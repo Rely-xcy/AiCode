@@ -130,6 +130,27 @@ class AgentDefinitionParserTest {
         assertEquals("只有正文", def.prompt)
     }
 
+    /**
+     * frontmatter 顶层写成列表（如 `- name: x`）时该文件无效、返回 null。
+     * 回归防护：泛型 load 的 unchecked 转换不会立即失败，旧实现拖到取值处抛
+     * ClassCastException，进而连累整个目录的扫描降级为空——一个坏文件废掉全部定义。
+     */
+    @Test
+    fun parse_topLevelListFrontmatterReturnsNull() {
+        assertNull(parseFile(write("broken.md", "---\n- name: broken\n- tools: [readFile]\n---\n正文")))
+    }
+
+    /** 顶层列表只废自己：同目录的合法定义必须照常解析。 */
+    @Test
+    fun scan_singleBrokenFileDoesNotKillWholeDirectory() {
+        write("good.md", "---\nname: good\n---\n正文")
+        write("broken.md", "---\n- name: broken\n---\n正文")
+
+        val defs = AgentDefinitionDirectoryScanner.scan(provider, tempFolder.root.absolutePath)
+
+        assertEquals(listOf("good"), defs.map { it.name })
+    }
+
     @Test
     fun scan_onlyTopLevelMarkdownSortedByName() {
         write("b.md", "---\nname: b\n---\n正文")

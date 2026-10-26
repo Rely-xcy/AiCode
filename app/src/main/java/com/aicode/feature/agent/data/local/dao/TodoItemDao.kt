@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -14,6 +15,17 @@ interface TodoItemDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<TodoItemEntity>)
+
+    /**
+     * 整表替换（replace 动作用）：删除与写入必须在同一事务里。
+     *
+     * 分两步裸调时，进程被杀/磁盘满/写入抛错都会让整张清单被清空且无法回滚。
+     */
+    @Transaction
+    suspend fun replaceAll(sessionId: String, items: List<TodoItemEntity>) {
+        deleteBySession(sessionId)
+        if (items.isNotEmpty()) upsertAll(items)
+    }
 
     @Query("SELECT * FROM todo_items WHERE sessionId = :sessionId ORDER BY `order` ASC, priority DESC")
     fun getBySession(sessionId: String): Flow<List<TodoItemEntity>>

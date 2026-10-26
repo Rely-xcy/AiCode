@@ -109,7 +109,7 @@ class TerminalSessionManager @Inject constructor(
         ensureContainer()
         val id = nextId()
         val shellCommand = buildInteractiveCommand()
-        FileLogger.i(TAG, "交互 shell 命令（$id）：$shellCommand")
+        FileLogger.i(TAG, "交互 shell 命令（$id）：${redactCommand(shellCommand)}")
         val workspace = requireWorkspacePath()
         val (session, client) = try {
             buildSession(shellCommand, workspace)
@@ -209,8 +209,22 @@ class TerminalSessionManager @Inject constructor(
         if (notify) monitorBackgroundExit(id)
 
         startKeepaliveService()
-        FileLogger.i(TAG, "后台命令标签 $id: $command")
+        FileLogger.i(TAG, "后台命令标签 $id: ${redactCommand(command)}")
         return id
+    }
+
+    /** 命令落盘前去敏：日志可导出，不能把 Bearer/token/密码明文写进去。 */
+    private fun redactCommand(command: String): String {
+        var out = command
+        out = out.replace(Regex("(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]+")) { it.groupValues[1] + "***" }
+        out = out.replace(Regex("://[^/@\\s:]+:[^/@\\s]+@")) { "://***:***@" }
+        out = out.replace(
+            Regex("(?i)((?:api[_-]?key|token|password|passwd|secret)\\s*=\\s*)[^\\s\"']+")
+        ) { it.groupValues[1] + "***" }
+        out = out.replace(
+            Regex("(?i)(--(?:password|token|api-key|secret)\\s+)[^\\s\"']+")
+        ) { it.groupValues[1] + "***" }
+        return out
     }
 
     private fun runningTab(id: String): TerminalTab? {

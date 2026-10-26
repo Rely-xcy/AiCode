@@ -20,8 +20,17 @@ object AgentDefinitionParser {
             FileLogger.w(TAG, "读取子代理定义失败: $filePath", it)
             return null
         }
+        return parseText(text, filePath)
+    }
 
-        val (frontmatter, body) = splitAndParseFrontmatter(text)
+    /**
+     * 解析已读到的文本（远端批量读取、导入等场景）；[filePath] 用于回显与缺 name 时的兼底名。
+     *
+     * frontmatter 顶层不是键值表（如写成了列表）时返回 null 跳过该文件并留痕；泛型 load 的 unchecked
+     * 转换在顶层非 map 时不会立即失败，而是拖到取值处抛 ClassCastException，进而连累整个目录降级为空。
+     */
+    fun parseText(text: String, filePath: String): AgentDefinition? {
+        val (frontmatter, body) = splitAndParseFrontmatter(text) ?: return null
         val prompt = body.trim()
         if (prompt.isEmpty()) return null
 
@@ -71,7 +80,11 @@ object AgentDefinitionParser {
         return parsed.ifEmpty { AgentDefinition.DEFAULT_INJECT }
     }
 
-    private fun splitAndParseFrontmatter(text: String): Pair<Map<String, Any>, String> {
+    /**
+     * 拆出 frontmatter 与正文。frontmatter 顶层不是键值表时返回 null（该定义无效）；
+     * YAML 语法错误时宽容处理为空配置、正文照常（保持历史行为）。
+     */
+    private fun splitAndParseFrontmatter(text: String): Pair<Map<String, Any>, String>? {
         val normalized = text.replace("\r\n", "\n")
         if (!normalized.startsWith("---\n")) return emptyMap<String, Any>() to normalized
 
@@ -81,13 +94,19 @@ object AgentDefinitionParser {
         val block = normalized.substring(4, end)
         val rest = normalized.substring(end + 4).removePrefix("\n")
 
-        val map = try {
-            Yaml().load<Map<String, Any>>(block) ?: emptyMap()
+        val loaded = try {
+            Yaml().load<Any>(block)
         } catch (e: Exception) {
             FileLogger.w(TAG, "解析子代理定义 YAML 失败", e)
-            emptyMap()
+            null
         }
-        return map to rest
+        val map = loaded as? Map<*, *>
+        if (loaded != null && map == null) {
+            FileLogger.w(TAG, "子代理定义 frontmatter 顶层不是键值表，已跳过: ${loaded.javaClass.simpleName}")
+            return null
+        }
+        @Suppress("UNCHECKED_CAST")
+        return (map ?: emptyMap<String, Any>()) as Map<String, Any> to rest
     }
 
     private val VALID_EFFORTS = ReasoningEffort.entries.map { it.apiValue }.toSet()

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.skill
 
+import com.aicode.feature.agent.domain.container.BulkFileSource
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -11,12 +12,18 @@ import javax.inject.Singleton
  */
 @Singleton
 class GlobalDirectorySkillSource @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val bulk: BulkFileSource
 ) : SkillSource {
+
+    /** 不启用远程批量读取的构造（单测与本地调用方）。 */
+    internal constructor(fileAccess: FileAccessProvider) : this(fileAccess, BulkFileSource.Disabled)
 
     val skillsRoot: String = "~/.aicode/skills"
 
-    override fun listSkills(): List<Skill> = SkillDirectoryScanner.scan(fileAccess, skillsRoot)
+    override fun listSkills(): List<Skill> = SkillDirectoryScanner.scan(fileAccess, skillsRoot, bulk)
+
+    override fun listSkillsOrNull(): List<Skill>? = SkillDirectoryScanner.scanOrNull(fileAccess, skillsRoot, bulk)
 
     override fun loadInstructions(name: String): String? =
         listSkills().firstOrNull { it.name.equals(name, ignoreCase = true) }?.instructions

@@ -53,7 +53,7 @@ class SendFileTool @Inject constructor(
     }
 
     override val description get() =
-        "把工作区已有文件发送到聊天区展示给用户。所有文件必须全部存在且合法，任一失败则整体失败，需修正后重新调用。仅展示，不读取内容、不进上下文。"
+        "把已有文件发送到聊天区展示给用户，向模型返回文件路径、名称、类型、大小等元数据，不返回文件内容。所有文件必须存在且合法，任一文件校验失败则整体失败，需修正后重新调用。"
 
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
 

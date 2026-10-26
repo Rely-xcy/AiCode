@@ -232,7 +232,7 @@ private fun WorkspaceSelectionHost(
         WorkspaceSheet(
             workspaces = workspaces,
             current = current,
-            showExternalEntry = isLocalMode,
+            isLocalMode = isLocalMode,
             onAddExternal = {
                 if (externalWarningDismissed) folderLauncher.launch(null)
                 else showExternalWarning = true
@@ -308,12 +308,33 @@ private fun WorkspaceSelectionHost(
     }
 }
 
+/** 列表行：用 [rowKey] 作为 LazyColumn 的唯一键（不能用可能重复的显示名）。 */
+internal data class WorkspaceRowItem(val workspace: Workspace, val rowKey: String)
+
+/**
+ * 给工作区列表生成唯一行键。
+ *
+ * 名称不能当键：外部目录名无法转成合法名时会回退成 `default`，两个这样的工作区同时存在
+ * 就会生成重复 key，LazyColumn 直接抛 IllegalArgumentException。这里改用路径作键，
+ * 并对完全相同的条目去重（同一路径同一名字只留一行）。
+ */
+internal fun distinctWorkspaceRows(workspaces: List<Workspace>): List<WorkspaceRowItem> {
+    val seen = HashSet<String>()
+    val out = ArrayList<WorkspaceRowItem>(workspaces.size)
+    for (ws in workspaces) {
+        // 键用「路径 + 名称」：路径在一台设备上唯一，名称能在路径为空时兜底。
+        val key = ws.path.ifBlank { ws.name } + "\u0000" + ws.name
+        if (seen.add(key)) out += WorkspaceRowItem(ws, key)
+    }
+    return out
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkspaceSheet(
     workspaces: List<Workspace>,
     current: Workspace?,
-    showExternalEntry: Boolean,
+    isLocalMode: Boolean,
     onAddExternal: () -> Unit,
     onSelect: (Workspace) -> Unit,
     onCreate: (String) -> Unit,
@@ -325,6 +346,9 @@ private fun WorkspaceSheet(
     val sheetState = rememberModalBottomSheetState()
     var showCreateDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Workspace?>(null) }
+    val createWorkspaceLabel = stringResource(
+        if (isLocalMode) R.string.workspace_new_internal else R.string.workspace_new_workspace
+    )
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -347,39 +371,42 @@ private fun WorkspaceSheet(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
-                if (showExternalEntry) {
+                if (isLocalMode) {
                     TextButton(onClick = onAddExternal) {
                         Icon(FeatherIcons.HardDrive, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(Spacing.xs))
-                        Text(stringResource(R.string.workspace_add_local_dir))
+                        Text(stringResource(R.string.workspace_add_external))
                     }
                 }
                 TextButton(onClick = { showCreateDialog = true }) {
                     Icon(FeatherIcons.Plus, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(Spacing.xs))
-                    Text(stringResource(R.string.workspace_new))
+                    Text(createWorkspaceLabel)
                 }
             }
 
             if (workspaces.isEmpty()) {
                 Text(
-                    stringResource(R.string.workspace_empty_hint),
+                    stringResource(R.string.workspace_empty_hint, createWorkspaceLabel),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = Spacing.md)
                 )
             } else {
+                // 列表 key 不能用显示名：工作区名可以是 default（外部目录名不可用时的兜底），
+                // 两个同名工作区同时存在时 LazyColumn 会直接抛 "Key already used" 崩掉。
+                val rows = remember(workspaces) { distinctWorkspaceRows(workspaces) }
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 320.dp),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    items(workspaces, key = { it.name }) { ws ->
+                    items(rows, key = { it.rowKey }) { row ->
                         WorkspaceRow(
-                            workspace = ws,
-                            selected = ws.name == current?.name,
-                            canDelete = workspaces.size > 1,
-                            onClick = { onSelect(ws) },
-                            onDelete = { pendingDelete = ws }
+                            workspace = row.workspace,
+                            selected = row.workspace.name == current?.name,
+                            canDelete = rows.size > 1,
+                            onClick = { onSelect(row.workspace) },
+                            onDelete = { pendingDelete = row.workspace }
                         )
                     }
                 }
@@ -389,6 +416,7 @@ private fun WorkspaceSheet(
 
     if (showCreateDialog) {
         CreateWorkspaceDialog(
+            title = createWorkspaceLabel,
             existingNames = workspaces.map { it.name },
             onConfirm = {
                 onCreate(it)
@@ -513,6 +541,7 @@ private fun WorkspaceRow(
 
 @Composable
 private fun CreateWorkspaceDialog(
+    title: String,
     existingNames: List<String>,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
@@ -524,7 +553,7 @@ private fun CreateWorkspaceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.workspace_new_workspace)) },
+        title = { Text(title) },
         text = {
             Column {
                 AppTextField(

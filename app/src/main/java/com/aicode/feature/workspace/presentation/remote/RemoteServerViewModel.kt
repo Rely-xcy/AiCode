@@ -108,11 +108,15 @@ class RemoteServerViewModel @Inject constructor(
     fun connectMount(id: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            val result = repository.connectMount(id)
-            val updatedFailed = if (result.isFailure) _uiState.value.failedMountIds + id else _uiState.value.failedMountIds - id
-            _uiState.value = _uiState.value.copy(isLoading = false, failedMountIds = updatedFailed)
-            if (result.isFailure) {
-                _uiState.value = _uiState.value.copy(error = result.exceptionOrNull()?.message)
+            try {
+                val result = repository.connectMount(id)
+                val updatedFailed = if (result.isFailure) _uiState.value.failedMountIds + id else _uiState.value.failedMountIds - id
+                _uiState.value = _uiState.value.copy(failedMountIds = updatedFailed)
+                if (result.isFailure) {
+                    _uiState.value = _uiState.value.copy(error = result.exceptionOrNull()?.message)
+                }
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
             }
         }
     }

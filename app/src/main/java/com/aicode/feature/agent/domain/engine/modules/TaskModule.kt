@@ -21,7 +21,8 @@ import javax.inject.Singleton
  * 任务模块：把「当前会话的任务清单」接进引擎。
  *
  * 两个口子，一前一后：
- * 1. **注入**——每轮把清单连同新鲜度放进系统提示词，让进度在上下文压到多深时都看得见
+ * 1. **注入**——每轮把清单连同新鲜度随本轮用户消息下发（[turnReminder]，不进系统提示词：
+ *    清单每轮都可能被模型改，放进 system 会打断 KV 缓存前缀），让进度在上下文压到多深时都看得见
  *    （清单存在独立表里而不是消息历史里，就是为了这个）；
  * 2. **收尾守卫**——模型要给出本轮最终回复时在边界上拦一次：这一轮在推进任务、清单里还有
  *    未完成项、清单却整轮没被动过，或清单已全部完成、收尾时却没清空，就把「清单该动却没动」
@@ -68,11 +69,22 @@ class TaskModule @Inject constructor(
         }
     }
 
-    override fun promptFragment(ctx: EngineContext): String? {
-        val sessionId = ctx.sessionId
-        val items = sessionId?.let { snapshotOf(it) }
-        // 子代理的纪律段走 [subAgentRules]（不受 inject 门禁），这里不再重复一遍
-        return renderBlock(items, ctx, withRules = !ctx.isSubAgent)
+    /**
+     * 清单与纪律规则改由 [turnReminder] 下发：清单会被模型每轮改动，放进系统提示词会让 system 变，
+     * KV 缓存的前缀整段失效。
+     */
+    override fun promptFragment(ctx: EngineContext): String? = null
+
+    /**
+     * 本轮带给模型的任务块：纪律规则（主代理）+ 清单快照（子代理只给清单，规则走 [subAgentRules]）。
+     *
+     * 快照未就绪时只说纪律、不对清单下任何断言；子代理既没清单也没规则时返回 null，不留空标题。
+     */
+    override fun turnReminder(ctx: EngineContext): String? {
+        val items = ctx.sessionId?.let { snapshotOf(it) }
+        val block = renderBlock(items, ctx, withRules = !ctx.isSubAgent).trim()
+        if (block.isEmpty()) return null
+        return "$REMINDER_HEADING\n$block"
     }
 
     /**
@@ -122,15 +134,17 @@ class TaskModule @Inject constructor(
     }
 
     private fun watch(sessionId: String) {
-        if (watchers.size >= MAX_WATCHED_SESSIONS) {
-            // 只防长期累积；被清掉的会话下一轮 promptFragment 会重新挂上
-            watchers.values.forEach { it.cancel() }
-            watchers.clear()
-        }
-        watchers.computeIfAbsent(sessionId) { id ->
-            scope.launch {
-                todoItemDao.getBySession(id).collect { rows ->
-                    snapshotBySession[id] = rows.map { it.toDomain() }
+        synchronized(watchers) {
+            if (watchers.containsKey(sessionId)) return
+            if (watchers.size >= MAX_WATCHED_SESSIONS) {
+                watchers.keys.firstOrNull()?.let { oldest ->
+                    watchers.remove(oldest)?.cancel()
+                    snapshotBySession.remove(oldest)
+                }
+            }
+            watchers[sessionId] = scope.launch {
+                todoItemDao.getBySession(sessionId).collect { rows ->
+                    snapshotBySession[sessionId] = rows.map { it.toDomain() }
                 }
             }
         }
@@ -187,6 +201,9 @@ class TaskModule @Inject constructor(
         /** 同时跟踪的会话数上限：只防长期累积。 */
         const val MAX_WATCHED_SESSIONS = 64
 
+        /** 任务块在提醒里的外层小标题：让模型知道这一段是什么。 */
+        const val REMINDER_HEADING = "## 当前任务清单"
+
         /** 清单全部完成、且这么久没再动过，才提一句「该清空或建新清单」：刚做完那一轮不念。 */
         const val ALL_DONE_QUIET_MINUTES = 30L
 
@@ -197,11 +214,13 @@ class TaskModule @Inject constructor(
         val DISCIPLINE_RULE = """
             任务清单（`todo` 工具，每轮随提示词注入，压缩上下文不会丢）：
             ① 开始多步任务（3 步以上或要多次工具调用）时先 todo(action="add") 建清单，再动手；一次性小任务不要建。
-            ② 每完成一项立刻 todo(action="update", subject="…", status="completed")，不要攒到最后一次性补。
+            ② 每完成一项立刻 todo(action="update", subject="…", status="…")：实现完先标 implemented，验证通过才标 completed；失败标 failed，受阻标 blocked，不要攒到最后一次性补。
             ③ 开始下一项时把它置为 in_progress。
             ④ 计划或需求变了（用户改主意、发现新问题、放弃某项）当场同步清单。
             ⑤ 一轮收尾前对照清单：回复里说「已完成 / 下一步」的每一项，清单里必须已经对上。
             ⑥ 清单里的任务全部完成后，用 todo(action="clear") 把整张清单一次清空、不留残余条目（完成项先留着，看得出整体进度）。
+            ⑦ 标记 completed 必须有证据：文件已存在且可读、测试已跑过、结果已核对；只写完代码没验证，保持 in_progress。
+            ⑧ 实施完成不等于验收通过；不能因为「已经生成了答案」就把任务标成完成。
             只改一项就只发那一项，不要重发整张清单；先调用工具、再写回复。
         """.trimIndent()
     }

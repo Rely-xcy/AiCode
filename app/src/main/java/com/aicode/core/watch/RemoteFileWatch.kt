@@ -1,9 +1,6 @@
 package com.aicode.core.watch
 
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.container.CommandEngine
-import com.aicode.feature.settings.data.repository.ExecutionMode
-import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import java.util.concurrent.CopyOnWriteArraySet
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -46,6 +43,26 @@ internal const val SCAN_END_MARKER = "END"
 internal const val REMOTE_SHALLOW_DEPTH = 1
 
 /**
+ * 轮询器对命令后端的唯一需求：后端已就绪时执行一条命令并回传输出。
+ *
+ * 只声明轮询真正用到的那一个方法，具体实现在 DI 层适配（见 `di/` 的绑定）。
+ */
+interface RemoteWatchCommandRunner {
+    /** 后端未就绪时返回 null（与调用方原来的「跳过本轮」语义一致）。 */
+    suspend fun runIfReady(command: String, timeoutMs: Long): RemoteWatchCommandOutput?
+}
+
+/**
+ * 一条扫描命令的结果：[output] 为原始输出，[truncated] 表示输出被后端限幅截断。
+ */
+data class RemoteWatchCommandOutput(val output: String, val truncated: Boolean)
+
+/** 轮询器对执行模式的最小需求：只关心当前是否处于远程 SSH 模式。 */
+fun interface RemoteWatchModeGate {
+    fun isRemoteSsh(): Boolean
+}
+
+/**
  * 远端（SSH）工作区文件变更的轮询器。
  *
  * 为什么是轮询：远端工作区在 SSH 服务器上，宿主没有对应目录，inotify 无从谈起；也不要求服务器
@@ -68,8 +85,8 @@ internal const val REMOTE_SHALLOW_DEPTH = 1
  */
 @Singleton
 class RemoteFileWatchPoller @Inject constructor(
-    private val commandEngine: CommandEngine,
-    private val executionModeHolder: ExecutionModeHolder
+    private val commandRunner: RemoteWatchCommandRunner,
+    private val modeGate: RemoteWatchModeGate
 ) {
     companion object {
         /** 前台轮询起止间隔：一有变化回到 [MIN_INTERVAL_MS]，连续无变化逐次翻倍到 [MAX_INTERVAL_MS]。 */
@@ -235,12 +252,11 @@ class RemoteFileWatchPoller @Inject constructor(
         }
 
         // 模式切到本地（或切回）的瞬间可能还留有订阅：本地不该被这条远端命令碰到，直接跳过本轮。
-        if (executionModeHolder.currentMode() != ExecutionMode.REMOTE_SSH) return false
+        if (!modeGate.isRemoteSsh()) return false
 
         val output = runCatching {
-            commandEngine.runCommandSyncIfReady(
+            commandRunner.runIfReady(
                 command = buildRemoteScanCommand(batch.map { RemoteScanDir(it.key.dir, it.key.depth) }, probe),
-                projectPath = null,
                 timeoutMs = COMMAND_TIMEOUT_MS
             )
         }.getOrNull()
@@ -261,7 +277,7 @@ class RemoteFileWatchPoller @Inject constructor(
             }
         }
 
-        if (output.outputTruncated) {
+        if (output.truncated) {
             synchronized(lock) { dirLimit = (batch.size / 2).coerceAtLeast(1) }
             logThrottled("truncated", "远端文件监控输出被截断，本轮丢弃并把每轮目录数降到 $dirLimit")
             return false

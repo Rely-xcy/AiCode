@@ -25,7 +25,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -39,10 +43,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionButton
+import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Trash2
 import androidx.compose.ui.res.stringResource
 import com.aicode.R
 import sh.calvin.reorderable.ReorderableItem
@@ -51,14 +61,29 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 /**
  * 提供商二级页：列表 + 空态提示。新增/编辑由顶栏「+」与点击触发 [ProviderEditorScreen]，左滑删除。
  * 每行为一组圆角卡片，长按内容区域可调整提供商顺序（持久化到 sortOrder）。
+ *
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：勾选后可批量启用 / 停用 / 删除。
+ * 多选模式下拖拽排序停用、整行点击改为勾选（与模型页一致）。
  */
 @Composable
 internal fun ProvidersSection(
     providers: List<AIProviderConfig>,
+    selection: ListSelectionState,
     onEdit: (AIProviderConfig) -> Unit,
     onDelete: (AIProviderConfig) -> Unit,
-    onReorder: (fromIndex: Int, toIndex: Int) -> Unit
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    onBatchDelete: (Set<String>) -> Unit,
+    onBatchSetEnabled: (Set<String>, Boolean) -> Unit
 ) {
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    val allKeys = remember(providers) { providers.map { it.id } }
+
+    // 列表刷新（删除 / 外部改动）后剔除已消失的选中项；全空了就退出多选，避免顶栏按钮停在选中态。
+    LaunchedEffect(allKeys, selection.isActive) {
+        selection.retainOnly(allKeys.toSet())
+        if (selection.isActive && providers.isEmpty()) selection.exit()
+    }
+
     if (providers.isEmpty()) {
         EmptyHint(stringResource(R.string.providers_empty))
         return
@@ -68,62 +93,118 @@ internal fun ProvidersSection(
         onReorder(from.index, to.index)
     }
     val hapticFeedback = LocalHapticFeedback.current
-    LazyColumn(
-        state = lazyListState,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        contentPadding = PaddingValues(top = Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        itemsIndexed(
-            items = providers,
-            key = { _, provider -> provider.id }
-        ) { _, provider ->
-            ReorderableItem(
-                state = reorderableState,
-                key = provider.id
-            ) { isDragging ->
-                // 拖拽中卡片轻微缩小（对齐 rikkahub 交互）、平滑过渡、阴影提升 + 层级前置，避免盖住相邻卡片
-                val dragScale by animateFloatAsState(
-                    targetValue = if (isDragging) 0.95f else 1f,
-                    animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
-                    label = "providerDragScale"
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == allKeys.size
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(allKeys)
+                },
+                onExit = { selection.exit() }
+            ) {
+                val enabled = selection.selectedCount > 0
+                SelectionActionButton(
+                    text = stringResource(R.string.common_batch_enable),
+                    enabled = enabled,
+                    onClick = { onBatchSetEnabled(selection.selectedKeys.toSet(), true) }
                 )
-                val dragElevation by animateDpAsState(
-                    targetValue = if (isDragging) 8.dp else 0.dp,
-                    animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
-                    label = "providerDragElevation"
+                SelectionActionButton(
+                    text = stringResource(R.string.common_batch_disable),
+                    enabled = enabled,
+                    onClick = { onBatchSetEnabled(selection.selectedKeys.toSet(), false) }
                 )
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.semanticColors.cardSurface,
-                    shadowElevation = dragElevation,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .zIndex(if (isDragging) 1f else 0f)
-                        .graphicsLayer {
-                            scaleX = dragScale
-                            scaleY = dragScale
-                        }
-                ) {
-                    ProviderItem(
-                        provider = provider,
-                        onEdit = { onEdit(provider) },
-                        onDelete = { onDelete(provider) },
-                        dragModifier = Modifier.longPressDraggableHandle(
-                            onDragStarted = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                            },
-                            onDragStopped = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                SelectionActionIconButton(
+                    icon = FeatherIcons.Trash2,
+                    contentDescription = stringResource(R.string.common_batch_delete),
+                    enabled = enabled,
+                    onClick = { showBatchDeleteConfirm = true },
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+        LazyColumn(
+            state = lazyListState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl),
+            contentPadding = PaddingValues(top = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            itemsIndexed(
+                items = providers,
+                key = { _, provider -> provider.id }
+            ) { _, provider ->
+                ReorderableItem(
+                    state = reorderableState,
+                    key = provider.id
+                ) { isDragging ->
+                    // 拖拽中卡片轻微缩小（对齐 rikkahub 交互）、平滑过渡、阴影提升 + 层级前置，避免盖住相邻卡片
+                    val dragScale by animateFloatAsState(
+                        targetValue = if (isDragging) 0.95f else 1f,
+                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                        label = "providerDragScale"
+                    )
+                    val dragElevation by animateDpAsState(
+                        targetValue = if (isDragging) 8.dp else 0.dp,
+                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                        label = "providerDragElevation"
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.semanticColors.cardSurface,
+                        shadowElevation = dragElevation,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                scaleX = dragScale
+                                scaleY = dragScale
+                            }
+                    ) {
+                        ProviderItem(
+                            provider = provider,
+                            onEdit = { onEdit(provider) },
+                            onDelete = { onDelete(provider) },
+                            selectionMode = selection.isActive,
+                            selected = selection.isSelected(provider.id),
+                            onToggleSelect = { selection.toggle(provider.id) },
+                            // 多选态不给拖拽手柄：整行点击已改为勾选，再挂长按拖拽会抢手势。
+                            dragModifier = if (selection.isActive) {
+                                Modifier
+                            } else {
+                                Modifier.longPressDraggableHandle(
+                                    onDragStarted = {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                    },
+                                    onDragStopped = {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                    }
+                                )
                             }
                         )
-                    )
+                    }
                 }
             }
         }
+    }
+
+    if (showBatchDeleteConfirm) {
+        val targets = selection.selectedKeys.toSet()
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.providers_batch_delete_title),
+            message = stringResource(R.string.providers_batch_delete_confirm, targets.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(targets)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
     }
 }
 
@@ -154,7 +235,10 @@ fun ProviderItem(
     provider: AIProviderConfig,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    dragModifier: Modifier = Modifier
+    dragModifier: Modifier = Modifier,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val sortDescription = stringResource(R.string.provider_sort_long_press)
     // 状态色与 MCP 行一致：启用用主题 tertiary（绿调），停用用 outline（灰）。
@@ -162,7 +246,10 @@ fun ProviderItem(
 
     SwipeToDeleteRow(
         onDelete = onDelete,
-        onClick = onEdit
+        onClick = onEdit,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect
     ) {
         Row(
             modifier = Modifier

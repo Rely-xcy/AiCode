@@ -9,6 +9,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.file.FileSystemLoopException
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.util.ArrayDeque
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -41,6 +45,11 @@ class WorkspacePathMapper @Inject constructor(
         const val CONTAINER_ROOT = "~/workspace"
         /** AI 配置目录在容器内的路径，绑定到宿主 [ContainerInstaller.aicodeDir]（独立于 rootfs）。 */
         const val AICODE_ROOT = "/root/.aicode"
+        /**
+         * 单次解析允许跟随的链接跳数上限。成环的链接（a→b→a）不会自己去死循环，
+         * 到上限就报 [FileSystemLoopException]，与内核 ELOOP 的判定口径一致。
+         */
+        const val MAX_LINK_HOPS = 40
     }
 
     /**
@@ -96,18 +105,104 @@ class WorkspacePathMapper @Inject constructor(
         val p = pathHomeResolver.expandHome(path.trim())
         val file = when {
             p == wsRoot || p == "$wsRoot/" || p == CONTAINER_ROOT || p == "$CONTAINER_ROOT/" -> requireWorkspaceRoot(root)
-            p.startsWith("$wsRoot/") -> File(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
+            p.startsWith("$wsRoot/") -> workspaceFile(requireWorkspaceRoot(root), p.removePrefix("$wsRoot/"))
             p == AICODE_ROOT || p == "$AICODE_ROOT/" -> aicodeRoot()
-            p.startsWith("$AICODE_ROOT/") -> File(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"))
+            p.startsWith("$AICODE_ROOT/") -> containedFile(aicodeRoot(), p.removePrefix("$AICODE_ROOT/"), "AI 配置目录")
             else -> mountedHostFile(p)
-                ?: if (p.startsWith("/")) File(rootfsRoot(), p.removePrefix("/"))
-                else File(requireWorkspaceRoot(root), p)
+                ?: if (p.startsWith("/")) containedFile(rootfsRoot(), p.removePrefix("/"), "容器镜像目录")
+                else workspaceFile(requireWorkspaceRoot(root), p)
         }
         return file
     }
 
+    /**
+     * 相对路径挂到工作区下之前做 canonical 包含校验：`../../data/...` 这类逃逸必须拒绝，
+     * 否则 readFile/listFiles 可以读出工作区之外的文件（备份导入侧已有同款校验）。
+     */
+    private fun workspaceFile(root: File, relative: String): File = containedFile(root, relative, "工作区")
+
+    /**
+     * 把相对路径拼到 [root] 下，并做 canonical 包含校验：`../../data/...` 这类逃逸必须拒绝。
+     *
+     * 三条根（工作区 / AI 配置目录 / 容器镜像目录）共用同一套校验：只做 «拼上根» 不够，
+     * 绝对路径分支同样能把 `..` 带进来（`/root/.aicode/../../data/data/...`）。
+     */
+    private fun containedFile(root: File, relative: String, label: String): File {
+        // 用纯字符串路径归一化（Path.normalize 不访问文件系统）：容器里目录可能尚未创建，
+        // canonicalFile 在那种场景下会走系统查询，不可靠。
+        val rootPath = Paths.get(root.path).toAbsolutePath().normalize()
+        val candidatePath = Paths.get(root.path, relative).toAbsolutePath().normalize()
+        if (candidatePath != rootPath && !candidatePath.startsWith(rootPath)) {
+            throw IllegalArgumentException("路径越出$label：$relative")
+        }
+        return candidatePath.toFile()
+    }
+
     /** 需要工作区根的路径在未落定时直接报错，而不是落到工作区父目录。 */
     private fun requireWorkspaceRoot(root: File?): File = root ?: throw workspaceRepository.notReadyException()
+
+    /**
+     * 逐段解析 [path] 沿途的符号链接，返回最终的宿主文件。
+     *
+     * 为什么逐段自己解，而不是交给 `File.canonicalFile`：容器里的链接文本是**容器路径**
+     * （`/etc/hosts`、`../target`），宿主机上并没有这个文件，`canonicalFile` 会把绝对目标当成
+     * 宿主绝对路径，从而读到链接文本以外的东西。这里每段都先经 [toHostFile] 落到宿主再判断是否链接，
+     * 于是链接目标走的是与普通路径**完全相同**的 [containedFile] 越界校验。
+     *
+     * 链接目标里的 `..` 在容器 `/` 处截断，无法退到宿主文件系统的上层。
+     *
+     * @param followFinalLink 为 false 时保留最后一段链接本身——删除、改名只该动链接，不该动目标。
+     */
+    fun resolveFile(path: String, followFinalLink: Boolean = true): File {
+        // 先按词法路径映射一次：`../../data/...` 这类越界的报错语义与工作区未就绪的报错
+        // 必须与改动前一致，否则链接解析会在容器根处截断 `..`，反而放过原先会被拒绝的路径。
+        toHostFile(path)
+        val expanded = pathHomeResolver.expandHome(path.trim())
+        val absolute = if (expanded.startsWith("/")) expanded else "${resolvedContainerRoot()}/$expanded"
+        val pending = ArrayDeque(absolute.split('/').filter { it.isNotEmpty() })
+        var current = "/"
+        var links = 0
+        while (pending.isNotEmpty()) {
+            val part = pending.removeFirst()
+            when (part) {
+                "." -> continue
+                ".." -> {
+                    current = current.substringBeforeLast('/', "").ifEmpty { "/" }
+                    continue
+                }
+            }
+            val candidate = current.trimEnd('/') + "/" + part
+            val linkTarget = if (followFinalLink || pending.isNotEmpty()) linkTargetOf(toHostFile(candidate)) else null
+            if (linkTarget == null) {
+                current = candidate
+                continue
+            }
+            if (++links > MAX_LINK_HOPS) throw FileSystemLoopException(path)
+            if (linkTarget.startsWith("/")) current = "/"
+            // 目标的各段先展开、再处理后面的段：提前归一化 `..` 会改变链接语义。
+            linkTarget.split('/').filter { it.isNotEmpty() }.asReversed().forEach(pending::addFirst)
+        }
+        return toHostFile(current)
+    }
+
+    /**
+     * [file] 的链接文本；不是链接、或读不出链接信息（无权限、文件系统不支持符号链接）时返回 null。
+     * 返回 null 让调用方按普通路径段处理：解析失败退化成改动前的词法行为，不能让一次异常
+     * 把整个读写链打挂。
+     */
+    private fun linkTargetOf(file: File): String? = try {
+        val candidate = file.toPath()
+        if (Files.isSymbolicLink(candidate)) Files.readSymbolicLink(candidate).toString() else null
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 宿主 [file] 的解析版本；不在三条根内的宿主路径原样返回（映射不出容器路径就没法解析）。 */
+    fun resolveHostFile(file: File, followFinalLink: Boolean = true): File {
+        val path = toContainerPath(file.absolutePath)
+        if (path == file.absolutePath) return file
+        return resolveFile(path, followFinalLink)
+    }
 
     /**
      * 把宿主路径还原为容器路径：
@@ -166,7 +261,7 @@ class WorkspacePathMapper @Inject constructor(
         for ((src, dst) in extraMounts()) {
             when {
                 p == dst || p == "$dst/" -> return File(src)
-                p.startsWith("$dst/") -> return File(src, p.removePrefix("$dst/"))
+                p.startsWith("$dst/") -> return containedFile(File(src), p.removePrefix("$dst/"), "挂载目录")
             }
         }
         return null

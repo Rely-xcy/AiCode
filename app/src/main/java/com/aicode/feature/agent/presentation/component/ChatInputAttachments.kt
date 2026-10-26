@@ -93,15 +93,19 @@ import kotlinx.coroutines.withContext
 internal fun QueuedRequestPanel(
     queuedRequests: List<QueuedRequest>,
     sessionId: String,
+    /** 非 null 时由外部决定展开态（受控）；null 时沿用本组件的会话内记忆。 */
+    expandedOverride: Boolean? = null,
     forceCollapse: Boolean = false,
+    onExpandedChange: (Boolean) -> Unit = {},
     onRemoveQueued: (String) -> Unit,
     onMoveQueued: (Int, Int) -> Unit,
     onEditQueued: (QueuedRequest) -> Unit,
     onInterjectQueued: (String) -> Unit
 ) {
     // 按会话记忆展开状态，默认展开；弹窗/键盘叠加时联动强制收起（同待办面板）。
-    var isExpanded by rememberSaveable(sessionId) { mutableStateOf(true) }
-    val effectiveExpanded = isExpanded && !forceCollapse
+    var internalExpanded by rememberSaveable(sessionId) { mutableStateOf(true) }
+    // 受控优先，forceCollapse（键盘/授权/计划审批压住）永远能再压一层。
+    val effectiveExpanded = (expandedOverride ?: internalExpanded) && !forceCollapse
     // 拖拽中读取最新队列与回调：pointerInput 只在 key 变化时重启，用 rememberUpdatedState 避免捕获陈旧值。
     val currentQueue by rememberUpdatedState(queuedRequests)
     val moveQueued by rememberUpdatedState(onMoveQueued)
@@ -128,7 +132,13 @@ internal fun QueuedRequestPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(Radius.sm))
-                    .clickable { isExpanded = !isExpanded }
+                    .clickable {
+                        if (expandedOverride == null) {
+                            internalExpanded = !internalExpanded
+                        } else {
+                            onExpandedChange(!effectiveExpanded)
+                        }
+                    }
                     .padding(horizontal = Spacing.md, vertical = Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically
             ) {

@@ -39,6 +39,10 @@ private val fileDescriptorMethod: Method? by lazy {
  * 「仅开启 SO_KEEPALIVE」。
  */
 fun Socket.applyTcpKeepAlive() {
+    // 连接池可能把这条连接关掉（对端断开、空闲回收）后才轮到本回调，此时设置只会抛
+    // 「Socket is closed」与 setsockopt EBADF，属预期情况而非故障，直接跳过。
+    if (isClosed || !isConnected) return
+
     runCatching { keepAlive = true }
         .onFailure { FileLogger.w(TAG, "开启 SO_KEEPALIVE 失败", it) }
 

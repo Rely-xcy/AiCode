@@ -15,11 +15,16 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -194,14 +199,35 @@ class ModelMetadataService @Inject constructor(
     )
 
     companion object {
+        /** reasoning_options 数组（统一成 JsonObject 列表，非数组/空返回空表）。 */
+        private fun reasoningOptionEntries(reasoningOptions: JsonElement?): List<JsonObject> =
+            reasoningOptions?.takeIf { it !is JsonNull }
+                ?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+                .orEmpty()
+
         /** 从 models.dev 的 reasoning_options 数组中提取 effort 类型的档位 values；无 effort 档位时返回空列表。 */
         fun parseReasoningOptions(reasoningOptions: JsonElement?): List<String> =
-            (reasoningOptions as? JsonArray)
-                ?.mapNotNull { it as? JsonObject }
-                ?.firstOrNull { (it["type"] as? JsonPrimitive)?.content == "effort" }
-                ?.let { it["values"] as? JsonArray }
-                ?.mapNotNull { (it as? JsonPrimitive)?.content }
+            reasoningOptionEntries(reasoningOptions)
+                .firstOrNull { it["type"]?.jsonPrimitive?.content == "effort" }
+                ?.get("values")?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 .orEmpty()
+
+        /**
+         * models.dev 的 `toggle` 类型：声明该模型可以开关思考。
+         * 具体用哪个线上字段关闭由 [com.aicode.feature.agent.domain.provider.ReasoningResolver] 按厂商判定。
+         */
+        fun parseReasoningToggle(reasoningOptions: JsonElement?): Boolean =
+            reasoningOptionEntries(reasoningOptions).any { it["type"]?.jsonPrimitive?.content == "toggle" }
+
+        /** models.dev 的 `budget_tokens` 类型：返回 (min, max)，非预算型返回 null。 */
+        fun parseReasoningBudget(reasoningOptions: JsonElement?): Pair<Int?, Int?>? =
+            reasoningOptionEntries(reasoningOptions)
+                .firstOrNull { it["type"]?.jsonPrimitive?.content == "budget_tokens" }
+                ?.let { entry ->
+                    entry["min"]?.jsonPrimitive?.intOrNull to entry["max"]?.jsonPrimitive?.intOrNull
+                }
 
         /**
          * 解析后的模型目录：[byProvider] 保留目录里的原始 id 大小写；[lowerByProvider] 结构相同但键统一小写
@@ -227,10 +253,12 @@ class ModelMetadataService @Inject constructor(
                     val outputModalities = (modalities?.get("output") as? JsonArray)
                         ?.mapNotNull { (it as? JsonPrimitive)?.content }
                         .orEmpty()
-                    val cost = model["cost"] as? JsonObject
-                    val reasoningOptions = parseReasoningOptions(model["reasoning_options"])
+                    val cost = model["cost"]?.jsonObject
+                    val reasoningOptions = model["reasoning_options"]
+                    val reasoningLevels = parseReasoningOptions(reasoningOptions)
+                    val reasoningBudget = parseReasoningBudget(reasoningOptions)
                     catalogKey to ModelMetadata(
-                        id = (model["id"] as? JsonPrimitive)?.content ?: "",
+                        id = model["id"]?.jsonPrimitive?.content ?: "",
                         providerId = providerId,
                         displayName = (model["name"] as? JsonPrimitive)?.content
                             ?: (model["id"] as? JsonPrimitive)?.content.orEmpty(),
@@ -242,14 +270,17 @@ class ModelMetadataService @Inject constructor(
                         // 图像输出能力：models.dev 的 modalities.output 标注，或 Nano Banana 系 id 后缀兜底
                         // （内置快照缺 output 模态时也能识别 gemini-*-image 模型）。
                         supportsImageOutput = "image" in outputModalities ||
-                            ((model["id"] as? JsonPrimitive)?.content.orEmpty().endsWith("-image")),
-                        supportsReasoning = (model["reasoning"] as? JsonPrimitive)?.booleanOrNull == true,
-                        supportsCustomTemperature = (model["temperature"] as? JsonPrimitive)?.booleanOrNull == true,
-                        reasoningEffortOptions = reasoningOptions.takeIf { it.isNotEmpty() },
-                        inputCostUsdPerM = (cost?.get("input") as? JsonPrimitive)?.doubleOrNull,
-                        outputCostUsdPerM = (cost?.get("output") as? JsonPrimitive)?.doubleOrNull,
-                        cacheReadCostUsdPerM = (cost?.get("cache_read") as? JsonPrimitive)?.doubleOrNull,
-                        cacheWriteCostUsdPerM = (cost?.get("cache_write") as? JsonPrimitive)?.doubleOrNull,
+                            (model["id"]?.jsonPrimitive?.content.orEmpty().endsWith("-image")),
+                        supportsReasoning = model["reasoning"]?.jsonPrimitive?.booleanOrNull == true,
+                        supportsCustomTemperature = model["temperature"]?.jsonPrimitive?.booleanOrNull == true,
+                        reasoningLevels = reasoningLevels.takeIf { it.isNotEmpty() },
+                        reasoningCanDisable = parseReasoningToggle(reasoningOptions),
+                        reasoningBudgetMin = reasoningBudget?.first,
+                        reasoningBudgetMax = reasoningBudget?.second,
+                        inputCostUsdPerM = cost?.get("input")?.jsonPrimitive?.doubleOrNull,
+                        outputCostUsdPerM = cost?.get("output")?.jsonPrimitive?.doubleOrNull,
+                        cacheReadCostUsdPerM = cost?.get("cache_read")?.jsonPrimitive?.doubleOrNull,
+                        cacheWriteCostUsdPerM = cost?.get("cache_write")?.jsonPrimitive?.doubleOrNull,
                         source = ModelMetadata.Source.MODELS_DEV
                     )
                 }.toMap()

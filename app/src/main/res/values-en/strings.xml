@@ -1,6 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AiCode</string>
+    <string name="plan_mode_refinement_requested">The user chose to refine the plan. Remain in PLAN and wait for specific feedback before making changes or requesting to exit again.</string>
+    <string name="plan_mode_approved_build">The plan was approved. BUILD mode is active; implement within the approved scope.</string>
+    <string name="plan_mode_approved_auto">The plan was approved and AUTO mode restored. Implement within the approved scope and follow AUTO permission rules.</string>
+    <string name="plan_mode_external_build">The user switched to BUILD. Continue within the current task scope and mode permissions.</string>
+    <string name="plan_mode_external_auto">The user switched to AUTO. Continue within the current task scope and mode permissions.</string>
+    <string name="tool_plan_mode_denied">This operation was not executed because PLAN mode allows read-only exploration. To implement changes, submit the plan and request to exit PLAN.</string>
+    <string name="tool_permission_rule_denied">Permission rules prohibit this tool call.</string>
+    <string name="tool_command_rule_denied">Permission rules prohibit this command.</string>
+    <string name="tool_command_rule_denied_detail">Permission rules prohibit this command. Matched rule: %1$s; offending segment: %2$s; suggestion: rewrite it in an allowed form, or ask the user to update the rule under Tool permissions and retry.</string>
+    <string name="tool_command_unanalyzable_reason">The command contains constructs that cannot be statically analyzed (%1$s); it can only be allowed once and cannot be remembered.</string>
+    <string name="tool_shizuku_confirmation_reason">Shizuku operates on Android as adb shell. Each call requires confirmation and cannot be saved as always allowed.</string>
+    <string name="tool_subagent_message_delivered">Message delivered. A running subagent will receive it shortly; an idle subagent will resume to process it.</string>
+    <string name="tool_subagent_plan_readonly_warning">PLAN mode is active: subagents inherit read-only permissions, so file edits and commands will be blocked. If implementation is needed, request to exit PLAN before delegating.</string>
+    <string name="tool_subagent_tier_pinned">This subagent pins its model (%1$s), so the requested "%2$s" tier was ignored.</string>
+    <string name="tool_subagent_tier_fallback">The requested "%1$s" tier is not configured or its provider is unavailable; using the "%2$s" tier (%3$s) instead.</string>
+    <string name="tool_subagent_tier_unavailable">The requested "%1$s" tier is not configured or its provider is unavailable; this subagent will inherit the current session model.</string>
+    <string name="tool_subagent_tier_default_applied">No tier was requested; using the model configured for the \"%1$s\" tier (\"%2$s\").</string>
+    <string name="tool_subagent_provider_unresolved">The provider "%1$s" in this subagent definition was not found (missing or name mismatch); the parent session provider will be combined with the definition model "%2$s", which may not be callable.</string>
+    <string name="tool_subagent_provider_ambiguous">The subagent "%1$s" pins model "%2$s" but no provider, and several enabled providers offer a model with that same name (%3$s). Nothing was dispatched, to avoid using the wrong provider; set `provider` in the subagent definition and retry.</string>
+    <string name="tool_subagent_pinned_provider_resolved">The subagent "%1$s" sets model "%2$s" without a provider; it was bound to the only provider offering it ("%3$s").</string>
+    <string name="tool_subagent_pinned_provider_unlisted">The subagent "%1$s" sets model "%2$s" without a provider, and no enabled provider lists that model; the parent session provider will be used, which may not be callable.</string>
+    <!-- Subagent model tiers -->
+    <string name="settings_subagent_tiers_header">Subagent model tiers</string>
+    <string name="settings_subagent_tier_light">Light</string>
+    <string name="settings_subagent_tier_standard">Balanced</string>
+    <string name="settings_subagent_tier_strong">Strong</string>
+    <string name="settings_subagent_tier_unconfigured">Not configured</string>
+    <!-- Subagent dispatch card -->
+    <string name="subagent_dispatch_title">Subagent Tasks</string>
+    <string name="subagent_dispatch_count">%1$d tasks dispatched</string>
+    <string name="subagent_card_default_agent">Subagent</string>
+    <string name="subagent_card_status_dispatched">Dispatched</string>
+    <string name="subagent_card_status_running">Running</string>
+    <string name="subagent_card_status_completed">Completed</string>
+    <string name="subagent_card_status_failed">Failed</string>
+    <string name="subagent_card_status_stopped">Stopped</string>
+    <string name="subagent_card_expand">Show full summary</string>
+    <string name="subagent_card_collapse">Collapse summary</string>
+    <string name="subagent_card_changed_files">%1$d files changed</string>
+    <string name="subagent_card_open">Open session</string>
+    <string name="subagent_card_stop">Stop</string>
+    <string name="chat_context_usage_estimated">Estimated input budget usage: %1$d%%</string>
+    <string name="agent_input_budget_exceeded">Context exceeds the model input budget. Shorten the input or reduce tool definitions.</string>
 
     <!-- Settings menu titles -->
     <string name="settings_title">Settings</string>
@@ -46,13 +89,22 @@
     <string name="settings_sendfile_max_size_desc">Per-file size cap; exceeding it fails the whole batch</string>
     <string name="settings_mb_value">%1$d MB</string>
     <string name="settings_sendfile_max_size_input_hint">MB, an integer greater than 0</string>
+    <string name="settings_general_goal">Goal</string>
+    <string name="settings_goal_max_turns">Max continuation turns</string>
+    <string name="settings_goal_max_turns_desc">Stop the autonomous loop after this many turns</string>
+    <string name="settings_turns_value">%1$d turns</string>
+    <string name="settings_goal_max_turns_input_hint">Integer number of turns greater than 0</string>
+    <string name="settings_goal_max_tokens">Token budget</string>
+    <string name="settings_goal_max_tokens_desc">Cap on input+output tokens consumed by the autonomous loop</string>
+    <string name="settings_tokens_value">%1$d</string>
+    <string name="settings_goal_max_tokens_input_hint">Integer not less than 1000</string>
     <string name="settings_vision_model">Vision Model</string>
     <string name="settings_compaction_model">Compaction Model</string>
     <string name="settings_title_model">Title Model</string>
     <string name="settings_image_gen_model">Image Generation Model</string>
     <string name="settings_mcp">MCP Servers</string>
     <string name="settings_skills">Skills</string>
-    <string name="settings_memory">Long-term memory</string>
+    <string name="settings_memory">Memory</string>
     <string name="settings_container">Container &amp; Images</string>
     <string name="settings_log_no_files">No log files yet</string>
     <string name="settings_log_read_failed">Failed to read log: %1$s</string>
@@ -70,6 +122,8 @@
     <string name="settings_shizuku_peer_title">Connected as</string>
     <string name="settings_shizuku_peer_adb">adb shell (uid 2000)</string>
     <string name="permission_root_not_rememberable">This tool acts on the host Android system as device root (uid 0). High risk, so only one-time approval is allowed and it cannot be remembered</string>
+    <string name="tool_root_permission_title">Confirm root command</string>
+    <string name="tool_root_permission_details">Will run on the Android system as device root (uid 0) (read-only/debug commands only).\nTimeout: %1$d s</string>
     <string name="root_channel_title">Device root channel</string>
     <string name="root_channel_desc">The Root tool and the virtual display both require device root; tap to check</string>
     <string name="root_channel_status_unknown">Not checked</string>
@@ -112,6 +166,7 @@
     <string name="settings_token_stats_calls_suffix2">%1$d calls</string>
     <string name="settings_token_stats_col_model">Model</string>
     <string name="settings_token_stats_col_reasoning_effort">Effort</string>
+    <string name="settings_token_stats_col_reasoning_wire">Sent as</string>
     <string name="settings_token_stats_col_provider">Vendor</string>
     <string name="settings_token_stats_col_input">Input</string>
     <string name="settings_token_stats_col_output">Output</string>
@@ -264,6 +319,10 @@
     <string name="settings_network_guide_more">See the online docs for more devices and details</string>
     <string name="settings_agent_sound_title">Agent completion notification</string>
     <string name="settings_agent_sound_subtitle">Pop a notification when agent finishes in background</string>
+    <string name="settings_live_notification_title">Live notifications</string>
+    <string name="settings_live_notification_subtitle">Show live progress notifications while the AI works in the background</string>
+    <string name="settings_approval_notification_title">Approval notifications</string>
+    <string name="settings_approval_notification_subtitle">Notify when the AI requests permission, asks a question, or waits for plan approval</string>
     <string name="agent_complete_notification_title">Task complete</string>
     <string name="agent_complete_notification_body">Tap to view</string>
     <string name="agent_complete_notification_background_body">Background task "%1$s" finished</string>
@@ -275,6 +334,20 @@
     <string name="notification_keepalive_enabled">Keepalive enabled</string>
     <string name="notification_channel_agent_complete">Agent completion notifications</string>
     <string name="notification_channel_agent_complete_desc">Notifications shown when the agent finishes in background</string>
+    <string name="notification_channel_agent_live">AI live progress</string>
+    <string name="notification_channel_agent_live_desc">Notifications showing the current progress while the AI works in the background</string>
+    <string name="notification_agent_live_title_multi">%1$d tasks running</string>
+    <string name="notification_channel_agent_approval">Approval notifications</string>
+    <string name="notification_channel_agent_approval_desc">Notifications shown when the AI requests permission, asks a question, or waits for plan approval in the background</string>
+    <string name="notification_approval_title">AI is waiting for your confirmation</string>
+    <string name="notification_approval_multi_title">%1$d tasks awaiting confirmation</string>
+    <string name="notification_approval_needed">Approval needed</string>
+    <string name="notification_approval_label_permission">Permission required</string>
+    <string name="notification_approval_label_question">Answer required</string>
+    <string name="notification_approval_label_plan">Plan approval</string>
+    <string name="notification_approval_action_allow">Allow</string>
+    <string name="notification_approval_action_reject">Reject</string>
+    <string name="notification_approval_action_approve_plan">Approve</string>
     <string name="settings_app_permissions">App Permissions</string>
     <string name="settings_permission_apk_install">Install unknown apps</string>
     <string name="settings_permission_apk_install_desc">Allow installing APK packages</string>
@@ -311,6 +384,7 @@
     <string name="common_allow">Allow</string>
     <string name="common_close">Close</string>
     <string name="common_clear">Clear</string>
+    <string name="common_search">Search</string>
     <string name="common_more">More</string>
     <string name="workbench_split_handle">Drag to resize panes</string>
     <string name="common_other">Other</string>
@@ -336,6 +410,10 @@
     <string name="common_show">Show</string>
     <string name="common_local">Local</string>
     <string name="common_model">Model</string>
+    <!-- Level name followed by its API value, e.g. "Max (max)", to match model docs and error text. -->
+    <string name="common_label_with_api">%1$s (%2$s)</string>
+    <!-- Provider + model: the same model name can exist under several providers. -->
+    <string name="common_provider_with_model">%1$s · %2$s</string>
     <string name="common_add">Add</string>
     <string name="credential_add">Add Credential</string>
     <string name="common_username">Username</string>
@@ -397,6 +475,17 @@
     <string name="chat_reasoning_effort_high">High</string>
     <string name="chat_reasoning_effort_xhigh">Extra high</string>
     <string name="chat_reasoning_effort_max">Max</string>
+    <string name="chat_reasoning_toggle">Thinking</string>
+    <string name="chat_reasoning_off_short">Off</string>
+    <string name="chat_reasoning_default_tag">Default</string>
+    <string name="chat_reasoning_effective_tag">Active</string>
+    <string name="chat_reasoning_effective">Effective: %1$s</string>
+    <string name="chat_reasoning_unknown_hint">Levels are unknown for this model, so the selected level may not take effect</string>
+    <string name="chat_reasoning_cannot_disable">This model always thinks; the lowest level is used instead</string>
+    <string name="chat_reasoning_endpoint_weak">This endpoint may ignore &quot;None&quot;; switch to the provider\'s Responses endpoint to fully disable thinking</string>
+    <string name="provider_model_section_reasoning">Reasoning levels</string>
+    <string name="provider_model_reasoning_hint">Tick only the levels this model really accepts; leave all unticked to use the built-in capability table</string>
+    <string name="provider_model_reasoning_can_disable">Thinking can be turned off</string>
     <string name="chat_open_file_missing">File not found or has been moved</string>
     <string name="chat_open_file_unavailable">Cannot read this file: the connection is lost or the workspace is not ready yet, please try again later</string>
     <string name="chat_open_file_unshareable">This file\'s location cannot be shared with other apps</string>
@@ -424,13 +513,14 @@
     <string name="agent_stopped_by_user">Stopped by user</string>
     <string name="agent_tool_executing">%1$s running…</string>
     <string name="agent_stop_refusal">The model declined to answer under its content safety policy.</string>
-    <string name="agent_stop_context_exceeded">This request exceeds the model\'s context window. Compact the context or start a new session.</string>    <string name="agent_context_no_compaction">No compaction needed (too few messages)</string>
+    <string name="agent_stop_context_exceeded">This request exceeds the model\'s context window. Compact the context or start a new session.</string>
+    <string name="agent_stop_server_overloaded">The model service is overloaded (its own CPU threshold was hit and it shed load), and automatic retries did not succeed. Retry in a moment, or switch model / provider.</string>    <string name="agent_context_no_compaction">No compaction needed (too few messages)</string>
     <string name="agent_compaction_failed">Compaction failed: %1$s</string>
     <!-- About -->
     <string name="about_version">Version</string>
     <string name="about_github_repo">GitHub Repository</string>
     <string name="about_license">Open Source License</string>
-    <string name="about_description">AI-powered code editor running on Android · Built-in Terminal · AI Agent · MCP Protocol</string>
+    <string name="about_description">Universal AI Coding Agent for Android · Linux dev environment · Local &amp; remote SSH</string>
     <string name="about_check_update">Check for updates</string>
     <string name="about_checking_update">Querying GitHub for the latest version…</string>
     <string name="about_up_to_date">Already up to date</string>
@@ -447,8 +537,14 @@
     <string name="about_update_channel">Update Channel</string>
     <string name="update_channel_stable">Stable</string>
     <string name="update_channel_stable_desc">Stable releases only</string>
-    <string name="update_channel_latest">Preview</string>
-    <string name="update_channel_latest_desc">Also detects pre-releases (RC)</string>
+    <string name="update_channel_beta">Beta</string>
+    <string name="update_channel_beta_desc">Beta builds, may contain unfinished features</string>
+    <string name="update_channel_rc">RC</string>
+    <string name="update_channel_rc_desc">Release candidates, close to stable</string>
+    <string name="update_channel_dev">Dev</string>
+    <string name="update_channel_dev_desc">Development builds, updated per commit</string>
+    <string name="update_channel_debug">Debug</string>
+    <string name="update_channel_debug_desc">Debug builds, for troubleshooting only</string>
     <string name="about_no_changelog">No changelog available</string>
     <!-- fork-only: self-hosted update source (drop these three fork_update_ keys before an upstream PR) -->
     <string name="fork_update_release_title">%1$s (%2$s)</string>
@@ -478,6 +574,19 @@
     <string name="about_update_verify_not_newer">Package version is not newer than the installed one</string>
     <string name="about_update_install_failed">No app available to install packages</string>
 
+    <string name="agreement_title">Welcome to AiCode</string>
+    <string name="agreement_terms">User Agreement</string>
+    <string name="agreement_privacy">Privacy Policy</string>
+    <string name="agreement_notice_prefix">"Before using AiCode, please read and agree to the "</string>
+    <string name="agreement_terms_link">User Agreement</string>
+    <string name="agreement_notice_conjunction">" and "</string>
+    <string name="agreement_privacy_link">Privacy Policy</string>
+    <string name="agreement_notice_suffix">" to understand the usage rules and data handling practices.\n\nBy tapping “Agree and continue”, you confirm that you have read and agree to both documents."</string>
+    <string name="agreement_accept">Agree and continue</string>
+    <string name="agreement_decline">Disagree</string>
+    <string name="agreement_terms_url">https://aicode.murk.top/en/terms</string>
+    <string name="agreement_privacy_url">https://aicode.murk.top/en/privacy</string>
+
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>
     <string name="ask_supplement">Supplement</string>
@@ -487,6 +596,21 @@
 
     <!-- Backup -->
     <string name="backup_exported">Backup exported</string>
+    <!-- Export summary: how many workspace files were written, which workspaces were skipped and why -->
+    <string name="backup_export_summary_no_workspaces">Workspace files were not selected, so this backup contains none.</string>
+    <string name="backup_export_stat_workspace_files">· Workspace Files: %1$s (%2$s workspaces)</string>
+    <string name="backup_export_stat_skipped_workspaces">· Skipped Workspaces: %1$s (%2$s)</string>
+    <string name="backup_export_skipped_workspace_item">%1$s (%2$s)</string>
+    <string name="backup_export_skipped_workspaces_more">%1$s and %2$s more</string>
+    <string name="backup_export_skipped_name_separator">", "</string>
+    <string name="backup_export_skip_remote_not_connected">remote not connected, files unreadable</string>
+    <string name="backup_export_skip_remote_unsupported">remote workspace files are not exported</string>
+    <string name="backup_export_skip_host_dir_missing">host directory missing</string>
+    <string name="backup_export_skip_empty">no files</string>
+    <string name="backup_export_skip_read_failed">read failed</string>
+    <string name="backup_export_remote_workspace_missing">Remote workspace files were not included: connect in remote mode and export again</string>
+    <!-- Keys are bound to the device Keystore, so undecryptable ones can only travel as ciphertext -->
+    <string name="backup_export_stat_undecryptable_secrets">· %1$s keys/sensitive fields could not be decrypted on this device and were exported as ciphertext (re-entry needed on another device)</string>
     <string name="backup_write_failed">Write failed: %1$s</string>
     <string name="backup_read_failed">Failed to read backup file</string>
     <string name="backup_export_title">Export Backup</string>
@@ -495,23 +619,35 @@
     <string name="backup_import_subtitle">Restore data from backup file</string>
     <string name="backup_set_password">Set export password</string>
     <string name="backup_password_hint">Leave empty for unencrypted tar.gz; enter a password for AES-GCM encryption</string>
+    <string name="backup_password_hint_with_secrets">This backup includes login credentials, so a password is required; exporting is blocked while it is empty</string>
+    <string name="backup_secrets_password_required">Login credentials are included — set an export password first</string>
     <string name="backup_export_btn">Export</string>
     <string name="backup_password_input">Enter backup password</string>
     <string name="backup_password_optional_hint">Leave empty if backup is unencrypted</string>
     <string name="backup_import_btn">Import</string>
     <string name="backup_operation_failed">Operation failed</string>
     <string name="backup_import_done">Import complete</string>    <string name="backup_actions">Actions</string>
-    <string name="backup_select_data">Select export data</string>
+    <string name="backup_import_done_secrets_need_refill">Import complete (some keys need re-entry)</string>
+    <string name="backup_select_data">Data</string>
     <string name="backup_data_remote">Connections &amp; Sync</string>
-    <string name="backup_data_chat_history">Chat History</string>
+    <string name="backup_data_chat_history">Chat</string>
     <string name="backup_data_mcp">MCP Servers</string>
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
     <string name="backup_data_workspace">Workspace Files</string>
+    <string name="backup_data_memory">Long-term Memory</string>
+    <string name="backup_data_memory_hint">Global and current workspace memory files; off by default</string>
+    <string name="backup_data_session_briefs">Session Working State</string>
+    <string name="backup_data_session_briefs_hint">Session briefs and current progress; off by default</string>
+    <string name="backup_data_login_secrets">Credentials</string>
+    <string name="backup_data_login_secrets_hint_off">Excludes git tokens, SSH private keys and passphrases, network backup target keys, MCP OAuth tokens, AI provider API keys and proxy passwords, connection passwords</string>
+    <string name="backup_data_login_secrets_hint_on">The backup file will contain credentials usable for signing in; keep it in your own safe keeping</string>
+    <string name="backup_data_login_secrets_password_hint">Login credentials are included: an export password is required, exporting is blocked while it is empty</string>
     <string name="backup_data_skills_agents">Skills &amp; Subagents</string>
     <string name="backup_data_panel_scripts">Panel Scripts</string>
     <string name="backup_workspace_git_hint">Workspace files are best backed up via Git; the export here is only a fallback</string>
     <string name="backup_password_label">Password (optional)</string>
+    <string name="backup_password_label_required">Password (required)</string>
     <string name="backup_processing">Processing</string>
     <string name="backup_processing_data">Processing data…</string>
     <string name="backup_restored_data">Restored data:</string>
@@ -521,14 +657,23 @@
     <string name="backup_stat_chat_sessions">· Chat Sessions: %1$s</string>
     <string name="backup_stat_chat_messages">· Chat Messages: %1$s</string>
     <string name="backup_stat_todo_items">· Todo Items: %1$s</string>
+    <string name="backup_stat_session_briefs">· Session Working States: %1$s</string>
     <string name="backup_stat_mcp_servers">· MCP Servers: %1$s</string>
     <string name="backup_stat_permission_rules">· Global Permission Rules: %1$s</string>
     <string name="backup_stat_workspace_files">· Workspace Files: %1$s</string>
+    <string name="backup_stat_memory_files">· Memory Files: %1$s</string>
+    <string name="backup_stat_skipped_security">· Skipped %1$s security-sensitive entries (.git hooks/config)</string>
+    <string name="backup_stat_skipped_workspace_files">· Skipped Workspace Files: %1$s (target workspace unavailable, e.g. remote not connected)</string>
+    <string name="backup_stat_undecryptable_secrets">· %1$s keys/sensitive fields could not be decrypted on this device; re-enter them in Settings</string>
+    <string name="backup_stat_secrets_all_restored">· All keys and sensitive fields restored</string>
     <string name="backup_stat_skill_files">· Skill Files: %1$s</string>
     <string name="backup_stat_subagent_files">· Subagent Files: %1$s</string>
     <string name="backup_stat_panel_scripts">· Panel Scripts: %1$s</string>
+    <string name="backup_stat_login_secrets">· Credentials: %1$s</string>
+    <string name="backup_stat_skipped_login_secrets">· Skipped %1$s credential item(s) (write failure or unrecognized format); please re-enter them in Settings</string>
     <string name="backup_skills_agents_config_covered">Skill and subagent enable states covered</string>
     <string name="backup_settings_covered">Theme, keepalive, logging, vision, and sync preferences covered</string>
+    <string name="backup_restore_remote_hint">Note: remote chat history only shows in remote mode; connect over SSH to see it.</string>
     <string name="backup_restore_workspaces_title">Restore workspaces</string>
     <string name="backup_restore_workspaces_warning">Files in local workspaces with the same name will be overwritten and cannot be undone. Select carefully.</string>
     <string name="backup_restore_workspaces_select_all">Select all</string>
@@ -539,6 +684,8 @@
     <string name="backup_export_failed">Export failed</string>
     <string name="backup_wrong_password">Wrong backup password, or the encrypted backup file is corrupted</string>
     <string name="backup_import_failed">Import failed</string>
+    <string name="backup_space_insufficient">Not enough storage: this operation needs about %1$s but only %2$s is available. Free up space and try again (nothing has been written).</string>
+    <string name="backup_import_partial">Restore interrupted: %1$s\n\nSome data was already written; re-importing will not create duplicates:\n%2$s</string>
 
     <!-- 网络备份 -->
     <string name="backup_net_section">Cloud backup</string>
@@ -547,8 +694,11 @@
     <string name="backup_net_add_target">Add backup target</string>
     <string name="backup_net_edit_target">Edit backup target</string>
     <string name="backup_net_no_target">No cloud backup target yet</string>
+    <string name="backup_net_no_target_hint">Tap + in the top right to add a WebDAV or S3 backup target</string>
     <string name="backup_net_upload">Upload</string>
     <string name="backup_net_upload_short">Upload</string>
+    <string name="backup_net_upload_password_hint">The backup will be uploaded to the cloud. A password is required (AES-GCM) to keep API keys, SSH credentials, etc. from being exposed in plain text</string>
+    <string name="backup_net_upload_password_required">An encryption password is required for cloud backup</string>
     <string name="backup_net_upload_subtitle">Export the current backup and upload to the selected target</string>
     <string name="backup_net_restore">Restore from cloud</string>
     <string name="backup_net_restore_subtitle">Download a backup from the selected target and restore</string>
@@ -673,6 +823,7 @@
     <string name="chat_queue_remove">Remove from queue</string>
     <string name="chat_queue_edit">Edit queued message</string>
     <string name="chat_queue_interject">Insert to AI now</string>
+    <string name="chat_interjected_ack">Interjected: %1$s</string>
     <string name="chat_queue_drag">Drag to reorder</string>
     <string name="chat_upload_file">Upload File</string>
     <string name="chat_upload_image">Upload Image</string>
@@ -691,6 +842,23 @@
     <string name="permission_rules_unconfirmed_project_reason">The project-level permission rules cannot be read right now (workspace not ready or read failed), so a project-level DENY rule cannot be ruled out. To avoid bypassing project permissions, this call can only be allowed once and cannot be remembered</string>
     <string name="permission_rules_unconfirmed_global_title">Global permission rules are unavailable</string>
     <string name="permission_rules_unconfirmed_global_reason">The global permission rules cannot be read right now (file read or parse failed), so a global DENY rule cannot be ruled out. To avoid bypassing global permissions, this call can only be allowed once and cannot be remembered</string>
+    <!-- Permission dialog and denial reasons: user-visible strings produced by ToolPermissionPolicyEngine -->
+    <string name="permission_shizuku_not_rememberable">Shizuku operates on the host Android system directly as adb shell. High risk, so only one-time approval is allowed and it cannot be remembered</string>
+    <string name="permission_plan_mode_deny">PLAN mode is active and the system sandbox forbids changing system state or running write operations. In plan mode, only use read-only tools to explore the code; do not try to modify files or run commands.</string>
+    <string name="permission_deny_tool_by_project_rule">This tool is forbidden by the project permission rules</string>
+    <string name="permission_deny_command_by_project_rule">This command is forbidden by the project permission rules</string>
+    <string name="permission_elevation_title">Confirm privileged operation</string>
+    <string name="permission_elevation_not_rememberable">The command hit the built-in safety protection. Elevation is allowed once only and cannot be remembered</string>
+    <string name="permission_deny_with_elevate_hint">%1$s. Instead: (1) split it into separate commands and call them individually (each is judged on its own); (2) if you really need it as one command, retry with `%2$s: true` and the user will be asked; (3) use the dedicated tools for reading, searching and listing. Do not work around this check by wrapping it in a script or a nested shell.</string>
+    <string name="permission_non_rememberable_capabilities">This tool modifies the agent configuration, the container environment, or invokes external dynamic tools. To reduce the risk of over-approval, it can only be allowed once</string>
+    <string name="permission_rm_unrememberable">High-risk delete (recursive, wildcard, or forced batch delete). To keep your data safe it cannot be remembered and can only be allowed once</string>
+    <string name="permission_rm_deny_root">Safety protection: high-risk delete blocked (deleting the root directory)</string>
+    <string name="permission_rm_deny_relative">Safety protection: high-risk delete blocked (global or relative-path wildcard delete)</string>
+    <string name="permission_rm_deny_home">Safety protection: high-risk delete blocked (deleting the home directory)</string>
+    <string name="permission_rm_deny_workspace">Safety protection: high-risk delete blocked (deleting the workspace root)</string>
+    <string name="permission_rm_deny_tmp">Safety protection: high-risk delete blocked (deleting the whole system temp directory)</string>
+    <string name="permission_rm_deny_system_dir">Safety protection: high-risk delete blocked (deleting a critical system directory)</string>
+    <string name="permission_rm_deny_unanalyzable">Safety protection: the command contains constructs that cannot be statically analyzed (command substitution, subshell, absolute-path redirection) and looks destructive, so it cannot be confirmed safe</string>
     <string name="chat_plan_completed">Plan completed</string>
     <string name="chat_continue_feedback">Continue feedback</string>
     <string name="chat_approve_and_implement">Approve and implement</string>
@@ -750,12 +918,29 @@
     <string name="chat_context_compressed">Context compressed</string>
     <string name="chat_compaction_failed">Context compaction failed</string>
     <string name="chat_compressing_context">Compressing context</string>
+    <string name="chat_compaction_progress">Compacting context (%1$d/%2$d)</string>
     <string name="chat_retrying">Retrying %1$s/%2$s</string>
     <string name="chat_key_switched">Switched to key %1$d of %2$d</string>
+    <string name="chat_goal_label">Goal · %1$s</string>
+    <string name="chat_goal_status_active">Active</string>
+    <string name="chat_goal_status_paused">Paused</string>
+    <string name="chat_goal_status_completed">Completed</string>
+    <string name="chat_goal_status_blocked">Blocked</string>
+    <string name="chat_goal_status_exhausted">Budget exhausted</string>
+    <string name="chat_goal_pause">Pause goal</string>
+    <string name="chat_goal_resume">Resume goal</string>
+    <string name="chat_goal_clear">Clear goal</string>
+    <string name="chat_goal_auto_approve_hint">Tools are auto-approved; pause to restore per-call confirmation</string>
     <string name="chat_error_title">Request failed</string>
+    <string name="network_error_dns">DNS resolution failed: the host has no usable address. Check your network, Wi-Fi DNS, or proxy settings</string>
+    <string name="network_error_timeout">Request timed out: slow network or no response from the server</string>
+    <string name="network_error_connect">Connection refused: check the Base URL and port</string>
+    <string name="network_error_ssl">SSL handshake failed: check the certificate or proxy settings</string>
+    <string name="common_error_unknown">Unknown error</string>
     <string name="slash_command_compress_desc">Manually compact this session context</string>
     <string name="slash_command_init_desc">Analyze the workspace codebase and generate or improve the AGENTS.md project rules</string>
     <string name="slash_command_usage_desc">View today and all-time call count, token usage and estimated cost</string>
+    <string name="slash_command_goal_desc">Set a session goal; the AI loops autonomously until done or the budget runs out</string>
     <string name="retry_error_rate_limit">Rate limit</string>
     <string name="retry_error_server_overloaded">Server overloaded</string>
     <string name="retry_error_server">Server error</string>
@@ -787,6 +972,11 @@
     <string name="container_resetting_title">Cleaning Container Data</string>
     <string name="container_resetting_message">Deleting data for "%1$s"…\n%2$s items removed</string>
     <string name="container_reset_confirm">This will delete the rootfs directory of "%1$s" (including installed tools and configs). It will be re-extracted and initialized on next use. Continue?</string>
+    <string name="container_reinstall_image">Reinstall Current Image</string>
+    <string name="container_reinstall_title">Reinstall Image</string>
+    <string name="container_reinstall_confirm">This will re-extract "%1$s" from the current image file. Tools and configs installed inside the container will be lost. Continue?</string>
+    <string name="container_reinstall_confirm_action">Reinstall</string>
+    <string name="container_reinstall_failed">Reinstall failed: %1$s</string>
     <string name="container_builtin_badge">Built-in</string>
     <string name="container_custom_badge">Custom</string>
     <string name="container_ssh_badge">SSH</string>
@@ -838,6 +1028,14 @@
     <string name="container_download_failed">Download failed: %1$s</string>
     <string name="container_download_list_empty">No images available</string>
     <string name="container_download_done">Downloaded</string>
+    <string name="container_download_newer_available">Update available</string>
+    <string name="container_download_checksum_failed">Checksum mismatch — the file may be truncated or tampered with. Please retry.</string>
+    <string name="container_download_eol_soon">Support ending soon</string>
+    <string name="container_download_eol_ended">No longer supported</string>
+    <string name="container_download_eol_extended">In %1$s extended support</string>
+    <string name="container_download_eol_extended_generic">In extended support</string>
+    <string name="container_download_eol_support_ends">Standard support ended: %1$s</string>
+    <string name="container_download_eol_fully_ends">Fully end-of-life: %1$s</string>
     <string name="container_download_size">Size: %1$s</string>
     <string name="container_download_delete_title">Delete downloaded image</string>
     <string name="container_download_delete_confirm">Delete the downloaded file for "%1$s"? Imported containers will not be able to extract again.</string>
@@ -855,7 +1053,7 @@
     <!-- Credential List -->
     <string name="credential_empty_hint">No credentials yet, tap + to add</string>
     <string name="credential_empty_title">No Git Credentials</string>
-    <string name="credential_empty_desc">Configure credentials so AiCode can authenticate when pushing or pulling repositories</string>
+    <string name="credential_empty_desc">Tap + in the top right to sign in with GitHub or add an access token. AiCode then authenticates pushes and pulls automatically</string>
 
     <!-- Credential Add / Quick Login -->
     <string name="credential_add_sheet_title">Add Credential</string>
@@ -894,6 +1092,8 @@
     <string name="credential_device_repos_granted">Authorized repositories (%1$d)</string>
     <string name="credential_device_repos_more">…and %1$d more</string>
     <string name="credential_device_readonly">This authorization is read-only, so pushes will be rejected. Switch to a personal access token (PAT), or change AiCode\'s repository permission to Read and write on GitHub.</string>
+    <string name="vscreen_accessibility_service_label">AiCode screen reader</string>
+    <string name="vscreen_accessibility_service_desc">Only used by AiCode to read UI controls while running automated tests on a virtual display (exports the node tree for that display; read-only, never intercepts input). Screenshots still work when this is off.</string>
     <string name="credential_device_install_unknown">Could not confirm whether AiCode is installed on your repositories (query restricted). If pushes fail, switch to a personal access token (PAT).</string>
     <string name="credential_device_failed_title">Authorization Incomplete</string>
     <string name="credential_device_failed">Sign-in failed: %1$s</string>
@@ -974,9 +1174,10 @@
     <string name="git_files_changed">%1$s files changed</string>
     <string name="git_no_files_changed">No files changed in this commit</string>
     <string name="git_loading_files">Loading changed files...</string>
-    <string name="git_not_a_repo">Current workspace is not a Git repository</string>
-    <string name="git_init_desc">Initialization will create .git here, after which you can stage, commit, and link remotes.</string>
-    <string name="git_init_repo">Initialize Git Repository</string>
+    <string name="git_not_a_repo">Current workspace is not a Git repository yet</string>
+    <string name="git_init_desc_primary">Initialize a new repository here to start version control</string>
+    <string name="git_init_desc_secondary">Or pick an existing repository from a subdirectory</string>
+    <string name="git_init_repo">Initialize New Repository</string>
     <string name="git_clone_repo">Clone Remote Repository</string>
     <string name="git_clone_dialog_title">Clone Git Repository</string>
     <string name="git_clone_desc">Clone a remote repository into the current workspace root (directory must be empty). For private repos, configure credentials via the key icon first.</string>
@@ -997,6 +1198,11 @@
     <string name="git_unstage_all_confirm">All files will be unstaged, but their contents will not be deleted. Continue?</string>
     <string name="git_pull_dirty_confirm">The working tree has uncommitted changes. Pulling may cause conflicts. Commit or stage them first if possible. Continue pulling?</string>
     <string name="git_pull_continue">Continue Pull</string>
+    <string name="git_switch_repo">Switch repository</string>
+    <string name="git_pick_existing_repo">Pick Existing Repository</string>
+    <string name="git_repo_selector_title">Select Repository</string>
+    <string name="git_repo_not_repo">Not a repo</string>
+    <string name="git_pick_repo_empty">No directories available in the current workspace</string>
     <string name="git_push_master_confirm_title">Branch Naming Suggestion</string>
     <string name="git_push_master_confirm_desc">Current local branch is \"master\". GitHub and GitLab recommend using \"main\" as the default branch. Would you like to rename it to \"main\" before pushing?</string>
     <string name="git_push_rename_to_main">Rename to main &amp; Push</string>
@@ -1013,6 +1219,8 @@
     <string name="git_toast_action_failed">%1$s failed: %2$s</string>
     <string name="git_toast_checkout_success">Switched to %1$s</string>
     <string name="git_toast_checkout_failed">Switch failed: %1$s</string>
+    <string name="git_toast_not_repo">This directory is not a Git repository</string>
+    <string name="git_toast_switch_repo_failed">Switch repository failed: %1$s</string>
     <string name="git_toast_diff_failed">Failed to load diff</string>
     <string name="git_toast_path_copied">Path copied</string>
     <string name="git_action_stage_all">Stage all</string>
@@ -1061,8 +1269,8 @@
 
     <!-- Git Conflict -->
     <string name="git_conflicted_count">Conflicts (%1$s)</string>
-    <string name="git_conflict_detected">Merge Conflicts Detected</string>
-    <string name="git_conflict_hint">Resolve conflicts in editor then stage the files, or abort the merge.</string>
+    <string name="git_merge_pending_title">Merge Awaiting Commit</string>
+    <string name="git_merge_pending_hint">There are no unresolved conflicts. Review and stage the changes you want to keep, then commit to complete the merge.</string>
     <string name="git_action_abort_merge">Abort Merge</string>
     <string name="git_abort_merge_confirm">Abort the current merge? Unresolved changes will be discarded and the working tree will be restored.</string>
 
@@ -1156,6 +1364,8 @@
     <string name="mcp_auth_status_unauthorized">Not signed in</string>
     <string name="mcp_auth_status_authorizing">Authorizing</string>
     <string name="mcp_auth_success">Authorized and connected</string>
+    <string name="mcp_auth_success_not_connected">Authorized, but failed to connect. Retry later</string>
+    <string name="mcp_auth_success_only">Authorized</string>
     <string name="mcp_search_placeholder">Search MCP servers…</string>
     <string name="mcp_search_empty">No matching MCP servers found</string>
     <string name="mcp_tools_search">Search tool name or description…</string>
@@ -1177,19 +1387,32 @@
     <string name="mcp_details">Details</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">No long-term memories yet</string>
-    <string name="memory_empty_hint">Whatever you ask the assistant to remember long-term shows up here</string>
+    <string name="memory_empty">No memories yet</string>
+    <string name="memory_loading">Loading memories…</string>
+    <string name="memory_empty_hint">Saved automatically as you chat (with Active memory on), or tap + in the top right to add one</string>
+    <string name="memory_search_hint">Search memory names or content…</string>
+    <string name="memory_search_empty">No matching memories found</string>
     <string name="memory_active_memory">Active memory</string>
-    <string name="memory_active_memory_desc">When on, the model records durable conclusions as long-term memory during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
+    <string name="memory_active_memory_desc">When on, the model records durable conclusions as memories during chat; if it claims to have remembered something without calling the memory tool, it is reminded to save it (uses the model, off by default)</string>
     <string name="memory_source_auto">Auto-saved</string>
     <string name="memory_source_pre_fold">Salvaged before compaction</string>
     <string name="memory_source_manual">Saved during chat</string>
     <string name="memory_detail_content">Content</string>
     <string name="memory_detail_empty">(no content)</string>
+    <string name="memory_detail_meta">Details</string>
+    <string name="memory_detail_hits">%1$d hits</string>
+    <string name="memory_detail_last_hit">Last hit %1$s</string>
+    <string name="memory_detail_created">Created %1$s</string>
+    <string name="memory_time_just_now">Just now</string>
+    <string name="memory_time_minutes_ago">%1$d min ago</string>
+    <string name="memory_time_hours_ago">%1$d h ago</string>
+    <string name="memory_time_days_ago">%1$d days ago</string>
     <string name="memory_group_global">Global memories</string>
+    <string name="memory_group_global_count">Global memories (%1$d)</string>
     <string name="memory_group_project">Project memories</string>
+    <string name="memory_group_project_count">Project memories (%1$d)</string>
     <string name="memory_add">Add memory</string>
-    <string name="memory_long_term_header">Long-term memory (cross-session)</string>
+    <string name="memory_long_term_header">Memories (cross-session)</string>
     <string name="memory_long_term_desc">Applies across sessions: each memory\'s name and description are injected into the system prompt of later chats.</string>
     <string name="memory_session_card_title">This session (short-term)</string>
     <string name="memory_session_card_desc">Read-only. Short-term context disappears when the session ends; it is never written to disk or carried over. Shown for the most recently updated session.</string>
@@ -1214,7 +1437,7 @@
     <string name="memory_pinned">Pinned</string>
     <string name="memory_pinned_desc">Always injected every turn, skipping topic ranking; good for cross-project preferences such as a user profile</string>
     <string name="memory_field_name_locked">The name is the memory\'s unique id; it can\'t be changed after creation</string>
-    <string name="memory_delete_confirm_title">Delete long-term memory</string>
+    <string name="memory_delete_confirm_title">Delete memory</string>
     <string name="memory_delete_confirm_message">This will delete \"%1$s\". This action cannot be undone. Delete?</string>
     <string name="memory_delete_failed">Delete failed; the entry may no longer exist</string>
     <string name="memory_save_failed">Save failed; nothing was written: project-scope memories need a ready workspace (or the file write failed)</string>
@@ -1249,17 +1472,18 @@
     <string name="prompts_field_content_placeholder">What the model should follow</string>
     <string name="prompts_editor_new">New prompt</string>
     <string name="prompts_editor_edit">Edit prompt</string>
-    <string name="prompts_add_sheet_title">Prompts</string>
     <string name="prompts_add_prompt">Add fragment</string>
-    <string name="prompts_add_prompt_hint">Insert a new fragment with a free number</string>
+    <string name="prompts_reset_custom">Reset custom prompts</string>
+    <string name="prompts_reset_confirm">Deletes every custom prompt fragment in this project and the global layer; each number falls back to the built-in prompt. This cannot be undone.</string>
     <string name="prompts_help">Help</string>
-    <string name="prompts_help_hint">How it works and when it applies</string>
     <string name="prompts_disable_builtin">Disable all built-in prompts</string>
     <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
 
     <!-- Skills Settings -->
     <string name="skills_empty">No skills installed</string>
     <string name="skills_empty_hint">Tap + in the top bar to create or import one.</string>
+    <string name="skills_search_hint">Search skill names, descriptions, or content…</string>
+    <string name="skills_search_empty">No matching skills found</string>
     <string name="skills_no_project_skills">No skills for the current project</string>
     <string name="skills_no_global_skills">No global skills</string>
     <string name="skills_enable">Enable</string>
@@ -1278,6 +1502,10 @@
     <string name="skills_scope_project">This project</string>
     <string name="skills_name_hint">Lowercase is recommended, e.g. pdf-report</string>
     <string name="skills_description_hint">When to use it; the AI decides whether to load it by this text</string>
+    <string name="chat_skill_triggered_chip">Skill triggered: %1$s</string>
+    <string name="skills_triggers_label">Trigger words</string>
+    <string name="skills_triggers_hint">e.g. reverse, unpack, triage</string>
+    <string name="skills_triggers_help">The skill auto-injects when a trigger word appears as a standalone space-separated token in the message (e.g. "help me reverse this"); comma-separated, at least 2 chars, no multi-word phrases</string>
     <string name="skills_instructions_hint">Describe the standard workflow and caveats for this kind of task; Markdown supported</string>
     <string name="skills_editor_error_invalid_name">Invalid name: it cannot be empty or contain path separators and other special characters</string>
     <string name="skills_editor_error_empty_instructions">The instructions cannot be empty</string>
@@ -1357,8 +1585,8 @@
     <string name="subagent_inject_main_rules_hint">Pick either this or the subagent baseline; enabling both injects overlapping rules</string>
     <string name="subagent_inject_skills">Skill list</string>
     <string name="subagent_inject_skills_hint">Lets it load and run project skills</string>
-    <string name="subagent_inject_memory">Long-term memory</string>
-    <string name="subagent_inject_memory_hint">Injects global and project long-term memories (cross-session)</string>
+    <string name="subagent_inject_memory">Memory</string>
+    <string name="subagent_inject_memory_hint">Injects global and project memories (cross-session)</string>
     <string name="subagent_inject_project_rules">Project rules</string>
     <string name="subagent_inject_project_rules_hint">Injects AGENTS.md or CLAUDE.md</string>
 
@@ -1448,6 +1676,28 @@
     <string name="provider_models_batch_delete">Delete</string>
     <string name="provider_models_batch_delete_title">Delete Models</string>
     <string name="provider_models_batch_delete_confirm">Are you sure you want to delete the selected %1$d models?</string>
+    <!-- Batch operations (multi-select mode): shared labels reused across pages -->
+    <string name="common_select_mode">Select</string>
+    <string name="common_select_all">Select All</string>
+    <string name="common_deselect_all">Deselect All</string>
+    <string name="common_selected_count">%1$d selected</string>
+    <string name="common_batch_delete">Delete</string>
+    <string name="common_batch_enable">Enable</string>
+    <string name="common_batch_disable">Disable</string>
+    <string name="common_batch_reconnect">Reconnect</string>
+    <string name="common_batch_deleting">Deleting…</string>
+    <string name="providers_batch_delete_title">Delete Providers</string>
+    <string name="providers_batch_delete_confirm">Delete the selected %1$d providers? This cannot be undone.</string>
+    <string name="mcp_batch_delete_title">Delete MCP Servers</string>
+    <string name="mcp_batch_delete_confirm">Delete the selected %1$d MCP servers?</string>
+    <string name="skills_batch_delete_title">Delete Skills</string>
+    <string name="skills_batch_delete_confirm">Delete the selected %1$d skill directories? This cannot be undone.</string>
+    <string name="subagents_batch_delete_title">Delete Subagents</string>
+    <string name="subagents_batch_delete_confirm">Delete the selected %1$d subagent definition files? This cannot be undone.</string>
+    <string name="prompts_batch_delete_title">Delete Prompts</string>
+    <string name="prompts_batch_delete_confirm">Delete the selected %1$d custom prompt fragments? Their numbers will fall back to the next source.</string>
+    <string name="container_download_batch_delete_title">Delete Downloaded Images</string>
+    <string name="container_download_batch_delete_confirm">Delete the selected %1$d image files? Imported containers will no longer be able to unpack them.</string>
     <string name="provider_model_name">Model Name</string>    <string name="provider_model_already_added">This model has already been added</string>
     <string name="provider_edit_model">Edit Model</string>
     <string name="provider_model_section_price">Pricing</string>
@@ -1529,6 +1779,11 @@
     <string name="ftp_login_password">Login Password</string>
     <string name="ftp_allow_anonymous">Allow Anonymous</string>
     <string name="ftp_anonymous_desc">Connect without username and password</string>
+    <string name="ftp_anonymous_confirm_title">Allow anonymous access?</string>
+    <string name="ftp_anonymous_confirm_message">Once enabled, any device on the same LAN can read and write your workspace without credentials.</string>
+    <string name="ftp_password_required">Set a username and password first</string>
+    <string name="ftp_reserved_username">anonymous is reserved for anonymous login. Use a different username.</string>
+    <string name="ftp_user_cache_cleanup_failed">Could not clear old FTP login data. The server was not started. Try again.</string>
     <string name="ftp_auto_start">Auto-start on app launch</string>
     <string name="ftp_auto_start_desc">Automatically start FTP service in background on app launch</string>
     <string name="ftp_config_saved">Configuration saved</string>
@@ -1581,13 +1836,14 @@
     <string name="ssh_login_key_content_label">Private key</string>
     <string name="ssh_login_key_passphrase_placeholder">Leave blank if the key is not encrypted</string>
     <string name="ssh_login_key_toggle_content">Show or hide the private key</string>
+    <string name="ssh_host_key_confirm_hint">Host key not confirmed. Test the connection in Connection Configuration to confirm it first.</string>
     <string name="ssh_host_key_confirm_title">Confirm SSH Host Key</string>
     <string name="ssh_host_key_changed_title">SSH Host Key Changed</string>
     <string name="ssh_host_key_trust">Trust and connect</string>
     <string name="ssh_host_key_reject">Reject</string>
     <string name="ssh_host_key_empty">No saved host fingerprints</string>
-    <string name="ssh_host_key_fingerprint_value">Fingerprint: %1$s</string>
-    <string name="ssh_host_key_detail">Saved server host fingerprint:\n%1$s</string>
+    <string name="ssh_host_key_fingerprint_value">SHA256 fingerprint: %1$s</string>
+    <string name="ssh_host_key_detail">Saved server host SHA256 fingerprint:\n%1$s</string>
 
     <!-- Remote Sync -->
     <string name="sync_save_settings">Save Settings</string>
@@ -1651,6 +1907,11 @@
 
     <!-- Todo Card -->
     <string name="todo_completed">Completed</string>
+    <string name="todo_implemented">Implemented</string>
+    <string name="todo_verifying">Verifying</string>
+    <string name="todo_blocked">Blocked</string>
+    <string name="todo_failed">Failed</string>
+    <string name="todo_cancelled">Cancelled</string>
     <string name="todo_in_progress">In Progress</string>
     <string name="todo_dashboard_title">Tasks</string>
     <string name="todo_dashboard_progress">%1$d/%2$d done</string>
@@ -1683,8 +1944,8 @@
     <string name="workspace_switch_confirm">Switching workspace will stop all running AI sessions and close terminal tabs in the current workspace. Continue?</string>
     <string name="workspace_confirm">Confirm</string>
     <string name="workspace_open">Open Workspace</string>
-    <string name="workspace_new">New</string>
-    <string name="workspace_empty_hint">No workspaces, tap "New" to create one</string>
+    <string name="workspace_new_internal">New Internal Workspace</string>
+    <string name="workspace_empty_hint">No workspaces, tap %1$s to create one</string>
     <string name="workspace_delete">Delete Workspace</string>
     <string name="workspace_delete_confirm">Delete "%1$s"? All files in this directory and this workspace\'s chats will be deleted and cannot be undone.</string>
     <string name="workspace_new_workspace">New Workspace</string>
@@ -1694,9 +1955,9 @@
     <string name="workspace_remote_default_create_failed">Failed to create the default remote workspace. Check server permissions and disk space.</string>
     <string name="workspace_remote_target_dir_empty">Remote workspace path is empty or invalid. Set a concrete directory in Container &amp; Images.</string>
     <string name="workspace_remote_not_configured">No remote connection is configured, so no workspace was loaded.</string>
-    <string name="workspace_add_local_dir">Add Local Directory</string>
-    <string name="workspace_external_added">Local directory workspace "%1$s" added</string>
-    <string name="workspace_external_warning_title">Add local directory workspace</string>
+    <string name="workspace_add_external">Add External Workspace</string>
+    <string name="workspace_external_added">External workspace "%1$s" added</string>
+    <string name="workspace_external_warning_title">Add External Workspace</string>
     <string name="workspace_external_warning_message">AI directly reads and writes the real files in the selected directory. Public storage does not support symlinks, so npm, yarn, pnpm, and git operations involving symlinks may fail. Removing the workspace only removes the association and does not delete directory contents.</string>
     <string name="workspace_external_warning_dont_show_again">Don’t show again</string>
     <string name="workspace_external_warning_continue">Continue</string>
@@ -1719,7 +1980,9 @@
     <string name="chat_more_options">More Options</string>
     <string name="chat_action_edit">Edit Message</string>
     <string name="chat_action_copy">Copy Text</string>
+    <string name="chat_action_fork">Fork From Here</string>
     <string name="chat_action_delete">Delete Message</string>
+    <string name="chat_fork_title">Fork of %1$s</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>
 
@@ -1901,4 +2164,35 @@
     <string name="browser_ua_custom_dialog_title">Custom User-Agent</string>
     <string name="browser_ua_custom_input_hint">Enter full User-Agent string</string>
     <string name="browser_ua_applied_toast">User-Agent updated, page reloaded</string>
+
+    <!-- Tool descriptions and result copy: read by the model, follows the UI language -->
+    <string name="common_tool_missing_argument">Missing parameter: %1$s.</string>
+    <string name="plan_mode_invalid_action">Invalid action: %1$s. Supported values: enter or exit.</string>
+    <string name="plan_mode_already_active">Already in PLAN mode.</string>
+    <string name="plan_mode_not_active">Cannot exit PLAN: the session is not in PLAN mode.</string>
+    <string name="plan_mode_session_required">No session is associated with this request. Cannot switch modes.</string>
+    <string name="plan_mode_session_missing">Session not found. Cannot switch modes.</string>
+    <string name="plan_mode_goal_active">A goal is running autonomously. Entering or exiting PLAN is unavailable; plan and advance the goal from inside the loop.</string>
+    <string name="plan_mode_entered">Entered PLAN mode.</string>
+    <string name="plan_mode_exited">Exited PLAN and restored %1$s mode.</string>
+    <string name="plan_mode_enter_action">Enter PLAN mode</string>
+    <string name="plan_mode_exit_action">Exit PLAN mode</string>
+    <string name="plan_mode_reason_unspecified">No reason provided</string>
+    <string name="plan_mode_request_title">Switch planning mode</string>
+    <string name="plan_mode_request_summary">Request to %1$s</string>
+    <string name="plan_mode_request_details">Action: %1$s\n\nReason: %2$s</string>
+    <string name="tool_output_saved_hint">Full output saved to %1$s. Use readFile to read it in sections.</string>
+    <string name="tool_output_unsaved_hint">Saving the full output failed. Only the beginning and end are available; try again with a smaller output range.</string>
+    <string name="tool_output_omitted">\n\n[Omitted %1$d characters from the middle. %2$s]\n\n</string>
+    <string name="tool_browser_screenshot_failed">A screenshot is currently unavailable. Try again later, or use getText/getHtml to read the page.</string>
+    <string name="tool_browser_condition_met">Condition met.</string>
+    <string name="tool_browser_wait_timeout">Timed out before the condition was met.</string>
+    <string name="tool_vision_images_attached">Attached %1$d images for direct viewing and analysis.</string>
+    <string name="tool_vision_focus">Focus: %1$s</string>
+    <string name="tool_vision_empty_response">The vision model returned no analysis.</string>
+    <string name="tool_vision_default_single">Describe the key information in the image, including legible text, elements, and layout. Note anything unclear.</string>
+    <string name="tool_vision_default_multiple">Describe the key information in each of these %1$d images in order, then compare their similarities and differences. Note anything unclear.</string>
+    <string name="tool_mcp_stdio_added">Added local MCP server %2$s in %1$s. The configuration takes effect in the next session. If the command needs a runtime such as Node or Python, install it with the command tool after the user confirms.</string>
+    <string name="tool_mcp_invalid_name">server_name may contain only ASCII letters, digits, underscores, and hyphens (current: %1$s). Server names are joined into mcp__&lt;server_name&gt;__&lt;tool&gt; for the model, so they must follow tool naming rules.</string>
+    <string name="tool_memory_saved">Saved memory “%1$s” in the %2$s scope. It appears in your memory index from the next turn.</string>
 </resources>

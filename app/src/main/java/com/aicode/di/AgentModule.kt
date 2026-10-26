@@ -10,6 +10,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
+import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -40,8 +41,14 @@ import com.aicode.feature.agent.domain.tool.container.TerminalSessionTool
 import com.aicode.feature.agent.domain.tool.explorer.ListFilesTool
 import com.aicode.feature.agent.domain.tool.explorer.SearchCodeTool
 import com.aicode.feature.agent.domain.tool.shizuku.ShizukuTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsInputTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsLogcatTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsObserveTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsStartTool
+import com.aicode.feature.agent.domain.tool.vscreen.VsStopTool
 import com.aicode.feature.agent.domain.tool.skill.LoadSkillTool
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionTool
+import com.aicode.feature.agent.domain.tool.root.RootTool
 import com.aicode.feature.agent.domain.tool.todo.TodoTool
 import com.aicode.feature.agent.domain.tool.subagent.TaskTool
 import com.aicode.feature.agent.domain.tool.subagent.MessageParentTool
@@ -91,6 +98,7 @@ import com.aicode.feature.agent.domain.tool.mcp.ManageMcpTool
 import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
+import com.aicode.feature.agent.domain.tool.goal.GoalStatusTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
@@ -162,6 +170,12 @@ object AgentModule {
     @Singleton
     fun provideTodoItemDao(database: AgentDatabase): TodoItemDao {
         return database.todoItemDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideSessionBriefDao(database: AgentDatabase): SessionBriefDao {
+        return database.sessionBriefDao()
     }
 
     @Provides
@@ -342,8 +356,9 @@ object AgentModule {
     @Singleton
     fun provideRemoteSftpFileAccess(
         connection: RemoteSshConnection,
-        workspaceRepository: WorkspaceRepository
-    ): RemoteSftpFileAccess = RemoteSftpFileAccess(connection, workspaceRepository)
+        workspaceRepository: WorkspaceRepository,
+        @ApplicationContext context: Context
+    ): RemoteSftpFileAccess = RemoteSftpFileAccess(connection, workspaceRepository, context)
 
     @Provides
     @Singleton
@@ -373,11 +388,18 @@ object AgentModule {
         webSearchTool: WebSearchTool,
         webFetchTool: WebFetchTool,
         planModeTool: PlanModeTool,
+        goalStatusTool: GoalStatusTool,
         todoTool: TodoTool,
         memoryTool: MemoryTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
-        browserTool: BrowserTool
+        browserTool: BrowserTool,
+        rootTool: RootTool,
+        vsStartTool: VsStartTool,
+        vsStopTool: VsStopTool,
+        vsInputTool: VsInputTool,
+        vsObserveTool: VsObserveTool,
+        vsLogcatTool: VsLogcatTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -388,6 +410,7 @@ object AgentModule {
             register("generateImage", generateImageTool)
             register("Bash", executeCommandTool)
             register("Shizuku", shizukuTool)
+            register("Root", rootTool)
             register("terminal", terminalSessionTool)
             register("list", listFilesTool)
             register("search", searchCodeTool)
@@ -397,11 +420,17 @@ object AgentModule {
             register("websearch", webSearchTool)
             register("webfetch", webFetchTool)
             register("planMode", planModeTool)
+            register("goalStatus", goalStatusTool)
             register("todo", todoTool)
             register("memory", memoryTool)
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)
+            register("vscreen_start", vsStartTool)
+            register("vscreen_stop", vsStopTool)
+            register("vscreen_input", vsInputTool)
+            register("vscreen_observe", vsObserveTool)
+            register("vscreen_logcat", vsLogcatTool)
         }
     }
 
@@ -412,7 +441,6 @@ object AgentModule {
     @Provides
     @Singleton
     fun provideAgentWorkflow(
-        toolRegistry: ToolRegistry,
         aiProviderRepository: AIProviderRepository,
         openAIApi: OpenAIApi,
         anthropicApi: AnthropicApi,
@@ -438,10 +466,10 @@ object AgentModule {
         eventInjector: AgentEventInjector,
         fileAccess: FileAccessProvider,
         writeLeaseRegistry: WriteLeaseRegistry,
-        interruptedWorkRecorder: InterruptedWorkRecorder
+        interruptedWorkRecorder: InterruptedWorkRecorder,
+        @ApplicationContext context: Context
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
-            toolRegistry,
             aiProviderRepository,
             openAIApi,
             anthropicApi,
@@ -467,7 +495,8 @@ object AgentModule {
             eventInjector,
             fileAccess,
             writeLeaseRegistry,
-            interruptedWorkRecorder
+            interruptedWorkRecorder,
+            context
         )
     }
 }

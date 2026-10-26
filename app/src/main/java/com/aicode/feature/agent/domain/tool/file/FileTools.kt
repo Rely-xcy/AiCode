@@ -16,6 +16,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LineDiff
 import com.aicode.core.watch.WorkspaceWriteSignal
 import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.sha256Fingerprint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -44,6 +45,12 @@ class ReadFileTool @Inject constructor(
     override val name = "readFile"
     override val description = "读取文件内容（工作区文件或容器绝对路径的系统文件）。单次读取有行数与字节上限，超出可用 start_line 分段续读。"
     override val capabilities = setOf(ToolCapability.READ_WORKSPACE)
+    override val useWhen =
+        "改文件前先读原内容、核实代码与配置的现状、按 output_path 回读被截断的工具输出时用它"
+    override val avoidWhen =
+        "只想找「某段文本出现在哪些文件」用 search，不要逐个 readFile 翻找，只看目录里有什么用 list"
+    override val successCriteria =
+        "返回里带 content 与 read_lines，truncated=true 说明还有内容没读到，用 start_line 续读直到 truncated=false，不要把截断内容当全文"
     override val parameters = mapOf(
         "path" to ToolParameter("path", ParameterType.STRING, "文件路径：~/workspace/... 为项目文件；其它绝对路径（如 /etc/...、/root/...）为容器系统文件。", required = true),
         "start_line" to ToolParameter("start_line", ParameterType.INTEGER, "开始行号（从 1 计）。", required = false),
@@ -184,6 +191,12 @@ class WriteFileTool @Inject constructor(
     override val description = "写入完整文件内容，文件不存在时自动创建（含父目录）。局部修改请用 editFile。"
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.WRITE_WORKSPACE)
+    override val useWhen =
+        "新建文件、整文件重写，或改动幅度大到逐处匹配不如整篇重写时用它，新建会自动创建父目录"
+    override val avoidWhen =
+        "已存在的文件只改局部几处时用 editFile：整篇重写会把没读到的其它改动一并覆盖，也更容易撞上 STALE_FILE"
+    override val successCriteria =
+        "返回里带 path、bytes_written、lines_written 与 added_lines/removed_lines，随后 readFile 该路径能读到写进去的内容"
     override val parameters = mapOf(
         "path" to ToolParameter("path", ParameterType.STRING, "文件路径：~/workspace/... 为项目文件；其它绝对路径（如 /etc/...、/root/...）为容器系统文件。", required = true),
         "content" to ToolParameter("content", ParameterType.STRING, "文件内容", required = true),
@@ -217,18 +230,18 @@ class WriteFileTool @Inject constructor(
             ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
 
         val key = fileAccess.toDisplayPath(path)
-        val existedBefore = fileAccess.exists(path)
-        checkVersion(path, key, context.sessionId, existedBefore)?.let { return it }
-
         return fileLock.withLock(key) {
-            checkVersion(path, key, context.sessionId, existedBefore)?.let { return@withLock it }
-            val result = performWrite(path, args)
-            // 写成功后登记新版本；登记失败不能把已成功的写入报成失败（见 EditFileTool 同处注释）。
+            // 锁内只读一次：旧内容、写前版本校验、写后登记全部基于这份快照。
+            // 锁外原来还有一次「exists + 指纹」预检，它要多传一遍全文，而权威判定本来就在锁内。
+            val snapshot = snapshotOf(path, key)
+            val existed = snapshot != null || fileAccess.exists(path)
+            staleFileError(snapshot, context.sessionId, key)?.let { return@withLock it }
+            val result = performWrite(path, args, existed, snapshot?.text.orEmpty())
             if (result is ToolResult.Success) {
-                runCatching { fileAccess.fingerprint(path) }
-                    .onFailure { FileLogger.w(TAG, "write_file 写后登记版本失败: $key", it) }
-                    .getOrNull()
-                    ?.let { versions.record(context.sessionId, key, it) }
+                // 写入不做编码转换（接口缺省 UTF-8 + 原子替换），落盘字节就是这份内容的 UTF-8 字节：
+                // 直接按它登记新版本，省掉「写完再整篇读回来算指纹」那一次完整传输。
+                val written = args["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                versions.record(context.sessionId, key, sha256Fingerprint(written.toByteArray(Charsets.UTF_8)))
             }
             result
         }
@@ -241,50 +254,55 @@ class WriteFileTool @Inject constructor(
     override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
         val path = args["path"]?.jsonPrimitive?.contentOrNull
             ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
-        return performWrite(path, args)
+        val snapshot = snapshotOf(path, fileAccess.toDisplayPath(path))
+        val existed = snapshot != null || fileAccess.exists(path)
+        return performWrite(path, args, existed, snapshot?.text.orEmpty())
     }
 
     /**
-     * 版本比对。返回 null 表示可以继续，返回 Error 表示内容已过期、拒绝写入。
+     * 写前读取一次：一次 [readFileSnapshot] 同时给出旧内容与指纹，供版本校验与差异渲染共用。
      *
-     * [existed] 为 false（新建文件）时直接放行：没有旧版本可比较，登记表里的任何记录
-     * 也不代表"这个文件曾经存在过"。
-     *
-     * **fail-open**：拿不到当前指纹时（远端文件超上限、IO 瞬时失败）放行并记日志。
-     * 版本校验是辅助保护，它自己的失败不应阻塞正常写入。
+     * 读不到全文（远端超上限、瞬时 IO 失败）时返回 null 并降级：校验按 fail-open 放行、
+     * 差异按「整体新增」渲染，与改动前「旧内容读失败就当空」的行为一致。
      */
-    private fun checkVersion(
-        path: String,
-        key: String,
-        sessionId: String?,
-        existed: Boolean
-    ): ToolResult? {
-        if (!existed) return null
+    private fun snapshotOf(path: String, key: String): FileSnapshot? =
+        runCatching { readFileSnapshot(fileAccess, path) }
+            .onFailure { FileLogger.w(TAG, "write_file 写前读取失败，跳过版本校验与差异: $key", it) }
+            .getOrNull()
+
+    /**
+     * 版本比对，直接吃写前那份快照的指纹——不再为校验单独读一遍文件。
+     *
+     * [snapshot] 为 null 时没有可信的当前指纹，**fail-open** 放行并记日志：版本校验是辅助保护，
+     * 它自己拿不到指纹（远端文件超上限、IO 瞬时失败）不应阻塞正常写入。
+     */
+    private fun staleFileError(snapshot: FileSnapshot?, sessionId: String?, key: String): ToolResult? {
+        val current = snapshot ?: return null
         val recorded = versions.get(sessionId, key) ?: return null
-        val current = runCatching { fileAccess.fingerprint(path) }.getOrElse { e ->
-            FileLogger.w(TAG, "write_file 无法计算当前指纹，跳过版本校验: $key", e)
-            return null
-        } ?: return null
-        if (recorded == current) return null
+        if (recorded == current.fingerprint) return null
         FileLogger.w(TAG, "write_file 拒绝过期写: $key（记录版本与当前不一致）")
         return ToolResult.Error(staleFileMessage(key), STALE_FILE_CODE)
     }
 
-    /** 真正的写入逻辑：不涉及锁与版本，纯粹按 [args] 完成一次整文件写。 */
-    private suspend fun performWrite(path: String, args: Map<String, JsonElement>): ToolResult {
+    /**
+     * 真正的写入逻辑：不涉及锁与版本，按 [args] 完成一次整文件写。
+     * [existed] / [oldContent] 由调用方的写前快照提供，本函数不再自己探一遍文件。
+     */
+    private suspend fun performWrite(
+        path: String,
+        args: Map<String, JsonElement>,
+        existed: Boolean,
+        oldContent: String
+    ): ToolResult {
         return try {
             val content = args["content"]?.jsonPrimitive?.contentOrNull ?: ""
             val overwrite = args["overwrite"]?.jsonPrimitive?.booleanOrNull ?: true
 
             FileLogger.d(TAG, "write_file path=$path (${content.length} 字符, overwrite=$overwrite)")
-            val existed = fileAccess.exists(path)
             if (existed && !overwrite) {
                 FileLogger.w(TAG, "write_file 文件已存在且 overwrite=false: $path")
                 return ToolResult.Error("文件已存在：$path（overwrite=false）", "FILE_EXISTS")
             }
-
-            // 写前留存旧内容，供生成「旧→新」差异（与 edit_file 同构，UI 据此渲染彩色 diff）。
-            val oldContent = if (existed) runCatching { fileAccess.readFile(path) }.getOrDefault("") else ""
 
             fileAccess.writeFile(path, content, overwrite = true)
 

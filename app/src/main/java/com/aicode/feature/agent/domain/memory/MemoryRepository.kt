@@ -7,6 +7,7 @@ import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,12 +16,48 @@ class MemoryRepository @Inject constructor(
     private val globalMemorySource: GlobalMemorySource,
     private val executionModeHolder: ExecutionModeHolder,
     private val containerInstaller: ContainerInstaller,
-    private val projectAicodeRoot: ProjectAicodeRoot
+    private val projectAicodeRoot: ProjectAicodeRoot,
+    private val pendingQueue: MemoryPendingQueue
 ) {
-    private companion object {
+    internal companion object {
         /** 命中记账的去重表上限；超限时淘汰最旧的一条（表本身保持有界，不整表清空）。 */
-        const val HIT_CACHE_LIMIT = 500
-        const val TAG = "MemoryRepository"
+        private const val HIT_CACHE_LIMIT = 500
+        private const val TAG = "MemoryRepository"
+
+        /**
+         * 写入前判重的正文相似阈值。
+         *
+         * 与 [MemoryCurator] 合并用的 DUPLICATE_THRESHOLD 同为 0.75：写入侧和治理侧必须同一口径，
+         * 否则会出现「写的时候没认出来，下一次治理又被合并」的反复。
+         */
+        internal const val CONTENT_DUPLICATE_THRESHOLD = 0.75
+
+        /** 只比较正文前若干字符：与 [MemoryCurator] 的扫描口径一致，也把判重成本钉死。 */
+        internal const val CONTENT_SCAN_CHARS = 1_000
+
+        /** 一条 pending 记录最多重试几次，超过就放弃并记日志。 */
+        private const val MAX_PENDING_ATTEMPTS = 5
+
+        /**
+         * 记忆名归一化：先按落盘文件名同一套规则（[MemorySource.sanitizeName]）去掉非法字符，
+         * 再忽略大小写。`Foo Bar` 与 `FOO-BAR` 归一到同一个名字。
+         */
+        internal fun normalizeName(name: String): String = MemorySource.sanitizeName(name).lowercase()
+
+        /** 正文 token 集合的 Jaccard 相似度；任一方为空返回 0（两条空正文不该算重复）。 */
+        internal fun jaccard(a: Set<String>, b: Set<String>): Double {
+            if (a.isEmpty() || b.isEmpty()) return 0.0
+            val intersection = a.count { it in b }
+            val union = a.size + b.size - intersection
+            return if (union == 0) 0.0 else intersection.toDouble() / union
+        }
+
+        /** 写入前判重用：正文 Jaccard 达到阈值即视为同一条。 */
+        internal fun isDuplicateContent(existingContent: String, newContent: String): Boolean =
+            jaccard(tokensOf(existingContent), tokensOf(newContent)) >= CONTENT_DUPLICATE_THRESHOLD
+
+        private fun tokensOf(content: String): Set<String> =
+            MemoryRanker.tokenize(content.take(CONTENT_SCAN_CHARS))
     }
 
     /** 按当前会话 projectRoot 创建项目级数据源（内部按执行模式决定存储位置）。 */
@@ -39,6 +76,13 @@ class MemoryRepository @Inject constructor(
 
     private fun notifyChanged() {
         _changes.tryEmit(Unit)
+    }
+
+    init {
+        // 启动后第一次记忆读取之前补写上次失败的抽取结果：仓库单例构造先于任何 listMemories，
+        // 此时补进来的条目与正常写入的一样会被后续读取看到，读取逻辑本身不用动。
+        runCatching { retryPendingMemories() }
+            .onFailure { FileLogger.w(TAG, "启动时补写待重试记忆失败", it) }
     }
 
     /** 扫描并聚合全局和项目级的 memory。同名 memory 项目级优先。kind 非空时只返回该类型。 */
@@ -143,6 +187,13 @@ class MemoryRepository @Inject constructor(
         return globalMemorySource.loadContent(name)
     }
 
+    /**
+     * 保存一条记忆：写入前先在同一 scope / 同一 projectRoot 里查重，命中就更新原条目。
+     *
+     * 判重规则（只在写入侧，读取路径不动）：规范化 name 相等，或正文 Jaccard ≥ 0.75。
+     * 命中时沿用原条目的 name（slug）、created_at、类型与置顶状态——换名新建会让同一条结论
+     * 在清单里出现两遍，直到 24 小时后的治理才被合并。
+     */
     fun saveMemory(
         name: String,
         description: String,
@@ -154,16 +205,111 @@ class MemoryRepository @Inject constructor(
         createdAt: Long = 0L,
         pinned: Boolean? = null
     ): Boolean {
+        val duplicate = findDuplicate(name, content, scope, projectRoot)
+        val targetName = duplicate?.name ?: name
+        // 新描述为空时沿用原描述：只改正文时不该把描述抹成空
+        val targetDescription = description.ifBlank { duplicate?.description.orEmpty() }
+        val targetKind = duplicate?.kind ?: kind
+        val targetCreatedAt = duplicate?.createdAt?.takeIf { it > 0 } ?: createdAt
+
         val saved = when (scope) {
-            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(name, description, content, kind, source, createdAt, pinned)
+            MemoryScope.GLOBAL -> globalMemorySource.saveMemory(
+                targetName, targetDescription, content, targetKind, source, targetCreatedAt, pinned
+            )
             MemoryScope.PROJECT -> {
                 if (projectRoot.isNullOrBlank()) false
-                else projectSource(projectRoot).saveMemory(name, description, content, kind, source, createdAt, pinned)
+                else projectSource(projectRoot).saveMemory(
+                    targetName, targetDescription, content, targetKind, source, targetCreatedAt, pinned
+                )
             }
         }
         if (saved) notifyChanged()
         return saved
     }
+
+    /** 同 scope、同 projectRoot 下查找与本次写入重复的既有条目；没有返回 null。 */
+    private fun findDuplicate(
+        name: String,
+        content: String,
+        scope: MemoryScope,
+        projectRoot: String?
+    ): Memory? {
+        val existing = listForScope(scope, projectRoot)
+        if (existing.isEmpty()) return null
+        val normalized = normalizeName(name)
+        return existing.firstOrNull { normalizeName(it.name) == normalized }
+            ?: existing.firstOrNull { isDuplicateContent(it.content, content) }
+    }
+
+    private fun listForScope(scope: MemoryScope, projectRoot: String?): List<Memory> = when (scope) {
+        MemoryScope.GLOBAL -> globalMemorySource.listMemories()
+        MemoryScope.PROJECT -> projectRoot?.takeIf { it.isNotBlank() }
+            ?.let { projectSource(it).listMemories() }
+            .orEmpty()
+    }
+
+    /**
+     * 重放写失败的记忆（pending 队列）。
+     *
+     * 触发点两处：治理周期到来时（MemoryModule.onTurnCompleted）与仓库构造时（第一次读记忆之前）。
+     * 幂等：同 scope 下已有「规范化 name 相同 + 正文哈希相同」的条目，说明这条其实已经落盘，直接丢弃。
+     * 单条失败 attempts + 1，达到 [MAX_PENDING_ATTEMPTS] 次后放弃并记日志。
+     *
+     * @return 本次成功补写的条数。
+     */
+    fun retryPendingMemories(): Int {
+        val recovered = pendingQueue.update { entries ->
+            if (entries.isEmpty()) return@update emptyList<PendingMemoryEntry>() to 0
+            val remaining = mutableListOf<PendingMemoryEntry>()
+            var savedCount = 0
+            entries.forEach { entry ->
+                val scope = scopeOf(entry.scope)
+                if (hasLanded(entry, scope)) {
+                    FileLogger.i(TAG, "待重试记忆已有同内容条目，丢弃: ${entry.name}")
+                    return@forEach
+                }
+                val saved = saveMemory(
+                    name = entry.name,
+                    description = entry.description,
+                    content = entry.content,
+                    scope = scope,
+                    projectRoot = entry.projectRoot,
+                    kind = kindOf(entry.kind),
+                    source = entry.source,
+                    createdAt = entry.createdAt
+                )
+                when {
+                    saved -> savedCount++
+                    entry.attempts + 1 >= MAX_PENDING_ATTEMPTS ->
+                        FileLogger.w(TAG, "待重试记忆连续 ${entry.attempts + 1} 次写入失败，放弃: ${entry.name}")
+                    else -> remaining += entry.copy(attempts = entry.attempts + 1)
+                }
+            }
+            remaining to savedCount
+        }
+        if (recovered > 0) FileLogger.i(TAG, "补写失败的记忆 $recovered 条")
+        return recovered
+    }
+
+    /** 已落盘判定：name 归一后相同，且正文哈希相同。 */
+    private fun hasLanded(entry: PendingMemoryEntry, scope: MemoryScope): Boolean {
+        val normalized = normalizeName(entry.name)
+        val hash = contentHash(entry.content)
+        return listForScope(scope, entry.projectRoot).any {
+            normalizeName(it.name) == normalized && contentHash(it.content) == hash
+        }
+    }
+
+    private fun contentHash(text: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(text.trim().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private fun scopeOf(raw: String): MemoryScope =
+        runCatching { MemoryScope.valueOf(raw.uppercase()) }.getOrDefault(MemoryScope.GLOBAL)
+
+    private fun kindOf(raw: String): MemoryKind =
+        runCatching { MemoryKind.valueOf(raw.uppercase()) }.getOrDefault(MemoryKind.PROFILE)
 
     fun editMemory(name: String, edits: List<MemoryEdit>, scope: MemoryScope, projectRoot: String?): MemoryEditResult {
         val result = when (scope) {

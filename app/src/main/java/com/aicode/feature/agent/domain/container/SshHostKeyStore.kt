@@ -1,10 +1,11 @@
 package com.aicode.feature.agent.domain.container
 
 import android.content.Context
+import com.aicode.feature.workspace.domain.remote.formatHostKeyFingerprint
+import com.aicode.feature.workspace.domain.remote.hostKeyFingerprintForDisplay
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.security.MessageDigest
 import java.security.PublicKey
-import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -42,19 +43,25 @@ class SharedPrefsSshHostKeyStore @Inject constructor(
     }.toMap()
 }
 
-/** 计算主机公钥的 SHA-256 指纹，形如 `SHA256:<base64>`，与 ssh-keygen -lf 的格式一致。 */
-fun sshHostKeyFingerprint(key: PublicKey): String {
-    val digest = MessageDigest.getInstance("SHA-256").digest(key.encoded)
-    return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
-}
+/**
+ * 计算主机公钥的 SHA-256 指纹，形如 `SHA256:<base64>`，与 ssh-keygen -lf 的格式一致。
+ *
+ * 摘要对象必须是 SSH wire 编码（`string 类型名 + 公钥字段`，即 AuthorizedKeys 里 base64 那段），
+ * 而不是 JCA 公钥的 `encoded`：sshj 交给我们的是 JCA 公钥，`encoded` 是 X.509 DER，摘要值与
+ * ssh-keygen 对不上，用户拿 `ssh-keygen -lf` 核对时会误以为自己连错了服务器。
+ */
+fun sshHostKeyFingerprint(key: PublicKey): String = formatHostKeyFingerprint(
+    net.schmizz.sshj.common.Buffer.PlainBuffer().putPublicKey(key).getCompactData()
+)
 
 /**
- * 主机密钥尚未确认时给用户的引导文案。
+ * 旧算法指纹：对 JCA 公钥的 DER 编码（[PublicKey.getEncoded]）做 SHA-256。
  *
- * 「连接配置」页的测试连通性、挂载/同步路径与执行模式路径共用这一句：主机密钥只能在该页保存，
- * 三处提示若各说各话，用户不知道该去哪里确认。
+ * SHA-256 不可逆，而存量存储里只有指纹串、没有公钥字节，所以算法一换，老用户连自己的服务器都会
+ * 撞上「主机密钥已变化」。此函数只为在 [SshHostKeyVerifier.verify] 里识别并静默升级那些老值，
+ * 不再用于产生新值。
  */
-const val SSH_HOST_KEY_CONFIRM_HINT = "主机密钥未确认，请先在「连接配置」页测试连通性完成确认"
+internal fun sshHostKeyFingerprintDer(key: PublicKey): String = formatHostKeyFingerprint(key.encoded)
 
 /** 主机密钥需要用户确认（首次连接或已保存指纹变化）。changed=false 首次，true 指纹变化。 */
 class SshHostKeyPendingException(
@@ -68,43 +75,41 @@ class SshHostKeyPendingException(
 class SshHostKeyVerifier @Inject constructor(
     private val store: SshHostKeyStore
 ) : net.schmizz.sshj.transport.verification.HostKeyVerifier {
-    /** 最近一次校验失败（待确认）详情；sshj 会把 verify 抛出的异常包装成 TransportException，
-     *  连接层无法按异常类型捕获，故通过此字段传递。consumePending 读取后清空。 */
-    @Volatile
-    private var pending: SshHostKeyPendingException? = null
+    // sshj 会包装校验异常，连接层需另外取详情；并发主机不能共用一个待确认槽位。
+    private val pending = ConcurrentHashMap<Pair<String, Int>, SshHostKeyPendingException>()
 
-    fun consumePending(): SshHostKeyPendingException? {
-        val p = pending
-        pending = null
-        return p
-    }
+    fun consumePending(host: String, port: Int): SshHostKeyPendingException? =
+        pending.remove(host to port)
 
-    /**
-     * 只读查看与 [host]:[port] 匹配的待确认详情，**不清空** pending。
-     *
-     * 供执行模式在连接失败时判断「是不是主机密钥没确认」（那次失败是我们自己抛的，必须报出来），
-     * 同时不把待确认详情从挂载/测试连通性路径手里抢走：pending 是单例上的单个字段，
-     * 两条路径并发时消费式读取会让其中一条拿不到详情、只报一堆 sshj 英文。
-     */
     fun pendingFor(host: String, port: Int): SshHostKeyPendingException? =
-        pending?.takeIf { it.host == host && it.port == port }
+        pending[host to port]
 
     override fun findExistingAlgorithms(hostname: String, port: Int): MutableList<String> = mutableListOf()
 
     override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
-        pending = null
+        val endpoint = hostname to port
+        pending.remove(endpoint)
         val fingerprint = sshHostKeyFingerprint(key)
         val saved = store.get(hostname, port)
         if (saved == null) {
             val e = SshHostKeyPendingException(hostname, port, key.algorithm, fingerprint, changed = false)
-            pending = e
+            pending[endpoint] = e
             throw e
         }
-        if (saved != fingerprint) {
-            val e = SshHostKeyPendingException(hostname, port, key.algorithm, fingerprint, changed = true)
-            pending = e
-            throw e
+        if (saved == fingerprint) return true
+        // 双算法兼容：两种指纹都由「这次的公钥字节」算出，命中任一种就说明服务器没换密钥。
+        // 命中旧算法时顺手把存储值升级成新格式，下次起只走新算法。
+        if (saved == sshHostKeyFingerprintDer(key)) {
+            store.save(hostname, port, fingerprint)
+            return true
         }
-        return true
+        // 更早的版本直接存过公钥 wire blob 本身：它可逆，还原后与本次 blob 的摘要相同即同一把密钥。
+        if (hostKeyFingerprintForDisplay(saved) == fingerprint) {
+            store.save(hostname, port, fingerprint)
+            return true
+        }
+        val e = SshHostKeyPendingException(hostname, port, key.algorithm, fingerprint, changed = true)
+        pending[endpoint] = e
+        throw e
     }
 }

@@ -6,6 +6,13 @@ data class ChatCompletionRequest(
     /** null 时 Gson 跳过该字段：服务端固定温度的模型（kimi-k3、gpt-5 系等）带上任何值都会 400。 */
     val temperature: Float? = null,
     val reasoning_effort: String? = null,
+    /**
+     * 厂商私有思考开关：`{"type": "disabled"}`。
+     * DeepSeek / Kimi / GLM / MiniMax 等只在 OpenAI 兼容层认这个字段，对它们发 `reasoning_effort="none"` 不生效。
+     */
+    val thinking: Map<String, String>? = null,
+    /** Qwen / DashScope 的思考开关（与 [thinking] 互不通用）。 */
+    val enable_thinking: Boolean? = null,
     val tools: List<OpenAIToolDefinition>? = null,
     val tool_choice: String? = null,
     val stream: Boolean = false,
@@ -83,7 +90,13 @@ data class Usage(
     val prompt_tokens: Int,
     val completion_tokens: Int,
     val total_tokens: Int,
-    val prompt_tokens_details: PromptTokensDetails? = null
+    val prompt_tokens_details: PromptTokensDetails? = null,
+    /** DeepSeek 系把命中数平铺在 usage 顶层（不在 prompt_tokens_details 里）。 */
+    val prompt_cache_hit_tokens: Int? = null,
+    /** DeepSeek 系的「未命中输入量」：与 hit 相加≈prompt_tokens，是补集而非缓存写入，不映射到 cacheCreationTokens。 */
+    val prompt_cache_miss_tokens: Int? = null,
+    /** 部分兼容服务把命中数直接平铺成顶层 cached_tokens，与 details.cached_tokens 同义。 */
+    val cached_tokens: Int? = null
 )
 
 /**

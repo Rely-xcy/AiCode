@@ -5,8 +5,10 @@ import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.SessionBriefDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.MessageRole
 import dagger.Lazy
@@ -18,6 +20,7 @@ import javax.inject.Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val agentMessageDao: AgentMessageDao,
+    private val sessionBriefDao: SessionBriefDao,
     // 会话删除要一并丢掉 [MessagePersistenceUseCase] 的历史缓存（它只增不删会一直占着整段历史）。
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     // Lazy 断环：引擎 → 记忆模块 → MemoryRepository → ProjectAicodeRoot → WorkspaceRepository → 本类，
@@ -81,10 +84,12 @@ class SessionUseCase @Inject constructor(
         // 递归收集子会话（v1 仅一层，循环即可）
         chatSessionDao.getSubSessionsByParentOnce(id).forEach { child ->
             agentMessageDao.deleteBySession(child.id)
+            sessionBriefDao.deleteBySession(child.id)
             chatSessionDao.delete(child.id)
             deleted.add(child.id)
         }
         agentMessageDao.deleteBySession(id)
+        sessionBriefDao.deleteBySession(id)
         chatSessionDao.delete(id)
         // 历史缓存按 sessionId 存，删掉的会话不会再 buildHistory，不清就永久占着
         deleted.forEach { sessionId -> messagePersistenceUseCase.evictHistory(sessionId) }
@@ -100,9 +105,15 @@ class SessionUseCase @Inject constructor(
         val sessions = chatSessionDao.getAllSessionsByWorkspaceOnce(workspacePath)
         if (sessions.isEmpty()) return 0
         sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
+        sessions.forEach { session -> sessionBriefDao.deleteBySession(session.id) }
         chatSessionDao.deleteByWorkspace(workspacePath)
         // 与 deleteSession 同一条清理：批量删同样会让这些 sessionId 的历史缓存永久留在内存里。
         sessions.forEach { session -> messagePersistenceUseCase.evictHistory(session.id) }
+        // 模块自持的会话级状态（记忆注入缓存、任务清单快照、工作状态 watcher）同样要释放，
+        // 否则批量删/切工作区后这些 sessionId 一直挂在内存里。
+        sessions.forEach { session ->
+            agentEngine.get().onSessionDeleted(EngineContext(sessionId = session.id))
+        }
         return sessions.size
     }
 
@@ -117,8 +128,7 @@ class SessionUseCase @Inject constructor(
 
     /** 工作区下可复用的空会话（从未发送过消息的根会话，取最近更新的一个），供「新建会话」直接切过去。 */
     suspend fun getEmptySessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
-        return chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath)
-            .firstOrNull { !agentMessageDao.hasMessages(it.id) }
+        return chatSessionDao.getEmptyRootSessionByWorkspace(workspacePath)
     }
 
     /** 回收工作区下多余的空会话（从未发送过消息），保留 [keepId]；保证列表最多一个空会话。 */
@@ -141,7 +151,7 @@ class SessionUseCase @Inject constructor(
      * @param providerId 覆盖 provider；null 表示继承父会话
      * @param model 覆盖模型；null 表示继承父会话
      * @param reasoningEffort 覆盖思考强度；null 表示继承父会话
-     * @param mode 覆盖运行模式；null 表示继承父会话
+     * @param mode 覆盖运行模式；null 表示继承父会话（只能往更严的方向收，不能放大，见 [resolveChildMode]）
      */
     fun newSubSessionEntity(
         title: String,
@@ -162,14 +172,24 @@ class SessionUseCase @Inject constructor(
             updatedAt = now,
             // 默认继承父会话 mode：权限引擎按会话 mode 判定写拦截，默认 BUILD 会让 PLAN
             // 模式下派出的子代理绕过只读限制，反过来 AUTO 模式的子代理又会弹授权窗打扰用户。
-            // 自定义子代理可用定义的 mode 覆盖该默认值。
-            mode = mode?.name ?: parent.mode,
+            mode = resolveChildMode(mode, parent.mode),
             providerId = providerId ?: parent.providerId,
             model = model ?: parent.model,
             reasoningEffort = reasoningEffort ?: parent.reasoningEffort,
             parentId = parentId,
             subagentType = subagentType
         )
+    }
+
+    /**
+     * 子会话实际生效的模式：默认继承父会话；自定义子代理的定义可覆盖，但只能更严、不能更宽。
+     *
+     * 若允许放大，PLAN 下派一个 `mode: build` 的子代理就能直接改文件——这正是业界把
+     * 「子代理不继承父权限」列为安全漏洞的原因。父会话 mode 值异常时按继承处理。
+     */
+    internal fun resolveChildMode(requested: AgentMode?, parentMode: String): String {
+        val parent = runCatching { AgentMode.valueOf(parentMode) }.getOrNull() ?: return parentMode
+        return (requested ?: parent).limitedBy(parent).name
     }
 
     suspend fun upsertSession(entity: ChatSessionEntity) {
@@ -193,16 +213,9 @@ class SessionUseCase @Inject constructor(
     }
 
     suspend fun updateMode(sessionId: String, mode: String) {
-        val s = chatSessionDao.getById(sessionId) ?: return
         val newMode = runCatching { AgentMode.valueOf(mode) }.getOrNull() ?: return
-        val currentMode = runCatching { AgentMode.valueOf(s.mode) }.getOrNull()
-        // 用户手动进入 PLAN 时同样记下进入前的模式，退出 PLAN 时恢复（与 AI 自切保持同一套语义）。
-        val modeBeforePlan = when {
-            newMode == AgentMode.PLAN && currentMode != AgentMode.PLAN -> currentMode?.name
-            newMode == AgentMode.PLAN -> s.modeBeforePlan
-            else -> null
-        }
-        chatSessionDao.upsert(s.copy(mode = newMode.name, modeBeforePlan = modeBeforePlan))
+        // 单条 UPDATE 原子完成：modeBeforePlan 由 SQL 根据当前 mode 计算，不覆盖其它列。
+        chatSessionDao.updateMode(sessionId, newMode.name)
     }
 
     suspend fun updateProviderModel(sessionId: String, providerId: String?, model: String?) {
@@ -211,6 +224,27 @@ class SessionUseCase @Inject constructor(
 
     suspend fun updateReasoningEffort(sessionId: String, effort: String) {
         chatSessionDao.updateReasoningEffort(sessionId, effort)
+    }
+
+    /**
+     * 设定/覆盖会话 goal：重置轮次计数，并记录当前累计 token 作为消耗基线，状态置 ACTIVE。
+     * [goal] 为 null/空白则清除目标。
+     */
+    suspend fun setGoal(sessionId: String, goal: String?, startInputTokens: Int, startOutputTokens: Int) {
+        val trimmed = goal?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) {
+            chatSessionDao.updateGoal(sessionId, null, null, 0, 0)
+        } else {
+            chatSessionDao.updateGoal(sessionId, trimmed, GoalStatus.ACTIVE.name, startInputTokens, startOutputTokens)
+        }
+    }
+
+    suspend fun updateGoalStatus(sessionId: String, status: GoalStatus?) {
+        chatSessionDao.updateGoalStatus(sessionId, status?.name)
+    }
+
+    suspend fun incrementGoalTurn(sessionId: String) {
+        chatSessionDao.incrementGoalTurn(sessionId)
     }
 
     suspend fun isSessionEmpty(sessionId: String): Boolean {

@@ -161,9 +161,7 @@ internal fun computeTaskDurations(
     lastTurnFinished: Boolean,
     /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
     runningTurnStartId: String? = null
-): Map<String, Long> = splitTurns(messages, lastTurnFinished, runningTurnStartId)
-    .filter { it.endMessage.timestamp > it.startMillis }
-    .associate { it.endMessage.id to (it.endMessage.timestamp - it.startMillis) }
+): Map<String, Long> = computeTurnStats(messages, lastTurnFinished, runningTurnStartId).taskDurations
 
 /**
  * 每轮任务的 token 合计：轮内**所有步骤**的输入/输出/缓存命中求和，返回「消息 id → [TurnUsage]」，
@@ -177,12 +175,35 @@ internal fun computeTurnUsage(
     lastTurnFinished: Boolean,
     /** 正在运行的那一轮的轮首用户行 id：它及其之后的轮不结算，见 [splitTurns]。 */
     runningTurnStartId: String? = null
-): Map<String, TurnUsage> = splitTurns(messages, lastTurnFinished, runningTurnStartId).associate { turn ->
-    turn.endMessage.id to TurnUsage(
-        inputTokens = turn.assistantMessages.sumOf { it.inputTokens },
-        outputTokens = turn.assistantMessages.sumOf { it.outputTokens },
-        cachedInputTokens = turn.assistantMessages.sumOf { it.cachedInputTokens }
-    )
+): Map<String, TurnUsage> = computeTurnStats(messages, lastTurnFinished, runningTurnStartId).turnUsages
+
+/** 一次轮次切分产出的两份派生数据：[computeTaskDurations] 与 [computeTurnUsage] 的结果。 */
+internal data class TurnStats(
+    val taskDurations: Map<String, Long>,
+    val turnUsages: Map<String, TurnUsage>
+)
+
+/**
+ * 耗时与用量共用同一份轮次切分（[splitTurns]）：分开算等于对消息列表跑两遍 O(n) 切分，
+ * 而每次消息变化（流式落库、工具状态）都会重跑一次，两遍纯属重复。
+ */
+internal fun computeTurnStats(
+    messages: List<AgentUIMessage>,
+    lastTurnFinished: Boolean,
+    runningTurnStartId: String? = null
+): TurnStats {
+    val durations = LinkedHashMap<String, Long>()
+    val usages = LinkedHashMap<String, TurnUsage>()
+    for (turn in splitTurns(messages, lastTurnFinished, runningTurnStartId)) {
+        val end = turn.endMessage
+        if (end.timestamp > turn.startMillis) durations[end.id] = end.timestamp - turn.startMillis
+        usages[end.id] = TurnUsage(
+            inputTokens = turn.assistantMessages.sumOf { it.inputTokens },
+            outputTokens = turn.assistantMessages.sumOf { it.outputTokens },
+            cachedInputTokens = turn.assistantMessages.sumOf { it.cachedInputTokens }
+        )
+    }
+    return TurnStats(taskDurations = durations, turnUsages = usages)
 }
 
 /** 任务耗时格式化：不足 1 分钟显示 `12s`，不足 1 小时显示 `2:05`，更长显示 `1:02:05`。 */
@@ -225,6 +246,8 @@ internal fun AgentMessageItem(
     toolExpandedOverride: Boolean? = null,
     /** 工具行手动展开/收起时回传新状态，由上层持久化。 */
     onToolExpandedChange: ((Boolean) -> Unit)? = null,
+    reasoningExpandedOverride: Boolean? = null,
+    onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
     /** 本 item 内容的外层内边距：工具调用分组展开时由 [AIChatPanel] 传入缩进，用于区分层级。 */
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /** 本轮任务总耗时（ms）：仅轮末助手消息非空，见 [computeTaskDurations]。 */
@@ -244,6 +267,8 @@ internal fun AgentMessageItem(
     reasoningDurationMs: Long? = null,
     /** 是否为分块的末块（渲染操作行、底部圆角、与下一条列表 item 的间距）；非分块消息恒为 true。 */
     isChunkFooter: Boolean = true,
+    /** 本轮消息自动触发的技能名（自然语言触发词命中）：仅用户消息渲染为气泡下方的小 chip。 */
+    triggeredSkills: List<String> = emptyList(),
 ) {
     if (message.isCompactionMarker) {
         // 压缩内部锚点不再渲染分隔线：摘要卡片已提供压缩反馈，避免与卡片重复。
@@ -327,7 +352,9 @@ internal fun AgentMessageItem(
             ReasoningBubble(
                 text = message.reasoning.orEmpty(),
                 cache = markdownCache,
-                durationMs = reasoningDurationMs
+                durationMs = reasoningDurationMs,
+                expandedOverride = reasoningExpandedOverride,
+                onExpandedChange = onReasoningExpandedChange
             )
         }
         if (hasContent || hasAttachments || message.role != MessageRole.ASSISTANT) {
@@ -431,8 +458,19 @@ internal fun AgentMessageItem(
                         val iconTint = MaterialTheme.colorScheme.onSurfaceVariant
                         // 排过内容才补间隔，否则本行首个元素会被凭空缩进一格
                         var emitted = false
+                        // 本轮自动触发了技能：行首给一个 chip，再排时间/操作（与相邻小字同级，不抢主色）。
+                        if (isUser && triggeredSkills.isNotEmpty()) {
+                            ChatTriggeredSkillChip(
+                                text = stringResource(
+                                    R.string.chat_skill_triggered_chip,
+                                    triggeredSkills.joinToString("、")
+                                )
+                            )
+                            emitted = true
+                        }
                         // 用户消息：时间戳排在复制按钮之前（对齐参考图里气泡下方的「17:55 ⧉」）
                         if (isUser) {
+                            if (emitted) Spacer(Modifier.width(Spacing.xs))
                             ChatMetaText(text = formatClockTime(message.timestamp))
                             emitted = true
                         }
@@ -541,7 +579,8 @@ internal fun TurnCollapseHeader(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
-    processCount: Int = 0
+    processCount: Int = 0,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = modifier
@@ -549,6 +588,7 @@ internal fun TurnCollapseHeader(
             .heightIn(min = ChatStyle.toolRowMinHeight)
             .clip(RoundedCornerShape(ChatStyle.panelCorner))
             .clickable(
+                enabled = enabled,
                 onClickLabel = stringResource(
                     if (expanded) R.string.common_collapse_action else R.string.common_expand
                 ),

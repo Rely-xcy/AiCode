@@ -24,8 +24,9 @@ object GitIgnoreMatcher {
         if (p.isEmpty()) return false
         // *.ext 文件模式：匹配任意层级的文件名
         if (p.startsWith("*.") && '/' !in p) {
-            val ext = p.removePrefix("*.")
-            return parts.any { it.endsWith(ext) }
+            // 必须带扩展名前的点：`*.log` 不能命中 `catalog`（endsWith("log") 会误判）。
+            val suffix = "." + p.removePrefix("*.")
+            return parts.any { it.endsWith(suffix) }
         }
         val segs = p.split('/')
         if (segs.size > parts.size) return false

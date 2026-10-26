@@ -51,6 +51,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +69,8 @@ import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionToggleAction
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
@@ -99,6 +103,7 @@ import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Database
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Globe
@@ -112,7 +117,9 @@ import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.PieChart
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.Save
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
@@ -149,8 +156,10 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     DefaultModels(R.string.settings_default_models),
     Mcp(R.string.settings_mcp),
     Skills(R.string.settings_skills),
+    SkillSearch(R.string.settings_skills),
     Memory(R.string.settings_memory),
     MemoryEditor(R.string.settings_memory),
+    MemorySearch(R.string.settings_memory),
     Prompts(R.string.prompts_title),
     PromptDetail(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
@@ -181,17 +190,21 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
  */
 private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.Menu -> 0
-    // 技能/子代理编辑页既可从列表(1) 进也可从详情页(2) 进，必须比详情页更深：
-    // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
-    SettingsSection.SkillEditor,
+    // 技能这一支整体比其它分支深一层：技能详情既能从列表(1) 进、也能从搜索结果(2) 进，
+    // 只有让详情比搜索页更深，「详情返回到搜索结果」才是往左退，而不是又从右边推进来一页。
+    SettingsSection.SkillEditor -> 4
+    SettingsSection.SkillDetail -> 3
+    // 编辑页必须比详情页更深：同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SubAgentEditor,
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
     SettingsSection.PromptDetail,
-    SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
     SettingsSection.MemoryEditor,
+    // 搜索页是列表页的下一层：从列表推进去、返回时向左退。
+    SettingsSection.MemorySearch,
+    SettingsSection.SkillSearch,
     SettingsSection.Log -> 2
     else -> 1
 }
@@ -237,6 +250,8 @@ fun SettingsScreen(
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
+    val liveNotificationEnabled by viewModel.liveNotificationEnabled.collectAsStateWithLifecycle()
+    val approvalNotificationEnabled by viewModel.approvalNotificationEnabled.collectAsStateWithLifecycle()
     val autoRemoveStaleModels by viewModel.autoRemoveStaleModels.collectAsStateWithLifecycle()
     val startupSessionMode by viewModel.startupSessionMode.collectAsStateWithLifecycle()
     val firstByteTimeoutSec by viewModel.firstByteTimeoutSec.collectAsStateWithLifecycle()
@@ -244,8 +259,12 @@ fun SettingsScreen(
     val maxNetworkRetries by viewModel.maxNetworkRetries.collectAsStateWithLifecycle()
     val enterToSend by viewModel.enterToSend.collectAsStateWithLifecycle()
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
+    val vscreenRootChannel by viewModel.vscreenRootChannel.collectAsStateWithLifecycle()
+    val vscreenAccessibilityEnabled by viewModel.vscreenAccessibilityEnabled.collectAsStateWithLifecycle()
     val effectiveCompaction by viewModel.effectiveCompactionThresholds.collectAsStateWithLifecycle()
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
+    val goalMaxTurns by viewModel.goalMaxTurns.collectAsStateWithLifecycle()
+    val goalMaxTokens by viewModel.goalMaxTokens.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themePresetId by viewModel.themePresetId.collectAsStateWithLifecycle()
@@ -259,6 +278,7 @@ fun SettingsScreen(
     val compactionModel by viewModel.compactionModel.collectAsStateWithLifecycle()
     val titleProviderId by viewModel.titleProviderId.collectAsStateWithLifecycle()
     val titleModel by viewModel.titleModel.collectAsStateWithLifecycle()
+    val subagentTierSelections by viewModel.subagentTierSelections.collectAsStateWithLifecycle()
     val imageGenProviderId by viewModel.imageGenProviderId.collectAsStateWithLifecycle()
     val imageGenModel by viewModel.imageGenModel.collectAsStateWithLifecycle()
     val modelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
@@ -276,8 +296,10 @@ fun SettingsScreen(
     val promptsAnnouncementText by viewModel.promptsAnnouncementText.collectAsStateWithLifecycle()
     val promptsAnnouncementOutdated by viewModel.promptsAnnouncementOutdated.collectAsStateWithLifecycle()
     val imageCatalog by viewModel.imageCatalog.collectAsStateWithLifecycle()
+    val imageVersions by viewModel.imageVersions.collectAsStateWithLifecycle()
     val imageDownload by viewModel.containerImageDownload.collectAsStateWithLifecycle()
     val containerReset by viewModel.containerReset.collectAsStateWithLifecycle()
+    val containerReinstall by viewModel.containerReinstall.collectAsStateWithLifecycle()
     val imageSourceOptions by viewModel.imageSourceOptions.collectAsStateWithLifecycle()
     val selectedImageSource by viewModel.selectedImageSource.collectAsStateWithLifecycle()
     val downloadedImages by viewModel.downloadedImages.collectAsStateWithLifecycle()
@@ -298,6 +320,11 @@ fun SettingsScreen(
 
     var section by remember { mutableStateOf(SettingsSection.Menu) }
     var logReturnSection by remember { mutableStateOf(SettingsSection.Menu) }
+    // 各列表页的多选状态：顶栏「多选」开关在本页 Scaffold 里，所以状态必须提到这里统一持有。
+    // 用普通 map（非 snapshot）新建容器，避免在组合期写快照状态；Compose 状态在 ListSelectionState 内部。
+    val listSelections = remember { mutableMapOf<SettingsSection, ListSelectionState>() }
+    fun selectionFor(target: SettingsSection): ListSelectionState =
+        listSelections.getOrPut(target) { ListSelectionState() }
     var editingProvider by remember { mutableStateOf<AIProviderConfig?>(null) }
     var showAddProviderSheet by remember { mutableStateOf(false) }
     var providerPresetPrefill by remember { mutableStateOf<ProviderPreset?>(null) }
@@ -355,9 +382,13 @@ fun SettingsScreen(
     }
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
+    // 技能页搜索词：SkillsSection 每次进分区都会重建，放它内部的 remember 会丢输入，
+    // 放页面级 rememberSaveable 才能在进详情页返回、旋屏后仍保留。
+    // 过滤只作用于已经加载到内存的列表（见 SkillsSection），不会因为敲字重扫盘。
+    var skillSearchQuery by rememberSaveable { mutableStateOf("") }
 
-    // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
-    var showPromptsAddSheet by remember { mutableStateOf(false) }
+    // 自定义提示词：编辑目标（新建/编辑/固定片段）+ 「重置」确认弹窗可见性
+    var showResetPrompts by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
     var selectedPrompt by remember { mutableStateOf<PromptFragment?>(null) }
     var showPromptsAnnouncement by remember { mutableStateOf(false) }
@@ -372,6 +403,9 @@ fun SettingsScreen(
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
     var skillEditorReturn by remember { mutableStateOf(SettingsSection.Skills) }
+    // 技能详情的返回目标：从搜索结果点进去就回搜索结果（关键词与滚动位置都还在），
+    // 从列表点进去就回列表。不能写死成列表，否则搜到一半点开一条，退回得重搜。
+    var skillDetailReturn by remember { mutableStateOf(SettingsSection.Skills) }
     // 保存后要在详情页展示的技能名：列表刷新是异步的，先记名字等刷新完再换快照。
     var pendingSkillName by remember { mutableStateOf<String?>(null) }
     // 「添加技能」底部弹层：选择作用域后走手动新建 / 文件导入 / 压缩包导入。
@@ -414,13 +448,15 @@ fun SettingsScreen(
         SettingsSection.Menu -> null
         SettingsSection.ProviderEditor -> SettingsSection.Providers
         SettingsSection.Log -> logReturnSection.takeUnless { expanded && it == SettingsSection.Menu }
-        SettingsSection.SkillDetail -> SettingsSection.Skills
+        SettingsSection.SkillDetail -> skillDetailReturn
         SettingsSection.PromptEditor -> promptEditorReturn
         SettingsSection.PromptDetail -> SettingsSection.Prompts
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
         SettingsSection.MemoryEditor -> SettingsSection.Memory
+        SettingsSection.MemorySearch -> SettingsSection.Memory
+        SettingsSection.SkillSearch -> SettingsSection.Skills
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
     }
@@ -454,6 +490,10 @@ fun SettingsScreen(
         }
     }
 
+    LaunchedEffect(section) {
+        if (section == SettingsSection.TokenStats) viewModel.compactOldCallDetails()
+    }
+
     // 首次（或公告内容更新后）进入「容器与镜像」页自动弹出使用说明；哈希比对在 ViewModel 完成。
     LaunchedEffect(section, containerAnnouncementOutdated) {
         if (section == SettingsSection.Container && containerAnnouncementOutdated && containerAnnouncementText.isNotBlank()) {
@@ -472,6 +512,11 @@ fun SettingsScreen(
     // 滚动位置必须提到 AnimatedContent 之外持有：菜单页作为分区分支被切走时会被 dispose，
     // 内部 rememberScrollState 一并丢弃，从二级页返回就跳回顶部。
     val menuScrollState = rememberScrollState()
+    // 同理：一级 / 详情页整块内容切走后会被 AnimatedContent dispose，内部 rememberScrollState、
+    // rememberLazyListState 一并丢失，从下一级页面返回就跳回顶部（供应商、技能、MCP 等所有列表都中招）。
+    // 用 SaveableStateHolder 按分区名接住这些 rememberSaveable 状态；编辑类页面不走这一步
+    // （它们在 AnimatedContent 里是独立分支），否则每次进编辑器会把上次的输入恢复出来。
+    val sectionStateHolder = rememberSaveableStateHolder()
     val menuBody: @Composable () -> Unit = {
         SettingsMenu(
             scrollState = menuScrollState,
@@ -680,27 +725,63 @@ fun SettingsScreen(
                 )
 
             else -> {
+            // 用分区名接住本页内部的滚动位置等 rememberSaveable 状态，返回时原样恢复（详见 sectionStateHolder）。
+            // 详情页要带上条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
+            val stateKey: String = when (current) {
+                SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
+                SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
+                SettingsSection.PromptDetail -> "PromptDetail:${selectedPrompt?.number ?: 0}"
+                else -> current.name
+            }
+            sectionStateHolder.SaveableStateProvider(stateKey) {
             // 存储页的顶栏刷新按钮与页面内容要共用同一个 ViewModel，故在此分支创建；
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 记忆页与记忆搜索页的顶栏、页面内容必须读写同一份搜索词 / 列表状态，回同一个 VM：
+            // 与存储页一样在 Scaffold 之前取一次，内容区再取同一实例。
+            // 仍然只在这两个分区创建，不会每次进设置页都扫一遍记忆目录。
+            val memorySectionViewModel: com.aicode.feature.settings.presentation.MemoryViewModel? =
+                if (current == SettingsSection.Memory || current == SettingsSection.MemorySearch) {
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                } else {
+                    null
+                }
             Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = if (current == SettingsSection.SkillDetail) {
-                            selectedSkill?.name ?: stringResource(current.titleRes)
-                        } else if (current == SettingsSection.SubAgentDetail) {
-                            selectedSubAgent?.name ?: stringResource(current.titleRes)
-                        } else if (expanded && current == SettingsSection.Menu) {
-                            // 大屏左栏顶部已经写着「设置」，右栏空态不再重复
-                            ""
-                        } else {
-                            stringResource(current.titleRes)
-                        }
-                    )
+                    val memoryVm = memorySectionViewModel
+                    if (current == SettingsSection.MemorySearch && memoryVm != null) {
+                        // 搜索页的顶栏只留返回箭头 + 输入框：没有标题、没有动作按钮，
+                        // 输入框才能吃满整行宽度，窄屏也不会被挤成一条缝。
+                        val memoryQuery by memoryVm.searchQuery.collectAsStateWithLifecycle()
+                        SearchTopBarField(
+                            query = memoryQuery,
+                            onQueryChange = memoryVm::setSearchQuery,
+                            placeholder = stringResource(R.string.memory_search_hint)
+                        )
+                    } else if (current == SettingsSection.SkillSearch) {
+                        SearchTopBarField(
+                            query = skillSearchQuery,
+                            onQueryChange = { skillSearchQuery = it },
+                            placeholder = stringResource(R.string.skills_search_hint)
+                        )
+                    } else {
+                        Text(
+                            text = if (current == SettingsSection.SkillDetail) {
+                                selectedSkill?.name ?: stringResource(current.titleRes)
+                            } else if (current == SettingsSection.SubAgentDetail) {
+                                selectedSubAgent?.name ?: stringResource(current.titleRes)
+                            } else if (expanded && current == SettingsSection.Menu) {
+                                // 大屏左栏顶部已经写着「设置」，右栏空态不再重复
+                                ""
+                            } else {
+                                stringResource(current.titleRes)
+                            }
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = settingsPageBackground(),
@@ -719,16 +800,24 @@ fun SettingsScreen(
                 },
                 actions = {
                     when (current) {
-                        SettingsSection.Providers -> IconButton(
-                            onClick = {
-                                providerPresetPrefill = null
-                                showAddProviderSheet = true
-                            },
-                            modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_ADD)
-                        ) {
-                            Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.settings_add_provider))
+                        SettingsSection.Providers -> {
+                            if (providers.isNotEmpty()) {
+                                SelectionToggleAction(selectionFor(SettingsSection.Providers))
+                            }
+                            IconButton(
+                                onClick = {
+                                    providerPresetPrefill = null
+                                    showAddProviderSheet = true
+                                },
+                                modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_ADD)
+                            ) {
+                                Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.settings_add_provider))
+                            }
                         }
                         SettingsSection.Mcp -> {
+                            if (mcpEntries.isNotEmpty()) {
+                                SelectionToggleAction(selectionFor(SettingsSection.Mcp))
+                            }
                             IconButton(onClick = { viewModel.reloadMcp() }) {
                                 if (mcpReloading) {
                                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -772,6 +861,9 @@ fun SettingsScreen(
                             }
                         }
                         SettingsSection.ContainerDownloads -> {
+                            if (downloadedImages.isNotEmpty()) {
+                                SelectionToggleAction(selectionFor(SettingsSection.ContainerDownloads))
+                            }
                             IconButton(onClick = { showImageSourceSheet = true }) {
                                 Icon(
                                     FeatherIcons.Globe,
@@ -781,15 +873,32 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Skills -> IconButton(onClick = {
-                            showSkillAddSheet = true
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.skills_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Skills -> {
+                            if (skills.isNotEmpty()) {
+                                SelectionToggleAction(selectionFor(SettingsSection.Skills))
+                            }
+                            IconButton(onClick = {
+                                // 与记忆页同一个口径：搜索页是一次性查询入口，进去总是空词。
+                                skillSearchQuery = ""
+                                section = SettingsSection.SkillSearch
+                            }) {
+                                Icon(
+                                    FeatherIcons.Search,
+                                    contentDescription = stringResource(R.string.common_search),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            IconButton(onClick = {
+                                showSkillAddSheet = true
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.skills_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                             IconButton(onClick = {
@@ -805,17 +914,22 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.SubAgents -> IconButton(onClick = {
-                            editingSubAgent = null
-                            subAgentEditorReturn = SettingsSection.SubAgents
-                            section = SettingsSection.SubAgentEditor
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.subagent_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.SubAgents -> {
+                            if (subAgents.isNotEmpty()) {
+                                SelectionToggleAction(selectionFor(SettingsSection.SubAgents))
+                            }
+                            IconButton(onClick = {
+                                editingSubAgent = null
+                                subAgentEditorReturn = SettingsSection.SubAgents
+                                section = SettingsSection.SubAgentEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.subagent_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                             IconButton(onClick = {
@@ -847,6 +961,15 @@ fun SettingsScreen(
                             }
                         }
                         SettingsSection.Prompts -> {
+                            // 多选：批量删除自定义提示词（本地/内置来源只读、不可勾选）。
+                            // 片段全部来自只读层（如未自定义时的全「本地」）时置灰开关——进多选也无项可勾。
+                            val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
+                                androidx.hilt.navigation.compose.hiltViewModel()
+                            val promptsState by promptsViewModel.state.collectAsStateWithLifecycle()
+                            SelectionToggleAction(
+                                selectionFor(SettingsSection.Prompts),
+                                enabled = promptsState.fragments.any { it.editable }
+                            )
                             IconButton(onClick = { showPromptsAnnouncement = true }) {
                                 Icon(
                                     FeatherIcons.Info,
@@ -855,7 +978,21 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
-                            IconButton(onClick = { showPromptsAddSheet = true }) {
+                            // 重置：清空自定义提示词，各编号回落到内置（排在「+」左侧）。
+                            IconButton(onClick = { showResetPrompts = true }) {
+                                Icon(
+                                    FeatherIcons.RotateCcw,
+                                    contentDescription = stringResource(R.string.prompts_reset_custom),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            // 「+」直接进新建页，不再弹方式选择。
+                            IconButton(onClick = {
+                                promptEditTarget = PromptEditTarget(null)
+                                promptEditorReturn = SettingsSection.Prompts
+                                section = SettingsSection.PromptEditor
+                            }) {
                                 Icon(
                                     FeatherIcons.Plus,
                                     contentDescription = stringResource(R.string.prompts_add_prompt),
@@ -878,16 +1015,31 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Memory -> IconButton(onClick = {
-                            memoryEditorTarget = MemoryEditorTarget()
-                            section = SettingsSection.MemoryEditor
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.memory_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Memory -> {
+                            IconButton(onClick = {
+                                // 每次从入口进搜索页都从空关键词开始：搜索页是一次性查询入口，
+                                // 留着上次的词会让人以为列表还在被筛选。
+                                memorySectionViewModel?.setSearchQuery("")
+                                section = SettingsSection.MemorySearch
+                            }) {
+                                Icon(
+                                    FeatherIcons.Search,
+                                    contentDescription = stringResource(R.string.common_search),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            IconButton(onClick = {
+                                memoryEditorTarget = MemoryEditorTarget()
+                                section = SettingsSection.MemoryEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.memory_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         SettingsSection.Storage -> {
                             IconButton(onClick = { storageViewModel?.refresh() }) {
@@ -931,11 +1083,16 @@ fun SettingsScreen(
                     onSetCompactionThresholdPercent = { viewModel.setCompactionThresholdPercent(it) },
                     sendFileMaxSizeMb = sendFileMaxSizeMb,
                     onSetSendFileMaxSizeMb = { viewModel.setSendFileMaxSizeMb(it) },
+                    goalMaxTurns = goalMaxTurns,
+                    onSetGoalMaxTurns = { viewModel.setGoalMaxTurns(it) },
+                    goalMaxTokens = goalMaxTokens,
+                    onSetGoalMaxTokens = { viewModel.setGoalMaxTokens(it) },
                     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
                     onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) }
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,
+                    selection = selectionFor(SettingsSection.Providers),
                     onEdit = {
                         editingProvider = it
                         section = SettingsSection.ProviderEditor
@@ -943,7 +1100,9 @@ fun SettingsScreen(
                     onDelete = { viewModel.deleteProvider(it.id) },
                     onReorder = { fromIndex, toIndex ->
                         viewModel.reorderProviders(fromIndex, toIndex)
-                    }
+                    },
+                    onBatchDelete = { ids -> viewModel.deleteProviders(ids) },
+                    onBatchSetEnabled = { ids, enabled -> viewModel.setProvidersEnabled(ids, enabled) }
                 )
                 SettingsSection.DefaultModels -> DefaultModelsSection(
                     providers = providers,
@@ -955,6 +1114,7 @@ fun SettingsScreen(
                     titleModel = titleModel,
                     imageGenProviderId = imageGenProviderId,
                     imageGenModel = imageGenModel,
+                    subagentTierSelections = subagentTierSelections,
                     modelMetadata = modelMetadata,
                     onLoadMetadata = { viewModel.loadAllModelMetadata() },
                     onSelectVisionModel = { pid, m -> viewModel.setVisionModel(pid, m) },
@@ -964,28 +1124,57 @@ fun SettingsScreen(
                     onSelectTitleModel = { pid, m -> viewModel.setTitleModel(pid, m) },
                     onClearTitleModel = { viewModel.clearTitleModel() },
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
-                    onClearImageGenModel = { viewModel.clearImageGenModel() }
+                    onClearImageGenModel = { viewModel.clearImageGenModel() },
+                    onSelectSubagentTierModel = { tier, pid, m -> viewModel.setSubagentTierModel(tier, pid, m) },
+                    onClearSubagentTierModel = { tier -> viewModel.clearSubagentTier(tier) }
                 )
                 SettingsSection.Mcp -> McpSection(
                     entries = mcpEntries,
                     statuses = mcpStatuses,
                     reloading = mcpReloading,
+                    selection = selectionFor(SettingsSection.Mcp),
                     onReload = { viewModel.reloadMcp() },
                     onToggle = { name, enabled, scope -> viewModel.setMcpServerEnabled(name, enabled, scope) },
                     onEdit = {
                         editingMcp = it
                         showMcpDialog = true
                     },
-                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) }
+                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) },
+                    onBatchDelete = { targets -> viewModel.deleteMcpServers(targets) },
+                    onBatchSetEnabled = { targets, enabled -> viewModel.setMcpServersEnabled(targets, enabled) },
+                    onBatchReconnect = { names -> viewModel.reconnectMcpServers(names) }
                 )
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
+                    selection = selectionFor(SettingsSection.Skills),
+                    deletingInProgress = skillDeleting.isNotEmpty(),
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
+                        selectionFor(SettingsSection.Skills).exit()
                         selectedSkill = it
+                        // 从列表进详情，返回目标就是列表；不复用上一次搜索留下的搜索页。
+                        skillDetailReturn = SettingsSection.Skills
                         section = SettingsSection.SkillDetail
+                    },
+                    onBatchDelete = { targets ->
+                        viewModel.deleteSkills(targets.map { it.name to it.scope })
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        viewModel.setSkillsEnabled(targets.map { it.name to it.scope }, enabled)
                     }
+                )
+                SettingsSection.SkillSearch -> SkillSearchSection(
+                    projectName = currentProjectName,
+                    entries = skills,
+                    keyword = skillSearchQuery,
+                    onOpenDetail = { entry ->
+                        selectedSkill = entry
+                        // 返回目标设成搜索页：搜到一半点进一条，退回还是那份结果，不用重搜
+                        skillDetailReturn = SettingsSection.SkillSearch
+                        section = SettingsSection.SkillDetail
+                    },
+                    onDelete = { skillToDelete = it }
                 )
                 SettingsSection.Prompts -> {
                     val promptsViewModel: com.aicode.feature.settings.presentation.PromptsViewModel =
@@ -994,26 +1183,32 @@ fun SettingsScreen(
                     LaunchedEffect(Unit) { promptsViewModel.refresh() }
                     PromptsSection(
                         state = promptsState,
+                        selection = selectionFor(SettingsSection.Prompts),
                         onOpenFragment = { fragment ->
+                            selectionFor(SettingsSection.Prompts).exit()
                             selectedPrompt = fragment
                             section = SettingsSection.PromptDetail
                         },
                         onDeleteFragment = promptsViewModel::deleteFragment,
                         onReorder = promptsViewModel::reorderFragments,
-                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled
+                        onToggleBuiltinDisabled = promptsViewModel::setBuiltinDisabled,
+                        onBatchDeleteFragments = { targets -> promptsViewModel.deleteFragments(targets) }
                     )
-                    if (showPromptsAddSheet) {
-                        PromptsAddSheet(
-                            onDismiss = { showPromptsAddSheet = false },
-                            onAddFragment = {
-                                showPromptsAddSheet = false
-                                promptEditTarget = PromptEditTarget(null)
-                                promptEditorReturn = SettingsSection.Prompts
-                                section = SettingsSection.PromptEditor
+                    if (showResetPrompts) {
+                        AlertDialog(
+                            onDismissRequest = { showResetPrompts = false },
+                            title = { Text(stringResource(R.string.prompts_reset_custom)) },
+                            text = { Text(stringResource(R.string.prompts_reset_confirm)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    promptsViewModel.resetCustomFragments()
+                                    showResetPrompts = false
+                                }) { Text(stringResource(R.string.common_reset)) }
                             },
-                            onHelp = {
-                                showPromptsAddSheet = false
-                                showPromptsAnnouncement = true
+                            dismissButton = {
+                                TextButton(onClick = { showResetPrompts = false }) {
+                                    Text(stringResource(R.string.common_cancel))
+                                }
                             }
                         )
                     }
@@ -1030,10 +1225,13 @@ fun SettingsScreen(
                 }
                 SettingsSection.PromptEditor -> Unit
                 SettingsSection.Memory -> {
-                    // 记忆页的 VM 只在这一分区创建，避免每次进设置页都扫一遍记忆目录
+                    // 用 Scaffold 之前取好的那一个实例：顶栏入口与这里必须读写同一份状态。
+                    // 仍然只在这一分区创建，不会每次进设置页都扫一遍记忆目录。
                     val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
-                        androidx.hilt.navigation.compose.hiltViewModel()
+                        requireNotNull(memorySectionViewModel) { "Memory section without ViewModel" }
+                    // 列表拿全量：筛选只发生在搜索页，否则从搜索页返回后列表还带着上次的关键词。
                     val memories by memoryViewModel.memories.collectAsStateWithLifecycle()
+                    val memoryLoading by memoryViewModel.loading.collectAsStateWithLifecycle()
                     val shortTerm by memoryViewModel.shortTermSession.collectAsStateWithLifecycle()
                     val activeMemory by memoryViewModel.activeMemoryEnabled.collectAsStateWithLifecycle()
                     val curationInterval by memoryViewModel.curationIntervalHours.collectAsStateWithLifecycle()
@@ -1061,6 +1259,7 @@ fun SettingsScreen(
                     var detailMemory by remember { mutableStateOf<com.aicode.feature.agent.domain.memory.Memory?>(null) }
                     MemorySection(
                         memories = memories,
+                        loading = memoryLoading,
                         shortTerm = shortTerm,
                         activeMemoryEnabled = activeMemory,
                         onToggleActiveMemory = memoryViewModel::setActiveMemoryEnabled,
@@ -1074,25 +1273,66 @@ fun SettingsScreen(
                         onDelete = { memoryToDelete = it }
                     )
                     detailMemory?.let { memory ->
-                        MemoryDetailSheet(memory = memory, onDismiss = { detailMemory = null })
-                    }
-                    // 删除记忆二次确认：确认按钮里才真正删；显示名用列表行同一个字段（memory.name）
-                    memoryToDelete?.let { memory ->
-                        AlertDialog(
-                            onDismissRequest = { memoryToDelete = null },
-                            title = { Text(stringResource(R.string.memory_delete_confirm_title)) },
-                            text = { Text(stringResource(R.string.memory_delete_confirm_message, memory.name)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    memoryViewModel.delete(memory)
-                                    memoryToDelete = null
-                                }) { Text(stringResource(R.string.common_delete)) }
+                        MemoryDetailSheet(
+                            memory = memory,
+                            onDismiss = { detailMemory = null },
+                            // 详情里改/删先关弹层：编辑是全屏分区，删要走二次确认，
+                            // 弹层留在下面会跟新分区或确认框抢焦点
+                            onEdit = {
+                                detailMemory = null
+                                memoryEditorTarget = MemoryEditorTarget(memory)
+                                section = SettingsSection.MemoryEditor
                             },
-                            dismissButton = {
-                                TextButton(onClick = { memoryToDelete = null }) { Text(stringResource(R.string.common_cancel)) }
+                            onDelete = {
+                                detailMemory = null
+                                memoryToDelete = memory
                             }
                         )
                     }
+                    // 删除记忆二次确认：确认按钮里才真正删；确认框与搜索页共用同一个。
+                    memoryToDelete?.let { memory ->
+                        MemoryDeleteConfirmDialog(
+                            memory = memory,
+                            onConfirm = {
+                                memoryViewModel.delete(memory)
+                                memoryToDelete = null
+                            },
+                            onDismiss = { memoryToDelete = null }
+                        )
+                    }
+                }
+                SettingsSection.MemorySearch -> {
+                    // 与记忆页同一个 VM 实例：结果就是它按当前关键词算好的 visibleMemories，
+                    // 本页不做第二套过滤，敲字不会触发读盘。
+                    val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                        requireNotNull(memorySectionViewModel) { "Memory search without ViewModel" }
+                    val searchResults by memoryViewModel.visibleMemories.collectAsStateWithLifecycle()
+                    val searchQuery by memoryViewModel.searchQuery.collectAsStateWithLifecycle()
+                    val searchLoading by memoryViewModel.loading.collectAsStateWithLifecycle()
+                    // 删除失败（条目已不存在等）也要提示：搜索页的删除走同一个 VM，
+                    // 而列表页那一个 collector 在另一个分支里，不在这里再挂一个就什么都不弹。
+                    val searchDeleteFailed by memoryViewModel.deleteFailed.collectAsStateWithLifecycle()
+                    val searchToastContext = LocalContext.current
+                    LaunchedEffect(searchDeleteFailed) {
+                        if (searchDeleteFailed) {
+                            Toast.makeText(
+                                searchToastContext,
+                                searchToastContext.getString(R.string.memory_delete_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            memoryViewModel.clearDeleteFailed()
+                        }
+                    }
+                    MemorySearchSection(
+                        results = searchResults,
+                        query = searchQuery,
+                        loading = searchLoading,
+                        onEdit = {
+                            memoryEditorTarget = MemoryEditorTarget(it)
+                            section = SettingsSection.MemoryEditor
+                        },
+                        onDelete = memoryViewModel::delete
+                    )
                 }
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
@@ -1108,10 +1348,19 @@ fun SettingsScreen(
                 SettingsSection.SubAgents -> SubAgentsSection(
                     projectName = currentProjectName,
                     entries = subAgents,
+                    selection = selectionFor(SettingsSection.SubAgents),
+                    deletingInProgress = subAgentDeleting.isNotEmpty(),
                     onDelete = { subAgentToDelete = it },
                     onOpenDetail = {
+                        selectionFor(SettingsSection.SubAgents).exit()
                         selectedSubAgent = it
                         section = SettingsSection.SubAgentDetail
+                    },
+                    onBatchDelete = { targets ->
+                        viewModel.deleteSubAgents(targets.map { it.name to it.scope })
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        viewModel.setSubAgentsEnabled(targets.map { it.name to it.scope }, enabled)
                     }
                 )
                 SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
@@ -1145,19 +1394,29 @@ fun SettingsScreen(
                         viewModel.resetContainer(profile)
                     },
                     resetState = containerReset,
+                    // 重装也会删 rootfs：与重置同样先停掉 AI 会话与终端标签，否则它们会继续读写正在被删的目录。
+                    reinstallState = containerReinstall,
+                    onDismissReinstall = { viewModel.dismissContainerReinstall() },
+                    onReinstallProfile = { profile ->
+                        onStopAllAndCloseTerminal()
+                        viewModel.reinstallContainerImage(profile)
+                    },
                     onRestoreBuiltin = { viewModel.restoreBuiltinAlpine() },
                     remoteConnections = remoteConnections
                 )
                 SettingsSection.ContainerDownloads -> ContainerImageDownloadSection(
                     catalog = imageCatalog,
+                    imageVersions = imageVersions,
                     state = imageDownload,
                     downloadedImages = downloadedImages,
                     sourceUnavailableIds = sourceUnavailableIds,
                     selectedSourceName = viewModel.sourceDisplayName(selectedImageSource, languageTag),
+                    selection = selectionFor(SettingsSection.ContainerDownloads),
                     onDownload = { entry -> viewModel.startContainerImageDownload(entry, selectedImageSource) },
                     onCancel = { viewModel.cancelContainerImageDownload() },
                     onImport = { entryId, fileUri -> viewModel.importDownloadedImage(entryId, fileUri) },
-                    onDelete = { entryId -> viewModel.deleteDownloadedImage(entryId) }
+                    onDelete = { entryId -> viewModel.deleteDownloadedImage(entryId) },
+                    onBatchDelete = { ids -> viewModel.deleteDownloadedImages(ids) }
                 )
                 SettingsSection.Proxy -> ProxySection(
                     config = proxyConfig,
@@ -1199,7 +1458,11 @@ fun SettingsScreen(
                         shizukuPeer = shizukuPeer,
                         onRequestShizukuPermission = { shizukuViewModel.requestPermission() },
                         onOpenShizuku = { shizukuViewModel.openShizukuApp() },
-                        onRefreshShizuku = { shizukuViewModel.refresh() }
+                        onRefreshShizuku = { shizukuViewModel.refresh() },
+                        rootChannelState = vscreenRootChannel,
+                        onProbeRootChannel = { viewModel.probeVscreenRootChannel() },
+                        accessibilityEnabled = vscreenAccessibilityEnabled,
+                        onRefreshAccessibility = { viewModel.refreshVscreenAccessibility() }
                     )
                 }
                 SettingsSection.BackgroundRun -> BackgroundRunSection(
@@ -1208,7 +1471,11 @@ fun SettingsScreen(
                     screenOnEnabled = screenOnEnabled,
                     onToggleScreenOn = { viewModel.setScreenOnEnabled(it) },
                     agentSoundEnabled = agentSoundEnabled,
-                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
+                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) },
+                    liveNotificationEnabled = liveNotificationEnabled,
+                    onToggleLiveNotification = { viewModel.setLiveNotificationEnabled(it) },
+                    approvalNotificationEnabled = approvalNotificationEnabled,
+                    onToggleApprovalNotification = { viewModel.setApprovalNotificationEnabled(it) }
                 )
                 SettingsSection.TokenStats -> TokenStatsSection(
                     state = tokenStats,
@@ -1239,6 +1506,7 @@ fun SettingsScreen(
             }
         }
     }
+        } // SaveableStateProvider 结束
         } // else 分支结束（storageViewModel 作用域）
         } // 详情区 when 结束
         } // AnimatedContent 结束
@@ -1424,7 +1692,7 @@ fun SettingsScreen(
     }
 
     skillToDelete?.let { target ->
-        val deleting = skillDeleting == target.name
+        val deleting = target.name in skillDeleting
         // 删除进行中保持弹窗（转圈），完成后才关闭，避免无反馈地“突然消失”。
         var deleteStarted by remember(target) { mutableStateOf(false) }
         LaunchedEffect(deleteStarted, deleting) {
@@ -1445,7 +1713,7 @@ fun SettingsScreen(
                     if (deleting) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
-                        Text(stringResource(R.string.common_delete))
+                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
@@ -1460,7 +1728,7 @@ fun SettingsScreen(
     SkillImportResultDialog(state = skillImportState, onDismiss = { viewModel.clearSkillImportState() })
 
     subAgentToDelete?.let { target ->
-        val deleting = subAgentDeleting == target.name
+        val deleting = target.name in subAgentDeleting
         var deleteStarted by remember(target) { mutableStateOf(false) }
         LaunchedEffect(deleteStarted, deleting) {
             if (deleteStarted && !deleting) subAgentToDelete = null
@@ -1480,7 +1748,7 @@ fun SettingsScreen(
                     if (deleting) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
-                        Text(stringResource(R.string.common_delete))
+                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
@@ -1769,7 +2037,8 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.FileText,
+                // 记忆用 Database：日志已经占了 FileText，两者不能同一图标（与 AI 工具里 memory 的图标也一致）。
+                icon = FeatherIcons.Database,
                 title = stringResource(SettingsSection.Memory.titleRes),
                 onClick = { onOpen(SettingsSection.Memory) }
             )

@@ -15,7 +15,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -68,7 +68,7 @@ class GitRepositoryTest {
     // ── status()：porcelain v1 -b 解析 ───────────────────────────
 
     @Test
-    fun status_parsesBranchTrackingAndChanges() = runTest {
+    fun status_parsesBranchTrackingAndChanges() = runBlocking {
         val repo = createRepo(
             "## feature/foo...origin/feature/foo [ahead 2, behind 3]\n" +
                 " M src/Main.kt\n" +
@@ -93,7 +93,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_noUpstream_upstreamNull() = runTest {
+    fun status_noUpstream_upstreamNull() = runBlocking {
         val repo = createRepo("## main")
         val status = repo.status()
         assertEquals("main", status.branch)
@@ -104,7 +104,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_detachedHead_branchIsHead() = runTest {
+    fun status_detachedHead_branchIsHead() = runBlocking {
         val repo = createRepo("## HEAD (no branch)")
         val status = repo.status()
         assertTrue(status.isDetached)
@@ -112,7 +112,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_chinesePath_keptUnescaped() = runTest {
+    fun status_chinesePath_keptUnescaped() = runBlocking {
         // core.quotepath=false 后中文路径原样输出，不得转义为 \NNN
         val repo = createRepo(" M 中文目录/文件.txt\n?? 中文未跟踪.txt\nA  新建/目录/测试.txt")
         val status = repo.status()
@@ -122,7 +122,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_renamedPath_usesNewPath() = runTest {
+    fun status_renamedPath_usesNewPath() = runBlocking {
         val repo = createRepo("R  old.txt -> 新目录/新名.txt")
         val status = repo.status()
         assertEquals(listOf(GitFileChange("新目录/新名.txt", "R", staged = true)), status.staged)
@@ -130,7 +130,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_bothModified_addedToStagedAndUnstaged() = runTest {
+    fun status_bothModified_addedToStagedAndUnstaged() = runBlocking {
         val repo = createRepo("MM app/src/X.kt")
         val status = repo.status()
         assertEquals(listOf(GitFileChange("app/src/X.kt", "M", staged = true)), status.staged)
@@ -138,7 +138,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun status_quotedPath_unquoted() = runTest {
+    fun status_quotedPath_unquoted() = runBlocking {
         // 含空格路径在 porcelain 里带引号，需还原
         val repo = createRepo(" M \"a b.txt\"")
         val status = repo.status()
@@ -148,7 +148,7 @@ class GitRepositoryTest {
     // ── branches() / loadAllRefs()：for-each-ref 解析 ────────────
 
     @Test
-    fun loadAllRefs_parsesBranchesRemotesAndTags() = runTest {
+    fun loadAllRefs_parsesBranchesRemotesAndTags() = runBlocking {
         val repo = createRepo(
             "main\u001f7f2a1b3c4d5e\u001f*\u001frefs/heads/main\u001forigin/main\u001f[ahead 1, behind 2]\n" +
                 "feature\u001f9a8b7c6d5e4f\u001f\u001frefs/heads/feature\u001f\u001f\n" +
@@ -183,7 +183,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun loadAllRefs_tagsReversedByRefname() = runTest {
+    fun loadAllRefs_tagsReversedByRefname() = runBlocking {
         // for-each-ref 按 refname 升序输出 v0.9 在前，解析后须反转为 [v1.0, v0.9]
         val repo = createRepo(
             "v0.9\u001f1a2b3c4d5e6f\u001f\u001frefs/tags/v0.9\u001f\u001f\n" +
@@ -195,7 +195,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun loadAllRefs_blankOutput_returnsEmpty() = runTest {
+    fun loadAllRefs_blankOutput_returnsEmpty() = runBlocking {
         val empty = createRepo("").loadAllRefs()
         assertTrue(empty.branches.isEmpty())
         assertTrue(empty.tags.isEmpty())
@@ -203,13 +203,13 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun loadAllRefs_fatalOutput_returnsEmpty() = runTest {
+    fun loadAllRefs_fatalOutput_returnsEmpty() = runBlocking {
         val fatal = createRepo("fatal: Not a git repository").loadAllRefs()
         assertTrue(fatal.branches.isEmpty() && fatal.tags.isEmpty() && fatal.refsByCommit.isEmpty())
     }
 
     @Test
-    fun branches_delegatesToLoadAllRefs() = runTest {
+    fun branches_delegatesToLoadAllRefs() = runBlocking {
         val repo = createRepo(
             "main\u001f7f2a1b3c4d5e\u001f*\u001frefs/heads/main\u001f\u001f\n" +
                 "origin/main\u001f7f2a1b3c4d5e\u001f\u001frefs/remotes/origin/main\u001f\u001f"
@@ -220,7 +220,7 @@ class GitRepositoryTest {
     // ── log(limit)：%x1f 分隔解析 ────────────────────────────────
 
     @Test
-    fun log_parsesFields() = runTest {
+    fun log_parsesFields() = runBlocking {
         val repo = createRepo(
             "a1b2c3d4\u001fa1b2c3\u001fAlice\u001f2 days ago\u001ffix: 问题\n" +
                 "e5f6a7b8\u001fe5f6a7\u001fBob\u001f3 days ago\u001ffeat: 新功能"
@@ -236,7 +236,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun log_messageWithPipe_keptWhole() = runTest {
+    fun log_messageWithPipe_keptWhole() = runBlocking {
         // 提交信息含 '|'：分隔符是 0x1f，message 应完整保留
         val repo = createRepo("a1b2c3d4\u001fa1b2c3\u001fAlice\u001f2 days ago\u001ffix: merge | conflict")
         val commits = repo.log(limit = 50)
@@ -244,17 +244,17 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun log_blankOutput_returnsEmpty() = runTest {
+    fun log_blankOutput_returnsEmpty() = runBlocking {
         assertTrue(createRepo("").log(limit = 50).isEmpty())
     }
 
     @Test
-    fun log_fatalOutput_returnsEmpty() = runTest {
+    fun log_fatalOutput_returnsEmpty() = runBlocking {
         assertTrue(createRepo("fatal: your current branch 'main' does not have any commits yet").log(limit = 50).isEmpty())
     }
 
     @Test
-    fun log_shortLine_skipped() = runTest {
+    fun log_shortLine_skipped() = runBlocking {
         // 不足 5 段（缺 message）的行整行丢弃
         val repo = createRepo("a1b2c3d4\u001fa1b2c3\u001fAlice\u001f2 days ago")
         assertTrue(repo.log(limit = 50).isEmpty())
@@ -263,7 +263,7 @@ class GitRepositoryTest {
     // ── commitFiles(hash)：diff-tree --name-status 解析 ──────────
 
     @Test
-    fun commitFiles_parsesNameStatus() = runTest {
+    fun commitFiles_parsesNameStatus() = runBlocking {
         val repo = createRepo(
             "M\tapp/src/Main.kt\n" +
                 "A\tapp/src/New.kt\n" +
@@ -283,14 +283,14 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun commitFiles_quotedPath_unquoted() = runTest {
+    fun commitFiles_quotedPath_unquoted() = runBlocking {
         val repo = createRepo("M\t\"a b.txt\"")
         val files = repo.commitFiles("a1b2c3d4")
         assertEquals(listOf(GitFileChange("a b.txt", "M", staged = false)), files)
     }
 
     @Test
-    fun commitFiles_noTabLines_skipped() = runTest {
+    fun commitFiles_noTabLines_skipped() = runBlocking {
         // fatal 行/空白行无 tab，跳过 → 空列表（提交无改动或命令失败）
         val repo = createRepo("fatal: ambiguous argument 'x': unknown revision or path not in the working tree.\n")
         assertTrue(repo.commitFiles("badhash").isEmpty())
@@ -299,7 +299,7 @@ class GitRepositoryTest {
     // ── untrackedFilesIn(dir)：ls-files --others 解析 ────────────
 
     @Test
-    fun untrackedFilesIn_parsesLines() = runTest {
+    fun untrackedFilesIn_parsesLines() = runBlocking {
         val repo = createRepo(
             "newDir/1.txt\n" +
                 "newDir/2.txt\n" +
@@ -311,7 +311,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun untrackedFilesIn_blankOrFatal_returnsEmpty() = runTest {
+    fun untrackedFilesIn_blankOrFatal_returnsEmpty() = runBlocking {
         assertTrue(createRepo("").untrackedFilesIn("dir").isEmpty())
         assertTrue(createRepo("fatal: not a git repository").untrackedFilesIn("dir").isEmpty())
     }
@@ -319,7 +319,7 @@ class GitRepositoryTest {
     // ── graph() / graphAppend()：log + refs → GitGraph ───────────
 
     @Test
-    fun graph_blankOutput_returnsEmptyGraph() = runTest {
+    fun graph_blankOutput_returnsEmptyGraph() = runBlocking {
         val graph = createRepo("").graph()
         assertTrue(graph.commits.isEmpty())
         assertTrue(graph.refs.isEmpty())
@@ -327,7 +327,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun graph_parsesCommitsAndFiltersRefs() = runTest {
+    fun graph_parsesCommitsAndFiltersRefs() = runBlocking {
         val repo = createRepo(
             "aaaa1111\u001faaaa1111\u001fAlice\u001f2 days ago\u001ffix: 修复 | 分号\u001fbbbb2222\u001f正文单行\n" +
                 "bbbb2222\u001fbbbb2222\u001fBob\u001f3 days ago\u001ffeat: init\u001f"
@@ -349,14 +349,14 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun graph_smallBatch_hasMoreTrue() = runTest {
+    fun graph_smallBatch_hasMoreTrue() = runBlocking {
         // 返回条数达到 limit → 还有更旧提交可加载
         val repo = createRepo("aaaa1111\u001faaaa1111\u001fAlice\u001f2 days ago\u001ffix\u001f")
         assertTrue(repo.graph(limit = 1).hasMore)
     }
 
     @Test
-    fun graphAppend_mergesExistingAndDedupes() = runTest {
+    fun graphAppend_mergesExistingAndDedupes() = runBlocking {
         val existing = listOf(
             GraphCommit("aaaa1111", "aaaa1111", "Alice", "d", "newer", parents = listOf("bbbb2222"))
         )
@@ -370,7 +370,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun graphAppend_existingNonEmpty_logFatal_buildsFromExisting() = runTest {
+    fun graphAppend_existingNonEmpty_logFatal_buildsFromExisting() = runBlocking {
         // 追加批次失败时保留已加载的提交重算布局，不降级为 EMPTY
         val existing = listOf(
             GraphCommit("aaaa1111", "aaaa1111", "Alice", "d", "newer", parents = emptyList())
@@ -381,7 +381,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun graphAppend_mergeCommit_computesMergeLanes() = runTest {
+    fun graphAppend_mergeCommit_computesMergeLanes() = runBlocking {
         val repo = createRepo(
             "m1m1m1\u001fm1m1m1\u001fAlice\u001f2 days ago\u001fMerge branch 'feat'\u001fp1p1p1 p2p2p2\u001f\n" +
                 "p1p1p1\u001fp1p1p1\u001fBob\u001f3 days ago\u001ffeat: x\u001fr0r0r0\u001f\n" +
@@ -396,7 +396,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun graph_fork_branchesToSeparateLanes() = runTest {
+    fun graph_fork_branchesToSeparateLanes() = runBlocking {
         val repo = createRepo(
             "c1c1c1\u001fc1c1c1\u001fAlice\u001f2 days ago\u001fbranch A\u001fr0r0r0\u001f\n" +
                 "c2c2c2\u001fc2c2c2\u001fBob\u001f2 days ago\u001fbranch B\u001fr0r0r0\u001f\n" +
@@ -410,7 +410,7 @@ class GitRepositoryTest {
     // ── commit()：消息 shell 转义与失败路径 ───────────────────────
 
     @Test
-    fun commit_messageWithPipe_shellSingleQuoted() = runTest {
+    fun commit_messageWithPipe_shellSingleQuoted() = runBlocking {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
         every { workspace.currentPathOrNull() } returns workPath
@@ -425,7 +425,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun commit_messageWithSingleQuote_escaped() = runTest {
+    fun commit_messageWithSingleQuote_escaped() = runBlocking {
         val engine = mockk<CommandEngine>()
         val workspace = mockk<WorkspaceRepository>()
         every { workspace.currentPathOrNull() } returns workPath
@@ -440,7 +440,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun commit_nonZeroExit_throwsGitCommandFailureException() = runTest {
+    fun commit_nonZeroExit_throwsGitCommandFailureException() = runBlocking {
         val repo = createRepo("fatal: 提交失败", exitCode = 1)
         val e = runCatching { repo.commit("msg") }.exceptionOrNull()
         assertTrue(e is GitCommandFailureException)
@@ -448,7 +448,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun commit_nonZeroExitWithBlankOutput_throwsWithExitCodeMessage() = runTest {
+    fun commit_nonZeroExitWithBlankOutput_throwsWithExitCodeMessage() = runBlocking {
         val repo = createRepo("", exitCode = 1)
         val e = runCatching { repo.commit("msg") }.exceptionOrNull()
         assertTrue(e is GitCommandFailureException)
@@ -458,7 +458,7 @@ class GitRepositoryTest {
     // ── 工作区未落定：每个 git 入口按 git 失败抛出，不把 git 跑在父目录上 ──
 
     @Test
-    fun status_workspaceNotReady_throwsGitCommandFailureWithNotReadyMessage() = runTest {
+    fun status_workspaceNotReady_throwsGitCommandFailureWithNotReadyMessage() = runBlocking {
         val (repo, _) = createNotReadyRepo()
         val e = runCatching { repo.status() }.exceptionOrNull()
         assertTrue(e is GitCommandFailureException)
@@ -467,7 +467,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun commit_workspaceNotReady_throwsWithoutRunningGitCommand() = runTest {
+    fun commit_workspaceNotReady_throwsWithoutRunningGitCommand() = runBlocking {
         val (repo, engine) = createNotReadyRepo()
         val e = runCatching { repo.commit("msg") }.exceptionOrNull()
         assertTrue(e is GitCommandFailureException)
@@ -476,7 +476,7 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun worktreeFileContent_workspaceNotReady_throwsInsteadOfReturningEmptyFile() = runTest {
+    fun worktreeFileContent_workspaceNotReady_throwsInsteadOfReturningEmptyFile() = runBlocking {
         // 未落定时必须报错：被 runCatching 吞掉会让 UI 把「读不到路径」误判成「文件为空」
         val (repo, _) = createNotReadyRepo()
         val e = runCatching { repo.worktreeFileContent("app/src/Main.kt") }.exceptionOrNull()

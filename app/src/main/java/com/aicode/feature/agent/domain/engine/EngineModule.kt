@@ -26,6 +26,11 @@ data class EngineContext(
      */
     val isSubAgent: Boolean = false,
     /**
+     * 本轮（一次用户请求 = 一次 agent 循环）的标识：同一轮工具循环里的多次模型调用共用。
+     * 发送前兜底截断按它冻结旧消息的截法；null 表示调用方没提供轮次边界（如手动压缩）。
+     */
+    val turnId: String? = null,
+    /**
      * 子代理定义的名称；没有自定义定义时（默认子代理）为 null。
      * 与 [isSubAgent] 不同义：这个字段带上名字，只供模块在固定提示段里渲染角色行。
      */
@@ -61,7 +66,7 @@ data class LlmCall(
     val overheadTokens: Int = 0,
     /** 手动强制压缩（用户点「压缩上下文」）。 */
     val force: Boolean = false,
-    /** 压缩过程要往 UI 推的事件（开始/结束/失败）。 */
+    /** 压缩过程要往 UI 推的事件（开始/进度/结束/失败）。 */
     val onEvent: suspend (AgentEvent) -> Unit = {}
 )
 
@@ -92,6 +97,14 @@ interface EngineModule {
 
     /** 本轮注入系统提示词的片段；返回 null 或空白表示本轮不参与。 */
     fun promptFragment(ctx: EngineContext): String? = null
+
+    /**
+     * 随本轮用户消息一起送给模型的提醒片段（落 `modelReminder` 列，不进系统提示词）。
+     *
+     * 每轮都会变的内容放这里：系统提示词一变，KV 缓存的前缀就整段失效；放这里对模型的可见性不变，
+     * 只是换了位置。由 [AgentEngine] 按 [order] 拼接，调用方拼到最后一条用户消息上。
+     */
+    fun turnReminder(ctx: EngineContext): String? = null
 
     /**
      * 子代理会话的固定规则片段：本会话是子代理时**必定**注入，不受 `AgentDefinition.inject` 门禁。

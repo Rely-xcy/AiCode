@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.auth.McpOAuthException
 import com.aicode.feature.agent.domain.mcp.auth.McpOAuthManager
+import com.aicode.feature.agent.domain.mcp.auth.McpTokenStore
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -29,6 +30,8 @@ import okhttp3.OkHttpClient
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private const val TAG = "McpManager"
+
 data class McpServerStatus(
     val name: String,
     val state: State,
@@ -37,6 +40,13 @@ data class McpServerStatus(
 ) {
     enum class State { CONNECTING, CONNECTED, NEEDS_AUTH, FAILED, DISABLED }
 }
+
+/**
+ * 授权结果：Result 成功即授权成功，[connected] 单独描述随后的重连，
+ * 因为「拿到令牌」与「拿到令牌后连得上」是两件事，UI 不能把后者当成必然。
+ * [connected] 为 null 表示两次重连都没观察到连接状态（配置已被删等），按未知处理。
+ */
+data class McpAuthorizeResult(val connected: Boolean?)
 
 // reloadMutex 串行化重连，避免设置页连点导致并发注册/反注册竞态。
 @Singleton
@@ -47,12 +57,9 @@ class McpManager @Inject constructor(
     private val containerEngine: LinuxContainerEngine,
     private val workspaceRepository: WorkspaceRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
-    private val oauthManager: McpOAuthManager
+    private val oauthManager: McpOAuthManager,
+    private val tokenStore: McpTokenStore
 ) {
-    private companion object {
-        const val TAG = "McpManager"
-    }
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val reloadMutex = Mutex()
 
@@ -92,6 +99,15 @@ class McpManager @Inject constructor(
                 }
             }
         }
+        // 令牌被本进程之外的入口整份覆盖（备份导入、手工替换文件）：内存快照与 OAuth 会话都还是旧的，
+        // 不刷新就一直用旧令牌到下次冷启动。先同步会话，再重建这些 server 的连接。
+        scope.launch {
+            tokenStore.externalChanges.collect {
+                FileLogger.i(TAG, "检测到 MCP 令牌被外部覆盖，刷新授权会话并重建远程连接")
+                oauthManager.syncFromStore()
+                reloadAuthServers()
+            }
+        }
     }
 
     suspend fun reload() = reloadMutex.withLock {
@@ -129,12 +145,17 @@ class McpManager @Inject constructor(
 
     private suspend fun connectOne(cfg: McpServerConfig): McpServerStatus {
         val t0 = System.currentTimeMillis()
+        // 失败路径必须关掉已创建的 transport/client：stdio 子进程与 readLoop/stderr 协程
+        // 不关就会在重连反复失败时持续泄漏（V2 审计 P2）。
+        var transport: McpTransport? = null
+        var client: McpClient? = null
+        var connected = false
         return try {
             FileLogger.i(TAG, "[${cfg.name}] 开始连接（${if (cfg.isStdio) "stdio" else "HTTP"}）")
             if (!cfg.isStdio && cfg.auth != null) {
                 oauthManager.prepare(cfg)
             }
-            val transport = if (cfg.isStdio) {
+            transport = if (cfg.isStdio) {
                 // stdio server 跑在「运行时容器」上：本地模式用当前容器，远程 SSH 模式用默认容器。
                 // 容器未就绪不自动初始化，直接失败并引导去终端页完成初始化。
                 val runtimeProfile = resolveMcpRuntimeProfile()
@@ -162,18 +183,20 @@ class McpManager @Inject constructor(
                     authorizationProvider = { oauthManager.cachedToken(cfg.name) }
                 )
             }
-            val client = McpClient(serverName = cfg.name, transport = transport)
-            client.connect()
+            client = McpClient(serverName = cfg.name, transport = transport!!)
+            val connectedClient = client!!
+            connectedClient.connect()
 
-            val tools = client.tools.map { McpTool(client, it) }
+            val tools = connectedClient.tools.map { McpTool(connectedClient, it) }
             val enabledTools = tools.filter { it.remoteName !in cfg.disabledTools }
             synchronized(activeClients) {
-                activeClients[cfg.name] = client
+                activeClients[cfg.name] = connectedClient
                 enabledTools.forEach { tool ->
                     toolRegistry.register(tool.name, tool)
                     registeredToolNames.add(tool.name)
                 }
             }
+            connected = true
             FileLogger.i(TAG, "[${cfg.name}] 连接成功，注册 ${enabledTools.size}/${tools.size} 个工具（${System.currentTimeMillis() - t0}ms）")
             McpServerStatus(cfg.name, McpServerStatus.State.CONNECTED, toolCount = enabledTools.size)
         } catch (e: McpAuthRequiredException) {
@@ -185,6 +208,11 @@ class McpManager @Inject constructor(
         } catch (e: Exception) {
             FileLogger.e(TAG, "[${cfg.name}] 连接失败（${System.currentTimeMillis() - t0}ms）", e)
             McpServerStatus(cfg.name, McpServerStatus.State.FAILED, error = e.message)
+        } finally {
+            if (!connected) {
+                runCatching { client?.close() }
+                runCatching { transport?.close() }
+            }
         }
     }
 
@@ -280,19 +308,53 @@ class McpManager @Inject constructor(
         }
     }
 
+    /** 令牌来源变化后重建启用了 OAuth 的远程 server；stdio 与匿名 server 不受令牌影响，不动。 */
+    private suspend fun reloadAuthServers() = reloadMutex.withLock {
+        val servers = configRepository.getEffectiveServers()
+            .filter { it.enabled && !it.isStdio && it.auth != null }
+        if (servers.isEmpty()) return@withLock
+        for (cfg in servers) {
+            teardownServer(cfg.name)
+            reconnectOne(cfg)
+        }
+    }
+
+    /** 某个 server 最近一次连接结果；尚未出现在状态列表时为 null。 */
+    private fun statusOf(name: String): McpServerStatus.State? =
+        _statuses.value.firstOrNull { it.name == name }?.state
+
     /** 删除 server 时仅断开其连接并反注册其工具，不影响其他 server。 */
     suspend fun removeServer(name: String) = reloadMutex.withLock {
         teardownServer(name)
         _statuses.value = _statuses.value.filterNot { it.name == name }
     }
 
-    /** 触发某个 server 的 OAuth 授权；成功后重连使其工具可用。 */
-    suspend fun authorize(name: String): Result<Unit> {
+    /**
+     * 批量删除：一次持锁断开多个 server（列表多选批量删除）。
+     * 逐条调用 [removeServer] 会反复抢 reloadMutex，服务端较多时串行等待明显。
+     */
+    suspend fun removeServers(names: Collection<String>) = reloadMutex.withLock {
+        if (names.isEmpty()) return@withLock
+        names.forEach { teardownServer(it) }
+        _statuses.value = _statuses.value.filterNot { it.name in names }
+    }
+
+    /**
+     * 触发某个 server 的 OAuth 授权；成功后立即重连使其工具可用。
+     * 授权前因无令牌而失败的连接不会自己恢复，所以这里连一次，没连上再补一次（失败只记日志）。
+     * 重连成败随结果一起返回：授权成功但连不上时调用方不能再显示「已连接」。
+     */
+    suspend fun authorize(name: String): Result<McpAuthorizeResult> {
         val cfg = configRepository.getEffectiveServers().firstOrNull { it.name == name }
             ?: return Result.failure(McpOAuthException("未找到 MCP server: $name"))
         return runCatching {
             oauthManager.authorize(cfg)
-            reloadServer(name)
+            McpAuthorizeResult(
+                retryConnectAfterAuthorize(name) {
+                    reloadServer(name)
+                    statusOf(name)
+                }
+            )
         }
     }
 
@@ -327,4 +389,26 @@ class McpManager @Inject constructor(
             activeClients.clear()
         }
     }
+}
+
+/**
+ * 授权成功后重连：首次没连上再补一次，两次都没连上只记日志（授权本身已成功，不因此报授权失败）。
+ * [attempt] 返回本次尝试后的连接状态。授权流程要开系统浏览器，真机路径在单测里跑不起来，
+ * 所以把重试次数与判定抽成这个函数，用假连接验证。
+ * 返回 true=已连接、false=观察到了失败状态、null=两次都没拿到状态（未知，不能当成已连接）。
+ */
+internal suspend fun retryConnectAfterAuthorize(
+    serverName: String,
+    attempt: suspend () -> McpServerStatus.State?
+): Boolean? {
+    var observedFailure = false
+    val first = attempt()
+    if (first == McpServerStatus.State.CONNECTED) return true
+    if (first != null) observedFailure = true
+    FileLogger.w(TAG, "[$serverName] 授权后首次重连未成功（${first ?: "未连接"}），自动重试一次")
+    val second = attempt()
+    if (second == McpServerStatus.State.CONNECTED) return true
+    if (second != null) observedFailure = true
+    FileLogger.w(TAG, "[$serverName] 授权后重试仍未连上（${second ?: "未连接"}），需用户手动重连")
+    return if (observedFailure) false else null
 }

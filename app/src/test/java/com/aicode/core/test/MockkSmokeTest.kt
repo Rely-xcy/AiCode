@@ -1,8 +1,8 @@
 package com.aicode.core.test
 
 import io.mockk.coEvery
+import kotlinx.coroutines.runBlocking
 import io.mockk.mockk
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -17,7 +17,7 @@ class MockkSmokeTest {
     }
 
     @Test
-    fun mockkAndRunTest_workTogether() = runTest {
+    fun mockkAndRunTest_workTogether() = runBlocking {
         val greeter = mockk<Greeter>()
         coEvery { greeter.greet(any()) } returns "hello"
 

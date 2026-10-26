@@ -241,4 +241,45 @@ class SkillRepositoryTest {
             temp.deleteRecursively()
         }
     }
+
+    @Test
+    fun searchSkills_matchesNameDescriptionAndInstructions_caseInsensitive() {
+        every { globalSource.listSkills() } returns listOf(
+            skill("Pdf-Tools").copy(description = "拆分与合并", instructions = "用 qpdf 合并"),
+            skill("docx-tools").copy(description = "PDF 转 docx", instructions = "用 soffice 转换"),
+            skill("bitmap-export").copy(description = "位图导出", instructions = "用 pdftoppm 导出图片")
+        )
+
+        val result = repository.searchSkills("PDF", 20)
+
+        assertEquals(
+            "名称命中排最前，其次描述，再次正文",
+            listOf("Pdf-Tools", "docx-tools", "bitmap-export"),
+            result.matches.map { it.name }
+        )
+        assertEquals(3, result.hitCount)
+        assertEquals(3, result.skillCount)
+    }
+
+    @Test
+    fun searchSkills_limitsMatchesButKeepsFullHitCount() {
+        every { globalSource.listSkills() } returns (1..5).map { skill("pdf-$it") }
+
+        val result = repository.searchSkills("pdf", 2)
+
+        assertEquals(2, result.matches.size)
+        assertEquals(5, result.hitCount)
+        assertEquals(5, result.skillCount)
+    }
+
+    @Test
+    fun searchSkills_noMatchReportsSearchedCount() {
+        every { globalSource.listSkills() } returns listOf(skill("pdf-tools"))
+
+        val result = repository.searchSkills("excel", 20)
+
+        assertTrue(result.matches.isEmpty())
+        assertEquals(0, result.hitCount)
+        assertEquals(1, result.skillCount)
+    }
 }

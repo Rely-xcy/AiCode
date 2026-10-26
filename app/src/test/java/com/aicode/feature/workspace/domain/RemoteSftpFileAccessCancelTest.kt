@@ -141,17 +141,38 @@ class RemoteSftpFileAccessCancelTest {
         assertEquals("文件不存在不是连接坏了，不丢通道", 0, f.invalidateCount.get())
     }
 
+    /**
+     * 断连时零 IO 快速失败：不调 [RemoteSshConnection.sftp]（那会新建一条 transport，最坏等满 connect 超时），
+     * 而是直接报可读的「未连接」。文件树展开十来个目录时，这 10s 会累加成一两分钟假死。
+     */
+    @Test
+    fun `断连时文件操作立即失败且不尝试建连`() = runBlocking {
+        val f = Fixture(connected = false)
+
+        val error = runCatching { f.fileAccess.listFiles("/") }.exceptionOrNull()
+
+        assertNotNull("断连时必须直接失败", error)
+        assertTrue(
+            "必须是可读的未连接提示，实际：${error?.message}",
+            error?.message?.contains("SSH 未连接") == true
+        )
+        assertEquals("未连接时不能去建连", 0, f.providerCount.get())
+        assertEquals("断连不是通道坏了，不该丢通道", 0, f.invalidateCount.get())
+    }
+
     /** 「取通道 / 丢通道」两个回调换成可观察的桩，其余按生产默认走。 */
-    private inner class Fixture {
+    private inner class Fixture(connected: Boolean = true) {
         val connection: RemoteSshConnection = mockk(relaxed = true)
         val workspaceRepository: WorkspaceRepository = mockk(relaxed = true)
         val remoteFile: RemoteFile = mockk(relaxed = true)
         val sftp: SFTPClient = mockk(relaxed = true)
         val invalidateCount = AtomicInteger()
         val writeCount = AtomicInteger()
+        val providerCount = AtomicInteger()
         val fileAccess: RemoteSftpFileAccess
 
         init {
+            every { connection.isConnected() } returns connected
             every { connection.config } returns RemoteConnectionConfig(
                 host = "example.com",
                 username = "dev",
@@ -164,7 +185,11 @@ class RemoteSftpFileAccessCancelTest {
             fileAccess = RemoteSftpFileAccess(
                 connection = connection,
                 workspaceRepository = workspaceRepository,
-                sftpProvider = { sftp },
+                context = mockk(relaxed = true),
+                sftpProvider = {
+                    providerCount.incrementAndGet()
+                    sftp
+                },
                 invalidateChannel = { invalidateCount.incrementAndGet() }
             )
         }

@@ -9,24 +9,56 @@ import java.io.InputStream
 import java.nio.charset.Charset
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileSystemLoopException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * [FileAccessProvider] 的本地实现：包一层 [WorkspacePathMapper]，走 java.io.File 直读。
- *
- * 本地模式下文件工具的原行为零变化——仅把原先散落在各工具里的 pathMapper.toHostFile + File 操作
- * 集中到此处，统一经由接口调用。
+ * 内容访问解析容器符号链接；删除与重命名保留末级链接本身。
  */
 @Singleton
 class LocalFileAccess @Inject constructor(
     private val pathMapper: WorkspacePathMapper
 ) : FileAccessProvider {
 
-    private fun resolve(path: String): File = pathMapper.toHostFile(path)
+    private fun resolve(path: String, followFinalLink: Boolean = true): File =
+        pathMapper.resolveFile(path, followFinalLink)
+
+    private fun resolveEntry(file: File): File = try {
+        pathMapper.resolveHostFile(file)
+    } catch (_: FileSystemLoopException) {
+        // 保留循环链接条目供删除或重命名，不让一个坏链接阻断整个目录的浏览。
+        file
+    }
+
+    private fun entryExists(file: File): Boolean =
+        Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+
+    private fun deleteTree(file: File) {
+        if (!entryExists(file)) return
+        // walkFileTree 默认不跟随链接，递归删除也不能进入链接指向的目录。
+        Files.walkFileTree(file.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.delete(path)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+                if (exc != null) throw exc
+                Files.delete(dir)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
 
     override fun readFile(path: String): String {
         val file = resolve(path)
@@ -75,13 +107,14 @@ class LocalFileAccess @Inject constructor(
 
     override fun listFiles(path: String): List<FileEntry> {
         val dir = resolve(path)
-        return dir.listFiles().orEmpty().map { child ->
+        return dir.listFiles().orEmpty().map { entry ->
+            val child = resolveEntry(entry)
             FileEntry(
-                name = child.name,
+                name = entry.name,
                 isDirectory = child.isDirectory,
                 size = child.length(),
                 lastModified = child.lastModified(),
-                localFile = child,
+                localFile = entry,
                 permissions = run {
                     val r = if (child.canRead()) "r" else "-"
                     val w = if (child.canWrite()) "w" else "-"
@@ -101,10 +134,20 @@ class LocalFileAccess @Inject constructor(
     override fun listFilesRecursive(path: String, maxDepth: Int): List<String> {
         val dir = resolve(path)
         if (!dir.isDirectory) return emptyList()
-        return dir.walkTopDown().maxDepth(maxDepth)
-            .filter { it.isFile }
-            .map { it.relativeTo(dir).invariantSeparatorsPath }
-            .toList()
+        val paths = mutableListOf<String>()
+        fun visit(directory: File, prefix: String, depth: Int, ancestors: Set<String>) {
+            if (depth >= maxDepth) return
+            directory.listFiles().orEmpty().forEach { entry ->
+                val child = resolveEntry(entry)
+                val relative = prefix + entry.name
+                if (child.isFile) paths.add(relative)
+                if (child.isDirectory && child.absolutePath !in ancestors) {
+                    visit(child, "$relative/", depth + 1, ancestors + child.absolutePath)
+                }
+            }
+        }
+        visit(dir, "", 0, setOf(dir.absolutePath))
+        return paths
     }
 
     override fun writeBytes(path: String, bytes: ByteArray, overwrite: Boolean) {
@@ -192,20 +235,18 @@ class LocalFileAccess @Inject constructor(
     override fun copyToLocal(path: String): File = resolve(path)
 
     override fun delete(path: String) {
-        resolve(path).delete()
+        resolve(path, followFinalLink = false).delete()
     }
 
     override fun deleteRecursively(path: String) {
-        val file = resolve(path)
-        if (!file.exists()) return
-        if (!file.deleteRecursively()) throw IOException("delete failed: ${file.absolutePath}")
+        deleteTree(resolve(path, followFinalLink = false))
     }
 
     override fun rename(path: String, newPath: String) {
-        val source = resolve(path)
-        val target = resolve(newPath)
-        if (!source.exists()) throw NoSuchFileException(source)
-        if (target.exists()) throw FileAlreadyExistsException(target)
+        val source = resolve(path, followFinalLink = false)
+        val target = resolve(newPath, followFinalLink = false)
+        if (!entryExists(source)) throw NoSuchFileException(source)
+        if (entryExists(target)) throw FileAlreadyExistsException(target)
         target.parentFile?.mkdirs()
         if (!source.renameTo(target)) {
             throw IOException("rename failed: ${source.absolutePath} -> ${target.absolutePath}")
@@ -214,16 +255,16 @@ class LocalFileAccess @Inject constructor(
 
     override fun copy(path: String, newPath: String, overwrite: Boolean) {
         val source = resolve(path)
-        val target = resolve(newPath)
+        val target = resolve(newPath, followFinalLink = false)
         if (!source.exists()) throw NoSuchFileException(source)
         val sourcePath = source.canonicalFile.toPath()
         val targetPath = target.canonicalFile.toPath()
         if (targetPath == sourcePath || (source.isDirectory && targetPath.startsWith(sourcePath))) {
             throw IOException("destination is the source or its descendant: $newPath")
         }
-        if (target.exists()) {
+        if (entryExists(target)) {
             if (!overwrite) throw FileAlreadyExistsException(target)
-            target.deleteRecursively()
+            deleteTree(target)
         }
         target.parentFile?.mkdirs()
         if (source.isDirectory) {
@@ -234,17 +275,17 @@ class LocalFileAccess @Inject constructor(
     }
 
     override fun move(path: String, newPath: String, overwrite: Boolean) {
-        val source = resolve(path)
-        val target = resolve(newPath)
-        if (!source.exists()) throw NoSuchFileException(source)
+        val source = resolve(path, followFinalLink = false)
+        val target = resolve(newPath, followFinalLink = false)
+        if (!entryExists(source)) throw NoSuchFileException(source)
         val sourcePath = source.canonicalFile.toPath()
         val targetPath = target.canonicalFile.toPath()
         if (targetPath == sourcePath || (source.isDirectory && targetPath.startsWith(sourcePath))) {
             throw IOException("destination is the source or its descendant: $newPath")
         }
-        if (target.exists()) {
+        if (entryExists(target)) {
             if (!overwrite) throw FileAlreadyExistsException(target)
-            target.deleteRecursively()
+            deleteTree(target)
         }
         target.parentFile?.mkdirs()
         val moved = try {
@@ -253,13 +294,19 @@ class LocalFileAccess @Inject constructor(
             false
         }
         if (moved) return
+        // 跨文件系统移动链接时保留链接文本，不复制或删除它指向的内容。
+        if (Files.isSymbolicLink(source.toPath())) {
+            Files.copy(source.toPath(), target.toPath(), LinkOption.NOFOLLOW_LINKS)
+            Files.delete(source.toPath())
+            return
+        }
         // 回退：复制后删除源（复制中断时源保留，下次重试安全）。
         if (source.isDirectory) {
             source.copyRecursively(target, overwrite = false)
         } else {
             source.copyTo(target, overwrite = false)
         }
-        if (!source.deleteRecursively()) throw IOException("delete-after-copy failed: ${source.absolutePath}")
+        deleteTree(source)
     }
 
     override fun mkdirs(path: String) {
@@ -267,12 +314,12 @@ class LocalFileAccess @Inject constructor(
     }
 
     override fun parentPath(path: String): String? {
-        val parent = resolve(path).parentFile ?: return null
+        val parent = pathMapper.toHostFile(path).parentFile ?: return null
         return pathMapper.toContainerPath(parent.absolutePath)
     }
 
     override fun toDisplayPath(path: String): String {
-        return pathMapper.toContainerPath(resolve(path).absolutePath)
+        return pathMapper.toContainerPath(pathMapper.toHostFile(path).absolutePath)
     }
 
     private companion object {

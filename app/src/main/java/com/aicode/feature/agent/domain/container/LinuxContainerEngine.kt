@@ -317,7 +317,9 @@ class LinuxContainerEngine @Inject constructor(
         projectPath: String?,
         timeoutMs: Long
     ): CommandResult? {
-        if (!containerInstaller.isInstalledFor(currentProfile)) return null
+        // 就绪标记是磁盘上的文件，调用方多半在主线程，判断本身也要离开主线程。
+        val installed = withContext(Dispatchers.IO) { containerInstaller.isInstalledFor(currentProfile) }
+        if (!installed) return null
         val result = execCaptured(command, projectPath, timeoutMs)
         return CommandResult(result.output, result.exitCode, result.truncated)
     }

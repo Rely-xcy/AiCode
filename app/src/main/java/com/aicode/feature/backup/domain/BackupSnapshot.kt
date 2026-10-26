@@ -29,8 +29,10 @@ data class BackupSnapshot(
     val themePresetId: String? = null,
     val dynamicColorEnabled: Boolean = false,
     val keepaliveEnabled: Boolean = false,
+    val liveNotificationEnabled: Boolean = false,
     val screenOnEnabled: Boolean = false,
     val agentSoundEnabled: Boolean = false,
+    val approvalNotificationEnabled: Boolean = false,
     val autoRemoveStaleModels: Boolean = true,
     val startupSessionMode: String? = null,
     val firstByteTimeoutSec: Int = 300,
@@ -73,8 +75,10 @@ data class BackupMetadata(
     val themePresetId: String? = null,
     val dynamicColorEnabled: Boolean = false,
     val keepaliveEnabled: Boolean = false,
+    val liveNotificationEnabled: Boolean = false,
     val screenOnEnabled: Boolean = false,
     val agentSoundEnabled: Boolean = false,
+    val approvalNotificationEnabled: Boolean = false,
     val autoRemoveStaleModels: Boolean = true,
     val startupSessionMode: String? = null,
     val firstByteTimeoutSec: Int = 300,
@@ -91,6 +95,15 @@ data class BackupMetadata(
     val compactionProviderId: String = "",
     val compactionModel: String = "",
     val syncSettings: SyncSettingsSnapshot? = null,
+    /**
+     * 导出时的执行模式原文（[com.aicode.feature.settings.data.repository.ExecutionMode] 的 name）。
+     *
+     * null 表示这份备份没带（本字段出现之前的旧备份，或导出时没勾「应用设置」）。
+     * 导入侧据此决定要不要切回远程模式：远程模式的会话只在远程工作区可见，不还原模式时
+     * 用户在新设备上会以为「聊天记录全丢了」（见 [shouldRestoreRemoteMode]）。
+     * 只能取枚举名做字符串，别把枚举直接序列化进备份——旧版本 App 读到未知枚举值会整包解析失败。
+     */
+    val executionMode: String? = null,
     val workspaces: List<WorkspaceBackupMeta> = emptyList(),
     /**
      * 这份备份是否带了「应用设置」段。
@@ -104,7 +117,15 @@ data class BackupMetadata(
     /**
      * 技能 / 子代理启停配置原文；null 表示这份备份没带（同 [BackupSnapshot.skillsAgentsConfig]）。
      */
-    val skillsAgentsConfig: SkillsAgentsConfigDto? = null
+    val skillsAgentsConfig: SkillsAgentsConfigDto? = null,
+    /**
+     * 供应商密钥与连接密码是否已拆到 `secrets/` 段（本字段出现之后的导出恒为 true）。
+     *
+     * 旧格式把密钥直接写在 metadata.json 里；新格式这里恒为空。导入侧必须能区分两者：
+     * 把「没带密钥」当成「用户清空了密钥」回写，会让一次配置恢复把本机 API Key 全部抹掉。
+     * 默认 false 表示旧格式，按旧路径从 metadata 读。
+     */
+    val secretsInSeparateSegment: Boolean = false
 )
 
 /**
@@ -145,8 +166,10 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     themePresetId = themePresetId,
     dynamicColorEnabled = dynamicColorEnabled,
     keepaliveEnabled = keepaliveEnabled,
+    liveNotificationEnabled = liveNotificationEnabled,
     screenOnEnabled = screenOnEnabled,
     agentSoundEnabled = agentSoundEnabled,
+    approvalNotificationEnabled = approvalNotificationEnabled,
     autoRemoveStaleModels = autoRemoveStaleModels,
     startupSessionMode = startupSessionMode,
     firstByteTimeoutSec = firstByteTimeoutSec,
@@ -201,7 +224,21 @@ data class ProviderDto(
     /** 自定义面板 (DIY) 脚本参数（JSON 编码）；null 表示旧备份无此字段，导入时回退为空。 */
     val scriptParams: String? = null,
     /** 多 Key 自动切换状态码（逗号分隔）；null 表示旧备份无此字段，导入时回退空串（即默认码表）。 */
-    val keySwitchStatusCodes: String? = null
+    val keySwitchStatusCodes: String? = null,
+    // 下面这组字段（单独代理 + 自定义请求头）在旧备份里不存在。全部用 null 表达「备份没带」，
+    // 导入时据此沿用本机同名 provider 的既有值：REPLACE 写入会把缺字段填成默认值，
+    // 等于一次导入静默抹掉用户配好的代理与请求头。
+    val proxyEnabled: Boolean? = null,
+    val proxyType: String? = null,
+    val proxyHost: String? = null,
+    val proxyPort: Int? = null,
+    val proxyUsername: String? = null,
+    /** 代理密码；库内加密存储，导出/导入与 apiKey 同一套密文语义。 */
+    val proxyPassword: String? = null,
+    /** 自定义请求头（JSON 编码的 Map）；库内加密存储。 */
+    val customHeaders: String? = null,
+    /** 已废弃的 UA 覆盖列（被 customHeaders 取代），仅为兼容旧备份保留。 */
+    val userAgent: String? = null
 )
 
 @Serializable
@@ -289,5 +326,17 @@ data class TodoItemDto(
     val priority: Int = 0,
     val order: Int = 0,
     val createdAt: Long,
+    val updatedAt: Long,
+    /** 父任务 id；旧备份缺该字段时为 null。 */
+    val parentId: String? = null
+)
+
+/**
+ * 会话工作状态（`session_briefs`）。主键是 sessionId，恢复时按主键 REPLACE，重复导入不会产生重复行。
+ */
+@Serializable
+data class SessionBriefDto(
+    val sessionId: String,
+    val content: String,
     val updatedAt: Long
 )

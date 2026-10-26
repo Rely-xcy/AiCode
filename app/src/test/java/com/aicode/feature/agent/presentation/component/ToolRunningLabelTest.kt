@@ -2,6 +2,8 @@ package com.aicode.feature.agent.presentation.component
 
 import com.aicode.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -67,6 +69,26 @@ class ToolRunningLabelTest {
         listOf("mcp__filesystem__read", "custom_tool", "", null).forEach { name ->
             assertEquals("$name", R.string.chat_status_calling_tool, toolRunningLabelRes(name))
         }
+    }
+
+    @Test
+    fun toolPreparation_showsProgressWhileWaitingForArguments() {
+        assertTrue(shouldShowToolPreparation(
+            preparingTool = "editFile", isBusy = true,
+            isCompacting = false, awaitingUserInput = false,
+        ))
+    }
+
+    @Test
+    fun toolPreparation_doesNotCompeteWithUserInputOrCompaction() {
+        assertFalse(shouldShowToolPreparation("editFile", true, false, true))
+        assertFalse(shouldShowToolPreparation("editFile", true, true, false))
+    }
+
+    @Test
+    fun toolPreparation_isHiddenWhenNoToolIsPreparingOrTaskFinished() {
+        assertFalse(shouldShowToolPreparation(null, true, false, false))
+        assertFalse(shouldShowToolPreparation("editFile", false, false, false))
     }
 
     @Test

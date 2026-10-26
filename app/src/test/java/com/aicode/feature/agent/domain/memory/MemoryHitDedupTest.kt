@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.memory
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
+import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import java.nio.file.Files
@@ -14,16 +15,21 @@ import kotlin.test.assertNotNull
  * 命中记账的会话级去重：同一会话同一记忆只记一次；去重表记满时淘汰最旧的一条。
  *
  * 这里只用真实的 [MemoryRepository.recordHits]（它不碰任何注入依赖，只读 memory.file 走文件 IO），
- * 四个构造依赖给 mockk 保持构造可行。
+ * 其余构造依赖给 mockk 保持构造可行；待重试队列给一个指向临时目录的真实实例（空队列）。
  */
 class MemoryHitDedupTest {
 
-    private fun repository() = MemoryRepository(
-        mockk<GlobalMemorySource>(relaxed = true),
-        mockk<ExecutionModeHolder>(relaxed = true),
-        mockk<ContainerInstaller>(relaxed = true),
-        mockk<ProjectAicodeRoot>(relaxed = true)
-    )
+    private fun repository(): MemoryRepository {
+        val installer = mockk<ContainerInstaller>(relaxed = true)
+        every { installer.aicodeDir } returns Files.createTempDirectory("hit-dedup-root").toFile()
+        return MemoryRepository(
+            mockk<GlobalMemorySource>(relaxed = true),
+            mockk<ExecutionModeHolder>(relaxed = true),
+            installer,
+            mockk<ProjectAicodeRoot>(relaxed = true),
+            MemoryPendingQueue(installer)
+        )
+    }
 
     private fun tempRoot(tag: String): File = Files.createTempDirectory(tag).toFile()
 

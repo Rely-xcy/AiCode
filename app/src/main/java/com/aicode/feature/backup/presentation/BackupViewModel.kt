@@ -8,6 +8,10 @@ import com.aicode.feature.backup.data.BackupTargetRepository
 import com.aicode.feature.backup.domain.BackupDecryptionException
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.ExportStats
+import com.aicode.feature.backup.domain.InsufficientSpaceException
+import com.aicode.feature.backup.domain.LoginSecretsPasswordRequiredException
+import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
@@ -37,11 +41,18 @@ import javax.inject.Inject
 sealed class BackupState {
     data object Idle : BackupState()
     data object Working : BackupState()
-    data object ExportDone : BackupState()
+
+    /**
+     * 导出完成；带上统计，让完成提示能讲清「工作区文件导了多少、哪些工作区被跳过」。
+     * 旧实现只是个无参状态 + Toast，导致「导出成功但工作区文件一个没进包」看不出来。
+     */
+    data class ExportDone(val stats: ExportStats) : BackupState()
     data class ImportSuccess(val stats: RestoreStats) : BackupState()
     /** 导入预览完成，等待选择要恢复的工作区。 */
     data class WorkspaceSelection(
-        val workspaces: List<WorkspaceBackupMeta>
+        val workspaces: List<WorkspaceBackupMeta>,
+        /** 解压后数据量，确认恢复时据此做空间预检。 */
+        val uncompressedBytes: Long = 0
     ) : BackupState()
     data class Error(val message: String) : BackupState()
 }
@@ -50,7 +61,7 @@ sealed class BackupState {
 sealed class NetworkBackupState {
     data object Idle : NetworkBackupState()
     data object Working : NetworkBackupState()
-    data class UploadDone(val targetName: String) : NetworkBackupState()
+    data class UploadDone(val targetName: String, val stats: ExportStats) : NetworkBackupState()
     data class RemoteList(
         val targetId: String,
         val targetName: String,
@@ -106,6 +117,9 @@ class BackupViewModel @Inject constructor(
             .putBoolean(KEY_WORKSPACE_FILES, options.workspaceFiles)
             .putBoolean(KEY_SKILLS_AGENTS, options.skillsAndAgents)
             .putBoolean(KEY_PANEL_SCRIPTS, options.panelScripts)
+            .putBoolean(KEY_MEMORY_FILES, options.memoryFiles)
+            .putBoolean(KEY_SESSION_BRIEFS, options.sessionBriefs)
+            .putBoolean(KEY_LOGIN_SECRETS, options.loginSecrets)
             .apply()
     }
 
@@ -118,7 +132,10 @@ class BackupViewModel @Inject constructor(
         appSettings = prefs.getBoolean(KEY_APP_SETTINGS, true),
         workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false),
         skillsAndAgents = prefs.getBoolean(KEY_SKILLS_AGENTS, true),
-        panelScripts = prefs.getBoolean(KEY_PANEL_SCRIPTS, true)
+        panelScripts = prefs.getBoolean(KEY_PANEL_SCRIPTS, true),
+        memoryFiles = prefs.getBoolean(KEY_MEMORY_FILES, false),
+        sessionBriefs = prefs.getBoolean(KEY_SESSION_BRIEFS, false),
+        loginSecrets = prefs.getBoolean(KEY_LOGIN_SECRETS, false)
     )
 
     /** 流式导出到 [output]（调用方打开，本方法负责关闭）。 */
@@ -126,11 +143,18 @@ class BackupViewModel @Inject constructor(
         _state.value = BackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
+            // 勾了登录凭据却没口令：直接拒绝并说清原因。绝不能静默改成「不含凭据」再导出，
+            // 那样用户会以为凭据已经在包里。BackupManager 也会再拦一次（见其 export 契约）。
+            if (options.loginSecrets && pw == null) {
+                _state.value = BackupState.Error(context.getString(R.string.backup_secrets_password_required))
+                runCatching { output.close() }
+                return@launch
+            }
             try {
-                backupManager.export(pw, options, output)
-                _state.value = BackupState.ExportDone
+                val stats = backupManager.export(pw, options, output)
+                _state.value = BackupState.ExportDone(stats)
             } catch (e: Exception) {
-                _state.value = BackupState.Error(e.message ?: context.getString(R.string.backup_export_failed))
+                _state.value = BackupState.Error(describeBackupError(e))
             } finally {
                 runCatching { output.close() }
             }
@@ -159,8 +183,14 @@ class BackupViewModel @Inject constructor(
         }
     }
 
-    /** 导出当前备份并上传到 [target]。 */
+    /** 导出当前备份并上传到 [target]。备份默认含解密后的 API Key / SSH 凭据，禁止明文上传远端。 */
     fun uploadToTarget(target: BackupTarget, password: String) {
+        if (password.isEmpty()) {
+            _networkState.value = NetworkBackupState.Error(
+                context.getString(R.string.backup_net_upload_password_required)
+            )
+            return
+        }
         _networkState.value = NetworkBackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
@@ -170,23 +200,29 @@ class BackupViewModel @Inject constructor(
                     File.createTempFile("netbackup", ".tar.gz", context.cacheDir)
                 }
                 val file = temp
-                withContext(Dispatchers.IO) {
+                val exportStats = withContext(Dispatchers.IO) {
                     file.outputStream().buffered().use { backupManager.export(pw, _exportOptions.value, it) }
+                }
+                // 网络上传与本地导出的工作区口径一致：跳过明细也随上传结果回给 UI，避免云端备份看起来「都带上了」。
+                if (exportStats.skippedWorkspaces.isNotEmpty()) {
+                    FileLogger.w(
+                        TAG,
+                        "网络导出跳过工作区 ${exportStats.skippedWorkspaces.size} 个：" +
+                            exportStats.skippedWorkspaces.joinToString { "${it.name}(${it.reason})" }
+                    )
                 }
                 val name = "aicode-backup-${fileTimestamp()}.tar.gz"
                 val result = withContext(Dispatchers.IO) {
                     runCatching { targetRepository.storageFor(target).upload(name, file).getOrThrow() }
                 }
                 result
-                    .onSuccess { _networkState.value = NetworkBackupState.UploadDone(target.name) }
+                    .onSuccess { _networkState.value = NetworkBackupState.UploadDone(target.name, exportStats) }
                     .onFailure {
-                        _networkState.value = NetworkBackupState.Error(
-                            it.message ?: context.getString(R.string.backup_net_upload_failed)
-                        )
+                        _networkState.value = NetworkBackupState.Error(describeBackupError(it))
                     }
             } catch (e: Exception) {
                 FileLogger.e(TAG, "网络备份上传失败", e)
-                _networkState.value = NetworkBackupState.Error(e.message ?: context.getString(R.string.backup_net_upload_failed))
+                _networkState.value = NetworkBackupState.Error(describeBackupError(e))
             } finally {
                 pw?.fill('\u0000')
                 val file = temp
@@ -251,12 +287,12 @@ class BackupViewModel @Inject constructor(
                     .onFailure {
                         withContext(Dispatchers.IO + NonCancellable) { temp.delete() }
                         pw?.fill('\u0000')
-                        _state.value = BackupState.Error(describeImportError(it))
+                        _state.value = BackupState.Error(describeBackupError(it))
                     }
             } catch (e: Exception) {
                 FileLogger.e(TAG, "网络备份恢复失败", e)
                 pw?.fill('\u0000')
-                _state.value = BackupState.Error(describeImportError(e))
+                _state.value = BackupState.Error(describeBackupError(e))
             }
         }
     }
@@ -293,13 +329,13 @@ class BackupViewModel @Inject constructor(
                 preview.onSuccess { preview ->
                     if (preview.hasWorkspaceData) {
                         pendingSource = source
-                        _state.value = BackupState.WorkspaceSelection(preview.workspaces)
+                        _state.value = BackupState.WorkspaceSelection(preview.workspaces, preview.uncompressedBytes)
                     } else {
-                        restoreFromSource(source, null)
+                        restoreFromSource(source, null, preview.uncompressedBytes)
                     }
-                }.onFailure { _state.value = BackupState.Error(describeImportError(it)) }
+                }.onFailure { _state.value = BackupState.Error(describeBackupError(it)) }
             } catch (e: Exception) {
-                _state.value = BackupState.Error(describeImportError(e))
+                _state.value = BackupState.Error(describeBackupError(e))
             } finally {
                 pw?.fill('\u0000')
                 if (_state.value !is BackupState.WorkspaceSelection || !isActive) {
@@ -312,12 +348,12 @@ class BackupViewModel @Inject constructor(
 
     /** 勾选确认后按所选工作区恢复，复用已校验的解密文件。 */
     fun confirmImportSelection(selected: Set<String>) {
-        if (_state.value !is BackupState.WorkspaceSelection) return
+        val selection = _state.value as? BackupState.WorkspaceSelection ?: return
         _state.value = BackupState.Working
         val source = pendingSource
         viewModelScope.launch {
             if (source != null) {
-                restoreFromSource(source, selected)
+                restoreFromSource(source, selected, selection.uncompressedBytes)
             } else {
                 _state.value = BackupState.Error(context.getString(R.string.backup_read_failed))
             }
@@ -338,13 +374,17 @@ class BackupViewModel @Inject constructor(
         }
     }
 
-    private suspend fun restoreFromSource(source: ImportSource, selected: Set<String>?) {
+    private suspend fun restoreFromSource(
+        source: ImportSource,
+        selected: Set<String>?,
+        uncompressedBytes: Long
+    ) {
         try {
             FileLogger.i(TAG, "开始还原：${describeSource(source)}${if (selected != null) "，勾选工作区=${selected.size}个" else "，全量"}")
             val result = withContext(Dispatchers.IO) {
                 val input = preparedImport?.inputStream() ?: openStream(source)
                     ?: throw IllegalArgumentException(context.getString(R.string.backup_read_failed))
-                input.use { backupManager.import(it, null, selected) }
+                input.use { backupManager.import(it, null, uncompressedBytes, selected) }
             }
             result.onSuccess {
                     FileLogger.i(TAG, "还原成功：$it")
@@ -352,11 +392,11 @@ class BackupViewModel @Inject constructor(
                 }
                 .onFailure {
                     FileLogger.e(TAG, "还原失败", it)
-                    _state.value = BackupState.Error(describeImportError(it))
+                    _state.value = BackupState.Error(describeBackupError(it))
                 }
         } catch (e: Exception) {
             FileLogger.e(TAG, "还原异常", e)
-            _state.value = BackupState.Error(describeImportError(e))
+            _state.value = BackupState.Error(describeBackupError(e))
         } finally {
             clearPreparedImport()
             discardLocalSource(source)
@@ -402,8 +442,28 @@ class BackupViewModel @Inject constructor(
         is ImportSource.Local -> "remote:${source.file.name}"
     }
 
-    private fun describeImportError(e: Throwable): String = when (e) {
+    private fun describeBackupError(e: Throwable): String = when (e) {
+        is InsufficientSpaceException -> context.getString(
+            R.string.backup_space_insufficient,
+            formatBytes(e.requiredBytes),
+            formatBytes(e.availableBytes)
+        )
+        is PartialRestoreException -> {
+            val detail = e.cause?.let { it.message ?: it::class.simpleName }
+                ?: context.getString(R.string.backup_import_failed)
+            if (e.partialStats.hasWrittenData) {
+                context.getString(
+                    R.string.backup_import_partial,
+                    detail,
+                    buildRestoreStatsLines(context, e.partialStats)
+                )
+            } else {
+                detail
+            }
+        }
         is BackupDecryptionException -> e.message ?: context.getString(R.string.backup_wrong_password)
+        // 网络上传入口也走同一份选项：勾了凭据却没口令时给出可操作的提示，而不是一句泛泛的失败。
+        is LoginSecretsPasswordRequiredException -> context.getString(R.string.backup_secrets_password_required)
         else -> buildString {
             append(e.message ?: e::class.simpleName ?: context.getString(R.string.backup_import_failed))
             // 诊断期附上 cause 链（最多两层），方便定位真实异常
@@ -418,6 +478,12 @@ class BackupViewModel @Inject constructor(
                 depth++
             }
         }
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+        bytes >= 1024L * 1024 -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
+        else -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
     }
 
     fun reset() {
@@ -442,5 +508,8 @@ class BackupViewModel @Inject constructor(
         private const val KEY_WORKSPACE_FILES = "workspace_files"
         private const val KEY_SKILLS_AGENTS = "skills_agents"
         private const val KEY_PANEL_SCRIPTS = "panel_scripts"
+        private const val KEY_MEMORY_FILES = "memory_files"
+        private const val KEY_SESSION_BRIEFS = "session_briefs"
+        private const val KEY_LOGIN_SECRETS = "login_secrets"
     }
 }

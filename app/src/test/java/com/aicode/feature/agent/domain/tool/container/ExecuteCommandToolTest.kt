@@ -10,8 +10,8 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -43,7 +43,7 @@ class ExecuteCommandToolTest {
     }
 
     @Test
-    fun execute_workspaceNotReady_returnsErrorWithoutRunningCommand() = runTest {
+    fun execute_workspaceNotReady_returnsErrorWithoutRunningCommand() = runBlocking {
         stubNotReadyWorkspace()
 
         val result = tool().execute(commandArgs("ls"))
@@ -53,7 +53,7 @@ class ExecuteCommandToolTest {
     }
 
     @Test
-    fun executeStream_workspaceNotReady_completesWithErrorWithoutRunningCommand() = runTest {
+    fun executeStream_workspaceNotReady_completesWithErrorWithoutRunningCommand() = runBlocking {
         stubNotReadyWorkspace()
 
         val events = tool().executeStream(commandArgs("ls"), mockk<AgentContext>()).toList()
@@ -67,14 +67,16 @@ class ExecuteCommandToolTest {
     }
 
     @Test
-    fun execute_workspaceReady_runsCommandInWorkspaceDir() = runTest {
+    fun execute_workspaceReady_runsCommandInWorkspaceDir() = runBlocking {
         // 正向对照：落定时命令仍以工作区路径为 cwd、返回原始输出（闸门不误伤正常路径）
         coEvery { workspace.awaitCurrentPathOrNull() } returns workPath
         coEvery { engine.runCommandSync(any(), any(), any()) } returns "ok"
 
-        val result = tool().execute(commandArgs("ls"))
+        // 用 pwd 而不是 ls：ls 会命中 ShellToolRoutingHint 的「列目录用 list 更好」提示，
+        // 输出就不再是原样回传，这条用例的正向对照会失真。
+        val result = tool().execute(commandArgs("pwd"))
 
         assertEquals(ToolResult.Success(JsonPrimitive("ok")), result)
-        coVerify(exactly = 1) { engine.runCommandSync("ls", workPath, any()) }
+        coVerify(exactly = 1) { engine.runCommandSync("pwd", workPath, any()) }
     }
 }

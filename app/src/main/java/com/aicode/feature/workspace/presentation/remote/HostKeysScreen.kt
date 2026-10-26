@@ -55,6 +55,7 @@ import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsRow
 import com.aicode.feature.settings.presentation.component.settingsLightMode
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.feature.workspace.domain.remote.hostKeyFingerprintForDisplay
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
@@ -214,7 +215,7 @@ fun HostKeysScreen(
                                                     maxLines = 1
                                                 )
                                                 Text(
-                                                    text = fingerprint,
+                                                    text = hostKeyFingerprintForDisplay(fingerprint),
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     maxLines = 1,
@@ -263,7 +264,7 @@ fun HostKeysScreen(
                     Text(
                         stringResource(
                             R.string.ssh_host_key_detail,
-                            hostKeys[address].orEmpty()
+                            hostKeyFingerprintForDisplay(hostKeys[address].orEmpty())
                         )
                     )
                 },
@@ -379,7 +380,7 @@ private fun AddLoginKeyMethodSheet(
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.semanticColors.pageBackground
     ) {
         Column(
             modifier = Modifier
