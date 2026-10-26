@@ -44,7 +44,8 @@ data class ToolParameter(
     /**
      * 当 [type] 为 [ParameterType.ARRAY] 时，描述数组元素的 JSON Schema（原样并入
      * function-calling 的 items 字段）。例如元素是对象时传
-     * `{"type":"object","properties":{...},"required":[...]}`。为空则不输出 items。
+     * `{"type":"object","properties":{...},"required":[...]}`。为空则兜底为字符串数组 schema
+     * 以满足 Gemini / OpenAPI 对 array 必须有 items 字段的要求。
      */
     val itemsSchema: Map<String, Any>? = null
 )
@@ -152,7 +153,9 @@ abstract class AgentTool {
             prop["type"] = param.type.name.lowercase()
             prop["description"] = param.description
             param.enum?.let { prop["enum"] = it }
-            if (param.type == ParameterType.ARRAY) param.itemsSchema?.let { prop["items"] = it }
+            if (param.type == ParameterType.ARRAY) {
+                prop["items"] = param.itemsSchema ?: mapOf("type" to "string")
+            }
             properties[key] = prop
             if (param.required) required.add(key)
         }
