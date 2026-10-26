@@ -349,8 +349,9 @@ class SystemPromptProvider @Inject constructor(
         segments += staticSegments(agentContext, onlyCustom = false)
         val skillsContent = activeSkillsSource.build(agentContext)
         val subAgentsContent = subAgentListSource.build(agentContext)
-        // 记忆内容全来自引擎：内置片段用的整块走 `{{AICODE_MEMORY}}`，两个按作用域分节的纯列表
-        // 变量取同一模块的分组结果——同一轮里读盘与命中记账只发生一次。
+        // `{{AICODE_MEMORY}}` 的名字是历史包袱：它注入的是引擎模块片段（团队协同、虚拟屏等），
+        // 记忆本体走每轮 reminder，不进系统提示词。两个按作用域分节的纯列表变量取记忆模块的分组结果，
+        // 与 reminder 共用一次读盘与命中记账。
         val memoryContent = engineFragmentSource.build(agentContext)
         val memories = agentEngine.memoryListGroups(engineContextOf(agentContext))
         val projectRules = projectRulesFor(agentContext)
