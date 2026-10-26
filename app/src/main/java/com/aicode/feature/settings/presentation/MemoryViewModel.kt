@@ -91,6 +91,9 @@ class MemoryViewModel @Inject constructor(
     /**
      * 首次读盘尚未完成：列表此时必然为空，界面据此渲染「正在读取」而不是「没有记忆」。
      * 不这样做时，进页面会先闪一下空态、过一会才变成列表，看起来像加载失败。
+     *
+     * 只在**记忆清单**读完时置 false，不等顶部那张短期卡片：清单才是用户进这页要看的，
+     * 短期卡片是只读状态条，没理由让它拖着一整页的「正在读取」。
      */
     private val _loading = MutableStateFlow(true)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
@@ -147,10 +150,22 @@ class MemoryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 // 工作区未落定时只能读全局记忆：项目级记忆属于具体工作区，不能猜工作区父目录。
+                // 纯 StateFlow 读，不是 IO。
                 val projectRoot = workspaceRepository.currentPathOrNull()
-                _memories.value = withContext(Dispatchers.IO) {
-                    memoryRepository.listMemories(projectRoot)
+                try {
+                    val loaded = withContext(Dispatchers.IO) {
+                        memoryRepository.listMemories(projectRoot)
+                    }
+                    // 内容没变就不写：每次进分区都会 refresh，而重扫出来的清单往往与手上这份逐条相等。
+                    // 不写这一下就不依赖 StateFlow 对「相等的新值」是否去重——无论它去不去，
+                    // 界面都拿不到新对象，也就不会把整屏记忆行（每行带滑动状态）重绘一遍。
+                    if (loaded != _memories.value) _memories.value = loaded
+                } finally {
+                    // 清单到手就先放开「正在读取」：短期卡片要查库，不该让列表等它。
+                    // 仍然等第一次读盘结束才置 false，「正在读取」与「没有记忆」不会混。
+                    _loading.value = false
                 }
+                // 短期卡片后到：它只是顶部一张只读卡，慢在这一步不影响列表已经可用。
                 _shortTermSession.value = if (projectRoot == null) {
                     null
                 } else {
@@ -158,6 +173,7 @@ class MemoryViewModel @Inject constructor(
                 }
             } finally {
                 inFlight = false
+                // 兜底：中途抛错 / 取消也要放开「正在读取」，别让界面永远停在占位态。
                 _loading.value = false
             }
         }

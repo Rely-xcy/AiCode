@@ -112,6 +112,7 @@ interface MemorySource {
                     )
                 )
             }
+            MemoryListCache.invalidate(root)
             MemoryEditResult.Success
         } catch (e: Exception) {
             FileLogger.e("MemorySource", "Failed to edit memory: $name", e)
