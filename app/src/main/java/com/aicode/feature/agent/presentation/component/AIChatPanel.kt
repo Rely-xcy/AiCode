@@ -2251,7 +2251,7 @@ fun AIChatPanel(
                     todoExpanded = it
                     if (it) dashboardExpanded = false
                 },
-                forceCollapseDashboard = pendingPermission != null || pendingQuestion != null || planApproval != null || imeVisible,
+                forceCollapseDashboard = pendingPermission != null || planApproval != null || imeVisible,
                 onDashboardExpandedChange = {
                     dashboardExpanded = it
                     if (it) todoExpanded = false
