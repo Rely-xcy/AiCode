@@ -60,6 +60,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -142,6 +143,12 @@ internal fun shouldShowToolPreparation(
     isCompacting: Boolean,
     awaitingUserInput: Boolean,
 ): Boolean = preparingTool != null && isBusy && !isCompacting && !awaitingUserInput
+
+/** [ChatPanelSlot] 的存档器：存名字而不是枚举实例，避免依赖 Bundle 对 Serializable 的支持。 */
+private val ChatPanelSlotSaver = Saver<ChatPanelSlot, String>(
+    save = { it.name },
+    restore = { name -> ChatPanelSlot.entries.firstOrNull { slot -> slot.name == name } ?: ChatPanelSlot.None }
+)
 
 /** 悬浮层（横幅/面板/输入框）与最后一条消息的间距。 */
 private val FLOATING_LAYER_GAP_DP = 8.dp
@@ -912,6 +919,7 @@ fun AIChatPanel(
     val pendingQuestion by viewModel.pendingUserQuestion.collectAsStateWithLifecycle()
     val currentTodoItems by viewModel.currentSessionTodoItems.collectAsStateWithLifecycle()
     val queuedRequests by viewModel.queuedRequests.collectAsStateWithLifecycle()
+    val planApproval by viewModel.pendingPlanApproval.collectAsStateWithLifecycle()
     // 「插话」即时确认：点击后短暂在输入框上方显示该条内容（约 2.6s 自动隐去）。
     // 不用 Toast：输入框区域就是用户此刻看的地方，且不会遮挡聊天内容。
     var interjectionAck by remember { mutableStateOf<String?>(null) }
@@ -1139,15 +1147,53 @@ fun AIChatPanel(
         derivedStateOf { imeInsets.getBottom(density) > 0 }
     }
 
-    // 余额/待办面板展开状态：展开时叠加面板联动折叠，避免输入框被双重顶开
-    var dashboardExpanded by rememberSaveable { mutableStateOf(false) }
-    var todoExpanded by rememberSaveable { mutableStateOf(false) }
-    // ProviderDashboardBar 仅在有面板脚本的 provider 下渲染（见 ChatInputBar）。无该栏时
-    // dashboardExpanded 可能残留 true：面板曾展开后随 provider 切换/脚本移除而卸载，LaunchedEffect
-    // 上报链路中断无法复位，直接拿它做 forceCollapse 会把授权/询问/计划面板永久压成收起态。
-    // 故叠加可见性，只在面板当前可见且展开时才折叠叠加面板。
+    // 输入框上方四类面板（排队/待办/自定义/提问）全局互斥：同一时刻最多一个展开。
+    // 展开态由各面板自己持有，这里只记「当前展开的是哪一个」，其余面板由 ChatInputBar 压成收起态。
+    var activePanel by rememberSaveable(stateSaver = ChatPanelSlotSaver) { mutableStateOf(ChatPanelSlot.None) }
+    // ProviderDashboardBar 仅在有面板脚本的 provider 下渲染（见 ChatInputBar）。面板随 provider
+    // 切换/脚本移除而消失后，activePanel 若仍指向它，会把其余面板永久压成收起态；
+    // 故叠加可见性，并由下方 effect 释放已不存在的面板占位。
     val dashboardBarVisible = activeProvider?.dashboardScriptPath?.isNotBlank() == true
-    val dashboardCollapseActive = (dashboardExpanded && dashboardBarVisible) || (todoExpanded && currentTodoItems.isNotEmpty())
+    // 键盘/授权/计划弹层会把排队、待办、自定义面板本身压成收起态，此时它们并不占用输入框上方，
+    // 不能连带把提问/计划/授权面板也压掉（后者本来就在等用户操作）。
+    val panelsBlockedByOverlay = imeVisible || pendingPermission != null || planApproval != null
+    val activePanelOccupied = when (activePanel) {
+        ChatPanelSlot.Queue -> queuedRequests.isNotEmpty()
+        ChatPanelSlot.Todo -> currentTodoItems.isNotEmpty()
+        ChatPanelSlot.Dashboard -> dashboardBarVisible
+        ChatPanelSlot.Question, ChatPanelSlot.None -> false
+    }
+    val dashboardCollapseActive = activePanelOccupied && !panelsBlockedByOverlay
+
+    LaunchedEffect(
+        activePanel,
+        queuedRequests.isNotEmpty(),
+        currentTodoItems.isNotEmpty(),
+        dashboardBarVisible,
+        pendingQuestion != null
+    ) {
+        val stale = when (activePanel) {
+            ChatPanelSlot.Queue -> queuedRequests.isEmpty()
+            ChatPanelSlot.Todo -> currentTodoItems.isEmpty()
+            ChatPanelSlot.Dashboard -> !dashboardBarVisible
+            ChatPanelSlot.Question -> pendingQuestion == null
+            ChatPanelSlot.None -> false
+        }
+        if (stale) activePanel = ChatPanelSlot.None
+    }
+
+    // 排队面板的默认展开靠这条：受控展开下 [ChatPanelSlot.None] 表示全部收起，
+    // 新排进来的消息就看不见了（改动前它默认展开）。只在「从无到有」且没有其它面板占位、
+    // 也没有待答提问时把它设为活动面板；用户手动收起后 key 不变，不会被重新顶开。
+    // 声明在提问面板的自动切槽之前，两者同帧到达时提问后写、最终占位。
+    LaunchedEffect(queuedRequests.isNotEmpty()) {
+        if (queuedRequests.isNotEmpty() &&
+            activePanel == ChatPanelSlot.None &&
+            pendingQuestion == null
+        ) {
+            activePanel = ChatPanelSlot.Queue
+        }
+    }
 
     fun buildDashboardContext(
         lastInput: Int = 0,
@@ -2111,6 +2157,11 @@ fun AIChatPanel(
                 lastUploadingCount?.let { UploadingBanner(count = it, onCancel = { cancelUpload() }) }
             }
 
+            // 问题到达时自动把它切到最前：四类面板互斥里只有它能由系统主动打开。
+            LaunchedEffect(pendingQuestion?.id) {
+                if (pendingQuestion != null) activePanel = ChatPanelSlot.Question
+            }
+
             val questionForPanel = rememberLastNonNull(pendingQuestion)
             AnimatedVisibility(
                 visible = pendingQuestion != null,
@@ -2123,16 +2174,24 @@ fun AIChatPanel(
                 exit = fadeOut(tween(140))
             ) {
                 questionForPanel?.let { question ->
-                    AskUserQuestionPanel(
-                        question = question,
-                        onConfirm = { answer -> viewModel.resolveUserQuestion(question.id, answer) },
-                        onSkip = { viewModel.resolveUserQuestion(question.id, UserQuestionAnswer(emptyList())) },
-                        forceCollapse = dashboardCollapseActive
-                    )
+                    // 收起≠取消：pendingQuestion 与 AskUserQuestionManager 的挂起流程不受影响，
+                    // 切到其它面板时只把这里的展开态压成收起，问题本身仍等用户回答。
+                    // 收起时必须同时接管点击，否则未知到底有没有别人的面板压着它。
+                    val questionCollapsed = dashboardCollapseActive
+                    TapToActivatePanel(
+                        enabled = questionCollapsed,
+                        onTap = { activePanel = ChatPanelSlot.Question }
+                    ) {
+                        AskUserQuestionPanel(
+                            question = question,
+                            onConfirm = { answer -> viewModel.resolveUserQuestion(question.id, answer) },
+                            onSkip = { viewModel.resolveUserQuestion(question.id, UserQuestionAnswer(emptyList())) },
+                            forceCollapse = questionCollapsed
+                        )
+                    }
                 }
             }
 
-            val planApproval by viewModel.pendingPlanApproval.collectAsStateWithLifecycle()
             val planForPanel = rememberLastNonNull(planApproval)
             AnimatedVisibility(
                 visible = planApproval != null,
@@ -2247,14 +2306,20 @@ fun AIChatPanel(
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
                 sessionId = currentSessionId.orEmpty(),
-                onTodoExpandedChange = {
-                    todoExpanded = it
-                    if (it) dashboardExpanded = false
+                activePanel = activePanel,
+                onActivePanelChange = { activePanel = it },
+                onQueueExpandedChange = { expanded ->
+                    if (expanded) activePanel = ChatPanelSlot.Queue
+                    else if (activePanel == ChatPanelSlot.Queue) activePanel = ChatPanelSlot.None
+                },
+                onTodoExpandedChange = { expanded ->
+                    if (expanded) activePanel = ChatPanelSlot.Todo
+                    else if (activePanel == ChatPanelSlot.Todo) activePanel = ChatPanelSlot.None
                 },
                 forceCollapseDashboard = pendingPermission != null || planApproval != null || imeVisible,
-                onDashboardExpandedChange = {
-                    dashboardExpanded = it
-                    if (it) todoExpanded = false
+                onDashboardExpandedChange = { expanded ->
+                    if (expanded) activePanel = ChatPanelSlot.Dashboard
+                    else if (activePanel == ChatPanelSlot.Dashboard) activePanel = ChatPanelSlot.None
                 },
                 onRefreshDashboard = {
                     activeProvider?.let {

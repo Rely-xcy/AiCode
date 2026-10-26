@@ -13,6 +13,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -149,6 +150,42 @@ private val INPUT_FIELD_MAX_HEIGHT = 140.dp
  */
 private val INPUT_FIELD_CONTENT_PADDING = 16.dp
 
+/**
+ * 输入框上方四类面板的互斥槽位：同一时刻最多一个展开，[None] 表示全部收起。
+ * 排队/待办/自定义三类面板支持受控展开（见各组件 `expandedOverride`），活动槽位直接决定谁展开；
+ * 被浮层压成收起时另有一层点击接管（见 [TapToActivatePanel]），点整块即等于「切到该面板」。
+ */
+internal enum class ChatPanelSlot { None, Queue, Todo, Dashboard, Question }
+
+/**
+ * 收起态面板整块变成「点一下切到它」的入口。
+ *
+ * 展开由外部通过 `expandedOverride` 驱动，但收起态只剩标题行可点、浮层压住时内部点击只会转成
+ * 「切换自身状态」而不显示，所以整块再加一层投射层：点任意位置 = 把该面板设为活动面板。
+ * 注意必须只在真的收起时启用，否则会吃掉面板内部的按钮点击。
+ */
+@Composable
+internal fun TapToActivatePanel(
+    enabled: Boolean,
+    onTap: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Box {
+        content()
+        if (enabled) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onTap
+                    )
+            )
+        }
+    }
+}
+
 @Composable
 internal fun ChatInputBar(
     value: String,
@@ -204,6 +241,11 @@ internal fun ChatInputBar(
     todoItems: List<TodoItem> = emptyList(),
     sessionId: String = "",
     onTodoExpandedChange: (Boolean) -> Unit = {},
+    onQueueExpandedChange: (Boolean) -> Unit = {},
+    /** 当前展开的面板；四处面板共用这一个槽位，非活动面板由本组件转成受控收起。 */
+    activePanel: ChatPanelSlot = ChatPanelSlot.None,
+    onActivePanelChange: (ChatPanelSlot) -> Unit = {},
+    /** 上层浮层（键盘/授权/计划审批）把三块面板压成收起；与 [activePanel] 驱动的受控展开是两回事，且优先。 */
     forceCollapseDashboard: Boolean = false,
     /** 消息列表正在滚动时内容区淡出到 40%，停止滚动恢复；用于长列表阅读时降低底部干扰（同 git 页 tab 栏）。 */
     isScrolling: Boolean = false,
@@ -448,36 +490,69 @@ internal fun ChatInputBar(
             }
 
             if (queuedRequests.isNotEmpty()) {
-                QueuedRequestPanel(
-                    queuedRequests = queuedRequests,
-                    sessionId = sessionId,
-                    forceCollapse = forceCollapseDashboard,
-                    onRemoveQueued = onRemoveQueued,
-                    onMoveQueued = onMoveQueued,
-                    onEditQueued = onEditQueued,
-                    onInterjectQueued = onInterjectQueued
-                )
+                // expandedOverride 就是「活动槽位是不是我」：非活动面板立刻跟着收起，点一次就能切过来；
+                // forceCollapseDashboard 单独表示被键盘/授权/计划审批压住，两者是两回事（后者更强）。
+                val queueExpanded = activePanel == ChatPanelSlot.Queue
+                // 只有「被其它面板占位 / 被浮层压住」时才接管整块点击：这两类情形下面板一定收起，
+                // 内部展开控件点了也看不到结果。activePanel 为 None 时不接管——此时面板自带的
+                // 标题行就能展开它，接管反而会吃掉面板内部按钮（数据面板摘要里的动作、重试）。
+                val queueTakeOver = forceCollapseDashboard ||
+                    (activePanel != ChatPanelSlot.None && activePanel != ChatPanelSlot.Queue)
+                TapToActivatePanel(
+                    enabled = queueTakeOver,
+                    onTap = { onActivePanelChange(ChatPanelSlot.Queue) }
+                ) {
+                    QueuedRequestPanel(
+                        queuedRequests = queuedRequests,
+                        sessionId = sessionId,
+                        expandedOverride = queueExpanded,
+                        forceCollapse = forceCollapseDashboard,
+                        onExpandedChange = onQueueExpandedChange,
+                        onRemoveQueued = onRemoveQueued,
+                        onMoveQueued = onMoveQueued,
+                        onEditQueued = onEditQueued,
+                        onInterjectQueued = onInterjectQueued
+                    )
+                }
             }
 
             if (todoItems.isNotEmpty()) {
-                TodoDashboardBar(
-                    items = todoItems,
-                    sessionId = sessionId,
-                    forceCollapse = forceCollapseDashboard,
-                    onExpandedChange = onTodoExpandedChange
-                )
+                val todoExpanded = activePanel == ChatPanelSlot.Todo
+                val todoTakeOver = forceCollapseDashboard ||
+                    (activePanel != ChatPanelSlot.None && activePanel != ChatPanelSlot.Todo)
+                TapToActivatePanel(
+                    enabled = todoTakeOver,
+                    onTap = { onActivePanelChange(ChatPanelSlot.Todo) }
+                ) {
+                    TodoDashboardBar(
+                        items = todoItems,
+                        sessionId = sessionId,
+                        expandedOverride = todoExpanded,
+                        forceCollapse = forceCollapseDashboard,
+                        onExpandedChange = onTodoExpandedChange
+                    )
+                }
             }
 
             if (activeProvider != null && activeProvider.dashboardScriptPath.isNotBlank()) {
-                ProviderDashboardBar(
-                    provider = activeProvider,
-                    state = dashboardState,
-                    onRefresh = onRefreshDashboard,
-                    onRefreshByButton = onRefreshDashboardByButton,
-                    onExpandedChange = onDashboardExpandedChange,
-                    maxExpandedBodyHeight = dashboardBodyMaxHeight,
-                    forceCollapse = forceCollapseDashboard
-                )
+                val dashboardExpanded = activePanel == ChatPanelSlot.Dashboard
+                val dashboardTakeOver = forceCollapseDashboard ||
+                    (activePanel != ChatPanelSlot.None && activePanel != ChatPanelSlot.Dashboard)
+                TapToActivatePanel(
+                    enabled = dashboardTakeOver,
+                    onTap = { onActivePanelChange(ChatPanelSlot.Dashboard) }
+                ) {
+                    ProviderDashboardBar(
+                        provider = activeProvider,
+                        state = dashboardState,
+                        onRefresh = onRefreshDashboard,
+                        onRefreshByButton = onRefreshDashboardByButton,
+                        onExpandedChange = onDashboardExpandedChange,
+                        maxExpandedBodyHeight = dashboardBodyMaxHeight,
+                        expandedOverride = dashboardExpanded,
+                        forceCollapse = forceCollapseDashboard
+                    )
+                }
             }
 
             currentGoal?.let { goal ->

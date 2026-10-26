@@ -62,17 +62,22 @@ fun TodoDashboardBar(
     items: List<TodoItem>,
     sessionId: String,
     modifier: Modifier = Modifier,
+    /** 非 null 时由外部决定展开态（受控）；null 时沿用本组件的会话内记忆。 */
+    expandedOverride: Boolean? = null,
     forceCollapse: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {}
 ) {
     if (items.isEmpty()) return
 
     // 按会话隔离记忆展开状态，新会话默认收起
-    var isExpanded by rememberSaveable(sessionId) { mutableStateOf(false) }
-    val effectiveExpanded = isExpanded && !forceCollapse
+    var internalExpanded by rememberSaveable(sessionId) { mutableStateOf(false) }
+    // 受控优先，forceCollapse（键盘/授权/计划审批压住）永远能再压一层。
+    val effectiveExpanded = (expandedOverride ?: internalExpanded) && !forceCollapse
 
-    LaunchedEffect(effectiveExpanded) {
-        onExpandedChange(effectiveExpanded)
+    // 只有组件自己持有展开态时才上报：受控模式下上报会把「被浮层压成收起」当成用户收起，
+    // 外部据此清掉活动槽位，浮层退去后就收不回来了。
+    LaunchedEffect(effectiveExpanded, expandedOverride) {
+        if (expandedOverride == null) onExpandedChange(effectiveExpanded)
     }
 
     val totalCount = items.size
@@ -100,7 +105,13 @@ fun TodoDashboardBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(Radius.sm))
-                    .clickable { isExpanded = !isExpanded }
+                    .clickable {
+                        if (expandedOverride == null) {
+                            internalExpanded = !internalExpanded
+                        } else {
+                            onExpandedChange(!effectiveExpanded)
+                        }
+                    }
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

@@ -71,18 +71,23 @@ fun ProviderDashboardBar(
     onRefresh: () -> Unit,
     maxExpandedBodyHeight: Dp,
     modifier: Modifier = Modifier,
+    /** 非 null 时由外部决定展开态（受控）；null 时沿用本组件的记忆。 */
+    expandedOverride: Boolean? = null,
     forceCollapse: Boolean = false,
     onRefreshByButton: () -> Unit = {},
     onExpandedChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
-    var isExpanded by rememberSaveable { mutableStateOf(false) }
+    var internalExpanded by rememberSaveable { mutableStateOf(false) }
 
-    // 弹窗/键盘叠加时同帧收起：用派生状态而不是 LaunchedEffect 异步改 isExpanded，
+    // 弹窗/键盘叠加时同帧收起：用派生状态而不是 LaunchedEffect 异步改内部状态，
     // 否则弹窗先出现顶开布局、面板后折叠，中间产生空档闪屏。
-    val effectiveExpanded = isExpanded && !forceCollapse
-    // 上报展开状态给外层，供叠加面板联动折叠
-    LaunchedEffect(effectiveExpanded) { onExpandedChange(effectiveExpanded) }
+    // 受控优先，forceCollapse 永远能再压一层。
+    val effectiveExpanded = (expandedOverride ?: internalExpanded) && !forceCollapse
+    // 上报展开状态给外层，供叠加面板联动折叠；受控模式下上报会把「被浮层压住」误报成用户收起。
+    LaunchedEffect(effectiveExpanded, expandedOverride) {
+        if (expandedOverride == null) onExpandedChange(effectiveExpanded)
+    }
 
     val cardBgColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)
@@ -194,7 +199,13 @@ fun ProviderDashboardBar(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { isExpanded = !effectiveExpanded },
+                            .clickable {
+                                if (expandedOverride == null) {
+                                    internalExpanded = !internalExpanded
+                                } else {
+                                    onExpandedChange(!effectiveExpanded)
+                                }
+                            },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
