@@ -125,6 +125,13 @@ class ReasoningEffortDialTest {
     }
 
     @Test
+    fun levelPosition_singleLevelSitsWhereTheHeadSits() {
+        // 只有一档时轨道不可拖，刻度点与指示头放同一位置，不会出现「点在中间、头在最右」两个矛盾的标记。
+        assertEquals(1f, levelPosition(1, 0), 0.0001f)
+        assertEquals(0, levelIndexAt(300f, 300f, 1))
+    }
+
+    @Test
     fun levelPosition_roundTripsThroughLevelIndexAt() {
         val width = 360f
         // 静止位置再换算回档位必须还是同一档，否则松手后指示头会归到别的档位。
