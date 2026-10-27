@@ -27,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import com.aicode.core.ui.AppStatusPill
+import com.aicode.core.ui.AppStatusTone
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,7 +50,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.FloatingTabBar
@@ -380,19 +381,11 @@ private fun PlatformIcon(host: String, modifier: Modifier = Modifier) {
 @Composable
 private fun HostBadge(host: String) {
     val label = remember(host) { hostBadgeLabel(host) }
-    val color = MaterialTheme.colorScheme.primary
-    Box(
-        modifier = Modifier
-            .background(color.copy(alpha = 0.12f), RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            maxLines = 1
-        )
-    }
+    AppStatusPill(
+        text = label,
+        tone = AppStatusTone.Brand,
+        textStyle = MaterialTheme.typography.labelSmall
+    )
 }
 
 private fun hostBadgeLabel(host: String): String {

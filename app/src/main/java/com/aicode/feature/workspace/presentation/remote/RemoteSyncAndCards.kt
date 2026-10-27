@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppStatusPill
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
@@ -209,17 +210,12 @@ private fun ProtocolBadge(protocol: RemoteProtocol) {
         RemoteProtocol.SFTP -> MaterialTheme.colorScheme.primary
         RemoteProtocol.FTP -> MaterialTheme.colorScheme.tertiary
     }
-    Box(
-        modifier = Modifier
-            .background(color.copy(alpha = 0.12f), RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = protocol.name,
-            style = MaterialTheme.typography.labelSmall,
-            color = color
-        )
-    }
+    AppStatusPill(
+        text = protocol.name,
+        textColor = color,
+        backgroundColor = color.copy(alpha = 0.12f),
+        textStyle = MaterialTheme.typography.labelSmall
+    )
 }
 
 /**

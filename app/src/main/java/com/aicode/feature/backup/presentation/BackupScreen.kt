@@ -55,9 +55,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppStatusPill
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.FloatingTabBar
@@ -796,13 +796,12 @@ private fun TargetTypeBadge(type: BackupTargetType) {
         BackupTargetType.WEBDAV -> stringResource(R.string.backup_net_type_webdav) to MaterialTheme.colorScheme.primary
         BackupTargetType.S3 -> stringResource(R.string.backup_net_type_s3) to MaterialTheme.colorScheme.tertiary
     }
-    Box(
-        modifier = Modifier
-            .background(color.copy(alpha = 0.12f), RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
-    }
+    AppStatusPill(
+        text = text,
+        textColor = color,
+        backgroundColor = color.copy(alpha = 0.12f),
+        textStyle = MaterialTheme.typography.labelSmall
+    )
 }
 
 @Composable
