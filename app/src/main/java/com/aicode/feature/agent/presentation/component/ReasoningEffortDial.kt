@@ -193,6 +193,9 @@ internal fun ReasoningThinkingPill(
  * 浓度滑轨：指针 x 把轨道宽度按「档位数 - 1」等分，落在哪一段就取哪档，首档贴左端、末档贴右端，
  * 所以从最左（外一点点）按下去也能取到最低档。
  *
+ * 轨道上的刻度点有 [levelCount] 个（跟着当前模型可用档位走），与取档比例同一套换算，
+ * 当前档位（拖动时是预览档位）的那个点高亮，其余点低透明度。
+ *
  * 拖动期间只把指针 x 写进 [previewX]（只在绘制阶段读，不触发重组、不做动画插值），指示头逐帧跟着手指；
  * 松手才回调一次 [onPick]，弹层不会被横向拖动带关。
  */
@@ -207,6 +210,9 @@ internal fun ReasoningLevelTrack(
 ) {
     val brand = MaterialTheme.colorScheme.primary
     val tipColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+    val dotColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    // 高亮点压在满浓度的主色填充上，用「主色上的内容色」才有反差，主色实心会与填充糊成一片。
+    val activeDotColor = MaterialTheme.colorScheme.onPrimary
     val trackBrush = remember(brand) {
         Brush.horizontalGradient(listOf(brand.copy(alpha = 0.12f), brand.copy(alpha = 0.32f)))
     }
@@ -298,7 +304,30 @@ internal fun ReasoningLevelTrack(
                     cornerRadius = corner
                 )
             }
-            // 指示头：竖条比轨道高，贴在当前档位（拖动时贴手指）上；不再画固定的档位刻度点。
+            // 刻度点：档位有几个画几个，位置与取档比例同一套（首点压左端、末点压右端），
+            // 用手指按端点时正好落在对应的点上。拖动中按指针位置换算最近的预览档位，
+            // 这几行只读 [previewX] 的当前值，落在绘制阶段，拖动不会触发重组。
+            val dotCenterY = trackTop + trackHeight / 2f
+            val activeIndex = previewX.value
+                ?.let { levelIndexAt(it, width, levelCount) }
+                ?: selectedIndex.coerceIn(0, (levelCount - 1).coerceAtLeast(0))
+            // 端点的圆心按半径内收：外缘正好压在轨道端头，与指示头的夹边方式一致，点不会被切掉一半。
+            fun dotCenterX(index: Int, radius: Float): Float {
+                val x = width * levelPosition(levelCount, index)
+                return if (width > radius * 2f) x.coerceIn(radius, width - radius) else width / 2f
+            }
+            if (levelCount > 0) {
+                val dotRadius = 2.dp.toPx()
+                for (index in 0 until levelCount) {
+                    if (index == activeIndex) continue
+                    drawCircle(
+                        color = dotColor,
+                        radius = dotRadius,
+                        center = Offset(dotCenterX(index, dotRadius), dotCenterY)
+                    )
+                }
+            }
+            // 指示头：竖条比轨道高，贴在当前档位（拖动时贴手指）上。
             val headWidth = 3.dp.toPx()
             val headHeight = trackHeight + 12.dp.toPx()
             val headLeft = (width * fraction - headWidth / 2f).coerceIn(0f, (width - headWidth).coerceAtLeast(0f))
@@ -308,6 +337,15 @@ internal fun ReasoningLevelTrack(
                 size = Size(headWidth, headHeight),
                 cornerRadius = CornerRadius(headWidth / 2f)
             )
+            // 高亮点画在指示头之后，静止时不会被指示头整颗盖掉；比普通点大一圈，压着竖条也看得见。
+            if (levelCount > 0) {
+                val activeRadius = 3.dp.toPx()
+                drawCircle(
+                    color = activeDotColor,
+                    radius = activeRadius,
+                    center = Offset(dotCenterX(activeIndex, activeRadius), dotCenterY)
+                )
+            }
         }
     }
 }
