@@ -92,6 +92,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.rememberImeBottomInset
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
@@ -977,13 +978,12 @@ internal fun SendButton(
                 }
             }
         }
-        Box(
+        ShapeClickBox(
+            onClick = if (showStop) onStop else onSend,
+            enabled = clickable,
             modifier = Modifier
                 .size(36.dp)
-                .clip(CircleShape)
-                .background(buttonColor)
-                .clickable(enabled = clickable, onClick = if (showStop) onStop else onSend),
-            contentAlignment = Alignment.Center
+                .background(buttonColor, CircleShape)
         ) {
             if (showStop) {
                 Icon(

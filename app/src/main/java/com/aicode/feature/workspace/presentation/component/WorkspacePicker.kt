@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.dialogTextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -521,12 +521,10 @@ private fun WorkspaceRow(
             }
         }
         if (canDelete) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(Radius.sm))
-                    .clickable(onClick = onDelete),
-                contentAlignment = Alignment.Center
+            ShapeClickBox(
+                onClick = onDelete,
+                modifier = Modifier.size(32.dp),
+                shape = RoundedCornerShape(Radius.sm)
             ) {
                 Icon(
                     FeatherIcons.Trash2,

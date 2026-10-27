@@ -3,7 +3,6 @@ package com.aicode.feature.agent.presentation.component
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
@@ -38,12 +37,12 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -135,14 +134,13 @@ internal fun ReasoningTopLevelButton(
 ) {
     val brand = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Box(
+    ShapeClickBox(
+        onClick = onClick,
         modifier = Modifier
             .size(MinTouchSize)
-            .clip(CircleShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description }
             .alpha(if (enabled) 1f else 0.38f),
-        contentAlignment = Alignment.Center
+        enabled = enabled,
+        contentDescription = description
     ) {
         Canvas(modifier = Modifier.size(TopButtonBoltSize)) {
             drawBolt(

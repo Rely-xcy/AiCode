@@ -19,6 +19,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import com.aicode.core.ui.ShapeClickBox
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -2551,11 +2552,12 @@ private fun ScrollToBottomButton(
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 6.dp,
-        modifier = modifier
-            .size(SCROLL_TO_BOTTOM_BTN_SIZE.dp)
-            .clickable(onClick = onClick)
+        modifier = modifier.size(SCROLL_TO_BOTTOM_BTN_SIZE.dp)
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        ShapeClickBox(
+            onClick = onClick,
+            modifier = Modifier.fillMaxSize()
+        ) {
             Icon(
                 imageVector = FeatherIcons.ArrowDown,
                 contentDescription = stringResource(R.string.common_scroll_to_bottom),

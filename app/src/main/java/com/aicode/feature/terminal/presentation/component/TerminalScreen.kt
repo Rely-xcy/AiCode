@@ -68,6 +68,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.terminal.data.repository.TerminalSettings
@@ -370,12 +371,9 @@ private fun TabChip(
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
         )
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onClose),
-            contentAlignment = Alignment.Center
+        ShapeClickBox(
+            onClick = onClose,
+            modifier = Modifier.size(22.dp)
         ) {
             Icon(
                 FeatherIcons.X,
