@@ -54,10 +54,11 @@ private val RingStroke = 2.4.dp
 private val BoltSize = 15.dp
 
 /**
- * 弹层顶部「最高档」按钮：23dp 裸闪电（不画环），外面留 48dp 触摸区。
- * 去掉 32dp 环之后原来 18dp 的闪电在 48dp 空框里显小，按去掉环之前「闪电 / 环」的观感补到 23dp。
+ * 弹层顶部「最高档」按钮：20dp 裸闪电（不画环），外面留 48dp 触摸区。
+ * 与改造前档位列表里的 `Icon(FeatherIcons.Zap, Modifier.size(20.dp))` 同尺寸：
+ * 自绘路径用的就是 Feather 的 24 视口坐标，side = 20dp 时整张视口缩到 20dp，观感与那个图标一致。
  */
-private val TopButtonBoltSize = 23.dp
+private val TopButtonBoltSize = 20.dp
 
 /** 浓度条：容器 48dp（触摸下限）里居中放 14dp 轨道，指示头 3dp 宽、比轨道高 12dp。 */
 private val TrackRowHeight = 48.dp
