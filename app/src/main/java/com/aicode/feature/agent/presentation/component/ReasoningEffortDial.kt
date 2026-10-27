@@ -4,8 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,14 +14,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -38,12 +36,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
 import com.aicode.feature.agent.domain.model.ReasoningEffort
@@ -58,7 +56,7 @@ private val BoltSize = 15.dp
 /** 弹层顶部「最高档」按钮：18dp 裸闪电（不画环），外面留 48dp 触摸区。 */
 private val TopButtonBoltSize = 18.dp
 
-/** 浓度条：容器 48dp（触摸下限）里居中放 14dp 轨道，指示条 3dp 宽、比轨道高 12dp，刻度点贴轨道下方。 */
+/** 浓度条：容器 48dp（触摸下限）里居中放 14dp 轨道，指示头 3dp 宽、比轨道高 12dp。 */
 private val TrackRowHeight = 48.dp
 private val TrackHeight = 14.dp
 
@@ -76,7 +74,7 @@ internal fun levelIndex(levels: List<ReasoningEffort>, effort: ReasoningEffort?)
     return levels.indices.minByOrNull { abs(levels[it].ordinal - effort.ordinal) } ?: -1
 }
 
-/** 环弧长与滑轨填充的同一个比例：档位下标 + 1 除以可用档位数，最高档正好画满。 */
+/** 环弧长 = 档位下标 + 1 除以可用档位数，最高档正好画满。 */
 internal fun levelFraction(levelCount: Int, index: Int): Float {
     if (levelCount <= 0 || index < 0) return 0f
     return (index + 1).toFloat() / levelCount
@@ -153,7 +151,10 @@ internal fun ReasoningTopLevelButton(
     }
 }
 
-/** 「思考开关」胶囊：整块（含文字）都是触摸区，开关本身只做展示，避免同一手势被处理两次。 */
+/**
+ * 「思考开关」胶囊：只有开关本体可点，胶囊外壳与文字都不接收触摸、不画 ripple，
+ * 避免点文字时整条胶囊跟着变色。
+ */
 @Composable
 internal fun ReasoningThinkingPill(
     label: String,
@@ -162,43 +163,34 @@ internal fun ReasoningThinkingPill(
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val shape = RoundedCornerShape(Radius.pill)
+    val shape = CircleShape
     val background = if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent
     val borderColor = if (checked) Color.Transparent else MaterialTheme.colorScheme.outlineVariant
-    Box(
+    Row(
         modifier = modifier
-            .height(MinTouchSize)
-            .toggleable(
-                value = checked,
-                enabled = enabled,
-                role = Role.Switch,
-                onValueChange = onCheckedChange
-            ),
-        contentAlignment = Alignment.Center
+            .height(40.dp)
+            .clip(shape)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .padding(start = Spacing.md, end = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .height(40.dp)
-                .clip(shape)
-                .background(background)
-                .border(1.dp, borderColor, shape)
-                .padding(start = Spacing.md, end = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.width(Spacing.sm))
-            AppSwitch(checked = checked, onCheckedChange = null, enabled = enabled)
-        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        AppSwitch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
 /**
- * 浓度滑轨：分段数 = 可用档位数，点哪段选哪档；拖动期间只改本地段位，松手才回调 [onPick]，
- * 不关闭弹层。手势里不做会触发重组的写入，避免每挪一像素就带动整个弹层重画。
+ * 浓度滑轨：指针 x 把轨道宽度按「档位数 - 1」等分，落在哪一段就取哪档，首档贴左端、末档贴右端，
+ * 所以从最左（外一点点）按下去也能取到最低档。
+ *
+ * 拖动期间只把指针 x 写进 [previewX]（只在绘制阶段读，不触发重组、不做动画插值），指示头逐帧跟着手指；
+ * 松手才回调一次 [onPick]，弹层不会被横向拖动带关。
  */
 @Composable
 internal fun ReasoningLevelTrack(
@@ -211,65 +203,88 @@ internal fun ReasoningLevelTrack(
 ) {
     val brand = MaterialTheme.colorScheme.primary
     val tipColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-    val tickColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
     val trackBrush = remember(brand) {
         Brush.horizontalGradient(listOf(brand.copy(alpha = 0.12f), brand.copy(alpha = 0.32f)))
     }
     val fillBrush = remember(brand) {
         Brush.horizontalGradient(listOf(brand.copy(alpha = 0.32f), brand))
     }
-    // 拖动中 / 松手后待上层确认的段位：-1 表示没有预览；只在绘制阶段读它，改它只触发重绘、不触发重组。
-    val dragIndex = remember { mutableIntStateOf(-1) }
-    // 上层档位来自数据库 Flow，松手后要过几帧才回来；预览等它真正生效再看齐，避免指示条先弹回旧档。
-    LaunchedEffect(selectedIndex, levelCount) {
-        dragIndex.intValue = -1
-    }
-    // pointerInput 不以 onPick 为 key（否则每次重组都会打断进行中的手势），改为始终取最新回调。
+    // 指针 x（px，已夹到 0..宽度）：null 表示没在按，指示头画当前档位的静止位置。
+    val previewX = remember { mutableStateOf<Float?>(null) }
+    val pressing = remember { mutableStateOf(false) }
+    // pointerInput 不以 onPick / selectedIndex 为 key（否则每次重组都会打断进行中的手势），改为始终取最新值。
     val latestOnPick = rememberUpdatedState(onPick)
+    val latestSelected = rememberUpdatedState(selectedIndex)
+    // 上层档位存在数据库里，松手后要过几帧才回灌；预览先压在手指位置，等新档位生效再让指示头归位。
+    LaunchedEffect(selectedIndex, levelCount) {
+        if (!pressing.value) previewX.value = null
+    }
     Box(
         modifier = modifier
             .height(TrackRowHeight)
             .semantics { contentDescription = description }
             .pointerInput(levelCount, enabled) {
                 if (!enabled || levelCount < 2) return@pointerInput
-                fun commit() {
-                    val picked = dragIndex.intValue
-                    if (picked >= 0) latestOnPick.value(picked)
-                }
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        dragIndex.intValue = indexAt(offset.x, size.width, levelCount)
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        val index = indexAt(change.position.x, size.width, levelCount)
-                        if (index != dragIndex.intValue) dragIndex.intValue = index
-                    },
-                    onDragEnd = { commit() },
-                    onDragCancel = { commit() }
-                )
-            }
-            .pointerInput(levelCount, enabled) {
-                if (!enabled || levelCount < 2) return@pointerInput
-                detectTapGestures { offset ->
-                    latestOnPick.value(indexAt(offset.x, size.width, levelCount))
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val width = size.width.toFloat()
+                    if (width <= 0f) return@awaitEachGesture
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val startX = down.position.x
+                    var picked = levelIndexAt(startX, width, levelCount)
+                    // 按下即对齐：预览从按下点直算，不经过 touchSlop，端点也不会被起始位移吃掉。
+                    previewX.value = startX.coerceIn(0f, width)
+                    pressing.value = true
+                    var horizontal = false
+                    var moved = false
+                    var released = false
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            released = true
+                            break
+                        }
+                        val dx = change.position.x - startX
+                        val dy = change.position.y - down.position.y
+                        if (!moved && (abs(dx) > touchSlop || abs(dy) > touchSlop)) moved = true
+                        if (!horizontal && abs(dx) > touchSlop && abs(dx) >= abs(dy)) horizontal = true
+                        if (horizontal) {
+                            // 横拖自己消费掉，弹层不会把它当成下拉关闭；位置一律取绝对坐标，不累加增量。
+                            change.consume()
+                            previewX.value = change.position.x.coerceIn(0f, width)
+                            picked = levelIndexAt(change.position.x, width, levelCount)
+                        }
+                    }
+                    pressing.value = false
+                    if (released && (horizontal || !moved)) {
+                        latestOnPick.value(picked)
+                        // 档位没变就没有回灌可等，直接让指示头归位。
+                        if (picked == latestSelected.value) previewX.value = null
+                    } else {
+                        previewX.value = null
+                    }
                 }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val shownIndex = dragIndex.intValue.takeIf { it >= 0 } ?: selectedIndex
-            val fraction = levelFraction(levelCount, shownIndex)
+            val width = size.width
+            if (width <= 0f) return@Canvas
+            // 拖动中用指针位置；没在按时用档位的静止位置。两者都是同一个 0..1 比例，填充与指示头共用。
+            val fraction = previewX.value
+                ?.let { (it / width).coerceIn(0f, 1f) }
+                ?: levelPosition(levelCount, selectedIndex)
             val trackHeight = TrackHeight.toPx()
             val trackTop = (size.height - trackHeight) / 2f
             val corner = CornerRadius(trackHeight / 2f)
-            // 底层轨道整体是主色的低透明度渐变，填充段是同一渐变的高透明度版本，长度 = 当前档位比例。
+            // 底层轨道整体是主色的低透明度渐变，填充段是同一渐变的高透明度版本，长度 = 当前档位位置。
             drawRoundRect(
                 brush = trackBrush,
                 topLeft = Offset(0f, trackTop),
-                size = Size(size.width, trackHeight),
+                size = Size(width, trackHeight),
                 cornerRadius = corner
             )
-            val filledWidth = (size.width * fraction).coerceIn(0f, size.width)
+            val filledWidth = width * fraction
             if (filledWidth > 0f) {
                 drawRoundRect(
                     brush = fillBrush,
@@ -279,38 +294,36 @@ internal fun ReasoningLevelTrack(
                     cornerRadius = corner
                 )
             }
-            val tipWidth = 3.dp.toPx()
-            val tipHeight = trackHeight + 12.dp.toPx()
-            val tipLeft = (size.width * fraction - tipWidth / 2f).coerceIn(0f, (size.width - tipWidth).coerceAtLeast(0f))
+            // 指示头：竖条比轨道高，贴在当前档位（拖动时贴手指）上；不再画固定的档位刻度点。
+            val headWidth = 3.dp.toPx()
+            val headHeight = trackHeight + 12.dp.toPx()
+            val headLeft = (width * fraction - headWidth / 2f).coerceIn(0f, (width - headWidth).coerceAtLeast(0f))
             drawRoundRect(
                 color = tipColor,
-                topLeft = Offset(tipLeft, trackTop - 6.dp.toPx()),
-                size = Size(tipWidth, tipHeight),
-                cornerRadius = CornerRadius(2.dp.toPx())
+                topLeft = Offset(headLeft, trackTop - 6.dp.toPx()),
+                size = Size(headWidth, headHeight),
+                cornerRadius = CornerRadius(headWidth / 2f)
             )
-            if (levelCount >= 1) {
-                val dotRadius = 1.5.dp.toPx()
-                for (i in 0 until levelCount) {
-                    val ratio = if (levelCount == 1) 0.5f else i.toFloat() / (levelCount - 1)
-                    drawCircle(
-                        color = tickColor,
-                        radius = dotRadius,
-                        center = Offset(
-                            x = (size.width * ratio).coerceIn(dotRadius, (size.width - dotRadius).coerceAtLeast(dotRadius)),
-                            y = trackTop + trackHeight + 6.dp.toPx()
-                        )
-                    )
-                }
-            }
         }
     }
 }
 
-/** 手指 x 坐标 → 最近的一段；宽度未知或只有一段时都落到第 0 段。 */
-private fun indexAt(x: Float, width: Int, levelCount: Int): Int {
-    if (width <= 0 || levelCount <= 1) return 0
-    val ratio = (x / width).coerceIn(0f, 1f)
-    return (ratio * (levelCount - 1)).roundToInt().coerceIn(0, levelCount - 1)
+/**
+ * 指针 x → 档位下标：两端直接钉死（x ≤ 0 取第 0 档、x ≥ 宽度取最后一档），
+ * 中间按「档位数 - 1」等分四舍五入。宽度未知或只有一档时只有第 0 档。
+ */
+internal fun levelIndexAt(x: Float, width: Float, levelCount: Int): Int {
+    if (width <= 0f || levelCount <= 1) return 0
+    if (x <= 0f) return 0
+    if (x >= width) return levelCount - 1
+    return (x / width * (levelCount - 1)).roundToInt().coerceIn(0, levelCount - 1)
+}
+
+/** 档位在轨道上的静止位置：首档贴左端、末档贴右端，中间等分；只有一档时贴右端。 */
+internal fun levelPosition(levelCount: Int, index: Int): Float {
+    if (levelCount <= 0 || index < 0) return 0f
+    if (levelCount == 1) return 1f
+    return index.coerceIn(0, levelCount - 1).toFloat() / (levelCount - 1)
 }
 
 /**
