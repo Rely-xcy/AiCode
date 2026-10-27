@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -123,9 +124,11 @@ internal fun ReasoningEffortSelector(
     val sectionLabel = stringResource(R.string.chat_reasoning_effort)
 
     // 闪电本身就是入口：有可用档位时外圈画强度环，一个档位都没有时只留闪电。
+    // 先 clip 再 clickable，否则 ripple 按矩形画，点上去是个方块。
     Box(
         modifier = Modifier
             .size(48.dp)
+            .clip(CircleShape)
             .semantics { contentDescription = sectionLabel }
             .clickable(enabled = enabled) { showSheet = true },
         contentAlignment = Alignment.Center
