@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,10 +9,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.ShapeClickBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -23,12 +27,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
+import compose.icons.feathericons.Zap
 import com.aicode.feature.agent.domain.model.ReasoningCapability
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.ReasoningPlan
@@ -113,10 +123,6 @@ internal fun ReasoningEffortSelector(
     val thinkingOn = effort != ReasoningEffort.NONE
     // 环弧长与滑轨都跟着「实际会生效」的档位走：被降级时画降完那一档，关得掉时是空环。
     val shownEffort = if (thinkingOn) plan.effectiveLevel ?: effort else ReasoningEffort.NONE
-    val topLevel = levels.lastOrNull()
-    val atTop = topLevel != null && levelIndex(levels, shownEffort) == levels.lastIndex
-    // 点闪电跳到最高档后，再点一次回到跳之前那一档。
-    var levelBeforeTop by remember(levels) { mutableStateOf<ReasoningEffort?>(null) }
     val sectionLabel = stringResource(R.string.chat_reasoning_effort)
 
     // 闪电本身就是入口：有可用档位时外圈画强度环，一个档位都没有时只留闪电。
@@ -142,33 +148,22 @@ internal fun ReasoningEffortSelector(
                     .padding(horizontal = Spacing.lg)
                     .padding(bottom = Spacing.xl)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (topLevel != null) {
-                        ReasoningTopLevelButton(
-                            atTop = atTop,
-                            enabled = enabled,
-                            description = stringResource(R.string.chat_reasoning_effort_max),
-                            onClick = {
-                                if (atTop) {
-                                    onChange(
-                                        levelBeforeTop
-                                            ?: levels.getOrNull(levels.lastIndex - 1)
-                                            ?: topLevel
-                                    )
-                                } else {
-                                    levelBeforeTop = effort
-                                    onChange(topLevel)
-                                }
-                            }
-                        )
-                    }
-                    Spacer(Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.chat_reasoning_effort),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
                     if (capability.showsThinkingToggle()) {
-                        ReasoningThinkingPill(
-                            label = stringResource(R.string.chat_reasoning_toggle),
+                        Text(
+                            text = stringResource(R.string.chat_reasoning_toggle),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        AppSwitch(
                             checked = thinkingOn,
                             enabled = enabled,
                             onCheckedChange = { on ->
@@ -184,47 +179,66 @@ internal fun ReasoningEffortSelector(
                     }
                 }
 
-                // 想关却关不掉：滑轨不藏，改画「实际会发的那一档」，否则用户会以为思考真停了。
-                val cannotDisable = plan.reason == ReasoningPlan.Reason.CANNOT_DISABLE
-                if (levels.isNotEmpty() && (thinkingOn || cannotDisable)) {
-                    val trackIndex = levelIndex(levels, shownEffort).coerceAtLeast(0)
-                    val levelLabel = levels.getOrNull(trackIndex)?.shortLabel() ?: shownEffort.shortLabel()
+                ReasoningHintLines(plan = plan, capability = capability)
+
+                levels.forEach { e ->
+                    val selected = thinkingOn && e == effort
+                    // 想关却关不掉时，把「实际会发的档位」标出来，避免用户以为思考真的停了。
+                    val effectiveWhenOff = !thinkingOn &&
+                        plan.reason == ReasoningPlan.Reason.CANNOT_DISABLE &&
+                        plan.effectiveLevel == e
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = Spacing.sm),
+                            .clip(RoundedCornerShape(Radius.sm))
+                            .clickable(enabled = enabled) {
+                                showSheet = false
+                                onChange(e)
+                            }
+                            .padding(horizontal = Spacing.md, vertical = Spacing.md),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        ReasoningLevelTrack(
-                            levelCount = levels.size,
-                            selectedIndex = trackIndex,
-                            enabled = enabled,
-                            description = sectionLabel,
-                            onPick = { index ->
-                                levels.getOrNull(index)?.let { picked ->
-                                    if (picked != effort) onChange(picked)
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
+                        Icon(
+                            FeatherIcons.Zap,
+                            contentDescription = null,
+                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Spacer(Modifier.width(Spacing.sm))
+                        Spacer(Modifier.width(Spacing.md))
                         Text(
-                            text = levelLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (thinkingOn) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            },
+                            text = e.withApiLabel(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
                             maxLines = 1,
-                            textAlign = TextAlign.End,
-                            modifier = Modifier.widthIn(min = 44.dp)
+                            overflow = TextOverflow.Ellipsis
                         )
+                        if (e == capability.defaultLevel) {
+                            Text(
+                                text = stringResource(R.string.chat_reasoning_default_tag),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (effectiveWhenOff) {
+                            Spacer(Modifier.width(Spacing.sm))
+                            Text(
+                                text = stringResource(R.string.chat_reasoning_effective_tag),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (selected) {
+                            Spacer(Modifier.width(Spacing.sm))
+                            Icon(
+                                FeatherIcons.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
-
-                ReasoningHintLines(plan = plan, capability = capability)
             }
         }
     }
