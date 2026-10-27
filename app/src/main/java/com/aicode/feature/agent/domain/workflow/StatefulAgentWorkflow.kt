@@ -68,7 +68,6 @@ import com.aicode.feature.agent.domain.provider.fixedTemperature
 import com.aicode.feature.agent.domain.provider.GeminiAdapter
 import com.aicode.feature.agent.domain.provider.AllKeysFailedException
 import com.aicode.feature.agent.domain.provider.KeySwitchOutcome
-import com.aicode.feature.agent.domain.provider.channelUnavailableFailure
 import com.aicode.feature.agent.domain.provider.isContextWindowOverflowError
 import com.aicode.feature.agent.domain.provider.isKeySwitchFailure
 import com.aicode.feature.agent.domain.provider.parseContextWindowLimit
@@ -387,41 +386,24 @@ class StatefulAgentWorkflow @Inject constructor(
                 it.chatCacheKeyEnabled = config.openaiChatCacheKey
             }
         }
-        // 多 Key 模式下由轮换器按本次模型决定用哪个 Key（会话内粘住，Key 不可用时切下一个并重发）。
-        // 同一供应商的不同 Key 可能属于不同分组，各自能访问的模型不一样，选 Key 时要看模型。
+        // 多 Key 模式下由轮换器决定本次用哪个 Key（会话内粘住，Key 不可用时切下一个并重发）。
         val activeKeys = config.effectiveApiKeys
-        provider.apiKey = keyRotator.activeKey(config, sessionId, config.effectiveModel)
+        provider.apiKey = keyRotator.activeKey(config, sessionId)
             ?: throw IllegalStateException("「${config.name}」的 Key 均在冷却中，请稍后重试")
         // 只有真正的多 Key 才需要自动切换：单 Key 冷却后没有可切换目标，只会把用户锁死一段时间。
         val keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? =
             if (activeKeys.size > 1) {
                 { error, failedKey, triedKeys ->
-                    // 上游 503 +「无可用渠道」：该 Key 所属分组没有这个模型的渠道，Key 本身没坏。
-                    // 换到另一个分组的 Key 同样没有渠道，所以既不冷却、也不切 Key——只记下这条证据
-                    // （下次选 Key 时绕开它），并把错误改写成用户看得懂的原因。
-                    val channelFailure = error.channelUnavailableFailure()
-                    if (channelFailure != null) {
-                        keyRotator.markModelUnavailable(config.id, failedKey, config.effectiveModel)
-                        val groupText = channelFailure.group?.let { "（group $it）" }.orEmpty()
-                        throw AllKeysFailedException(
-                            "「${config.name}」当前 Key 所属分组$groupText没有模型 ${config.effectiveModel} 的可用渠道：" +
-                                "该模型可能需要换一个分组的 Key。",
-                            error
-                        )
-                    }
                     if (!error.isKeySwitchFailure(config.effectiveKeySwitchStatusCodes)) {
                         null
                     } else {
-                        val switched = keyRotator.reportFailure(
-                            providerId = config.id,
-                            sessionId = sessionId,
-                            key = failedKey,
-                            triedKeys = triedKeys,
-                            model = config.effectiveModel
-                        ) ?: throw AllKeysFailedException(
-                            "「${config.name}」的 ${activeKeys.size} 个 Key 均失败：${error.message ?: error.javaClass.simpleName}",
-                            error
-                        )
+                        val switched = keyRotator.reportFailure(config.id, sessionId, failedKey, triedKeys)
+                        if (switched == null) {
+                            throw AllKeysFailedException(
+                                "「${config.name}」的 ${activeKeys.size} 个 Key 均失败：${error.message ?: error.javaClass.simpleName}",
+                                error
+                            )
+                        }
                         KeySwitchOutcome(switched.newKey, switched.newIndex, switched.total)
                     }
                 }
