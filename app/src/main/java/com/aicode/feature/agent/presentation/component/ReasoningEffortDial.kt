@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +20,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -52,8 +55,7 @@ private val RingSize = 34.dp
 private val RingStroke = 2.4.dp
 private val BoltSize = 15.dp
 
-/** 弹层顶部「最高档」按钮：32dp 环 + 18dp 闪电，外面再留 48dp 触摸区。 */
-private val TopButtonRingSize = 32.dp
+/** 弹层顶部「最高档」按钮：18dp 裸闪电（不画环），外面留 48dp 触摸区。 */
 private val TopButtonBoltSize = 18.dp
 
 /** 浓度条：容器 48dp（触摸下限）里居中放 14dp 轨道，指示条 3dp 宽、比轨道高 12dp，刻度点贴轨道下方。 */
@@ -65,7 +67,7 @@ private val MinTouchSize = 48.dp
 
 /**
  * 档位在「当前模型可用档位」里的下标；不在列表里（被降级 / 历史值）时落到序号最近的档位，
- * 保证滑轨与徽章不会因为一个对不上的值整段空白。
+ * 保证滑轨不会因为一个对不上的值整段空白。
  */
 internal fun levelIndex(levels: List<ReasoningEffort>, effort: ReasoningEffort?): Int {
     if (levels.isEmpty() || effort == null || effort == ReasoningEffort.NONE) return -1
@@ -84,9 +86,13 @@ internal fun levelFraction(levelCount: Int, index: Int): Float {
 internal fun ReasoningEffort.shortLabel(): String =
     if (this == ReasoningEffort.NONE) "OFF" else apiValue.uppercase()
 
+/** 环与弧只在有具体档位时出现：关闭思考（OFF）或没有可用档位时整圈不画，只留闪电。 */
+internal fun showsReasoningRing(levels: List<ReasoningEffort>, effort: ReasoningEffort?): Boolean =
+    levelIndex(levels, effort) >= 0
+
 /**
- * 输入栏的思考入口：有可用档位时先画常驻底环，再按「当前档位 / 档位总数」叠一段从 12 点顺时针的进度弧；
- * 一个档位都没有（模型只支持开 / 关或纯透传）时不画环，只留闪电。
+ * 输入栏的思考入口：打开时先画常驻底环，再按「当前档位 / 档位总数」叠一段从 12 点顺时针的进度弧；
+ * 关闭思考（OFF）或一个档位都没有（模型只支持开 / 关或纯透传）时环与弧都不画，只留灰色闪电。
  */
 @Composable
 internal fun ReasoningRingBolt(
@@ -106,7 +112,7 @@ internal fun ReasoningRingBolt(
             .alpha(if (enabled) 1f else 0.38f)
     ) {
         drawBoltRing(
-            ringColor = if (levels.isEmpty()) Color.Transparent else baseRing,
+            ringColor = if (showsReasoningRing(levels, effort)) baseRing else Color.Transparent,
             arcFraction = fraction,
             arcColor = brand,
             boltColor = if (index >= 0) brand else muted,
@@ -117,7 +123,7 @@ internal fun ReasoningRingBolt(
     }
 }
 
-/** 弹层左上的最高档按钮：环常驻（最高档时环与闪电一起高亮实心）。 */
+/** 弹层左上的最高档按钮：只有裸闪电，不画环（最高档时闪电本身高亮实心）。 */
 @Composable
 internal fun ReasoningTopLevelButton(
     atTop: Boolean,
@@ -136,15 +142,12 @@ internal fun ReasoningTopLevelButton(
             .alpha(if (enabled) 1f else 0.38f),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.size(TopButtonRingSize)) {
-            drawBoltRing(
-                ringColor = if (atTop) brand else brand.copy(alpha = 0.32f),
-                arcFraction = 0f,
-                arcColor = brand,
-                boltColor = if (atTop) brand else muted,
-                boltFilled = atTop,
-                ringStroke = 1.5.dp.toPx(),
-                boltSide = TopButtonBoltSize.toPx()
+        Canvas(modifier = Modifier.size(TopButtonBoltSize)) {
+            drawBolt(
+                center = Offset(size.width / 2f, size.height / 2f),
+                side = TopButtonBoltSize.toPx(),
+                color = if (atTop) brand else muted,
+                filled = atTop
             )
         }
     }
@@ -194,8 +197,8 @@ internal fun ReasoningThinkingPill(
 }
 
 /**
- * 浓度滑轨：分段数 = 可用档位数，点哪段选哪档；拖动时按手指的实时位置取整到最近的一段，
- * 全程只回调 [onPick]，不关闭弹层。
+ * 浓度滑轨：分段数 = 可用档位数，点哪段选哪档；拖动期间只改本地段位，松手才回调 [onPick]，
+ * 不关闭弹层。手势里不做会触发重组的写入，避免每挪一像素就带动整个弹层重画。
  */
 @Composable
 internal fun ReasoningLevelTrack(
@@ -209,35 +212,59 @@ internal fun ReasoningLevelTrack(
     val brand = MaterialTheme.colorScheme.primary
     val tipColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
     val tickColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
-    val fraction = levelFraction(levelCount, selectedIndex)
+    val trackBrush = remember(brand) {
+        Brush.horizontalGradient(listOf(brand.copy(alpha = 0.12f), brand.copy(alpha = 0.32f)))
+    }
+    val fillBrush = remember(brand) {
+        Brush.horizontalGradient(listOf(brand.copy(alpha = 0.32f), brand))
+    }
+    // 拖动中 / 松手后待上层确认的段位：-1 表示没有预览；只在绘制阶段读它，改它只触发重绘、不触发重组。
+    val dragIndex = remember { mutableIntStateOf(-1) }
+    // 上层档位来自数据库 Flow，松手后要过几帧才回来；预览等它真正生效再看齐，避免指示条先弹回旧档。
+    LaunchedEffect(selectedIndex, levelCount) {
+        dragIndex.intValue = -1
+    }
+    // pointerInput 不以 onPick 为 key（否则每次重组都会打断进行中的手势），改为始终取最新回调。
+    val latestOnPick = rememberUpdatedState(onPick)
     Box(
         modifier = modifier
             .height(TrackRowHeight)
             .semantics { contentDescription = description }
             .pointerInput(levelCount, enabled) {
                 if (!enabled || levelCount < 2) return@pointerInput
+                fun commit() {
+                    val picked = dragIndex.intValue
+                    if (picked >= 0) latestOnPick.value(picked)
+                }
                 detectHorizontalDragGestures(
-                    onDragStart = { offset -> onPick(indexAt(offset.x, size.width, levelCount)) },
+                    onDragStart = { offset ->
+                        dragIndex.intValue = indexAt(offset.x, size.width, levelCount)
+                    },
                     onHorizontalDrag = { change, _ ->
                         change.consume()
-                        onPick(indexAt(change.position.x, size.width, levelCount))
-                    }
+                        val index = indexAt(change.position.x, size.width, levelCount)
+                        if (index != dragIndex.intValue) dragIndex.intValue = index
+                    },
+                    onDragEnd = { commit() },
+                    onDragCancel = { commit() }
                 )
             }
             .pointerInput(levelCount, enabled) {
                 if (!enabled || levelCount < 2) return@pointerInput
-                detectTapGestures { offset -> onPick(indexAt(offset.x, size.width, levelCount)) }
+                detectTapGestures { offset ->
+                    latestOnPick.value(indexAt(offset.x, size.width, levelCount))
+                }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            val shownIndex = dragIndex.intValue.takeIf { it >= 0 } ?: selectedIndex
+            val fraction = levelFraction(levelCount, shownIndex)
             val trackHeight = TrackHeight.toPx()
             val trackTop = (size.height - trackHeight) / 2f
             val corner = CornerRadius(trackHeight / 2f)
             // 底层轨道整体是主色的低透明度渐变，填充段是同一渐变的高透明度版本，长度 = 当前档位比例。
             drawRoundRect(
-                brush = Brush.horizontalGradient(
-                    listOf(brand.copy(alpha = 0.12f), brand.copy(alpha = 0.32f))
-                ),
+                brush = trackBrush,
                 topLeft = Offset(0f, trackTop),
                 size = Size(size.width, trackHeight),
                 cornerRadius = corner
@@ -245,7 +272,7 @@ internal fun ReasoningLevelTrack(
             val filledWidth = (size.width * fraction).coerceIn(0f, size.width)
             if (filledWidth > 0f) {
                 drawRoundRect(
-                    brush = Brush.horizontalGradient(listOf(brand.copy(alpha = 0.32f), brand)),
+                    brush = fillBrush,
                     topLeft = Offset(0f, trackTop),
                     // 太短时按轨道高度收边，否则圆角会被压成尖角。
                     size = Size(filledWidth.coerceAtLeast(trackHeight), trackHeight),
@@ -279,42 +306,6 @@ internal fun ReasoningLevelTrack(
     }
 }
 
-/** 档位徽章：竖条根数 = 可用档位数，高度从 5dp 递增到 14dp，点亮到当前档位为止。 */
-@Composable
-internal fun ReasoningLevelBadge(
-    levelCount: Int,
-    selectedIndex: Int,
-    modifier: Modifier = Modifier
-) {
-    if (levelCount <= 0) return
-    val shape = RoundedCornerShape(Radius.sm)
-    val brand = MaterialTheme.colorScheme.primary
-    val dim = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
-    Box(
-        modifier = modifier
-            .size(34.dp)
-            .clip(shape)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(if (levelCount >= 6) 1.5.dp else 3.dp)
-        ) {
-            repeat(levelCount) { i ->
-                val height = 5.dp + 9.dp * (if (levelCount == 1) 1f else i.toFloat() / (levelCount - 1))
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .height(height)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (i <= selectedIndex) brand else dim)
-                )
-            }
-        }
-    }
-}
-
 /** 手指 x 坐标 → 最近的一段；宽度未知或只有一段时都落到第 0 段。 */
 private fun indexAt(x: Float, width: Int, levelCount: Int): Int {
     if (width <= 0 || levelCount <= 1) return 0
@@ -324,7 +315,7 @@ private fun indexAt(x: Float, width: Int, levelCount: Int): Int {
 
 /**
  * 环与闪电的共用画法：底环整圈、进度弧从 12 点顺时针、闪电居中。
- * [ringColor] 透明时整圈不画（模型没有任何可用档位）。
+ * [ringColor] 透明时整圈不画（关闭思考或模型没有任何可用档位），只留闪电。
  */
 private fun DrawScope.drawBoltRing(
     ringColor: Color,
@@ -360,19 +351,26 @@ private fun DrawScope.drawBoltRing(
             style = Stroke(width = ringStroke, cap = StrokeCap.Round)
         )
     }
-    val path = featherBoltPath(
+    drawBolt(
         center = Offset(size.width / 2f, size.height / 2f),
-        side = boltSide
+        side = boltSide,
+        color = boltColor,
+        filled = boltFilled
     )
-    val boltStroke = 2.4f * (boltSide / 24f)
-    if (boltFilled) {
-        drawPath(path = path, color = boltColor)
-        drawPath(path = path, color = boltColor, style = Stroke(width = boltStroke, join = StrokeJoin.Round))
+}
+
+/** 只画闪电本体（描边或实心），不画环；输入栏入口与弹层顶部按钮共用。 */
+private fun DrawScope.drawBolt(center: Offset, side: Float, color: Color, filled: Boolean) {
+    val path = featherBoltPath(center = center, side = side)
+    val stroke = 2.4f * (side / 24f)
+    if (filled) {
+        drawPath(path = path, color = color)
+        drawPath(path = path, color = color, style = Stroke(width = stroke, join = StrokeJoin.Round))
     } else {
         drawPath(
             path = path,
-            color = boltColor,
-            style = Stroke(width = boltStroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            color = color,
+            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
 }

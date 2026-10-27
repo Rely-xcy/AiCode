@@ -225,8 +225,6 @@ internal fun ReasoningEffortSelector(
                             textAlign = TextAlign.End,
                             modifier = Modifier.widthIn(min = 44.dp)
                         )
-                        Spacer(Modifier.width(Spacing.sm))
-                        ReasoningLevelBadge(levelCount = levels.size, selectedIndex = trackIndex)
                     }
                 }
 
