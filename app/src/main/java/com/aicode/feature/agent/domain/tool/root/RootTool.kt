@@ -41,6 +41,9 @@ class RootTool @Inject constructor(
         const val TAG = "RootTool"
         const val DEFAULT_TIMEOUT_SECONDS = 120L
         const val MAX_TIMEOUT_SECONDS = 1_800L
+
+        /** 回读是只读查询，给短超时即可：它挂住时不该把主命令的超时也一起吃完。 */
+        const val READBACK_TIMEOUT_MS = 10_000L
     }
 
     override val name = "Root"
@@ -138,7 +141,18 @@ class RootTool @Inject constructor(
             FileLogger.v(TAG, "Root exec 完成，输出 ${result.output.length} 字符，退出码 ${result.exitCode}")
             // 退出码回给模型：与 Bash 工具一致，非 0 是「命令失败」而不是「工具失败」，
             // 由模型决定要不要重试/换写法（命令本身的语义错误不该被吞成工具错误）。
-            ToolResult.Success(JsonPrimitive("exit=${result.exitCode}\n$output"))
+            //
+            // 命令跑完再读一次实际状态：退出码只说明「命令被系统接受」，改状态类命令的成功与否要看回读
+            // （见 [DeviceStateReadback]；回读命令本身都是白名单内的只读查询）。
+            val readback = DeviceStateReadback.report(command) { probe ->
+                val probeResult = rootShell.run(probe, READBACK_TIMEOUT_MS)
+                DeviceStateReadback.Observation(probeResult.output, probeResult.exitCode)
+            }
+            val body = buildString {
+                append("exit=").append(result.exitCode).append('\n').append(output)
+                if (readback != null) append("\n\n").append(readback)
+            }
+            ToolResult.Success(JsonPrimitive(body))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

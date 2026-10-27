@@ -38,7 +38,17 @@ class VsStopTool @Inject constructor(
         // 无论销毁成功还是「本来就没开」，授权都必须收回：授权不能越过屏的生命周期。
         if (sessionId != null) guard.revoke(sessionId)
         return result.fold(
-            onSuccess = { ToolResult.Success(JsonPrimitive("虚拟屏已销毁，本会话授权已收回。")) },
+            onSuccess = {
+                // 回读：只能确认本进程侧状态已清空。系统侧的 display 释放是异步的（VirtualDisplay.release() 不返回
+                // 结果），这里读不到，所以不把「已销毁」写成比事实更满的话。
+                val leftover = manager.current
+                val text = if (leftover != null) {
+                    "虚拟屏销毁后仍记录着一块活着的屏（displayId=${leftover.displayId}），销毁未完成。"
+                } else {
+                    "虚拟屏已销毁（本进程侧已无存活屏；系统侧 display 释放是异步的，未回读），本会话授权已收回。"
+                }
+                ToolResult.Success(JsonPrimitive(text))
+            },
             onFailure = { ToolResult.Error(it.message ?: "销毁虚拟屏失败", code = "VSCREEN_STOP_FAILED") }
         )
     }
