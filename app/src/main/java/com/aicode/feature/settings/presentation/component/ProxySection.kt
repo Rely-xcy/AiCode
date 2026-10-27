@@ -1,6 +1,5 @@
 package com.aicode.feature.settings.presentation.component
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +42,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.feature.settings.data.repository.ProxyConfig
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.presentation.SettingsViewModel.ProxyTestUiState
@@ -156,14 +156,16 @@ internal fun ProxySection(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     trailingIcon = {
-                        Icon(
-                            imageVector = if (passwordVisible) FeatherIcons.Eye else FeatherIcons.EyeOff,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clickable { passwordVisible = !passwordVisible }
-                        )
+                        ShapeClickBox(
+                            onClick = { passwordVisible = !passwordVisible },
+                            modifier = Modifier.size(20.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (passwordVisible) FeatherIcons.Eye else FeatherIcons.EyeOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

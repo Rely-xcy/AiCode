@@ -66,6 +66,7 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.LocalImageViewer
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.THUMBNAIL_MAX_EDGE
 import com.aicode.core.ui.decodeSampledBitmap
 import com.aicode.feature.agent.presentation.QueuedRequest
@@ -322,15 +323,15 @@ private fun PendingAttachmentPreviewItem(
             if (attachment.image != null) {
                 val viewer = LocalImageViewer.current
                 val previewLabel = stringResource(R.string.common_image_preview)
-                ImageThumbnail(
-                    attachment = attachment,
-                    // 右上角的移除按钮是 Box 里后声明的兄弟节点，绘制在上层、命中测试也先到，两者不抢
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(onClickLabel = previewLabel) {
-                            viewer.show(attachment.toViewerRequest())
-                        }
-                )
+                // 右上角的移除按钮是 Box 里后声明的兄弟节点，绘制在上层、命中测试也先到，两者不抢。
+                ShapeClickBox(
+                    onClick = { viewer.show(attachment.toViewerRequest()) },
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(Radius.md),
+                    onClickLabel = previewLabel
+                ) {
+                    ImageThumbnail(attachment = attachment, modifier = Modifier.fillMaxSize())
+                }
             } else {
                 FileAttachmentPreview(attachment = attachment)
             }

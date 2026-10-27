@@ -205,8 +205,8 @@ class RetryPolicyTest {
         }
     }
 
-    private fun httpError(code: Int, body: String = "{}"): HttpException =
-        HttpException(Response.error<Any>(code, body.toResponseBody(null)))
+    private fun httpError(code: Int): HttpException =
+        HttpException(Response.error<Any>(code, "{}".toResponseBody(null)))
 
     /**
      * 带 Retry-After 头的 429。Retrofit 只有 `error(int, ResponseBody)`（不带响应头）与
@@ -303,83 +303,5 @@ class RetryPolicyTest {
         assertNull(SocketTimeoutException().toRetryErrorInfo().statusCode)
         assertNull(IOException().toRetryErrorInfo().statusCode)
         assertNull(StreamApiException("server_is_overloaded", "m").toRetryErrorInfo().statusCode)
-    }
-
-    // ---------- 503 + 渠道缺失：先给换 Key 一次机会 ----------
-
-    /** 分组没有该模型的渠道不是瞬时故障：回调接住后直接换 Key 重发，不按 5xx 指数退避。 */
-    @Test
-    fun channelUnavailable_switchesKeyInsteadOfRetrying() = runTest {
-        var attempts = 0
-        var switched = 0
-
-        val result = retryStaircase(
-            maxRetries = 6,
-            onKeyFailure = { e, _ ->
-                if (e.channelUnavailableFailure() == null) {
-                    false
-                } else {
-                    switched++
-                    true
-                }
-            }
-        ) {
-            attempts++
-            if (attempts == 1) throw httpError(503, CHANNEL_BODY) else "ok"
-        }
-
-        assertEquals("ok", result)
-        assertEquals(2, attempts)
-        assertEquals(1, switched)
-    }
-
-    /** 回调没接住（单 Key 场景）：仍按原有 5xx 重试，行为不变。 */
-    @Test
-    fun channelUnavailable_withoutSwitchKeeps5xxRetry() = runTest {
-        var attempts = 0
-
-        try {
-            retryStaircase(
-                maxRetries = 1,
-                onKeyFailure = { _, _ -> false }
-            ) {
-                attempts++
-                throw httpError(503, CHANNEL_BODY)
-            }
-            org.junit.Assert.fail("Expected HttpException")
-        } catch (_: HttpException) {
-            assertEquals(2, attempts)
-        }
-    }
-
-    /** 流式路径同样处理：尚未吐字时换 Key 重发，而不是当成瞬时 5xx 重试。 */
-    @Test
-    fun channelUnavailable_streamSwitchesKeyInsteadOfRetrying() = runTest {
-        var attempts = 0
-        var switched = 0
-
-        streamWithStaircaseRetry(
-            maxRetries = 6,
-            onKeyFailure = { e, canRetry ->
-                if (canRetry && e.channelUnavailableFailure() != null) {
-                    switched++
-                    true
-                } else {
-                    false
-                }
-            },
-            attemptOnce = { _ ->
-                attempts++
-                if (attempts == 1) throw httpError(503, CHANNEL_BODY)
-            }
-        )
-
-        assertEquals(2, attempts)
-        assertEquals(1, switched)
-    }
-
-    private companion object {
-        const val CHANNEL_BODY =
-            """{"error":{"message":"No available channel for model gpt-5.6-sol under group 0.15"}}"""
     }
 }

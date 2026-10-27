@@ -58,6 +58,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.SwipeToDeleteRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -501,17 +502,21 @@ fun ProviderEditorScreen(
                                     PasswordVisualTransformation()
                                 },
                                 trailing = {
-                                    Icon(
-                                        imageVector = if (apiKeyVisible) FeatherIcons.EyeOff else FeatherIcons.Eye,
-                                        contentDescription = stringResource(
-                                            if (apiKeyVisible) R.string.provider_hide_api_key else R.string.provider_show_api_key
-                                        ),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .size(24.dp)
-                                            .clickable { apiKeyVisible = !apiKeyVisible }
-                                            .padding(2.dp)
+                                    val apiKeyDescription = stringResource(
+                                        if (apiKeyVisible) R.string.provider_hide_api_key else R.string.provider_show_api_key
                                     )
+                                    ShapeClickBox(
+                                        onClick = { apiKeyVisible = !apiKeyVisible },
+                                        modifier = Modifier.size(24.dp),
+                                        contentDescription = apiKeyDescription
+                                    ) {
+                                        Icon(
+                                            imageVector = if (apiKeyVisible) FeatherIcons.EyeOff else FeatherIcons.Eye,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(2.dp)
+                                        )
+                                    }
                                 }
                             )
                         }
@@ -2392,16 +2397,20 @@ private fun ProviderKeyCard(
                         PasswordVisualTransformation()
                     },
                     trailing = {
-                        Icon(
-                            imageVector = if (valueVisible) FeatherIcons.EyeOff else FeatherIcons.Eye,
-                            contentDescription = stringResource(
-                                if (valueVisible) R.string.provider_hide_api_key else R.string.provider_show_api_key
-                            ),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clickable { valueVisible = !valueVisible }
+                        val valueDescription = stringResource(
+                            if (valueVisible) R.string.provider_hide_api_key else R.string.provider_show_api_key
                         )
+                        ShapeClickBox(
+                            onClick = { valueVisible = !valueVisible },
+                            modifier = Modifier.size(20.dp),
+                            contentDescription = valueDescription
+                        ) {
+                            Icon(
+                                imageVector = if (valueVisible) FeatherIcons.EyeOff else FeatherIcons.Eye,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 )
                 ProviderTextFieldRow(

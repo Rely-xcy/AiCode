@@ -456,10 +456,7 @@ private fun Throwable.describeForRetryLog(): String {
  * @param onKeyFailure 多 Key 切换回调：在判定为「不可重试」的失败时先调用，入参为
  *        (触发失败, 是否允许重发)。返回 true 表示调用方已切 Key、可重置重试计数并重发；
  *        返回 false 时，限流类失败（429 / rate_limit_*）会退避重试，其余抛出原异常。
- *        网络类失败（408/5xx/超时等）不会触发该回调，唯一例外是「分组没有该模型的渠道」
- *        （503 +「无可用渠道」，见 [channelUnavailableFailure]）：它不是瞬时故障，同一 Key
- *        重试不会变好，所以先给回调一次机会（由它决定报错还是换 Key）；回调未接住时仍按
- *        原有 5xx 重试处理。
+ *        网络类失败（408/5xx/超时等）不会触发该回调。
  * @param onRetry 重试前回调，参数为 (当前重试次数, 最大重试次数)；用于通知上层"正在重试"。
  *                置于 [block] 之前以保证 `retryStaircase { ... }` 的 trailing lambda 仍绑定到 [block]。
  * @param maxRetries 最大重试次数（不含首次请求），由调用方按「偏好设置 → 网络」传入；0 表示不重试。
@@ -478,18 +475,13 @@ suspend fun <T> retryStaircase(
             throw e
         } catch (e: Throwable) {
             coroutineContext.ensureActive()
-            // 分组没有该模型的渠道（503 +「无可用渠道」）不是瞬时故障：同一个 Key 重试不会变好，
-            // 先给多 Key 切换一次机会。回调没接住（单 Key、或调用方不处理该类型）时落到下面的
-            // 5xx 重试，行为与以前完全一致。
-            val retriable = isRetriableNetworkError(e)
-            val channelUnavailable = onKeyFailure != null && e.channelUnavailableFailure() != null
-            if (!retriable || channelUnavailable) {
+            if (!isRetriableNetworkError(e)) {
                 if (onKeyFailure?.invoke(e, true) == true) {
                     attempt = 0
                     continue
                 }
                 // 无 Key 可切（单 Key）时的限流退避重试：429 是瞬时限流，等待后重试优于直接失败
-                if (!retriable && !isRateLimitError(e)) throw e
+                if (!isRateLimitError(e)) throw e
             }
             if (attempt >= maxRetries) throw e
             awaitNetworkIfOffline()
@@ -509,8 +501,6 @@ suspend fun <T> retryStaircase(
  *        (触发失败, 是否允许重发)。仅当本次尝试尚未收到任何内容时才会传入允许重发；
  *        已吐字时仍可能切换（供后续请求用新 Key）但不会重发，避免用户看到重复内容。
  *        返回 false 时，尚未吐字的限流类失败会退避重试，其余抛出原异常。
- *        「分组没有该模型的渠道」（503 +「无可用渠道」）同样会先给这个回调一次机会：
- *        它不属于瞬时故障，同一个 Key 重试不会变好，交给上层决定改写错误还是换 Key。
  * @param onRetry 重试前回调，参数为 (当前重试次数, 最大重试次数)；用于通知上层"正在重试"。
  *                回调在 delay 之前调用，确保 UI 能立即展示重试状态。声明为 suspend 以便
  *                调用方在其中通过 Flow 的 emit() 推送重试事件。
@@ -533,19 +523,13 @@ suspend fun streamWithStaircaseRetry(
             throw e
         } catch (e: Throwable) {
             coroutineContext.ensureActive()
-            // 同 retryStaircase：渠道缺失先给多 Key 切换一次机会，回调没接住时仍走原有重试。
-            val retriable = isRetriableNetworkError(e)
-            val channelUnavailable = onKeyFailure != null && e.channelUnavailableFailure() != null
-            if (!retriable || channelUnavailable) {
-                val canResend = !receivedContent
-                if (onKeyFailure?.invoke(e, canResend) == true) {
+            if (!isRetriableNetworkError(e)) {
+                if (onKeyFailure?.invoke(e, !receivedContent) == true) {
                     attempt = 0
                     continue
                 }
-                // 已吐字就不能再发一遍（会重复输出），渠道缺失同样如此
-                if (channelUnavailable && !canResend) throw e
                 // 限流且尚未吐字、又无 Key 可切（单 Key）→ 退避重试；已吐字不重发，保持原行为
-                if (!retriable && !(isRateLimitError(e) && canResend)) throw e
+                if (!(isRateLimitError(e) && !receivedContent)) throw e
             }
             if (attempt >= maxRetries) throw e
             awaitNetworkIfOffline()

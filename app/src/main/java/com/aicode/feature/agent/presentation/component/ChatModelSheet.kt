@@ -1,7 +1,5 @@
 package com.aicode.feature.agent.presentation.component
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +12,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.ShapeClickBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -25,8 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -123,12 +120,11 @@ internal fun ReasoningEffortSelector(
     val sectionLabel = stringResource(R.string.chat_reasoning_effort)
 
     // 闪电本身就是入口：有可用档位时外圈画强度环，一个档位都没有时只留闪电。
-    Box(
-        modifier = Modifier
-            .size(48.dp)
-            .semantics { contentDescription = sectionLabel }
-            .clickable(enabled = enabled) { showSheet = true },
-        contentAlignment = Alignment.Center
+    ShapeClickBox(
+        onClick = { showSheet = true },
+        modifier = Modifier.size(48.dp),
+        enabled = enabled,
+        contentDescription = sectionLabel
     ) {
         ReasoningRingBolt(levels = levels, effort = shownEffort, enabled = enabled)
     }
