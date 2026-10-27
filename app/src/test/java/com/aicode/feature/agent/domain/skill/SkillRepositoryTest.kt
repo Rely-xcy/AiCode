@@ -281,5 +281,58 @@ class SkillRepositoryTest {
         assertTrue(result.matches.isEmpty())
         assertEquals(0, result.hitCount)
         assertEquals(1, result.skillCount)
+        assertTrue(
+            "真没命中不能被当成预算截断",
+            !result.truncatedByBudget
+        )
+    }
+
+    @Test
+    fun searchSkills_splitsChinesePhraseAndRanksFullCoverageFirst() {
+        every { globalSource.listSkills() } returns listOf(
+            skill("reverse-analysis").copy(description = "逆向分析 APK", instructions = "ida"),
+            skill("log-analyzer").copy(description = "日志分析", instructions = "grep"),
+            skill("translate").copy(description = "翻译", instructions = "translate")
+        )
+
+        val result = repository.searchSkills("逆向 分析", 20)
+
+        // 两个词全中的排在只蹭中「分析」的前面；完全无关的不进结果
+        assertEquals(listOf("reverse-analysis", "log-analyzer"), result.matches.map { it.name })
+        assertEquals(2, result.hitCount)
+    }
+
+    @Test
+    fun searchSkills_matchesEnglishQueryThroughAliasTable() {
+        every { globalSource.listSkills() } returns listOf(
+            skill("apk-shelltools").copy(description = "APK 脱壳", instructions = "frida"),
+            skill("docx-tools").copy(description = "文档转换", instructions = "soffice")
+        )
+
+        // 名称里没有 unpack，靠问法表里「脱壳 ↔ unpack」才对上
+        val result = repository.searchSkills("unpack", 20)
+
+        assertEquals(listOf("apk-shelltools"), result.matches.map { it.name })
+    }
+
+    @Test
+    fun searchSkills_budgetExhaustedReturnsScannedPartAndFlagsTruncated() {
+        every { globalSource.listSkills() } returns (1..5).map { skill("pdf-$it") }
+
+        val result = repository.searchSkills("pdf", 20, budgetMillis = 0)
+
+        assertTrue("预算为 0 时不应有结果", result.matches.isEmpty())
+        assertTrue("必须能区分「时间不够」与「真没有」", result.truncatedByBudget)
+        assertEquals(5, result.skillCount)
+    }
+
+    @Test
+    fun searchSkills_defaultBudgetScansEverything() {
+        every { globalSource.listSkills() } returns listOf(skill("pdf-tools"))
+
+        val result = repository.searchSkills("pdf", 20)
+
+        assertEquals(listOf("pdf-tools"), result.matches.map { it.name })
+        assertTrue(!result.truncatedByBudget)
     }
 }

@@ -6,6 +6,7 @@ import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.agent.domain.memory.MemoryEdit
 import com.aicode.feature.agent.domain.memory.MemoryEditResult
+import com.aicode.feature.agent.domain.memory.MemoryRanker
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.memory.MemorySource
@@ -31,6 +32,9 @@ class MemoryTool @Inject constructor(
 ) : AbstractContextualTool() {
     private companion object {
         const val TAG = "MemoryTool"
+
+        /** 检索最多回这么多条：检索的用途是「认出该读哪条」，条数再多也只是把上下文占满。 */
+        const val MAX_SEARCH_HITS = 20
     }
 
     override val name = "memory"
@@ -39,13 +43,14 @@ class MemoryTool @Inject constructor(
 
     override fun effectiveCapabilities(args: Map<String, JsonElement>): Set<ToolCapability> {
         return when (args["action"]?.jsonPrimitive?.contentOrNull) {
-            "read", "list" -> setOf(ToolCapability.READ_AGENT_CONFIG)
+            "read", "list", "search" -> setOf(ToolCapability.READ_AGENT_CONFIG)
             else -> capabilities
         }
     }
     override val description =
-        "管理长期记忆（读取/保存/局部编辑/删除/列表）。记忆跨会话生效，用于保留用户的稳定偏好、" +
+        "管理长期记忆（读取/保存/局部编辑/删除/列表/关键词检索）。记忆跨会话生效，用于保留用户的稳定偏好、" +
             "项目约定、架构决策等；保存与编辑无需用户确认。什么时候该主动保存，见系统提示词里的长期记忆规则。" +
+            "记忆条数很多时用 action=search + keyword 按关键词（支持中文分词与中英别名）检索出名字，再 read 取正文。" +
             "注意：只在回复里声称「已记住」而不调用本工具是无效的——用户会去记忆页找，找不到就是 bug。" +
             "决定要记就当场调用，不要拖到下一轮。"
 
@@ -73,9 +78,15 @@ class MemoryTool @Inject constructor(
         "action" to ToolParameter(
             name = "action",
             type = ParameterType.STRING,
-            description = "操作类型：read=读取记忆正文；save=保存（创建或全量覆盖）；edit=局部编辑已有正文；delete=删除；list=列出所有记忆摘要",
-            enum = listOf("read", "save", "edit", "delete", "list"),
+            description = "操作类型：read=读取记忆正文；save=保存（创建或全量覆盖）；edit=局部编辑已有正文；delete=删除；list=列出所有记忆摘要；search=按关键词检索（返回名字与描述）",
+            enum = listOf("read", "save", "edit", "delete", "list", "search"),
             required = true
+        ),
+        "keyword" to ToolParameter(
+            name = "keyword",
+            type = ParameterType.STRING,
+            description = "search 必填：检索关键词，支持中文分词与中英别名，匹配名称、描述与正文",
+            required = false
         ),
         "name" to ToolParameter(
             name = "name",
@@ -126,6 +137,7 @@ class MemoryTool @Inject constructor(
         return try {
             when (action) {
                 "list" -> handleList(context.projectRoot)
+                "search" -> handleSearch(args, context.projectRoot)
                 "read" -> handleRead(memoryName, context.projectRoot)
                 "save" -> handleSave(args, memoryName, scope, context.projectRoot)
                 "edit" -> handleEdit(args, memoryName, scope, context.projectRoot)
@@ -144,6 +156,42 @@ class MemoryTool @Inject constructor(
         
         val list = memories.joinToString("\n") { "- ${it.name} (${it.scope.name.lowercase()}): ${it.description}" }
         return ToolResult.Success(JsonPrimitive("当前记忆列表：\n$list"))
+    }
+
+    /**
+     * 按关键词检索：只回名字与一行描述，正文留给 read。
+     *
+     * 为什么需要它：记忆全靠 list 逐条看时，条数一多模型只能看到一串名字前面那几条（或根本不看），
+     * 而 read 要求名字全等——想不起来名字就只能瞎猜。
+     */
+    private fun handleSearch(args: Map<String, JsonElement>, projectRoot: String?): ToolResult {
+        val keyword = args["keyword"]?.jsonPrimitive?.contentOrNull?.trim()
+        if (keyword.isNullOrEmpty()) {
+            return ToolResult.Error("search 操作缺少必需参数：keyword", "MISSING_KEYWORD")
+        }
+
+        val memories = memoryRepository.listMemories(projectRoot)
+        val hits = MemoryRanker.search(memories, keyword, MAX_SEARCH_HITS)
+        if (hits.isEmpty()) {
+            return ToolResult.Success(
+                JsonPrimitive(
+                    "没有匹配的记忆：关键词「$keyword」在 ${memories.size} 条记忆的名称、描述与正文里都没有命中。" +
+                        "换更短或更常见的词再试，或用 action=list 看全部名字。"
+                )
+            )
+        }
+
+        val omitted = memories.size - hits.size
+        val text = buildString {
+            append("关键词「").append(keyword).append("」命中 ").append(hits.size).append(" 条记忆：\n")
+            append(hits.joinToString("\n") { "- ${it.name} (${it.scope.name.lowercase()}): ${it.description}" })
+            if (omitted > 0) {
+                append("\n（其余 ").append(omitted).append(" 条不相关或未命中，已略）")
+            }
+            append("\n用 memory(action=\"read\", name=\"<名字>\") 读正文。")
+        }
+        FileLogger.d(TAG, "检索记忆 $keyword 命中 ${hits.size} 条（共 ${memories.size} 条）")
+        return ToolResult.Success(JsonPrimitive(text))
     }
 
     private fun handleRead(name: String?, projectRoot: String?): ToolResult {

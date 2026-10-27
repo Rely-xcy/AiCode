@@ -25,11 +25,14 @@ data class Skill(
  * @param matches 命中项（已按调用方给的条数上限截断）
  * @param hitCount 命中总数（未截断），用于「还有 N 条」
  * @param skillCount 参与检索的技能总数：一个都没命中时靠它说明「搜过了多少个」而不是让人自己猜
+ * @param truncatedByBudget 时间预算用完、扫描被中断。此时 [hitCount] 与 [matches] 都只是「已扫到的那部分」
+ *   的结果，调用方必须把它和「确实没有匹配」分开说，否则模型会误以为库里真没有这个能力。
  */
 data class SkillSearchResult(
     val matches: List<Skill>,
     val hitCount: Int,
-    val skillCount: Int
+    val skillCount: Int,
+    val truncatedByBudget: Boolean = false
 )
 
 /** 单行描述的长度上限：换行与连续空白压成一个空格，超长截断。 */
