@@ -2,6 +2,8 @@ package com.aicode.feature.agent.presentation.component
 
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -62,5 +64,16 @@ class ReasoningEffortDialTest {
         assertEquals("MEDIUM", ReasoningEffort.MEDIUM.shortLabel())
         assertEquals("XHIGH", ReasoningEffort.XHIGH.shortLabel())
         assertEquals("MAX", ReasoningEffort.MAX.shortLabel())
+    }
+
+    @Test
+    fun ring_hiddenWhenOffOrNoLevels() {
+        // 关闭思考时输入栏闪电外面必须什么都不剩：环与弧都不画，只留灰色闪电。
+        assertFalse(showsReasoningRing(threeLevels, ReasoningEffort.NONE))
+        assertFalse(showsReasoningRing(threeLevels, null))
+        assertFalse(showsReasoningRing(emptyList(), ReasoningEffort.HIGH))
+        // 打开时才有环；对不上的历史档位也可按最近档位画环。
+        assertTrue(showsReasoningRing(threeLevels, ReasoningEffort.LOW))
+        assertTrue(showsReasoningRing(threeLevels, ReasoningEffort.MAX))
     }
 }
