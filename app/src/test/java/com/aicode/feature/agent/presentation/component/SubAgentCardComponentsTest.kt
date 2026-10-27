@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.feature.agent.presentation.SubAgentCardStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -209,6 +210,21 @@ class SubAgentCardComponentsTest {
         assertEquals("子代理", subAgentSingleSummary(named.copy(agentName = "  "), null, "子代理").agentName)
     }
 
+    /** 派发结果没带 agent 名时，用子会话实时状态里的名字补上；两边都拿不到才退回默认名。 */
+    @Test
+    fun singleSummary_fallsBackToLiveAgentName() {
+        val unnamed = ParsedSubAgentDispatchItem("sub-1", null, "调研缓存实现", null, null, null)
+
+        assertEquals(
+            "reviewer",
+            subAgentSingleSummary(unnamed, null, "子代理", liveAgentName = "reviewer").agentName
+        )
+        assertEquals(
+            "子代理",
+            subAgentSingleSummary(unnamed, null, "子代理", liveAgentName = "  ").agentName
+        )
+    }
+
     /** 任务项自己没有告警时，顶层告警照常显示；两者不同则两条都显示。 */
     @Test
     fun singleSummary_keepsGlobalWarningAndKeepsDistinctOnes() {
@@ -220,5 +236,53 @@ class SubAgentCardComponentsTest {
             subAgentSingleSummary(item.copy(warning = "项内告警"), "顶层告警", "子代理").warnings
         )
         assertEquals(emptyList<String>(), subAgentSingleSummary(item, null, "子代理").warnings)
+    }
+
+    /** 多条派发的状态摘要：同一状态只出一条，按运行中/已完成/失败/已停止排序。 */
+    @Test
+    fun statusSummary_groupsAndOrdersStatuses() {
+        val summary = subAgentStatusSummary(
+            statuses = listOf(
+                SubAgentCardStatus.COMPLETED,
+                SubAgentCardStatus.RUNNING,
+                SubAgentCardStatus.COMPLETED,
+                SubAgentCardStatus.FAILED,
+                SubAgentCardStatus.STOPPED
+            ),
+            runningLabel = "RUN",
+            completedLabel = "OK",
+            failedLabel = "FAIL",
+            stoppedLabel = "STOP"
+        )
+
+        assertEquals("RUN 1 · OK 2 · FAIL 1 · STOP 1", summary)
+    }
+
+    /** 历史回放拿不到实时状态（全为 null）时摘要为空，卡头只显示数量。 */
+    @Test
+    fun statusSummary_isEmptyWithoutLiveStates() {
+        val summary = subAgentStatusSummary(
+            statuses = listOf(null, null),
+            runningLabel = "RUN",
+            completedLabel = "OK",
+            failedLabel = "FAIL",
+            stoppedLabel = "STOP"
+        )
+
+        assertEquals("", summary)
+    }
+
+    /** 只有部分子代理有实时状态时，null 不参与计数。 */
+    @Test
+    fun statusSummary_ignoresNullEntries() {
+        val summary = subAgentStatusSummary(
+            statuses = listOf(SubAgentCardStatus.RUNNING, null),
+            runningLabel = "RUN",
+            completedLabel = "OK",
+            failedLabel = "FAIL",
+            stoppedLabel = "STOP"
+        )
+
+        assertEquals("RUN 1", summary)
     }
 }
