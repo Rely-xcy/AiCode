@@ -37,10 +37,9 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppStatusPill
 import com.aicode.core.ui.BatchDeleteConfirmDialog
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionActionBar
@@ -437,8 +436,7 @@ internal fun McpServerRow(
     }
 }
 
-/** 紧凑 pill 标签：胶囊背景 + 小字，用于状态/类型/摘要。
- *  [leadingDotColor] 非空时在文字前加同色小圆点（日志等级等需要靠色点区分的位置）。 */
+/** 紧凑 pill 标签的旧入口：保留原签名并转调 [AppStatusPill]，既有调用点无需改动。 */
 @Composable
 internal fun McpPill(
     text: String,
@@ -447,26 +445,11 @@ internal fun McpPill(
     modifier: Modifier = Modifier,
     leadingDotColor: Color? = null
 ) {
-    Row(
-        modifier = modifier
-            .background(backgroundColor, RoundedCornerShape(Radius.pill))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (leadingDotColor != null) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .background(leadingDotColor, RoundedCornerShape(Radius.pill))
-            )
-            Spacer(Modifier.width(6.dp))
-        }
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            color = textColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
+    AppStatusPill(
+        text = text,
+        modifier = modifier,
+        textColor = textColor,
+        backgroundColor = backgroundColor,
+        leadingDotColor = leadingDotColor
+    )
 }
