@@ -325,8 +325,10 @@ private fun PendingAttachmentPreviewItem(
                 ImageThumbnail(
                     attachment = attachment,
                     // 右上角的移除按钮是 Box 里后声明的兄弟节点，绘制在上层、命中测试也先到，两者不抢
+                    // 缩略图本身是 76dp 圆角方块，不先 clip 的话点一下会铺出方形的 ripple。
                     modifier = Modifier
                         .fillMaxSize()
+                        .clip(RoundedCornerShape(Radius.md))
                         .clickable(onClickLabel = previewLabel) {
                             viewer.show(attachment.toViewerRequest())
                         }

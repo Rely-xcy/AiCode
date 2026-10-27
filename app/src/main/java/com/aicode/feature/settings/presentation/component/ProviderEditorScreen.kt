@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -509,6 +510,7 @@ fun ProviderEditorScreen(
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier
                                             .size(24.dp)
+                                            .clip(CircleShape)
                                             .clickable { apiKeyVisible = !apiKeyVisible }
                                             .padding(2.dp)
                                     )
@@ -2400,6 +2402,7 @@ private fun ProviderKeyCard(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .size(20.dp)
+                                .clip(CircleShape)
                                 .clickable { valueVisible = !valueVisible }
                         )
                     }
