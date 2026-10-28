@@ -24,7 +24,8 @@ class RemoteAgentProvisionerTest {
         val fileAccess = mockk<FileAccessProvider>()
         every { fileAccess.fileSize(path) } answers { remoteSize }
         every { fileAccess.writeBytes(path, any(), true) } answers {
-            uploaded = firstArg<ByteArray>()
+            // 第二个参数才是字节；第一个是路径（String），取 firstArg 会撞 ClassCastException。
+            uploaded = arg<ByteArray>(1)
             remoteSize = binary.size.toLong()
         }
 
