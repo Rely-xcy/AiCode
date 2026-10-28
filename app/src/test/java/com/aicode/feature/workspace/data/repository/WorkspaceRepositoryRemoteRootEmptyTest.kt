@@ -112,7 +112,9 @@ class WorkspaceRepositoryRemoteRootEmptyTest {
             generalSettingsRepository = generalSettingsRepository,
             // 本用例只测远程目标目录取根/短路，凭证注入开关/凭证库都不走到，relaxed mock 即可。
             credentialInjectSettings = mockk<CredentialInjectSettingsRepository>(relaxed = true),
-            credentialRepository = mockk<CredentialRepository>(relaxed = true)
+            credentialRepository = mockk<CredentialRepository>(relaxed = true),
+            // initialize() 里会调 warmUp()，relaxed mock 让它变成空操作，不干扰对 exec 命令的断言。
+            agentHolder = mockk<RemoteAgentHolder>(relaxed = true)
         )
     }
 
