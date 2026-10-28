@@ -55,7 +55,7 @@ interface AgentChannel {
 open class RemoteAgentException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /** 打开通道或 hello 握手失败。能力探测据此降级到 L2。 */
-class RemoteAgentHandshakeException(message: String, cause: Throwable? = null) : RemoteAgentException(message, cause)
+open class RemoteAgentHandshakeException(message: String, cause: Throwable? = null) : RemoteAgentException(message, cause)
 
 /** 协议版本不一致。继承 [RemoteAgentHandshakeException]：握手失败的一种，但探测层要先于普通失败识别它，按 PROTOCOL.md 第 7 节直接回落 SFTP。 */
 class RemoteAgentProtocolMismatchException(val proto: Int) : RemoteAgentHandshakeException(
