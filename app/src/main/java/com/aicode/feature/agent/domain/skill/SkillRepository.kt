@@ -79,36 +79,104 @@ class SkillRepository @Inject constructor(
     fun disabledNames(): Set<String> = skillConfigRepository.disabledNames()
 
     /**
-     * 按关键词检索技能：名称、描述、正文任一包含关键词即算命中，大小写不敏感。
+     * 按关键词检索技能：先用 [SkillQueryLexicon] 把关键词切成词，再逐条打分，命中任何一个词就能返回。
      *
      * 为什么要检索引擎而不是让模型看全量清单：技能装到几百个时全量清单在预算里只放得下前几条，
      * 剩下的连名字都不出现，模型只能猜——而 [loadInstructions] 按名字全等匹配，猜必落空。
      *
-     * 命中按「名称 > 描述 > 正文」分档排序，同档内保持 [listSkills] 的顺序（即用户拖拽的顺序）：
-     * 名称里带关键词比正文里蹭到一个词更可信，而分档排序必须稳定，否则同一关键词两次检索得到的
+     * 为什么要打分而不是分档：模型给的常是「逆向 分析」这种多词问法，分档只看「命中没命中」会把
+     * 只蹭中一个泛词（「分析」）的技能和名称就叫 `reverse-analysis` 的技能混在同一档里。打分让
+     * 「名称命中 > 描述命中 > 正文命中」保持原样（同一词的权重依次递减），同时把词命中数与覆盖率算进去：
+     * 全词命中比部分命中高，问法表里的同义词只按降权算命中。
+     *
+     * 等分时按 [listSkills] 的下标升序（即用户拖拽的顺序）：排序必须稳定，否则同一关键词两次检索得到的
      * 「前 N 条」不一样，模型就拿不到上次看到的名字。
      *
      * @param limit 最多返回几条，仅影响 [SkillSearchResult.matches]，[SkillSearchResult.hitCount] 永远是全量
+     * @param budgetMillis 本次扫描的时间预算（毫秒）。用完就返回已扫到的结果并在
+     *   [SkillSearchResult.truncatedByBudget] 里标记；不要拿它当「没匹配」用。
      */
-    fun searchSkills(keyword: String, limit: Int): SkillSearchResult {
-        val needle = keyword.trim().lowercase()
+    fun searchSkills(
+        keyword: String,
+        limit: Int,
+        budgetMillis: Long = DEFAULT_SEARCH_BUDGET_MS
+    ): SkillSearchResult {
         val skills = listSkills()
-        if (needle.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+        val tokens = SkillQueryLexicon.tokenize(keyword)
+        if (tokens.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
 
-        val ranked = skills.mapNotNull { skill ->
-            val tier = when {
-                skill.name.lowercase().contains(needle) -> TIER_NAME
-                skill.description.lowercase().contains(needle) -> TIER_DESCRIPTION
-                skill.instructions.lowercase().contains(needle) -> TIER_INSTRUCTIONS
-                else -> null
+        // 每个词连同它在问法表里的别名一起扫：别名命中算命中，但权重降一档。
+        val variants = tokens.map { term -> term to SkillQueryAliases.aliasesOf(term) }
+
+        // 预算从扫描开始计时，不把 listSkills() 的读盘算进去：读盘阶段不可中断，
+        // 把它计入只会让「技能装得多」直接变成「每次必然截断」，反而一条结果都拿不到。
+        // 计时用 nanoTime + 循环内检查，不起线程也不跑协程超时取消——那样拿不到已扫到的部分。
+        val deadline = System.nanoTime() + budgetMillis.coerceAtLeast(0L) * NANOS_PER_MILLI
+        val hits = ArrayList<ScoredSkill>(minOf(skills.size, 32))
+        var truncatedByBudget = false
+        for (index in skills.indices) {
+            if (System.nanoTime() >= deadline) {
+                truncatedByBudget = true
+                break
             }
-            tier?.let { rank -> rank to skill }
-        }.sortedBy { it.first }
+            val skill = skills[index]
+            val score = scoreSkill(skill, variants)
+            if (score > 0.0) hits.add(ScoredSkill(score, index, skill))
+        }
+        hits.sortWith(compareByDescending<ScoredSkill> { it.score }.thenBy { it.index })
+
         return SkillSearchResult(
-            matches = ranked.take(limit).map { it.second },
-            hitCount = ranked.size,
-            skillCount = skills.size
+            matches = hits.take(limit).map { it.skill },
+            hitCount = hits.size,
+            skillCount = skills.size,
+            truncatedByBudget = truncatedByBudget
         )
+    }
+
+    /**
+     * 单个技能对一组检索词的得分；0 表示一个词（含别名）都没命中。
+     *
+     * 同一词在名称/描述/正文里都出现时只取最高权重：正文里再蹭几次也不会让一条弱相关变强，
+     * 否则正文长的大技能会恒赢。
+     */
+    private fun scoreSkill(skill: Skill, variants: List<Pair<String, List<String>>>): Double {
+        val name = skill.name.lowercase()
+        val description = skill.description.lowercase()
+        // 正文最长，lower 一次不便宜：只在真的有词需要落到正文时才降一次，后面所有词复用。
+        var loweredBody: String? = null
+        fun body(): String = loweredBody ?: skill.instructions.lowercase().also { loweredBody = it }
+
+        fun weightOf(term: String): Double {
+            if (name.contains(term)) return WEIGHT_NAME
+            if (description.contains(term)) return WEIGHT_DESCRIPTION
+            return if (body().contains(term)) WEIGHT_INSTRUCTIONS else 0.0
+        }
+
+        var total = 0.0
+        var matched = 0
+        for ((term, aliases) in variants) {
+            var best = weightOf(term)
+            if (best == 0.0) {
+                for (alias in aliases) {
+                    val aliasWeight = weightOf(alias)
+                    if (aliasWeight > best) best = aliasWeight
+                }
+                best *= ALIAS_FACTOR
+            }
+            if (best > 0.0) {
+                total += best
+                matched++
+            }
+        }
+        if (matched == 0) return 0.0
+
+        // 全词命中说明问法很具体；只命中一部分仍要能返回，但按覆盖率降权，排在全中之后。
+        return if (matched == variants.size) {
+            total * ALL_TOKENS_FACTOR
+        } else {
+            val coverage = matched.toDouble() / variants.size
+            total * (PARTIAL_BASE_FACTOR + PARTIAL_COVERAGE_FACTOR * coverage)
+        }
     }
 
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
@@ -211,10 +279,34 @@ class SkillRepository @Inject constructor(
     companion object {
         private const val TAG = "SkillRepository"
 
-        /** 检索命中的三档：名称最可信，描述次之，正文最泛（大段正文里蹭到一个词不算强相关）。 */
-        private const val TIER_NAME = 0
-        private const val TIER_DESCRIPTION = 1
-        private const val TIER_INSTRUCTIONS = 2
+        /**
+         * 检索打分的权重：名称最可信，描述次之，正文最泛（大段正文里蹭到一个词不算强相关）。
+         * 具体数值只决定相对关系：名称命中一个词要能压过多词正文命中。
+         */
+        private const val WEIGHT_NAME = 10.0
+        private const val WEIGHT_DESCRIPTION = 6.0
+        private const val WEIGHT_INSTRUCTIONS = 2.0
+
+        /** 问法表别名只算「大概率是同一件事」，拿不到原词那么高的分。 */
+        private const val ALIAS_FACTOR = 0.6
+
+        /** 全部词都命中时整体加成：问法越具体，结果越可信。 */
+        private const val ALL_TOKENS_FACTOR = 1.4
+
+        /** 部分命中时的降权下限与覆盖率系数：命中一半约 0.7 倍，蹭中一个词接近 0.4 倍。 */
+        private const val PARTIAL_BASE_FACTOR = 0.4
+        private const val PARTIAL_COVERAGE_FACTOR = 0.6
+
+        /**
+         * 单次检索的扫描预算（毫秒）。设备上几百个技能的常见耗时是个位数毫秒，过百毫秒就是卡顿；
+         * 宁可返回「已扫到的那部分 + 已截断」，也不让一次工具调用把主线程拖住。
+         */
+        internal const val DEFAULT_SEARCH_BUDGET_MS = 150L
+
+        private const val NANOS_PER_MILLI = 1_000_000L
+
+        /** 打分的中间结果：保留原下标，用作等分时的稳定次级键。 */
+        private data class ScoredSkill(val score: Double, val index: Int, val skill: Skill)
 
         /** 新建技能时写入的指令文件名。 */
         private const val INSTRUCTION_FILE = "SKILL.md"

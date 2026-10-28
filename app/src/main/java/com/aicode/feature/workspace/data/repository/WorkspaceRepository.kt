@@ -20,6 +20,7 @@ import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.PathHomeResolver
 import com.aicode.feature.workspace.domain.UriPathResolver
+import com.aicode.feature.workspace.domain.remote.agent.RemoteAgentHolder
 import com.aicode.feature.workspace.domain.model.Workspace
 import com.aicode.feature.workspace.domain.model.WorkspaceType
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -94,7 +95,8 @@ class WorkspaceRepository @Inject constructor(
     private val sessionUseCase: SessionUseCase,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val credentialInjectSettings: CredentialInjectSettingsRepository,
-    private val credentialRepository: CredentialRepository
+    private val credentialRepository: CredentialRepository,
+    private val agentHolder: RemoteAgentHolder
 ) {
     /** 校验失败时给 UI 的提示文案（如目录不可写/无法解析），消费后置 null。 */
     private val _addError = MutableStateFlow<String?>(null)
@@ -235,6 +237,9 @@ class WorkspaceRepository @Inject constructor(
         // 远程模式：等 SSH 连接就绪后再列工作区，避免启动时序竞争
         if (!isLocal()) {
             waitForConnection()
+            // 在后台把 agent 拉起来，不阻塞工作区初始化：首次要传 2.4MB 二进制，
+            // 等它会把首屏拖成好几秒；未就绪期间文件访问自动退回 SFTP。
+            agentHolder.warmUp()
             val cfg = remoteSshConnection.config
             val wsRoot = remoteWorkspaceRootPath()
             val scan = wsRoot?.let { root -> scanRemoteWorkspaceRoot(root, symlinkCandidateName?.let { "$root/$it" }) }

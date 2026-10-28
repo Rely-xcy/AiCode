@@ -80,6 +80,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.util.FileLogger
@@ -713,17 +714,16 @@ private fun BrowserBottomBar(
                 }
 
                 // 4. 标签页管理按钮（数字方框徽标）
-                Box(
+                ShapeClickBox(
+                    onClick = onOpenTabs,
                     modifier = Modifier
                         .size(28.dp)
-                        .clip(RoundedCornerShape(7.dp))
                         .border(
                             1.8.dp,
                             MaterialTheme.colorScheme.onSurfaceVariant,
                             RoundedCornerShape(7.dp)
-                        )
-                        .clickable(onClick = onOpenTabs),
-                    contentAlignment = Alignment.Center
+                        ),
+                    shape = RoundedCornerShape(7.dp)
                 ) {
                     Text(
                         text = "$tabsCount",

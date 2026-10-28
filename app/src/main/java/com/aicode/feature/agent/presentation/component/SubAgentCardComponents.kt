@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,13 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Radius
@@ -186,65 +180,12 @@ internal fun parseSubAgentDispatch(argsJson: String?, content: String?): ParsedS
     )
 }
 
-/** 单条派发合并卡片的文案模型：子代理名已回退，告警已去重。 */
-internal data class SubAgentSingleSummary(
-    val agentName: String,
-    val warnings: List<String> = emptyList()
-)
-
 /**
- * 汇总单条派发卡片需要的文案。
+ * 子代理派发卡片（结构对标网络搜索结果卡片）：
  *
- * 单条派发时 `data.warning` 会被解析器同时写进任务项与 `globalWarning`（见 parseSubAgentDispatch
- * 的单条分支），两处都渲染就是同一条提示出现两次，所以这里按内容合并。
- *
- * 代理名优先取派发结果（参数或结果的 `agent`）；结果里没带时用子会话实时状态里的名字补上，
- * 两者都没有才退回默认名——否则卡片上只剩一句泛称，看不出是哪个子代理在干活。
- */
-internal fun subAgentSingleSummary(
-    item: ParsedSubAgentDispatchItem,
-    globalWarning: String?,
-    defaultAgentName: String,
-    liveAgentName: String? = null
-): SubAgentSingleSummary = SubAgentSingleSummary(
-    agentName = item.agentName?.takeIf { it.isNotBlank() }
-        ?: liveAgentName?.takeIf { it.isNotBlank() }
-        ?: defaultAgentName,
-    warnings = listOfNotNull(
-        item.warning?.takeIf { it.isNotBlank() },
-        globalWarning?.takeIf { it.isNotBlank() }
-    ).distinct()
-)
-
-/**
- * 多条派发的状态摘要，形如「运行中 2 · 已完成 1」；同一状态只出一条，按运行中/已完成/失败/已停止排序。
- *
- * 标签由调用方从资源取（纯函数便于单测）；全部为 null（历史回放拿不到实时状态）时返回空串。
- */
-internal fun subAgentStatusSummary(
-    statuses: List<SubAgentCardStatus?>,
-    runningLabel: String,
-    completedLabel: String,
-    failedLabel: String,
-    stoppedLabel: String
-): String = listOf(
-    SubAgentCardStatus.RUNNING to runningLabel,
-    SubAgentCardStatus.COMPLETED to completedLabel,
-    SubAgentCardStatus.FAILED to failedLabel,
-    SubAgentCardStatus.STOPPED to stoppedLabel
-).mapNotNull { (status, label) ->
-    statuses.count { it == status }.takeIf { it > 0 }?.let { count -> "$label $count" }
-}.joinToString(" · ")
-
-/**
- * 子代理派发卡片：单条与多条都只出一张卡，卡内按行组织，不再嵌套子卡片。
- *
- * 单条：代理名 + 状态药丸 + 箭头 / 任务描述（单行截断）/ 模型与档位（弱化小字）。
- * 多条：卡头一行「子代理任务」+ 派发与状态摘要，下面按行列出各子代理，行间分隔线，
- * 每行可点进对应子会话；告警统一收在卡片底部。
- *
- * 状态药丸的实时状态来自 [LocalSubAgentCardHost]（按子会话 id 索引）：本进程内派发的子代理
- * 随生命周期刷新，历史回放拿不到实时状态时退回静态「已派发」，不渲染假的「运行中」。
+ * 顶部概览 Summary 展示图标、标题、数量统计与「已派发」状态药丸；
+ * 下方平铺各子代理任务卡片项（01, 02...），仅展示发出时的状态（代理名称、模型/档位、指令描述与告警），
+ * 点击任意子任务项直接进入对应子会话。
  */
 @Composable
 internal fun SubAgentDispatchCard(dispatch: ParsedSubAgentDispatch) {
@@ -252,136 +193,84 @@ internal fun SubAgentDispatchCard(dispatch: ParsedSubAgentDispatch) {
     val items = dispatch.items
     if (items.isEmpty()) return
 
-    val onOpen: (String) -> Unit = { sessionId -> host?.onOpen?.invoke(sessionId) }
-
-    if (items.size == 1) {
-        val item = items.first()
-        SubAgentSingleDispatchCard(
-            item = item,
-            globalWarning = dispatch.globalWarning,
-            liveState = item.subSessionId?.let { host?.states?.get(it) },
-            onOpen = onOpen
-        )
-        return
-    }
-
-    val liveStates = items.map { item -> item.subSessionId?.let { host?.states?.get(it) } }
-    val warnings = (
-        listOfNotNull(dispatch.globalWarning?.takeIf { it.isNotBlank() }) +
-            items.mapNotNull { item -> item.warning?.takeIf { it.isNotBlank() } }
-        ).distinct()
-
-    Surface(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.sm),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            SubAgentDispatchSummary(count = items.size, liveStates = liveStates)
-            items.forEachIndexed { index, item ->
-                SubAgentRowDivider()
-                SubAgentDispatchRow(
-                    index = index + 1,
-                    item = item,
-                    liveState = liveStates[index],
-                    onOpen = onOpen
-                )
-            }
-            warnings.forEach { warning ->
-                SubAgentRowDivider()
-                Box(modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)) {
-                    SubAgentWarningBanner(warning)
-                }
-            }
+        // 1. 顶部 Summary（参考 WebSearchSummary）
+        SubAgentDispatchSummary(count = items.size)
+
+        // 2. 全局警告（如有）
+        dispatch.globalWarning?.takeIf { items.size > 1 }?.let { warning ->
+            SubAgentWarningBanner(warning)
+        }
+
+        // 3. 任务卡片列表（参考 WebSearchResultItem）
+        items.forEachIndexed { index, item ->
+            SubAgentDispatchItemCard(
+                index = index + 1,
+                item = item,
+                liveState = item.subSessionId?.let { host?.states?.get(it) },
+                onOpen = { sessionId -> host?.onOpen?.invoke(sessionId) }
+            )
         }
     }
 }
 
-/** 卡头：图标 + 标题，副标题是派发数量与各状态计数（无实时状态时只显示数量）。 */
+/** 顶部 Summary：图标 + 标题 + 数量统计 + 派发状态。 */
 @Composable
-private fun SubAgentDispatchSummary(count: Int, liveStates: List<SubAgentCardState?>) {
-    val statusSummary = subAgentStatusSummary(
-        statuses = liveStates.map { it?.status },
-        runningLabel = subAgentStatusLabel(SubAgentCardStatus.RUNNING),
-        completedLabel = subAgentStatusLabel(SubAgentCardStatus.COMPLETED),
-        failedLabel = subAgentStatusLabel(SubAgentCardStatus.FAILED),
-        stoppedLabel = subAgentStatusLabel(SubAgentCardStatus.STOPPED)
-    )
-    val subtitle = listOfNotNull(
-        stringResource(R.string.subagent_dispatch_count, count),
-        statusSummary.takeIf { it.isNotEmpty() }
-    ).joinToString(" · ")
-
+private fun SubAgentDispatchSummary(count: Int) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SubAgentGlyph()
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(Radius.sm))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = FeatherIcons.Cpu,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(17.dp)
+            )
+        }
         Spacer(Modifier.width(Spacing.sm))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.subagent_dispatch_title),
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = subtitle,
+                text = stringResource(R.string.subagent_dispatch_count, count),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                style = MaterialTheme.typography.bodySmall
             )
         }
-    }
-}
-
-/** 卡片图标：单条卡与多条卡头共用，尺寸与工具行图标一致。 */
-@Composable
-private fun SubAgentGlyph() {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(Radius.sm))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = FeatherIcons.Cpu,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(17.dp)
-        )
+        SubAgentDispatchedChip()
     }
 }
 
 /**
- * 单条派发：一张卡三行——代理名 + 状态药丸 + 箭头 / 任务描述（单行截断）/ 模型与档位（弱化小字）。
- * 整卡可点进子会话。
+ * 单个子代理任务卡片项：序号（01, 02...）+ 身份/模型 + 描述 + 跳转箭头。
  *
- * [liveState] 与任务项同源：完成后在描述下追加结果摘要与改动文件数；为 null（历史回放、
- * 进程重启后）时状态药丸退回静态「已派发」。
+ * [liveState] 来自 ViewModel 的实时状态（按子会话 id 索引）：本进程内派发的子代理会随
+ * 生命周期刷新状态药丸并展示结果摘要；为 null（历史消息回放、进程重启后）时退回静态
+ * 「已派发」展示，不会渲染假的「运行中」。
  */
 @Composable
-private fun SubAgentSingleDispatchCard(
+private fun SubAgentDispatchItemCard(
+    index: Int,
     item: ParsedSubAgentDispatchItem,
-    globalWarning: String?,
     liveState: SubAgentCardState?,
     onOpen: (String) -> Unit
 ) {
     val hasSession = item.subSessionId != null
-    val summary = subAgentSingleSummary(
-        item = item,
-        globalWarning = globalWarning,
-        defaultAgentName = stringResource(R.string.subagent_card_default_agent),
-        liveAgentName = liveState?.agentName
-    )
-    val meta = modelBadge(item.tier, item.model)
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -391,29 +280,54 @@ private fun SubAgentSingleDispatchCard(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
                 .then(
                     if (hasSession) {
                         Modifier.clickable { onOpen(item.subSessionId!!) }
                     } else Modifier
                 )
-                .padding(horizontal = Spacing.sm, vertical = Spacing.sm)
+                .padding(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs)
         ) {
             Row(verticalAlignment = Alignment.Top) {
-                SubAgentGlyph()
+                // 序号：01, 02...（对标网络搜索）
+                Text(
+                    text = index.toString().padStart(2, '0'),
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(Modifier.width(Spacing.sm))
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = summary.agentName,
+                            text = item.agentName ?: stringResource(R.string.subagent_card_default_agent),
                             color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(Modifier.width(Spacing.xs))
+                        modelBadge(item.tier, item.model)?.let { badge ->
+                            Spacer(Modifier.width(Spacing.xs))
+                            Surface(
+                                shape = RoundedCornerShape(Radius.xs),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = badge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
                         SubAgentStatusChip(liveState?.status)
                         if (hasSession) {
                             Spacer(Modifier.width(Spacing.xs))
@@ -432,34 +346,23 @@ private fun SubAgentSingleDispatchCard(
                             text = item.description,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    meta?.let { badge ->
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = badge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
+                    // 完成后的结果摘要（与完成通知同一份）：多数场景无需再进子会话即可看到结论
                     liveState?.excerpt?.takeIf { it.isNotBlank() }?.let { excerpt ->
-                        Spacer(Modifier.height(Spacing.xs))
+                        Spacer(Modifier.height(2.dp))
                         Text(
                             text = excerpt,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                             style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     liveState?.changedFiles?.takeIf { it.isNotEmpty() }?.let { files ->
-                        Spacer(Modifier.height(2.dp))
                         Text(
                             text = stringResource(R.string.subagent_card_changed_files, files.size),
                             color = MaterialTheme.colorScheme.primary,
@@ -468,97 +371,12 @@ private fun SubAgentSingleDispatchCard(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+
+                    item.warning?.let { warning ->
+                        Spacer(Modifier.height(Spacing.xs / 2))
+                        SubAgentWarningBanner(warning)
+                    }
                 }
-            }
-
-            summary.warnings.forEach { warning ->
-                Spacer(Modifier.height(Spacing.xs))
-                SubAgentWarningBanner(warning)
-            }
-        }
-    }
-}
-
-/**
- * 卡内行分隔线：与设置分组的 SettingsDivider 同款（0.5dp、低透明度描边色），只缩进卡片内边距。
- */
-@Composable
-private fun SubAgentRowDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(horizontal = Spacing.sm),
-        thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-    )
-}
-
-/**
- * 卡内一行子代理：序号 + 「代理名 · 描述」（单行截断）+ 状态药丸 + 箭头，整行可点进子会话。
- *
- * 序号用 1、2、3 而非 01：行内已有代理名做标识，补零只多占两格宽度，小屏上会把描述挤掉。
- */
-@Composable
-private fun SubAgentDispatchRow(
-    index: Int,
-    item: ParsedSubAgentDispatchItem,
-    liveState: SubAgentCardState?,
-    onOpen: (String) -> Unit
-) {
-    val hasSession = item.subSessionId != null
-    val agentName = item.agentName?.takeIf { it.isNotBlank() }
-        ?: liveState?.agentName?.takeIf { it.isNotBlank() }
-        ?: stringResource(R.string.subagent_card_default_agent)
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (hasSession) {
-                    Modifier.clickable { onOpen(item.subSessionId!!) }
-                } else Modifier
-            )
-            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = index.toString(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.labelSmall,
-            textAlign = TextAlign.End,
-            modifier = Modifier.widthIn(min = 12.dp)
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = subAgentRowLabel(agentName = agentName, description = item.description),
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        SubAgentStatusChip(liveState?.status)
-        if (hasSession) {
-            Spacer(Modifier.width(Spacing.xs))
-            Icon(
-                imageVector = FeatherIcons.ChevronRight,
-                contentDescription = stringResource(R.string.subagent_card_open),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
-}
-
-/** 行文案：代理名用正文色，描述用弱化色，拼成一行交给 ellipsis 截断。 */
-@Composable
-private fun subAgentRowLabel(agentName: String, description: String): AnnotatedString {
-    val descriptionColor = MaterialTheme.colorScheme.onSurfaceVariant
-    return buildAnnotatedString {
-        append(agentName)
-        if (description.isNotBlank()) {
-            withStyle(SpanStyle(color = descriptionColor)) {
-                append(" · ")
-                append(description)
             }
         }
     }
@@ -611,29 +429,25 @@ private fun SubAgentDispatchedChip() {
  */
 @Composable
 private fun SubAgentStatusChip(status: SubAgentCardStatus?) {
-    if (status == null) {
-        SubAgentDispatchedChip()
-    } else {
-        SubAgentStatusPill(label = subAgentStatusLabel(status), color = subAgentStatusColor(status))
+    when (status) {
+        null -> SubAgentDispatchedChip()
+        SubAgentCardStatus.RUNNING -> SubAgentStatusPill(
+            label = stringResource(R.string.subagent_card_status_running),
+            color = MaterialTheme.colorScheme.primary
+        )
+        SubAgentCardStatus.COMPLETED -> SubAgentStatusPill(
+            label = stringResource(R.string.subagent_card_status_completed),
+            color = MaterialTheme.semanticColors.success
+        )
+        SubAgentCardStatus.FAILED -> SubAgentStatusPill(
+            label = stringResource(R.string.subagent_card_status_failed),
+            color = MaterialTheme.colorScheme.error
+        )
+        SubAgentCardStatus.STOPPED -> SubAgentStatusPill(
+            label = stringResource(R.string.subagent_card_status_stopped),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
-}
-
-/** 状态文案：卡片药丸与多条派发的状态摘要共用同一套。 */
-@Composable
-private fun subAgentStatusLabel(status: SubAgentCardStatus): String = when (status) {
-    SubAgentCardStatus.RUNNING -> stringResource(R.string.subagent_card_status_running)
-    SubAgentCardStatus.COMPLETED -> stringResource(R.string.subagent_card_status_completed)
-    SubAgentCardStatus.FAILED -> stringResource(R.string.subagent_card_status_failed)
-    SubAgentCardStatus.STOPPED -> stringResource(R.string.subagent_card_status_stopped)
-}
-
-/** 状态色调：运行中用主色、完成用成功色、失败用错误色、已停止用弱化色。 */
-@Composable
-private fun subAgentStatusColor(status: SubAgentCardStatus): Color = when (status) {
-    SubAgentCardStatus.RUNNING -> MaterialTheme.colorScheme.primary
-    SubAgentCardStatus.COMPLETED -> MaterialTheme.semanticColors.success
-    SubAgentCardStatus.FAILED -> MaterialTheme.colorScheme.error
-    SubAgentCardStatus.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 /** 状态药丸通用形制：色点 + 文本，[color] 决定整体色调。 */

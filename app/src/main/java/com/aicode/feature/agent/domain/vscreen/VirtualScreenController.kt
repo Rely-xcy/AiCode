@@ -75,6 +75,34 @@ class VirtualScreenController @Inject constructor(
      */
     suspend fun tree(limit: Int): Result<String> {
         val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        val nodes = captureNodes(screen, limit).getOrElse { return Result.failure(it) }
+        // 读到的结果顺手留一份指纹：调用方接着就要注入，那次对比不必再读一遍屏。
+        manager.rememberTreeSnapshot(screen, UiTreeSnapshot.of(nodes, limit))
+        return Result.success(formatUiNodes(nodes, limit))
+    }
+
+    /**
+     * 取「注入前」的界面指纹：优先用 [tree] 留下的那份，没有才现读一次。
+     *
+     * 缓存跟屏绑定（换屏 / 停止 / 屏失效都在 [VirtualScreenManager] 里作废），
+     * 所以这里拿到的不会是一块已经不存在的屏的界面。
+     */
+    suspend fun treeFingerprintForCompare(limit: Int): Result<UiTreeSnapshot> {
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        manager.recentTreeSnapshot(screen)?.let { return Result.success(it) }
+        return treeFingerprint(screen, limit)
+    }
+
+    /** 现读一次界面指纹（注入后回读用）；结果不缓存——界面刚被动过，不能当下一回的对照。 */
+    suspend fun treeFingerprint(limit: Int): Result<UiTreeSnapshot> {
+        val screen = manager.ensureAlive().getOrElse { return Result.failure(it) }
+        return treeFingerprint(screen, limit)
+    }
+
+    private fun treeFingerprint(screen: VirtualScreenManager.Screen, limit: Int): Result<UiTreeSnapshot> =
+        captureNodes(screen, limit).map { UiTreeSnapshot.of(it, limit) }
+
+    private fun captureNodes(screen: VirtualScreenManager.Screen, limit: Int): Result<List<UiNode>> {
         if (!VscreenAccessibilityBridge.isReady) {
             return Result.failure(
                 IllegalStateException(
@@ -90,7 +118,7 @@ class VirtualScreenController @Inject constructor(
                 )
             )
         }
-        return Result.success(formatUiNodes(nodes, limit))
+        return Result.success(nodes)
     }
 
     /**
@@ -150,6 +178,9 @@ class VirtualScreenController @Inject constructor(
                 IllegalStateException("注入 $action 失败（exit=${result.exitCode}）。原始输出：${result.output.trim().take(400)}")
             )
         }
+        // 事件已经进了屏，界面随时可能变化：缓存的指纹不再描述当前界面，先丢掉。
+        // 注入失败的那支上面已经返回——界面没被碰，缓存还能接着用。
+        manager.forgetTreeSnapshot(screen)
         return Result.success("$action 已注入 displayId=${screen.displayId}")
     }
 

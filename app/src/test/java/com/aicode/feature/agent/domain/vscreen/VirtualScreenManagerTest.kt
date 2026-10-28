@@ -181,6 +181,52 @@ class VirtualScreenManagerTest {
     }
 
     @Test
+    fun `控件树缓存跟屏一起失效`() = runTest {
+        val manager = VirtualScreenManager(backend, guard, clock, backgroundScope)
+        val screen = manager.start("s1", "com.example.app", null, 1080, 1920, 320, lifetimeMs = 60_000).getOrThrow()
+        runCurrent()
+
+        val snapshot = UiTreeSnapshot(nodeCount = 40, truncated = true, hash = 42L)
+        manager.rememberTreeSnapshot(screen, snapshot)
+        assertEquals(snapshot, manager.recentTreeSnapshot(screen))
+
+        // 注入成功会改动界面：旧指纹必须作废，不能当下一回的对照。
+        manager.forgetTreeSnapshot(screen)
+        assertNull(manager.recentTreeSnapshot(screen))
+
+        manager.rememberTreeSnapshot(screen, snapshot)
+        manager.stop()
+        assertNull("屏没了，屏上读到的树不能再拿来当对照", manager.recentTreeSnapshot(screen))
+    }
+
+    @Test
+    fun `换屏后迟到的旧屏快照不会盖到新屏上`() = runTest {
+        val manager = VirtualScreenManager(backend, guard, clock, backgroundScope)
+        val first = manager.start("s1", "com.example.app", null, 1080, 1920, 320, lifetimeMs = 60_000).getOrThrow()
+        runCurrent()
+
+        clock.nowMs = 120_000
+        val second = manager.start("s2", "com.example.app", null, 1080, 1920, 320, lifetimeMs = 60_000).getOrThrow()
+
+        val snapshot = UiTreeSnapshot(nodeCount = 40, truncated = true, hash = 7L)
+        manager.rememberTreeSnapshot(first, snapshot)
+        assertNull("旧屏的读树结果晚到时不允许当新屏的对照", manager.recentTreeSnapshot(second))
+
+        manager.rememberTreeSnapshot(second, snapshot)
+        assertEquals(snapshot, manager.recentTreeSnapshot(second))
+    }
+
+    @Test
+    fun `只看到不足对比深度的快照不能当对照`() = runTest {
+        val manager = VirtualScreenManager(backend, guard, clock, backgroundScope)
+        val screen = manager.start("s1", "com.example.app", null, 1080, 1920, 320, lifetimeMs = 60_000).getOrThrow()
+        runCurrent()
+
+        manager.rememberTreeSnapshot(screen, UiTreeSnapshot(nodeCount = 5, truncated = true, hash = 1L))
+        assertNull("前缀比对比读取短，比出来必然是「变了」，只能弃用", manager.recentTreeSnapshot(screen))
+    }
+
+    @Test
     fun `stop 释放屏、收回授权并取消定时器`() = runTest {
         val manager = VirtualScreenManager(backend, guard, clock, backgroundScope)
 

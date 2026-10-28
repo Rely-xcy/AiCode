@@ -13,6 +13,7 @@ import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.feature.agent.domain.tool.root.DeviceStateReadback
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -38,6 +39,9 @@ class ShizukuTool @Inject constructor(
 
         const val DEFAULT_TIMEOUT_SECONDS = 120L
         const val MAX_TIMEOUT_SECONDS = 1_800L
+
+        /** 回读是只读查询，给短超时即可：它挂住时不该把主命令的超时也一起吃完。 */
+        const val READBACK_TIMEOUT_MS = 10_000L
     }
 
     override val name = "Shizuku"
@@ -100,7 +104,19 @@ class ShizukuTool @Inject constructor(
             val result = shizukuManager.runCommand(command, timeoutMs)
             val output = BoundedOutput().apply { append(result.output) }.build()
             FileLogger.v(TAG, "Shizuku exec 完成，输出 ${result.output.length} 字符，退出码 ${result.exitCode}")
-            ToolResult.Success(JsonPrimitive(output))
+            // 退出码以前被丢了，模型只看得到 stdout，非 0 的命令会被当成「跑了」。
+            //
+            // 再读一次实际状态：本工具没有白名单，`settings put` / `wm size` / `pm disable` 这类
+            // 写命令全靠这里区分「命令跑了」和「状态真的变了」（见 [DeviceStateReadback]）。
+            val readback = DeviceStateReadback.report(command) { probe ->
+                val probeResult = shizukuManager.runCommand(probe, READBACK_TIMEOUT_MS)
+                DeviceStateReadback.Observation(probeResult.output, probeResult.exitCode)
+            }
+            val body = buildString {
+                append("exit=").append(result.exitCode).append('\n').append(output)
+                if (readback != null) append("\n\n").append(readback)
+            }
+            ToolResult.Success(JsonPrimitive(body))
         } catch (e: CancellationException) {
             throw e
         } catch (e: ShizukuBindException) {

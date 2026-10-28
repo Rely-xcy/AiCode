@@ -60,6 +60,17 @@ class VirtualScreenManager @Inject constructor(
     @Volatile
     private var expiryJob: Job? = null
 
+    /** 一条控件树快照记录：屏对象是身份凭据，换了屏就不认。 */
+    private class TreeSnapshotEntry(val screen: Screen, val snapshot: UiTreeSnapshot)
+
+    /**
+     * 最近一次读屏留下的指纹，只存一份、跟着当前这块屏。
+     *
+     * 有界：新的一份直接覆盖旧的，不做历史；换屏或被注入改动后由 [forgetTreeSnapshot] 清空。
+     */
+    @Volatile
+    private var treeSnapshot: TreeSnapshotEntry? = null
+
     /** 是否存在存活中的屏（工具侧做会话授权与并发判定用）。 */
     val hasScreen: Boolean get() = current != null
 
@@ -166,6 +177,34 @@ class VirtualScreenManager @Inject constructor(
         }
     }
 
+    /**
+     * 记下这次读到的界面指纹，供下一次注入当对照。
+     *
+     * 只有「读的就是当前这块屏」时才记账：并发里可能有旧屏的读树结果晚到，
+     * 记下来会让下一次注入拿上一块屏的界面当对照。
+     */
+    fun rememberTreeSnapshot(screen: Screen, snapshot: UiTreeSnapshot) {
+        if (current !== screen) return
+        treeSnapshot = TreeSnapshotEntry(screen, snapshot)
+    }
+
+    /**
+     * 取最近一次读屏的指纹；屏已经换了、或覆盖深度不够的都不算数。
+     *
+     * 比的是屏对象身份而不是 displayId：displayId 在旧屏释放后可能被系统重新分配，
+     * 用编号比会把旧屏的树当成新屏的对照。
+     */
+    fun recentTreeSnapshot(screen: Screen): UiTreeSnapshot? =
+        treeSnapshot
+            ?.takeIf { it.screen === screen }
+            ?.snapshot
+            ?.takeIf { it.coversComparePrefix }
+
+    /** 界面已被改动（注入成功）：缓存的指纹不再描述当前界面，丢弃。 */
+    fun forgetTreeSnapshot(screen: Screen) {
+        if (treeSnapshot?.screen === screen) treeSnapshot = null
+    }
+
     /** 取当前屏，没有时返回失败并给出可照做的提示。 */
     fun requireScreen(): Result<Screen> =
         current?.let { Result.success(it) }
@@ -204,6 +243,8 @@ class VirtualScreenManager @Inject constructor(
      * 就绕过了那道唯一的 ASK 点。
      */
     private fun destroyLocked(reason: String, revokeSession: Boolean) {
+        // 屏一消失，屏上读到的控件树就不再是「当前界面」，必须跟屏一起失效。
+        treeSnapshot = null
         val dying = current ?: return
         expiryJob?.cancel()
         expiryJob = null

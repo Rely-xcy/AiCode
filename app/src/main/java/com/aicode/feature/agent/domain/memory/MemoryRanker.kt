@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.memory
 
+import com.aicode.core.util.SearchTokens
+
 /**
  * 记忆召回排序：不引入向量库，用「文本重合度 + 新鲜度」做粗排。
  *
@@ -137,6 +139,25 @@ object MemoryRanker {
     }
 
     /**
+     * 按关键词检索记忆（工具层 `action=search` 用）：与上面同一套分词与字段权重，但只留真命中的，
+     * 且不参与新旧排序。
+     *
+     * 为什么不复用 [rank]：那个是「这轮该注入哪几条」，要的是新鲜度与去重；检索要的是「哪些记忆
+     * 讲过这件事」，陈旧记忆也得能被找到（它只是不该每轮都占坑位）。
+     */
+    fun search(memories: List<Memory>, keyword: String, limit: Int): List<Memory> {
+        if (limit <= 0) return emptyList()
+        val tokens = tokenize(keyword)
+        if (tokens.isEmpty()) return emptyList()
+        return memories
+            .map { memory -> memory to overlap(memory, tokens) }
+            .filter { it.second > 0.0 }
+            .sortedWith(compareByDescending<Pair<Memory, Double>> { it.second }.thenBy { it.first.name })
+            .take(limit)
+            .map { it.first }
+    }
+
+    /**
      * 低成本去重：只有 3 个坑位，两条说的是同一件事就是纯浪费。
      *
      * 用 token 集合的 Jaccard 相似度就够了——不用 MMR：实测本地 7B 跑一次 MMR 要 40 秒，
@@ -164,15 +185,20 @@ object MemoryRanker {
         return union > 0 && intersection.toDouble() / union >= DEDUPE_THRESHOLD
     }
 
-    private fun score(memory: Memory, tokens: Set<String>, now: Long): Double {
-        val name = tokenize(memory.name)
-        val description = tokenize(memory.description)
-        val content = tokenize(memory.content.take(CONTENT_SCAN_CHARS))
-        val overlap = tokens.count { it in name } * NAME_WEIGHT +
-            tokens.count { it in description } * DESCRIPTION_WEIGHT +
-            tokens.count { it in content } * CONTENT_WEIGHT
-        return overlap * if (isStale(memory, now)) STALE_FACTOR else 1.0
-    }
+    private fun score(memory: Memory, tokens: Set<String>, now: Long): Double =
+        overlap(memory, tokens) * if (isStale(memory, now)) STALE_FACTOR else 1.0
+
+    /** 关键词 token 在名称/描述/正文上的加权重合分（口径见 [SearchTokens.overlapScore]）。 */
+    private fun overlap(memory: Memory, tokens: Set<String>): Double =
+        SearchTokens.overlapScore(
+            tokens = tokens,
+            nameTokens = SearchTokens.tokenize(memory.name),
+            descriptionTokens = SearchTokens.tokenize(memory.description),
+            contentTokens = SearchTokens.tokenize(memory.content.take(CONTENT_SCAN_CHARS)),
+            nameWeight = NAME_WEIGHT.toDouble(),
+            descriptionWeight = DESCRIPTION_WEIGHT.toDouble(),
+            contentWeight = CONTENT_WEIGHT.toDouble()
+        )
 
     /**
      * 陈旧判定：记了 30 天却一次都没被注入过，说明它跟你的日常话题关系不大。
@@ -191,45 +217,6 @@ object MemoryRanker {
 
     private fun updatedAt(memory: Memory): Long = memory.file?.lastModified() ?: 0L
 
-    /**
-     * 分词：ASCII 词（长度 ≥ 2，转小写）+ CJK 二元组。
-     * 单字 CJK 不成词，只有连续两个以上汉字才会产出 token。
-     */
-    fun tokenize(text: String): Set<String> {
-        if (text.isBlank()) return emptySet()
-        val tokens = mutableSetOf<String>()
-        val ascii = StringBuilder()
-        var previousCjk: Char? = null
-
-        fun flushAscii() {
-            if (ascii.length >= 2) tokens.add(ascii.toString().lowercase())
-            ascii.clear()
-        }
-
-        for (char in text) {
-            when {
-                char.isLetterOrDigit() && char.code < ASCII_CEILING -> ascii.append(char)
-
-                isCjk(char) -> {
-                    flushAscii()
-                    previousCjk?.let { tokens.add("$it$char") }
-                    previousCjk = char
-                }
-
-                else -> {
-                    flushAscii()
-                    previousCjk = null
-                }
-            }
-        }
-        flushAscii()
-        return tokens
-    }
-
-    private const val ASCII_CEILING = 0x2E80
-
-    private fun isCjk(char: Char): Boolean {
-        val code = char.code
-        return code in 0x3040..0x30FF || code in 0x4E00..0x9FFF || code in 0xAC00..0xD7AF
-    }
+    /** 分词口径与技能检索共用，见 [SearchTokens.tokenize]；保留此入口供现有调用方使用。 */
+    fun tokenize(text: String): Set<String> = SearchTokens.tokenize(text)
 }

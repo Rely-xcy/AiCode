@@ -22,6 +22,7 @@ import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.sftp.SFTPClient
 import net.schmizz.sshj.sftp.OpenMode
 import net.schmizz.sshj.sftp.RenameFlags
+import java.security.MessageDigest
 import java.util.EnumSet
 import java.util.UUID
 import net.schmizz.sshj.transport.DisconnectListener
@@ -205,6 +206,20 @@ class RemoteSshConnection @Inject constructor(
         return cmd
     }
 
+    /**
+     * 开一条**保持 stdin 打开**的 exec 会话，供双向协议使用（远端 agent 的请求/响应帧）。
+     *
+     * 与 [startExecSession] 唯一的区别就是不立即关 stdin：那个方法服务于「只读输出」的
+     * 一次性命令，关掉 stdin 能避免远端把 channel 当成待读输入而滗到超时；
+     * 而 agent 正是要从 stdin 收帧，关掉就等于把它饿死。
+     *
+     * 调用方负责关闭返回的 Command：会话生命周期就是 agent 进程的生命周期。
+     */
+    fun startInteractiveExecSession(command: String): Session.Command {
+        val client = sshClient ?: throw IllegalStateException("SSH 未连接")
+        return client.startSession().exec(command)
+    }
+
     /** 开一个新的 Session，供调用方分配 PTY 并启动 shell。调用方负责关闭 Session。 */
     fun startShellSession(): Session {
         val client = sshClient ?: throw IllegalStateException("SSH 未连接")
@@ -330,8 +345,18 @@ class RemoteSshConnection @Inject constructor(
         val client = sshClient ?: return
         val home = remoteHome ?: return
         val destDir = home.trimEnd('/') + "/.aicode/docs"
+        // 内容指纹：全部文档排序后拼接再取 sha256。与远端 .version 比对，一致就整轮跳过。
+        // 之前每次连接/重连都无条件全量重写 54 个文件，每个 7 次 SFTP 往返、完全串行，
+        // 400 次往返就这样白白花掉；而文档只在 App 升级时才变。
+        val version = docsVersion(docs)
+        val versionFile = "$destDir/.version"
         withContext(Dispatchers.IO) {
             runCatching {
+                val remoteVersion = readRemoteCommandOrNull(client, "cat '$versionFile' 2>/dev/null")?.trim()
+                if (remoteVersion == version) {
+                    FileLogger.d(TAG, "远程文档已是最新（$version），跳过上传")
+                    return@runCatching
+                }
                 // 先建全部子目录并清掉旧 .md：版本间调整文档分类会改变路径，只覆盖不清理会让旧文件残留
                 val subDirs = docs.keys.mapNotNull { key ->
                     key.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
@@ -341,8 +366,46 @@ class RemoteSshConnection @Inject constructor(
                     val dest = "$destDir/$name"
                     writeRemoteFile(dest, content.toByteArray(Charsets.UTF_8))
                 }
-                FileLogger.i(TAG, "已同步 ${docs.size} 个文档到远程 $destDir")
+                // 写指纹放最后：上传中途失败时远端版本号仍旧，下次会重传，不会把半套文档当完整。
+                executeRemoteCommand(client, "printf '%s' '$version' > '$versionFile'")
+                FileLogger.i(TAG, "已同步 ${docs.size} 个文档到远程 $destDir（$version）")
             }.onFailure { FileLogger.w(TAG, "同步文档到远程失败", it) }
+        }
+    }
+
+    /** 全部文档的内容指纹：按路径排序后逐个追加「路径 + 内容」，与 Map 的迭代顺序无关。 */
+    private fun docsVersion(docs: Map<String, String>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (key in docs.keys.sorted()) {
+            digest.update(key.toByteArray(Charsets.UTF_8))
+            digest.update(0)
+            digest.update(docs.getValue(key).toByteArray(Charsets.UTF_8))
+            digest.update(0)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * 执行一条只读命令并取回 stdout；退出码非 0 或抛异常时返回 null。
+     *
+     * 与 [executeRemoteCommand] 的区别：那个只关心成败、丢弃输出，用于 mkdir/rm 这类动作；
+     * 这个需要把远端的状态读回来（如 .version 内容），所以单独一条路径。
+     */
+    private fun readRemoteCommandOrNull(client: SSHClient, command: String): String? {
+        val session = client.startSession()
+        return try {
+            val cmd = session.exec(command)
+            cmd.outputStream.close()
+            val text = cmd.inputStream.bufferedReader().use { it.readText() }
+            cmd.join()
+            val status = cmd.exitStatus
+            cmd.close()
+            if (status == 0) text else null
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "读取远端命令输出失败: ${e.message}")
+            null
+        } finally {
+            runCatching { session.close() }
         }
     }
 
