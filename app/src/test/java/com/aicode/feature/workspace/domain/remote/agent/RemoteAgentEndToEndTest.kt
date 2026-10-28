@@ -35,9 +35,7 @@ class RemoteAgentEndToEndTest {
         val binary = extractBuiltinBinary()
         assumeTrue("当前架构没有内置 agent 二进制，跳过", binary != null)
         val root = Files.createTempDirectory("agent-e2e-root").toFile()
-        val process = ProcessBuilder(binary!!.absolutePath, "-root", root.absolutePath)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
+        val process = ProcessBuilder(binary!!.absolutePath, "-root", root.absolutePath).start()
         val session = RemoteAgentSession(
             launchCommand = "test",
             openChannel = { ProcessAgentChannel(process) }
@@ -89,14 +87,23 @@ class RemoteAgentEndToEndTest {
     }
 }
 
-/** 把一个真实子进程的三根流包成 [AgentChannel]：stdout 读、stdin 写、stderr 丢弃。 */
+/** 把一个真实子进程的三根流包成 [AgentChannel]：stdout 读、stdin 写、stderr 后台抽干。 */
 private class ProcessAgentChannel(private val process: Process) : AgentChannel {
+
+    // 不抽干 stderr 会把进程堵死：agent 每处理一帧就往 stderr 写一行，
+    // 管道缓冲（通常 64KB）满了之后它就会阻塞在写日志上，不再响应请求。
+    // 也不用 ProcessBuilder.Redirect.DISCARD —— 那是 Java 9+ API，本项目编译目标不是它。
+    private val drain = Thread {
+        runCatching { process.errorStream.readBytes() }
+    }.apply {
+        isDaemon = true
+        start()
+    }
 
     override val input: InputStream get() = process.inputStream
 
     override val output: OutputStream get() = process.outputStream
 
-    // 测试里不看 stderr：agent 的日志行会写满管道缓冲，读走丢掉才不会把进程堵死。
     override val error: InputStream get() = InputStream.nullInputStream()
 
     override fun close() {
