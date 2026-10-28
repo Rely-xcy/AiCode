@@ -12,6 +12,7 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.PathHomeResolver
+import com.aicode.feature.workspace.domain.remote.agent.RemoteAgentHolder
 import com.aicode.feature.workspace.domain.remote.RemoteAuth
 import io.mockk.every
 import io.mockk.mockk

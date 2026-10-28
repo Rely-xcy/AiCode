@@ -11,6 +11,7 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.PathHomeResolver
+import com.aicode.feature.workspace.domain.remote.agent.RemoteAgentHolder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -70,7 +71,9 @@ class WorkspaceRepositoryCurrentPathTest {
             generalSettingsRepository = generalSettingsRepository,
             // 本用例只测路径语义，凭证注入开关/凭证库都不走到，relaxed mock 即可。
             credentialInjectSettings = mockk<CredentialInjectSettingsRepository>(relaxed = true),
-            credentialRepository = mockk<CredentialRepository>(relaxed = true)
+            credentialRepository = mockk<CredentialRepository>(relaxed = true),
+            // agent 只在 initialize() 里预热，本用例走 currentPath()，relaxed mock 足够。
+            agentHolder = mockk<RemoteAgentHolder>(relaxed = true)
         )
     }
 
