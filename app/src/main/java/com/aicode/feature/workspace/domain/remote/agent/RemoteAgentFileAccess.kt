@@ -122,30 +122,53 @@ class RemoteAgentFileAccess(
 
     override fun parentPath(path: String): String? = delegate.parentPath(path)
 
-    // ---- 写路径与其他：期 2 先全量委托 ----
+    // ---- 写路径：能安全接管的走 agent，其余仍委托 ----
+
+    /**
+     * 文件内容写入：原子性由远端 agent 保证（同目录临时文件 + rename），这里直写目标。
+     *
+     * 不在客户端再套一层 tmp+rename：那样每次写会多一次往返，而远端已经保证了「要么旧内容、
+     * 要么完整新内容」。overwrite=false 也交给远端判——它能在动临时文件前就返回 EEXIST。
+     */
+    override fun writeBytes(path: String, bytes: ByteArray, overwrite: Boolean) {
+        call("write", AgentRequestParams(path = abs(path), overwrite = overwrite), bytes)
+    }
 
     override fun writeFile(path: String, content: String, overwrite: Boolean, encoding: Charset) =
-        delegate.writeFile(path, content, overwrite, encoding)
+        writeBytes(path, content.toByteArray(encoding), overwrite)
 
-    override fun writeBytes(path: String, bytes: ByteArray, overwrite: Boolean) =
-        delegate.writeBytes(path, bytes, overwrite)
-
+    /** 流式写入需要「分块 append」的协议支持，agent 没有；继续走 SFTP 的流式实现。 */
     override fun writeStream(path: String, input: InputStream, overwrite: Boolean): Long =
         delegate.writeStream(path, input, overwrite)
 
+    /** agent 的 mkdir 是 MkdirAll 语义：已存在且是目录算成功，与接口约定一致。 */
+    override fun mkdirs(path: String) {
+        call("mkdir", AgentRequestParams(path = abs(path)))
+    }
+
+    override fun delete(path: String) {
+        call("remove", AgentRequestParams(path = abs(path), recursive = false))
+    }
+
+    override fun deleteRecursively(path: String) {
+        call("remove", AgentRequestParams(path = abs(path), recursive = true))
+    }
+
+    /** 接口要求目标已存在时报 FileAlreadyExistsException；agent 的 rename 会直接覆盖，所以先查一次。 */
+    override fun rename(path: String, newPath: String) {
+        val target = abs(newPath)
+        if (statOrNull(newPath) != null) throw FileAlreadyExistsException(target)
+        call("rename", AgentRequestParams(path = abs(path), to = target))
+    }
+
+    // ---- 其余仍委托：agent 没有对应 op，或语义不对等 ----
+
     override fun copyToLocal(path: String): File = delegate.copyToLocal(path)
-
-    override fun delete(path: String) = delegate.delete(path)
-
-    override fun deleteRecursively(path: String) = delegate.deleteRecursively(path)
-
-    override fun rename(path: String, newPath: String) = delegate.rename(path, newPath)
 
     override fun copy(path: String, newPath: String, overwrite: Boolean) = delegate.copy(path, newPath, overwrite)
 
+    /** 跨分区 move 用 rename 会失败，交给 SFTP 的「复制 + 删除源」实现。 */
     override fun move(path: String, newPath: String, overwrite: Boolean) = delegate.move(path, newPath, overwrite)
-
-    override fun mkdirs(path: String) = delegate.mkdirs(path)
 
     // ---- 内部 ----
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -175,6 +176,36 @@ func TestWrite(t *testing.T) {
 		resp, _, _ := call(t, root, fields, tc.body)
 		if resp.Ok || resp.Err != tc.code {
 			t.Fatalf("%s: 期望 %s，实际 %+v", tc.name, tc.code, resp)
+		}
+	}
+}
+
+func TestWriteIsAtomic(t *testing.T) {
+	_, root := newTestRoot(t)
+	target := filepath.Join(root, "atomic.txt")
+
+	// 反复覆盖：每次成功之后读到的必须就是这次写的完整内容，
+	// 不能出现「文件还在、内容只写了一半」的中间态。
+	for i := 0; i < 3; i++ {
+		body := bytes.Repeat([]byte("x"), 4096*(i+1))
+		resp, _, _ := call(t, root, map[string]any{"id": i + 1, "op": "write", "path": target}, body)
+		if !resp.Ok {
+			t.Fatalf("第 %d 次写入失败: %+v", i+1, resp)
+		}
+		got, err := os.ReadFile(target)
+		if err != nil || !bytes.Equal(got, body) {
+			t.Fatalf("第 %d 次写入后内容不完整: err=%v len=%d", i+1, err, len(got))
+		}
+	}
+
+	// 临时文件不能留在目录里：留了就是每次写都往用户工作区堆垃圾。
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp.") {
+			t.Fatalf("残留临时文件: %s", e.Name())
 		}
 	}
 }

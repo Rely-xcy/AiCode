@@ -4,12 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type agent struct {
@@ -275,21 +277,40 @@ func (a *agent) opWrite(req *request, body []byte) (*response, []byte, *protoErr
 	if req.Overwrite != nil {
 		overwrite = *req.Overwrite
 	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	if !overwrite {
-		flags |= os.O_EXCL
+	// 目标是目录：在动临时文件之前就拒，否则 rename 盖目录会得到 EEXIST，
+	// 与「你把文件写到目录上了」的真实原因对不上。
+	if info, statErr := os.Stat(p); statErr == nil && info.IsDir() {
+		return nil, nil, newErr(errIsDir, "is a directory")
 	}
-	f, err := os.OpenFile(p, flags, os.FileMode(mode))
+
+	// 已存在且不允许覆盖：提前返回，别等到 rename 才发现
+	if !overwrite {
+		if _, statErr := os.Lstat(p); statErr == nil {
+			return nil, nil, newErr(errExist, "file already exists")
+		}
+	}
+
+	// 同目录临时文件 + rename：中途失败或断线时目标文件保持原样，
+	// 读方看到的要么是旧内容、要么是完整新内容。直接 open 目标会留下半截文件，
+	// 而远端跑的是模型，它可能立刻就去读自己刚写的那个文件。
+	tmp := fmt.Sprintf("%s.tmp.%d.%d", p, os.Getpid(), time.Now().UnixNano())
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(mode))
 	if err != nil {
 		return nil, nil, asProtoErr(err)
 	}
 	_, writeErr := f.Write(body)
 	closeErr := f.Close()
 	if writeErr != nil {
+		os.Remove(tmp)
 		return nil, nil, asProtoErr(writeErr)
 	}
 	if closeErr != nil {
+		os.Remove(tmp)
 		return nil, nil, asProtoErr(closeErr)
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return nil, nil, asProtoErr(err)
 	}
 	size := int64(len(body))
 	resp := okResponse(req.ID)
