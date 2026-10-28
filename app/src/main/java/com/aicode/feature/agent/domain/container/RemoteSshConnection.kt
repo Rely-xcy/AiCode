@@ -205,6 +205,20 @@ class RemoteSshConnection @Inject constructor(
         return cmd
     }
 
+    /**
+     * 开一条**保持 stdin 打开**的 exec 会话，供双向协议使用（远端 agent 的请求/响应帧）。
+     *
+     * 与 [startExecSession] 唯一的区别就是不立即关 stdin：那个方法服务于「只读输出」的
+     * 一次性命令，关掉 stdin 能避免远端把 channel 当成待读输入而滗到超时；
+     * 而 agent 正是要从 stdin 收帧，关掉就等于把它饿死。
+     *
+     * 调用方负责关闭返回的 Command：会话生命周期就是 agent 进程的生命周期。
+     */
+    fun startInteractiveExecSession(command: String): Session.Command {
+        val client = sshClient ?: throw IllegalStateException("SSH 未连接")
+        return client.startSession().exec(command)
+    }
+
     /** 开一个新的 Session，供调用方分配 PTY 并启动 shell。调用方负责关闭 Session。 */
     fun startShellSession(): Session {
         val client = sshClient ?: throw IllegalStateException("SSH 未连接")
