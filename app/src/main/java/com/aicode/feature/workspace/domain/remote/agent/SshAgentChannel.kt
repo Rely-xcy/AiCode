@@ -16,8 +16,8 @@ import net.schmizz.sshj.connection.channel.direct.Session
  * [AgentChannel] 也不想依赖 sshj 的具体类型——单测用内存流就能跑完整个会话逻辑。
  * 这一个类就是两条边之间的适配器，跨依赖只此一处。
  *
- * 关闭顺序是先命令后会话：命令通道没关就关 session，sshj 会在日志里刷一串
- * "Channel closed" 的噪声，排查真问题时很碍事。
+ * 关闭只关命令通道：`Session.Command` 不回指 `Session`，而远端 agent 是「stdin 读到 EOF
+ * 就退出」的主循环，关掉通道就等于通知它收工，不需要另去关会话。
  */
 internal class SshAgentChannel(private val command: Session.Command) : AgentChannel {
 
@@ -28,7 +28,8 @@ internal class SshAgentChannel(private val command: Session.Command) : AgentChan
     override val error: InputStream get() = command.errorStream
 
     override fun close() {
+        // Session.Command 没有回指 Session 的引用，只能关通道本身；
+        // 会话随远端进程退出自然结束（stdin 关闭即 EOF，agent 主循环 return）。
         runCatching { command.close() }
-        runCatching { command.session.close() }
     }
 }

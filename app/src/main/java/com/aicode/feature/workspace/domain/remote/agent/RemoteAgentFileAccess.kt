@@ -85,7 +85,8 @@ class RemoteAgentFileAccess(
 
     override fun isFile(path: String): Boolean {
         val stat = statOrNull(path) ?: return false
-        return !stat.isDir
+        // isDir 在协议里是可选字段，没给时按普通文件处理（stat 能成功说明对象存在）。
+        return stat.isDir != true
     }
 
     override fun fileSize(path: String): Long = statOrNull(path)?.size ?: 0L
@@ -114,7 +115,7 @@ class RemoteAgentFileAccess(
         )
         return parseEntries(response.body)
             .filter { !it.isDir }
-            .map { path.trimEnd('/') + "/" + it.name }
+            .map { path.trimEnd('/') + "/" + it.n }
     }
 
     override fun toDisplayPath(path: String): String = delegate.toDisplayPath(path)
