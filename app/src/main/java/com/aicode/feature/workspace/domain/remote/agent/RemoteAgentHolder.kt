@@ -7,7 +7,10 @@ import dagger.Lazy
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -38,6 +41,12 @@ class RemoteAgentHolder @Inject constructor(
 
     private val mutex = Mutex()
 
+    /**
+     * 预热用的事件循环。启动阶段只调 [warmUp]：首次要传 2.4MB 二进制，同步等会把
+     * 工作区初始化拖成好几秒；agent 没就绪期间文件访问会自动退回 SFTP，不影响可用性。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile
     private var current: RemoteAgentConnection? = null
 
@@ -48,6 +57,17 @@ class RemoteAgentHolder @Inject constructor(
 
     /** 已就绪的会话；没有或已判定不可用时返回 null，调用方据此退回 SFTP。 */
     fun sessionOrNull(): RemoteAgentSession? = current?.session
+
+    /**
+     * 后台拉起 agent，不阻塞调用方。已就绪或正在连时直接返回。
+     *
+     * 用在本进程的启动路径（工作区初始化）上：那里已经在 IO 线程，但首次上传二进制要
+     * 好几秒，不能让用户等着它才能用文件功能。
+     */
+    fun warmUp() {
+        if (current != null) return
+        scope.launch { ensureConnected() }
+    }
 
     /** 是否已经连上。 */
     val isReady: Boolean get() = current != null
