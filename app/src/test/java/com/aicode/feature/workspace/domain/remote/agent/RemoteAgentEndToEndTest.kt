@@ -5,7 +5,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
-import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -69,19 +68,17 @@ class RemoteAgentEndToEndTest {
         }
     }
 
-    /** 把 assets 里当前架构的 gzip 解到临时文件并加可执行位；架构不支持时返回 null。 */
+    /** 取 assets 里当前架构的二进制到临时文件并加可执行位；架构不支持时返回 null。 */
     private fun extractBuiltinBinary(): File? {
         val suffix = when (System.getProperty("os.arch")?.lowercase()) {
             "amd64", "x86_64" -> "amd64"
             "aarch64", "arm64" -> "arm64"
             else -> return null
         }
-        val gz = File("src/main/assets/remote-agent/aicode-agent-v1-linux-$suffix.gz")
-        if (!gz.isFile) return null
+        val asset = File("src/main/assets/remote-agent/aicode-agent-v1-linux-$suffix")
+        if (!asset.isFile) return null
         val out = Files.createTempFile("aicode-agent-", "").toFile()
-        GZIPInputStream(gz.inputStream()).use { input ->
-            out.outputStream().use { output -> input.copyTo(output) }
-        }
+        asset.copyTo(out, overwrite = true)
         out.setExecutable(true)
         return out
     }
