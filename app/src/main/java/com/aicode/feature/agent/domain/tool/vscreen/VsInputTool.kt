@@ -65,12 +65,13 @@ class VsInputTool @Inject constructor(
         val action = args["action"]?.jsonPrimitive?.contentOrNull
             ?: return ToolResult.Error("缺少必需参数：action")
         // 先把「要注入什么」定下来，再取注入前快照：参数不合法时不必白读一次控件树。
-        val inject: suspend () -> Result<String> = when (action) {
+        val inject: suspend () -> Result<String>
+        when (action) {
             "tap" -> {
                 val x = args["x"]?.jsonPrimitive?.intOrNull
                 val y = args["y"]?.jsonPrimitive?.intOrNull
                 if (x == null || y == null) return ToolResult.Error("tap 需要 x 与 y")
-                { controller.tap(x, y) }
+                inject = { controller.tap(x, y) }
             }
             "swipe" -> {
                 val x1 = args["x"]?.jsonPrimitive?.intOrNull
@@ -81,23 +82,23 @@ class VsInputTool @Inject constructor(
                     return ToolResult.Error("swipe 需要 x/y/x2/y2")
                 }
                 val duration = args["duration"]?.jsonPrimitive?.intOrNull ?: DEFAULT_SWIPE_MS
-                { controller.swipe(x1, y1, x2, y2, duration) }
+                inject = { controller.swipe(x1, y1, x2, y2, duration) }
             }
             "text" -> {
                 val text = args["text"]?.jsonPrimitive?.contentOrNull
                     ?: return ToolResult.Error("text 动作需要 text 参数")
-                { controller.text(text) }
+                inject = { controller.text(text) }
             }
             "key" -> {
                 val key = args["key"]?.jsonPrimitive?.contentOrNull
                     ?: return ToolResult.Error("key 动作需要 key 参数")
-                { controller.key(key) }
+                inject = { controller.key(key) }
             }
             "back" -> {
-                { controller.key("KEYCODE_BACK") }
+                inject = { controller.key("KEYCODE_BACK") }
             }
             "home" -> {
-                { controller.key("KEYCODE_HOME") }
+                inject = { controller.key("KEYCODE_HOME") }
             }
             else -> return ToolResult.Error("未知 action：$action（支持 tap/swipe/text/key/back/home）")
         }
