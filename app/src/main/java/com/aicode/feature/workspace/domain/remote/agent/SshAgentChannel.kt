@@ -2,7 +2,7 @@ package com.aicode.feature.workspace.domain.remote.agent
 
 import java.io.InputStream
 import java.io.OutputStream
-import net.schmizz.sshj.Session
+import net.schmizz.sshj.connection.channel.direct.Session
 
 /**
  * 把 sshj 的 exec 通道包成 [AgentChannel]，供 [RemoteAgentSession] 收发协议帧。
