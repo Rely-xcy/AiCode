@@ -3,6 +3,8 @@ package com.aicode.feature.workspace.domain
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.workspace.data.repository.WorkspaceNotReadyException
+import com.aicode.feature.workspace.domain.remote.agent.RemoteAgentFileAccess
+import com.aicode.feature.workspace.domain.remote.agent.RemoteAgentHolder
 import java.io.File
 import java.io.InputStream
 import java.nio.charset.Charset
@@ -20,12 +22,28 @@ import javax.inject.Singleton
 class DelegatingFileAccess @Inject constructor(
     private val modeHolder: ExecutionModeHolder,
     private val localFileAccess: LocalFileAccess,
-    private val remoteSftpFileAccess: RemoteSftpFileAccess
+    private val remoteSftpFileAccess: RemoteSftpFileAccess,
+    private val agentHolder: RemoteAgentHolder
 ) : FileAccessProvider {
 
-    private fun delegate(): FileAccessProvider =
-        if (modeHolder.currentMode() == ExecutionMode.REMOTE_SSH) remoteSftpFileAccess
-        else localFileAccess
+    /**
+     * 远程模式优先走 agent，拿不到会话就退回 SFTP。
+     *
+     * 每次现造一个 [RemoteAgentFileAccess] 而不缓存：它只包了三根引用（delegate、session、home），
+     * 构造是 O(1)；缓存反而要处理「重连后 session 换了」的失效问题，得不偿失。
+     *
+     * agent 没就绪时静默退回 SFTP——这是预期内的常态（远端没 python、架构不支持、
+     * 还没连上），不是错误，不在这里记日志（Holder 已经在失败时记过了）。
+     */
+    private fun delegate(): FileAccessProvider {
+        if (modeHolder.currentMode() != ExecutionMode.REMOTE_SSH) return localFileAccess
+        val session = agentHolder.sessionOrNull() ?: return remoteSftpFileAccess
+        return RemoteAgentFileAccess(
+            delegate = remoteSftpFileAccess,
+            session = session,
+            home = session.capabilities?.home.orEmpty()
+        )
+    }
 
     /**
      * 转发一次调用，并把「工作区尚未落定」换成为模型一眼能看懂的临时性提示。
