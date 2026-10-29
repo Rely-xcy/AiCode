@@ -64,7 +64,6 @@ import com.aicode.feature.settings.data.remote.ApkVerifyResult
 import com.aicode.feature.settings.data.remote.ForkUpdateCheckService
 import com.aicode.feature.settings.data.remote.UpdateAsset
 import com.aicode.feature.settings.data.remote.UpdateCheckResult
-import com.aicode.feature.settings.data.remote.UpdateCheckService
 import com.aicode.feature.settings.data.repository.UpdateCheckSettingsRepository
 import com.aicode.feature.settings.data.repository.UpdateChannel
 import com.aicode.feature.settings.domain.disconnectQuietly
@@ -440,9 +439,8 @@ class SettingsViewModel @Inject constructor(
     private val llmCallRecordDao: LlmCallRecordDao,
     private val modelCostCalculator: ModelCostCalculator,
     private val updateCheckSettingsRepository: UpdateCheckSettingsRepository,
-    // fork 专属：检查更新的数据源换成本 fork 站点的 id 版接口，剥离步骤见 ForkUpdateCheckService 文件头
+    // fork 专属：检查更新的数据源改成本 fork 站点的接口，客户端不再自己判新旧
     private val forkUpdateCheckService: ForkUpdateCheckService,
-    private val updateCheckService: UpdateCheckService,
     private val apkDownloader: ApkDownloader,
     private val apkVerifier: ApkVerifier,
     private val providerDashboardRunner: ProviderDashboardRunner,
@@ -2068,7 +2066,7 @@ class SettingsViewModel @Inject constructor(
         }
         if (!manual) {
             if (!updateCheckSettingsRepository.autoCheckEnabled) return
-            if (updateCheckSettingsRepository.hasCheckedToday()) return
+            if (!updateCheckSettingsRepository.shouldAutoCheck()) return
         }
         viewModelScope.launch {
             // 手动检查显示「检测中」反馈；自动检查全程无感，仅检测到新版本才弹窗
@@ -2079,7 +2077,6 @@ class SettingsViewModel @Inject constructor(
             // fork 专属：数据源换成自建接口，按当前通道 + 本机 versionCode 问服务端；
             // 新旧由服务端判（见 ForkUpdateCheckService）
             val result = forkUpdateCheckService.checkForUpdate(
-                localVersionName = currentVersionName(),
                 localVersionCode = currentVersionCode(),
                 channel = updateCheckSettingsRepository.channel
             )
@@ -2109,7 +2106,7 @@ class SettingsViewModel @Inject constructor(
             // fork 专属：失败不算「今天已检」——发布服务时通时不通，失败当天不再试等于白等一天，
             // 下次启动重试一次。代价是失败当天每次冷启动多发一次请求（单次请求，非循环重试，10s 超时兜底）。
             if (!manual && result !is UpdateCheckResult.Error) {
-                updateCheckSettingsRepository.markCheckedToday()
+                updateCheckSettingsRepository.markChecked()
             }
         }
     }

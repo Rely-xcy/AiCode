@@ -45,8 +45,8 @@ enum class UpdateChannel(val wireName: String) {
 }
 
 /**
- * 「自动检查更新」偏好存储：开关、更新通道、上次检测日期统一存 SharedPreferences
- * （键值文件，非数据库）。上次检测日期不写数据库，但也不放 cacheDir——缓存目录可能被
+ * 「自动检查更新」偏好存储：开关、更新通道、上次检查时间统一存 SharedPreferences
+ * （键值文件，非数据库）。检查时间不写数据库，但也不放 cacheDir——缓存目录可能被
  * 系统清理导致「每天一次」失效，持久化到 SharedPreferences 更可靠。
  */
 @Singleton
@@ -89,13 +89,22 @@ class UpdateCheckSettingsRepository @Inject constructor(
             prefs.edit().putString(KEY_DOWNLOAD_MIRROR, value.trim()).apply()
         }
 
-    /** 今天是否已检测过（按记录日期判断）。 */
-    fun hasCheckedToday(): Boolean = prefs.getString(KEY_LAST_CHECKED, null) == today()
+    /**
+     * 上次检查完成的时间戳（[System.currentTimeMillis]，0 = 从未检查）。
+     *
+     * 用时间戳而不是「今天几号」：跨时区、用户改系统时间、跨年都不会把“24 小时”算错。
+     */
+    val lastCheckedAt: Long
+        get() = prefs.getLong(KEY_LAST_CHECKED_AT, 0L)
 
-    /** 记录今天已检测。 */
-    fun markCheckedToday() {
-        prefs.edit().putString(KEY_LAST_CHECKED, today()).apply()
+    /** 记录检查完成。只在「问成了」时调，失败不记——否则用户点一次失败要等一整天。 */
+    fun markChecked(now: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LAST_CHECKED_AT, now).apply()
     }
+
+    /** 自动检查是否到了该跑的时间（手动检查不受此限）。 */
+    fun shouldAutoCheck(now: Long = System.currentTimeMillis()): Boolean =
+        now - lastCheckedAt >= CHECK_INTERVAL_MS
 
     /**
      * 把版本与更新信息写入 `~/.aicode/update-info.json`（宿主 filesDir/aicode/），
@@ -110,8 +119,12 @@ class UpdateCheckSettingsRepository @Inject constructor(
             obj.put("channel", channel.name.lowercase())
             obj.put("lastCheckedAt", java.time.LocalDateTime.now().toString())
             when (result) {
-                is UpdateCheckResult.UpToDate -> obj.put("hasUpdate", false)
+                is UpdateCheckResult.UpToDate -> {
+                    obj.put("status", "upToDate")
+                    obj.put("hasUpdate", false)
+                }
                 is UpdateCheckResult.NewVersion -> {
+                    obj.put("status", "newVersion")
                     obj.put("hasUpdate", true)
                     obj.put("latestVersion", result.info.latestTag)
                     val updates = org.json.JSONArray()
@@ -126,7 +139,8 @@ class UpdateCheckSettingsRepository @Inject constructor(
                     obj.put("updates", updates)
                 }
                 is UpdateCheckResult.Error -> {
-                    obj.put("hasUpdate", false)
+                    // 不能写 hasUpdate:false——读这份文件的 AI 会把「没查成」当成「已是最新」
+                    obj.put("status", "error")
                     obj.put("error", result.message)
                 }
             }
@@ -134,13 +148,14 @@ class UpdateCheckSettingsRepository @Inject constructor(
         }
     }
 
-    private fun today(): String = java.time.LocalDate.now().toString()
-
     private companion object {
         const val KEY_ENABLED = "auto_check_enabled"
         const val KEY_CHANNEL = "update_channel"
-        const val KEY_LAST_CHECKED = "last_checked_date"
+        const val KEY_LAST_CHECKED_AT = "last_checked_at"
         const val KEY_DOWNLOAD_MIRROR = "download_mirror"
+
+        /** 自动检查间隔：24 小时。 */
+        const val CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 }
 
