@@ -16,9 +16,6 @@ interface BackupTargetDao {
     @Query("SELECT * FROM backup_targets ORDER BY createdAt ASC, rowid ASC")
     suspend fun getAllOnce(): List<BackupTargetEntity>
 
-    @Query("SELECT * FROM backup_targets WHERE id = :id")
-    suspend fun getById(id: String): BackupTargetEntity?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: BackupTargetEntity)
 

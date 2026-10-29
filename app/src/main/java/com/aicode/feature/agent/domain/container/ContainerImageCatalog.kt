@@ -241,10 +241,6 @@ class ContainerImageCatalog @Inject constructor(
         context.assets.open(ASSET_FILE).bufferedReader().use { it.readText() }
     }.getOrNull()
 
-    /** 全局源 id 列表（保持 JSON 顺序），供右上角源切换展示。 */
-    val sourceIds: List<String>
-        get() = _catalog.value.sources.keys.toList()
-
     /** 源显示名（按语言键 zh/en 取，缺省回退任意可用名）；源不存在返回 null。 */
     fun sourceName(sourceId: String, lang: String): String? {
         val names = _catalog.value.sources[sourceId]?.name ?: return null

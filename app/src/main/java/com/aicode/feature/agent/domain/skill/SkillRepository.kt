@@ -102,8 +102,13 @@ class SkillRepository @Inject constructor(
         budgetMillis: Long = DEFAULT_SEARCH_BUDGET_MS
     ): SkillSearchResult {
         val skills = listSkills()
-        val tokens = SkillQueryLexicon.tokenize(keyword)
-        if (tokens.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+        val allTokens = SkillQueryLexicon.tokenize(keyword)
+        if (allTokens.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+
+        // 结构词在构建 variants 之前就剔掉，不能只给 0 分：留下来会算进分母，
+        // 把「android kotlin pdf」这种查询的覆盖率拉成 1/3，反而把真正命中的 pdf 挡在门槛外。
+        val tokens = if (allTokens.size > 1) allTokens.filterNot { it in STRUCTURAL_TERMS } else allTokens
+        if (tokens.isEmpty()) return SkillSearchResult(emptyList(), 0, skills.size)
 
         // 每个词连同它在问法表里的别名一起扫：别名命中算命中，但权重降一档。
         val variants = tokens.map { term -> term to SkillQueryAliases.aliasesOf(term) }
@@ -142,13 +147,10 @@ class SkillRepository @Inject constructor(
     private fun scoreSkill(skill: Skill, variants: List<Pair<String, List<String>>>): Double {
         val name = skill.name.lowercase()
         val description = skill.description.lowercase()
-        // 多词查询才启用结构词过滤：单搜「android」是合理意图，夹在一堆词里就只是噪声。
-        val multi = variants.size > 1
 
         // 正文不再参与判定：技能正文动辄几千字，蹭到一个泛词就上榜，是「一搜一大片」的主因。
         // 名称与描述本来就是给人（和检索）看的一句话摘要，拿它当唯一依据才准。
         fun weightOf(term: String): Double {
-            if (multi && term in STRUCTURAL_TERMS) return 0.0
             if (containsWord(name, term)) return WEIGHT_NAME
             if (containsWord(description, term)) return WEIGHT_DESCRIPTION
             return 0.0
@@ -210,10 +212,6 @@ class SkillRepository @Inject constructor(
         return projectDirectorySkillSource.loadInstructions(name)
             ?: globalDirectorySkillSource.loadInstructions(name)
     }
-
-    /** 技能是否在任一作用域中被禁用。 */
-    fun isSkillDisabled(name: String): Boolean =
-        name.lowercase() in skillConfigRepository.disabledNames()
 
     /** 在指定作用域启用/禁用某个技能。@return false 表示项目级配置因工作区未就绪被跳过。 */
     fun setSkillDisabled(name: String, disabled: Boolean, scope: SkillScope): Boolean =

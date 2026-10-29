@@ -19,7 +19,6 @@ import com.aicode.feature.git.domain.model.GitFileChange
 import com.aicode.feature.git.domain.model.GitGraph
 import com.aicode.feature.git.domain.model.GitStash
 import com.aicode.feature.git.domain.model.GitStatus
-import com.aicode.feature.git.domain.model.GitTab
 import com.aicode.feature.git.domain.model.GitTag
 import com.aicode.feature.git.presentation.component.DiffData
 import com.aicode.feature.git.presentation.component.DiffRow
@@ -81,7 +80,6 @@ class GitViewModel @Inject constructor(
         /** 拓扑图视图：提交（含父哈希）+ 引用 + 泳道布局，供 LogTab 绘制彩色分支连线。 */
         val graph: GitGraph = GitGraph.EMPTY,
         val tags: List<GitTag> = emptyList(),
-        val tab: GitTab = GitTab.STATUS,
         val busy: Boolean = false,
         val toast: String? = null,
         /** 是否已配置远程仓库，控制拉取/推送按钮可用性。 */
@@ -167,14 +165,6 @@ class GitViewModel @Inject constructor(
         return coroutineScope {
             dirs.map { dir -> dir to async { repository.untrackedFilesIn(dir) } }
                 .associate { (dir, deferred) -> dir to deferred.await() }
-        }
-    }
-
-    fun setTab(tab: GitTab) {
-        _state.update { it.copy(tab = tab) }
-        // 兜底：进入页面即已异步加载；若尚未开始/完成（如加载失败后重进），切 tab 时再补一次。
-        if (tab == GitTab.BRANCHES && !_state.value.branchesLoaded && !_state.value.branchesLoading) {
-            loadBranches()
         }
     }
 

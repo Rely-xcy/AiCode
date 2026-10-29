@@ -23,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,13 +90,6 @@ class ListSelectionState {
         _selected.retainAll(keys)
     }
 }
-
-/**
- * 创建一份多选状态。设置页各列表的多选状态由 SettingsScreen 统一持有（顶栏按钮在那边），
- * 离开列表页进详情 / 编辑时显式退出，因此这里用 remember 而不做跨配置持久化。
- */
-@Composable
-fun rememberListSelectionState(): ListSelectionState = remember { ListSelectionState() }
 
 /**
  * 顶部栏右上角的多选开关：与模型页同一套图标与配色（`FeatherIcons.CheckSquare`）。

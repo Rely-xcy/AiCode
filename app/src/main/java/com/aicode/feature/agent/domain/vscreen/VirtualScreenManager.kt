@@ -205,11 +205,6 @@ class VirtualScreenManager @Inject constructor(
         if (treeSnapshot?.screen === screen) treeSnapshot = null
     }
 
-    /** 取当前屏，没有时返回失败并给出可照做的提示。 */
-    fun requireScreen(): Result<Screen> =
-        current?.let { Result.success(it) }
-            ?: Result.failure(IllegalStateException("当前没有存活的虚拟屏，先调用 vscreen_start 创建。"))
-
     /** 到点自动销毁：屏的生命周期必须自己收尾，不能指望下一次工具调用替它检查。 */
     private fun armExpiry(screen: Screen) {
         expiryJob?.cancel()

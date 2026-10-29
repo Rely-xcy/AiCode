@@ -81,9 +81,6 @@ class AgentDefinitionRepository @Inject constructor(
     /** 当前被禁用的子代理名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = configRepository.disabledNames()
 
-    /** 该子代理是否在任一作用域中被禁用。 */
-    fun isDisabled(name: String): Boolean = name.lowercase() in configRepository.disabledNames()
-
     /** 在指定作用域启用/禁用某个子代理。@return false 表示项目级配置因工作区未就绪被跳过。 */
     fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope): Boolean {
         val written = configRepository.setDisabled(name, disabled, scope)

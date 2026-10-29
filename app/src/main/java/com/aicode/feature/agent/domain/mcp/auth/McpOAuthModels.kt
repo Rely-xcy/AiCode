@@ -57,13 +57,3 @@ data class OAuthTokens(
     fun isExpired(nowEpochSeconds: Long, skewSeconds: Long = 30): Boolean =
         expiresAtEpochSeconds != null && nowEpochSeconds >= expiresAtEpochSeconds - skewSeconds
 }
-
-/** 运行时的一次授权会话（仅内存，不落盘）。 */
-data class OAuthAuthorizationSession(
-    val issuer: String,
-    val state: String,
-    val codeVerifier: String,
-    val resource: String,
-    val scope: String?,
-    val redirectUri: String
-)

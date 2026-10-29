@@ -248,13 +248,6 @@ class AIAgentViewModel @Inject constructor(
     val agentStates: StateFlow<Map<String, AgentUIState>> = _agentStates.asStateFlow()
 
     /**
-     * 各会话「最后一轮是否正常完成」：只有正常收尾（收到完成标记）才在轮末回复下挂「复制 / 更多」
-     * 按钮；主动暂停 / 出错 / 未开始都不挂，避免按钮挂在半截输出上。
-     */
-    private val _completedSessions = MutableStateFlow<Set<String>>(emptySet())
-    val completedSessions: StateFlow<Set<String>> = _completedSessions.asStateFlow()
-
-    /**
      * 子代理卡片状态（按子会话 id 索引），仅存内存。
      *
      * 卡片主体从工具结果渲染（agent、任务、档位、模型都在结果里），这里只补「本进程才知道」的实时状态：
@@ -2539,7 +2532,6 @@ class AIAgentViewModel @Inject constructor(
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setCompacting(sessionId, false)
-                        _completedSessions.value = _completedSessions.value + sessionId
                         // 子代理会话完成时通知父会话（异步回调）
                         if (isSubAgent) {
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
@@ -2622,7 +2614,6 @@ class AIAgentViewModel @Inject constructor(
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage(context)))
-             _completedSessions.value = _completedSessions.value - sessionId
              // 子会话在 workflow 之外失败（如历史构建异常）：通知父会话并释放并发名额。
              // 不补这一手，父代理会一直等一条永不到来的完成通知，名额也泄漏到进程重启。
              if (isSubSession) {

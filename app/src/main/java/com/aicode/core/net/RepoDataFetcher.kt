@@ -158,18 +158,6 @@ class RepoDataFetcher(
         return if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrNull() else null
     }
 
-    fun clearCache(pathInRepo: String? = null) {
-        val dir = File(context.filesDir, CACHE_DIR_NAME)
-        if (!dir.exists()) return
-        if (pathInRepo == null) {
-            dir.deleteRecursively()
-        } else {
-            val cleanPath = pathInRepo.trim().removePrefix("/")
-            getCacheFile(cleanPath).delete()
-            getEtagFile(cleanPath).delete()
-        }
-    }
-
     private fun getCacheFile(path: String): File {
         val safeName = path.replace('/', '_')
         return File(File(context.filesDir, CACHE_DIR_NAME), safeName)

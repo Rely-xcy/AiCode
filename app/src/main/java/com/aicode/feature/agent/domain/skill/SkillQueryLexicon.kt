@@ -35,7 +35,12 @@ internal object SkillQueryLexicon {
             if (cleaned.all { it.code < 128 } && cleaned.length < 3) continue
             tokens.add(cleaned)
         }
-        tokens.addAll(SearchTokens.tokenize(text))
+        tokens.addAll(
+            SearchTokens.tokenize(text).filterNot {
+                // 共用分词也会吐英文词，短词那道闸同样要过一遍。
+                it.all { ch -> ch.code < 128 } && it.length < 3
+            }
+        )
         return if (tokens.size <= MAX_TOKENS) tokens.toList() else tokens.take(MAX_TOKENS).toList()
     }
 }

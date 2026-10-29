@@ -1679,16 +1679,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 触发某个 server 的 OAuth 授权，结果（含失败原因）写入 [mcpAuthState] 供编辑弹窗展示。 */
-    fun authorizeMcpServer(name: String) {
-        if (_mcpAuthState.value.inProgress) return
-        viewModelScope.launch {
-            _mcpAuthState.value = McpAuthUiState(serverName = name, inProgress = true)
-            val result = mcpManager.authorize(name)
-            _mcpAuthState.value = mcpAuthUiState(name, result)
-        }
-    }
-
     fun cancelMcpAuthorize(name: String) {
         mcpManager.cancelAuthorize(name)
     }

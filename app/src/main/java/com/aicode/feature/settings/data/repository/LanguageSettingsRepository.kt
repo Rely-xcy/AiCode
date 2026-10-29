@@ -51,9 +51,6 @@ class LanguageSettingsRepository @Inject constructor(
 
     suspend fun snapshot(): String? = languageFlow.first()
 
-    /** 同步读取语言 tag，供 attachBaseContext 在 Activity 创建前调用（此时 Hilt 尚未注入）。 */
-    fun getLanguageSync(): String? = syncPrefs.getString(PREFS_KEY, null)
-
     suspend fun restore(value: String?) {
         // 复用 setLanguage：还原不仅写 DataStore，还须同步 language_prefs_sync，
         // 否则备份导入后冷启动按旧 tag 设置 locale。

@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -56,62 +55,11 @@ import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.HardDrive
-import compose.icons.feathericons.MoreHorizontal
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Trash2
 import androidx.compose.ui.res.stringResource
 import android.widget.Toast
 import com.aicode.R
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun WorkspaceChip(
-    viewModel: WorkspaceViewModel,
-    hasRunningSessions: () -> Boolean = { false },
-    onSwitchConfirmed: () -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    val current by viewModel.current.collectAsStateWithLifecycle()
-    var showSheet by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(Radius.pill))
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable { showSheet = true }
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            FeatherIcons.Folder,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = current?.name ?: stringResource(R.string.workspace_select),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Icon(
-            FeatherIcons.MoreHorizontal,
-            contentDescription = stringResource(R.string.workspace_switch),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp)
-        )
-    }
-
-    WorkspaceSelectionHost(
-        visible = showSheet,
-        onDismiss = { showSheet = false },
-        viewModel = viewModel,
-        hasRunningSessions = hasRunningSessions,
-        onSwitchConfirmed = onSwitchConfirmed
-    )
-}
 
 /**
  * 顶栏的工作区选择图标按钮：点击弹出选择/新建/删除面板。
