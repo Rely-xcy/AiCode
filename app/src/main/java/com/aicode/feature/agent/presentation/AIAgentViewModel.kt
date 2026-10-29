@@ -71,6 +71,7 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
+import com.aicode.feature.terminal.domain.RemoteTerminalSessionManager
 import com.aicode.feature.terminal.domain.TabFinishedEvent
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -169,6 +170,7 @@ class AIAgentViewModel @Inject constructor(
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val planApprovalManager: PlanApprovalManager,
     private val terminalSessionManager: TerminalSessionManager,
+    private val remoteTerminalSessionManager: RemoteTerminalSessionManager,
     private val terminalSessionProvider: TerminalSessionProvider,
     private val slashCommandRegistry: SlashCommandRegistry,
     private val fileMentionRepository: FileMentionRepository,
@@ -2698,10 +2700,16 @@ class AIAgentViewModel @Inject constructor(
         askUserQuestionManager.resolve(id, answer)
     }
 
-    /** 停止当前工作区所有正在运行的 AI 会话并关闭所有终端标签（切换工作区前调用）。 */
+    /**
+     * 停止当前工作区所有正在运行的 AI 会话并关闭所有终端标签（切换工作区前调用）。
+     *
+     * 本地与远程是两套管理器：只关本地的话，远程模式下切工作区后旧标签仍停在旧目录，
+     * 继续敲命令会作用在错误的工作区（`ensureInitialTab` 还会复用旧标签，不重新 cd）。
+     */
     fun stopAllAndCloseTerminal() {
         stopAllAgents()
         terminalSessionManager.tabs.value.map { it.id }.forEach { terminalSessionManager.closeTab(it) }
+        remoteTerminalSessionManager.tabs.value.map { it.id }.forEach { remoteTerminalSessionManager.closeTab(it) }
     }
 
     /** 停止当前工作区所有正在运行的 AI 会话（切换工作区前调用）。 */
@@ -2926,12 +2934,23 @@ class AIAgentViewModel @Inject constructor(
         draftPrefs.edit().remove(sessionId).apply()
     }
 
-    /** 新建会话；工作区里已有空会话时直接切过去复用（当前会话为空则优先），避免堆积空会话。 */
+    /**
+     * 新建会话。
+     *
+     * 复用顺序：当前会话是空的 → 直接用它；否则找本工作区里已有的空根会话（最近更新的一个）切过去；
+     * 都没有才真新建。不查这一下的话，每点一次「新建」就多一条空会话，列表越堆越长。
+     */
     fun newSession() = viewModelScope.launch {
         if (_currentWorkspace.value.isBlank()) return@launch
         val curId = _currentSessionId.value
         if (curId != null && sessionUseCase.isSessionEmpty(curId)) {
             setAgentState(curId, AgentUIState.Idle)
+            return@launch
+        }
+        val reusable = sessionUseCase.getEmptySessionOfWorkspace(_currentWorkspace.value)
+        if (reusable != null && reusable.id != curId) {
+            setAgentState(reusable.id, AgentUIState.Idle)
+            _currentSessionId.value = reusable.id
             return@launch
         }
         // 新会话时异步重连未连接的 MCP server，让 manageMcp 新增的配置真正生效；

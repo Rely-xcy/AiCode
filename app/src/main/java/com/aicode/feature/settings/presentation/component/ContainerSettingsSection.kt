@@ -142,8 +142,8 @@ internal fun ContainerSection(
     onReinstallProfile: (ContainerProfile) -> Unit = {},
     onRestoreBuiltin: () -> Unit = {},
     remoteConnections: List<RemoteConnection> = emptyList(),
-    /** 长按拖拽排序落库（顺序即列表存储顺序）。 */
-    onReorder: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> }
+    /** 长按拖拽排序落库。参数是 profile id，不是列表下标——下标会因为分组等其它 item 漂移。 */
+    onReorder: (movedId: String, targetId: String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     // 长按拖拽排序的触感反馈（与「供应商」页一致：进入拖拽与松手各一次）
@@ -183,7 +183,11 @@ internal fun ContainerSection(
         // 与「供应商」页一致：一行一张独立圆角卡片（8dp 间距），长按行内容拖拽排序
         val listState = rememberLazyListState()
         val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
-            onReorder(from.index, to.index)
+            // reorderable 给的是列表下标；VM 按 id 在权威列表里定位，这里先换 id。
+            // 取不到（拖到了列表外）就不回调，避免 VM 拿到无意义的下标。
+            val movedId = profiles.getOrNull(from.index)?.id
+            val targetId = profiles.getOrNull(to.index)?.id
+            if (movedId != null && targetId != null) onReorder(movedId, targetId)
         }
         LazyColumn(
             state = listState,

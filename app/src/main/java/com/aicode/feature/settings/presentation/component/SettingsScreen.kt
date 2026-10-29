@@ -1402,7 +1402,8 @@ fun SettingsScreen(
                         viewModel.reinstallContainerImage(profile)
                     },
                     onRestoreBuiltin = { viewModel.restoreBuiltinAlpine() },
-                    remoteConnections = remoteConnections
+                    remoteConnections = remoteConnections,
+                    onReorder = viewModel::reorderContainerProfiles
                 )
                 SettingsSection.ContainerDownloads -> ContainerImageDownloadSection(
                     catalog = imageCatalog,
