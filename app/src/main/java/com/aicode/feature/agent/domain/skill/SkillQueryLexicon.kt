@@ -25,8 +25,15 @@ internal object SkillQueryLexicon {
 
         val tokens = LinkedHashSet<String>()
         for (chunk in text.split(WHITESPACE)) {
-            // 纯标点的块（如 "!!"、"-"）当词用会让 contains 迟到一大片技能名，直接丢。
-            if (chunk.isNotBlank() && chunk.any { it.isLetterOrDigit() }) tokens.add(chunk)
+            // 词首尾的标点会跟着切块进来（`file.kt`、`(word)`、`word,`），不去掉就永远匹配不上。
+            val cleaned = chunk.trim { !it.isLetterOrDigit() && it != '-' && it != '_' && it != '.' }
+            if (cleaned.isEmpty() || !cleaned.any { it.isLetterOrDigit() }) continue
+            // 纯数字（版本号、行号）不是技能主题。
+            if (cleaned.all { it.isDigit() }) continue
+            // 短英文词一律丢：`ui` 命中 build/guide、`ai` 命中 detail，两个字母足够蹭到半个库。
+            // 中文不受此限，`逆向` 本身就是有效查询。
+            if (cleaned.all { it.code < 128 } && cleaned.length < 3) continue
+            tokens.add(cleaned)
         }
         tokens.addAll(SearchTokens.tokenize(text))
         return if (tokens.size <= MAX_TOKENS) tokens.toList() else tokens.take(MAX_TOKENS).toList()

@@ -35,7 +35,8 @@ class LoadSkillTool @Inject constructor(
          * 检索最多回这么多条：清单本来就只放得下几条，检索结果的用途是「认出正确的名字」，
          * 再多也只是一串名字，换更具体的关键词比翻页更有效。
          */
-        const val MAX_SEARCH_HITS = 20
+        /** 一次最多列几条。列多了模型反而不会挑，只看前两三条就决定。 */
+        const val MAX_SEARCH_HITS = 8
 
         /**
          * 正文单页字符上限。
