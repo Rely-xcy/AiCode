@@ -83,6 +83,79 @@ class RemoteSshConnection @Inject constructor(
     private val credentialSyncMutex = Mutex()
     internal val sftpOperationMutex = Mutex()
 
+    /**
+     * 由 agent 会话层在构造完成后注册进来。非空时，内置文档/资源/凭据的上传优先走 agent，
+     * 失败再退回 SFTP。
+     *
+     * 为什么用字段而不是构造参数：agent 会话本身要拿这条连接去开 exec 通道，
+     * 构造注入会形成环；接口 + 事后注册能把依赖方向倒过来。
+     */
+    @Volatile
+    var agentFileOps: RemoteFileOps? = null
+
+    /**
+     * 试一次 agent 写入。返回 false 表示「本次没写成，调用方应退回 SFTP」；
+     * 但「目标已存在」这种业务结果不归入失败——那是调用方要处理的真实结果，不能当成传输层故障吞掉。
+     */
+    private suspend fun tryAgentWrite(
+        path: String,
+        bytes: ByteArray,
+        executable: Boolean = false,
+        overwrite: Boolean = true
+    ): Boolean {
+        val ops = agentFileOps ?: return false
+        return try {
+            ops.write(path, bytes, executable, overwrite)
+            true
+        } catch (e: java.nio.file.FileAlreadyExistsException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "agent 写入失败，退回 SFTP: $path", e)
+            false
+        }
+    }
+
+    /** agent 建目录；失败或未就绪返回 false，由调用方退回 SFTP。 */
+    private suspend fun tryAgentMkdirs(path: String): Boolean {
+        val ops = agentFileOps ?: return false
+        return try {
+            ops.mkdirs(path)
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "agent 建目录失败，退回 SFTP: $path", e)
+            false
+        }
+    }
+
+    /** agent 判存在；未就绪或失败时返回 null（表示「不知道」），调用方自行退回 SFTP。 */
+    private suspend fun tryAgentExists(path: String): Boolean? {
+        val ops = agentFileOps ?: return null
+        return try {
+            ops.exists(path)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** agent 删文件；未就绪或失败返回 false。 */
+    private suspend fun tryAgentRemove(path: String): Boolean {
+        val ops = agentFileOps ?: return false
+        return try {
+            ops.remove(path)
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     /** 连接状态流，供 UI 显示指示器、工作区初始化等待连接就绪。 */
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -362,10 +435,13 @@ class RemoteSshConnection @Inject constructor(
                     key.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
                 }.distinct()
                 executeRemoteCommand(client, buildRemoteDocsPreparationCommand(destDir, subDirs))
+                var viaAgent = 0
                 for ((name, content) in docs) {
                     val dest = "$destDir/$name"
-                    writeRemoteFile(dest, content.toByteArray(Charsets.UTF_8))
+                    val bytes = content.toByteArray(Charsets.UTF_8)
+                    if (tryAgentWrite(dest, bytes)) viaAgent++ else writeRemoteFile(dest, bytes)
                 }
+                if (viaAgent > 0) FileLogger.d(TAG, "文档上传 $viaAgent/${docs.size} 个走 agent")
                 // 写指纹放最后：上传中途失败时远端版本号仍旧，下次会重传，不会把半套文档当完整。
                 executeRemoteCommand(client, "printf '%s' '$version' > '$versionFile'")
                 FileLogger.i(TAG, "已同步 ${docs.size} 个文档到远程 $destDir（$version）")
@@ -426,12 +502,20 @@ class RemoteSshConnection @Inject constructor(
         val destDir = home.trimEnd('/') + "/.aicode/" + destSubdir.trim('/')
         withContext(Dispatchers.IO) {
             runCatching {
-                sftpOperationMutex.withLock { sftp().mkdirs(destDir) }
+                if (!tryAgentMkdirs(destDir)) {
+                    sftpOperationMutex.withLock { sftp().mkdirs(destDir) }
+                }
+                var viaAgent = 0
                 for ((name, bytes) in files) {
                     val dest = "$destDir/$name"
-                    val exists = sftpOperationMutex.withLock { sftp().statExistence(dest) != null }
-                    if (!exists) writeRemoteFile(dest, bytes, executable, overwrite = false)
+                    // 先判存在：内置资源只补齐缺失、不覆盖用户改过的。
+                    val exists = tryAgentExists(dest)
+                        ?: sftpOperationMutex.withLock { sftp().statExistence(dest) != null }
+                    if (exists) continue
+                    if (tryAgentWrite(dest, bytes, executable, overwrite = false)) viaAgent++
+                    else writeRemoteFile(dest, bytes, executable, overwrite = false)
                 }
+                if (viaAgent > 0) FileLogger.d(TAG, "内置资源 $viaAgent/${files.size} 个走 agent")
                 FileLogger.i(TAG, "已释放 ${files.size} 个内置文件到远程 $destDir")
             }.onFailure { FileLogger.w(TAG, "释放内置文件到远程失败: $destSubdir", it) }
         }
@@ -455,7 +539,9 @@ class RemoteSshConnection @Inject constructor(
         val wsRoot = workspaceRoot.trimEnd('/').ifEmpty { return@withLock }
         withContext(Dispatchers.IO) {
             runCatching {
-                sftpOperationMutex.withLock { sftp().mkdirs(aicodeDir) }
+                if (!tryAgentMkdirs(aicodeDir)) {
+                    sftpOperationMutex.withLock { sftp().mkdirs(aicodeDir) }
+                }
 
                 val creds = credentials.joinToString("\n") { c ->
                     "https://${enc(c.username)}:${enc(c.token)}@${c.host}"
@@ -471,8 +557,12 @@ class RemoteSshConnection @Inject constructor(
                     "#!/bin/sh\n",
                     "#!/bin/sh\nexport AICODE_CRED_NO_PROMPT=1\n"
                 )
-                writeRemoteFile("$aicodeDir/git-credential-aicode", remoteHelperScript.toByteArray(Charsets.UTF_8), executable = true)
-                writeRemoteFile("$aicodeDir/git-credentials", encodeCreds(creds).toByteArray(Charsets.UTF_8))
+                if (!tryAgentWrite("$aicodeDir/git-credential-aicode", remoteHelperScript.toByteArray(Charsets.UTF_8), executable = true)) {
+                    writeRemoteFile("$aicodeDir/git-credential-aicode", remoteHelperScript.toByteArray(Charsets.UTF_8), executable = true)
+                }
+                if (!tryAgentWrite("$aicodeDir/git-credentials", encodeCreds(creds).toByteArray(Charsets.UTF_8))) {
+                    writeRemoteFile("$aicodeDir/git-credentials", encodeCreds(creds).toByteArray(Charsets.UTF_8))
+                }
 
                 val gitconfig = buildString {
                     append("[include]\n")
@@ -480,13 +570,17 @@ class RemoteSshConnection @Inject constructor(
                     append("[includeIf \"gitdir:${gitConfigValue(wsRoot)}/\"]\n")
                     append("    path = ~/.aicode/gitconfig.credential\n")
                 }
-                writeRemoteFile("$aicodeDir/gitconfig", gitconfig.toByteArray(Charsets.UTF_8))
+                if (!tryAgentWrite("$aicodeDir/gitconfig", gitconfig.toByteArray(Charsets.UTF_8))) {
+                    writeRemoteFile("$aicodeDir/gitconfig", gitconfig.toByteArray(Charsets.UTF_8))
+                }
 
                 val credentialConfig = buildString {
                     append("[credential]\n")
                     append("    helper = !AICODE_CRED_NO_PROMPT=1 $aicodeDir/git-credential-aicode\n")
                 }
-                writeRemoteFile("$aicodeDir/gitconfig.credential", credentialConfig.toByteArray(Charsets.UTF_8))
+                if (!tryAgentWrite("$aicodeDir/gitconfig.credential", credentialConfig.toByteArray(Charsets.UTF_8))) {
+                    writeRemoteFile("$aicodeDir/gitconfig.credential", credentialConfig.toByteArray(Charsets.UTF_8))
+                }
                 FileLogger.i(TAG, "已注入 git 凭据到远程 $aicodeDir（限定 $wsRoot/）")
             }.onFailure { FileLogger.w(TAG, "注入 git 凭据到远程失败", it) }
         }
@@ -502,11 +596,17 @@ class RemoteSshConnection @Inject constructor(
         val aicodeDir = home.trimEnd('/') + "/.aicode"
         withContext(Dispatchers.IO) {
             runCatching {
-                sftpOperationMutex.withLock {
-                    val sftp = sftp()
-                    listOf("gitconfig", "gitconfig.credential", "git-credentials", "git-credential-aicode").forEach { name ->
-                        val path = "$aicodeDir/$name"
-                        if (sftp.statExistence(path) != null) sftp.rm(path)
+                var allViaAgent = true
+                listOf("gitconfig", "gitconfig.credential", "git-credentials", "git-credential-aicode").forEach { name ->
+                    if (!tryAgentRemove("$aicodeDir/$name")) allViaAgent = false
+                }
+                if (!allViaAgent) {
+                    sftpOperationMutex.withLock {
+                        val sftp = sftp()
+                        listOf("gitconfig", "gitconfig.credential", "git-credentials", "git-credential-aicode").forEach { name ->
+                            val path = "$aicodeDir/$name"
+                            if (sftp.statExistence(path) != null) sftp.rm(path)
+                        }
                     }
                 }
                 FileLogger.i(TAG, "已撤销远程 git 凭据注入")

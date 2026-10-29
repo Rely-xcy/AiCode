@@ -54,6 +54,10 @@ func (a *agent) handle(req *request, body []byte) *reply {
 		resp, out, perr = a.opRemove(req)
 	case "rename":
 		resp, out, perr = a.opRename(req)
+	case "chmod":
+		resp, out, perr = a.opChmod(req)
+	case "copy":
+		resp, out, perr = a.opCopy(req)
 	case "hash":
 		resp, out, perr = a.opHash(req)
 	case "grep":
@@ -379,6 +383,78 @@ func (a *agent) opRename(req *request) (*response, []byte, *protoError) {
 		return nil, nil, asProtoErr(err)
 	}
 	if err := os.Rename(from, to); err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	return okResponse(req.ID), nil, nil
+}
+
+func (a *agent) opChmod(req *request) (*response, []byte, *protoError) {
+	if req.Mode == nil {
+		return nil, nil, newErr(errInvalid, "mode is required")
+	}
+	if *req.Mode < 0 {
+		return nil, nil, newErr(errInvalid, "mode must not be negative")
+	}
+	p, err := a.sb.resolve(req.Path)
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	// 只取权限位：调用方可能传了 setuid/sticky 这些高位，代理不该替用户改它们。
+	if err := os.Chmod(p, os.FileMode(*req.Mode)&0o777); err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	return okResponse(req.ID), nil, nil
+}
+
+// opCopy 现在只复制单个普通文件：目录递归复制走不到上传内置资源那几条路径，
+// 而递归复制要自己处理权限/符号链接/失败回滚，不值得为它引入一个半残实现。
+func (a *agent) opCopy(req *request) (*response, []byte, *protoError) {
+	if req.To == "" {
+		return nil, nil, newErr(errInvalid, "to is required")
+	}
+	from, err := a.sb.resolve(req.Path)
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	to, err := a.sb.resolve(req.To)
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	src, err := os.Open(from)
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	if info.IsDir() {
+		return nil, nil, newErr(errIsDir, "copy of directories is not supported")
+	}
+	if req.Overwrite != nil && !*req.Overwrite {
+		if _, statErr := os.Lstat(to); statErr == nil {
+			return nil, nil, newErr(errExist, "file already exists")
+		}
+	}
+	// 与 write 一样先写临时文件再 rename：复制中断时目标不会变成半截。
+	tmp := fmt.Sprintf("%s.tmp.%d.%d", to, os.Getpid(), time.Now().UnixNano())
+	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return nil, nil, asProtoErr(err)
+	}
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		os.Remove(tmp)
+		return nil, nil, asProtoErr(copyErr)
+	}
+	if closeErr != nil {
+		os.Remove(tmp)
+		return nil, nil, asProtoErr(closeErr)
+	}
+	if err := os.Rename(tmp, to); err != nil {
+		os.Remove(tmp)
 		return nil, nil, asProtoErr(err)
 	}
 	return okResponse(req.ID), nil, nil
