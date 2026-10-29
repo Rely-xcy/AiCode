@@ -210,6 +210,62 @@ func TestWriteIsAtomic(t *testing.T) {
 	}
 }
 
+func TestChmodAndCopy(t *testing.T) {
+	_, root := newTestRoot(t)
+	src := filepath.Join(root, "src.txt")
+	if resp, _, _ := call(t, root, map[string]any{"id": 1, "op": "write", "path": src}, []byte("payload")); !resp.Ok {
+		t.Fatalf("准备源文件失败: %+v", resp)
+	}
+
+	// chmod：先改成 600 再读回权限位
+	resp, _, _ := call(t, root, map[string]any{"id": 2, "op": "chmod", "path": src, "mode": 0o600}, nil)
+	if !resp.Ok {
+		t.Fatalf("chmod 失败: %+v", resp)
+	}
+	info, err := os.Stat(src)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("chmod 后权限 = %v", info.Mode().Perm())
+	}
+	// setuid 位不应当被写进文件：只取 0o777
+	resp, _, _ = call(t, root, map[string]any{"id": 3, "op": "chmod", "path": src, "mode": 0o4755}, nil)
+	if !resp.Ok {
+		t.Fatalf("chmod 高位失败: %+v", resp)
+	}
+	if info, _ := os.Stat(src); info.Mode().Perm() != 0o755 {
+		t.Fatalf("chmod 高位应被截成 0755，实际 %v", info.Mode().Perm())
+	}
+	if resp, _, _ := call(t, root, map[string]any{"id": 4, "op": "chmod", "path": src}, nil); resp.Err != errInvalid {
+		t.Fatalf("缺 mode 应报 EINVAL: %+v", resp)
+	}
+
+	// copy：内容一致、不残留 tmp
+	dst := filepath.Join(root, "dst.txt")
+	resp, _, _ = call(t, root, map[string]any{"id": 5, "op": "copy", "path": src, "to": dst}, nil)
+	if !resp.Ok {
+		t.Fatalf("copy 失败: %+v", resp)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "payload" {
+		t.Fatalf("copy 后内容 = %q", got)
+	}
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp.") {
+			t.Fatalf("copy 残留临时文件: %s", e.Name())
+		}
+	}
+
+	// overwrite=false 且目标已存在
+	if resp, _, _ := call(t, root, map[string]any{"id": 6, "op": "copy", "path": src, "to": dst, "overwrite": false}, nil); resp.Err != errExist {
+		t.Fatalf("copy 到已存在应报 EEXIST: %+v", resp)
+	}
+	// 源是目录
+	sub := filepath.Join(root, "sub")
+	call(t, root, map[string]any{"id": 7, "op": "mkdir", "path": sub}, nil)
+	if resp, _, _ := call(t, root, map[string]any{"id": 8, "op": "copy", "path": sub, "to": filepath.Join(root, "sub2")}, nil); resp.Err != errIsDir {
+		t.Fatalf("copy 目录应报 EISDIR: %+v", resp)
+	}
+}
+
 func TestMkdirRemoveRename(t *testing.T) {
 	_, root := newTestRoot(t)
 

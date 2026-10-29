@@ -243,7 +243,7 @@ class SkillRepositoryTest {
     }
 
     @Test
-    fun searchSkills_matchesNameDescriptionAndInstructions_caseInsensitive() {
+    fun searchSkills_matchesNameAndDescriptionButNotInstructions() {
         every { globalSource.listSkills() } returns listOf(
             skill("Pdf-Tools").copy(description = "拆分与合并", instructions = "用 qpdf 合并"),
             skill("docx-tools").copy(description = "PDF 转 docx", instructions = "用 soffice 转换"),
@@ -252,13 +252,41 @@ class SkillRepositoryTest {
 
         val result = repository.searchSkills("PDF", 20)
 
+        // 正文不再参与判定：bitmap-export 只在正文里提到 pdftoppm，不算相关。
+        // 正文动辄几千字，蹭到泛词就上榜是「一搜一大片」的主因。
         assertEquals(
-            "名称命中排最前，其次描述，再次正文",
-            listOf("Pdf-Tools", "docx-tools", "bitmap-export"),
+            "名称命中排描述之前；只命中正文的不进结果",
+            listOf("Pdf-Tools", "docx-tools"),
             result.matches.map { it.name }
         )
-        assertEquals(3, result.hitCount)
+        assertEquals(2, result.hitCount)
         assertEquals(3, result.skillCount)
+    }
+
+    @Test
+    fun searchSkills_dropsTwoLetterEnglishTokens() {
+        every { globalSource.listSkills() } returns listOf(
+            skill("build-tools").copy(description = "构建工具"),
+            skill("ui-kit").copy(description = "界面组件")
+        )
+
+        // `ui` 两个字母，切词阶段就被丢掉：它能蹭到 build/guide/quick，留着就是噪声源
+        assertTrue(repository.searchSkills("ui", 20).matches.isEmpty())
+    }
+
+    @Test
+    fun searchSkills_ignoresStructuralTermsOnlyInMultiWordQuery() {
+        every { globalSource.listSkills() } returns listOf(
+            skill("android-reverse").copy(description = "Android 逆向与脱壳"),
+            skill("pdf-tools").copy(description = "PDF 拆分合并")
+        )
+
+        // 单词查询不过滤：用户就是想知道 android 相关技能
+        assertEquals(1, repository.searchSkills("android", 20).matches.size)
+
+        // 多词里 android 是结构词，不提供任何区分度；只有 pdf 算真正命中
+        val mixed = repository.searchSkills("android kotlin pdf", 20)
+        assertEquals(listOf("pdf-tools"), mixed.matches.map { it.name })
     }
 
     @Test

@@ -1,9 +1,11 @@
 package com.aicode.feature.workspace.domain.remote.agent
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.container.RemoteFileOps
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.Lazy
+import java.nio.file.FileAlreadyExistsException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -37,7 +39,13 @@ class RemoteAgentHolder @Inject constructor(
     private val connection: RemoteSshConnection,
     private val binaries: RemoteAgentBinaries,
     private val fileAccessProvider: Lazy<FileAccessProvider>
-) {
+) : RemoteFileOps {
+
+    init {
+        // 把「怎么写远端文件」交给连接层：连接层用它优先走 agent、拿不到就退回 SFTP。
+        // 用事后注册而不是构造注入，避免 Connection → Holder → Connection 的环。
+        connection.agentFileOps = this
+    }
 
     private val mutex = Mutex()
 
@@ -135,6 +143,58 @@ class RemoteAgentHolder @Inject constructor(
             FileLogger.d(TAG, "agent 会话已关闭")
         }
         current = null
+    }
+
+    // ---- RemoteFileOps：会话不就绪时直接抛，由连接层退回 SFTP ----
+
+    override suspend fun mkdirs(path: String) {
+        val session = requireSession()
+        val response = session.request("mkdir", AgentRequestParams(path = remotePath(path)))
+        if (!response.ok) throw RemoteAgentUnavailableException("mkdir 失败: ${response.err} ${response.msg}")
+    }
+
+    override suspend fun exists(path: String): Boolean {
+        val session = requireSession()
+        val response = session.request("stat", AgentRequestParams(path = remotePath(path)))
+        return response.ok
+    }
+
+    override suspend fun write(path: String, bytes: ByteArray, executable: Boolean, overwrite: Boolean) {
+        val session = requireSession()
+        val target = remotePath(path)
+        val write = session.request(
+            "write",
+            AgentRequestParams(path = target, overwrite = overwrite, mode = if (executable) 0x1ED else null),
+            bytes
+        )
+        if (!write.ok) {
+            // 已存在且不允许覆盖：抛接口约定的异常，不要一律归成「agent 不可用」
+            // 否则调用方会把它当成传输层故障而退回 SFTP，把「目标已存在」这个真实结果弄丢。
+            if (write.err == "EEXIST") throw FileAlreadyExistsException(target)
+            throw RemoteAgentUnavailableException("write 失败: ${write.err} ${write.msg}")
+        }
+    }
+
+    override suspend fun remove(path: String) {
+        val session = requireSession()
+        val response = session.request("remove", AgentRequestParams(path = remotePath(path)))
+        if (!response.ok && response.err != "ENOENT") {
+            throw RemoteAgentUnavailableException("remove 失败: ${response.err} ${response.msg}")
+        }
+    }
+
+    /** 取会话；没就绪就抛，让调用方退回 SFTP，而不是在这里默默失败。 */
+    private fun requireSession(): RemoteAgentSession =
+        sessionOrNull() ?: throw RemoteAgentUnavailableException("agent 尚未就绪")
+
+    /** 把 `~/...` 展开成绝对路径；其余路径原样传（agent 只接受绝对路径）。 */
+    private fun remotePath(path: String): String {
+        val home = current?.session?.capabilities?.home ?: return path
+        return when {
+            path == "~" -> home
+            path.startsWith("~/") -> home.trimEnd('/') + path.substring(1)
+            else -> path
+        }
     }
 
     /**

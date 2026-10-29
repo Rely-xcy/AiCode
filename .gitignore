@@ -30,6 +30,9 @@ log-*.txt
 *.apk
 /test
 
+# Go agent 的本地编译产物：源码才入库，二进制由 assets 承载
+tools/aicode-agent/aicode-agent
+
 # Python（模型数据更新脚本）
 __pycache__/
 *.pyc

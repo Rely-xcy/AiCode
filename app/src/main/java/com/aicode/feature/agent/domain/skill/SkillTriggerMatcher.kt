@@ -26,6 +26,28 @@ object SkillTriggerMatcher {
 
     private const val MIN_TRIGGER_LENGTH = 2
 
+    /**
+     * 英文触发词最短 3 个字符（中文仍是 2）。
+     *
+     * 两个字母的英文词到处都是：`UI` 能命中任何一段技术文本，`PE` 同理。
+     * 宁可在配置层要求写具体一点（`PEfile` 而不是 `PE`），不要让它变成全时噪声源。
+     */
+    private const val MIN_ASCII_TRIGGER_LENGTH = 3
+
+    /**
+     * 超过这么多个词的长文本不参与自然语言触发。
+     *
+     * 粘贴的报错日志、代码块、结构化任务描述里必然含有 test/review/build 这类词，
+     * 但那些不是「用户主动说出一个触发词」。用户真要用某个能力，会在一句话里说。
+     */
+    const val MAX_TRIGGER_TOKENS = 40
+
+    /** 短命令阈值：≤ 这么多个词且只命中一个技能时，省掉一次工具往返，直接给正文。 */
+    const val SHORT_COMMAND_TOKENS = 10
+
+    /** 候选上限：给模型太多选项反而挑不准。 */
+    const val MAX_CANDIDATES = 3
+
     private val WHITESPACE = Regex("[\\s\\u3000]+")
 
     /** 按空白分词；空串返回空列表。 */
@@ -39,7 +61,13 @@ object SkillTriggerMatcher {
      */
     fun sanitize(triggers: List<String>): List<String> =
         triggers.map { it.trim() }
-            .filter { it.length >= MIN_TRIGGER_LENGTH && !WHITESPACE.containsMatchIn(it) }
+            .filter { trigger ->
+                if (trigger.length < MIN_TRIGGER_LENGTH) return@filter false
+                if (WHITESPACE.containsMatchIn(trigger)) return@filter false
+                // 纯 ASCII 的触发词要高一个字：两字母英文单词的误触面积太大。
+                if (trigger.all { it.code < 128 } && trigger.length < MIN_ASCII_TRIGGER_LENGTH) return@filter false
+                true
+            }
             .distinct()
 
     /**

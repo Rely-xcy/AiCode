@@ -33,7 +33,7 @@ sealed interface ApkDownloadResult {
 /**
  * 更新包下载：默认先走镜像源加速，失败自动回退直连 GitHub 重试一次。
  *
- * 与 [UpdateCheckService] 一样必须挂 [AppProxy.okHttpAuthenticator]——OkHttp 默认不响应代理的
+ * 与更新检测一样必须挂 [AppProxy.okHttpAuthenticator]——OkHttp 默认不响应代理的
  * 407 质询，漏挂会让配了代理的用户下载必然失败（检测却正常，现象很迷惑）。
  *
  * 文件落 `cacheDir/update/`（`file_paths.xml` 已声明 cache-path，可直接 FileProvider 授权）；

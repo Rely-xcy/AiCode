@@ -27,8 +27,6 @@ class BackupTargetRepository @Inject constructor(
 ) {
     val targets: Flow<List<BackupTarget>> = dao.getAll().map { list -> list.map { it.toModel() } }
 
-    suspend fun getTarget(id: String): BackupTarget? = dao.getById(id)?.toModel()
-
     /** 新建或更新目标；[BackupTarget.id] 为空时分配新 id。 */
     suspend fun save(target: BackupTarget) {
         val normalized = if (target.id.isBlank()) target.copy(id = UUID.randomUUID().toString()) else target

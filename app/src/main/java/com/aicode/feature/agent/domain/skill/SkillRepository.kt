@@ -102,8 +102,13 @@ class SkillRepository @Inject constructor(
         budgetMillis: Long = DEFAULT_SEARCH_BUDGET_MS
     ): SkillSearchResult {
         val skills = listSkills()
-        val tokens = SkillQueryLexicon.tokenize(keyword)
-        if (tokens.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+        val allTokens = SkillQueryLexicon.tokenize(keyword)
+        if (allTokens.isEmpty() || limit <= 0) return SkillSearchResult(emptyList(), 0, skills.size)
+
+        // 结构词在构建 variants 之前就剔掉，不能只给 0 分：留下来会算进分母，
+        // 把「android kotlin pdf」这种查询的覆盖率拉成 1/3，反而把真正命中的 pdf 挡在门槛外。
+        val tokens = if (allTokens.size > 1) allTokens.filterNot { it in STRUCTURAL_TERMS } else allTokens
+        if (tokens.isEmpty()) return SkillSearchResult(emptyList(), 0, skills.size)
 
         // 每个词连同它在问法表里的别名一起扫：别名命中算命中，但权重降一档。
         val variants = tokens.map { term -> term to SkillQueryAliases.aliasesOf(term) }
@@ -142,14 +147,13 @@ class SkillRepository @Inject constructor(
     private fun scoreSkill(skill: Skill, variants: List<Pair<String, List<String>>>): Double {
         val name = skill.name.lowercase()
         val description = skill.description.lowercase()
-        // 正文最长，lower 一次不便宜：只在真的有词需要落到正文时才降一次，后面所有词复用。
-        var loweredBody: String? = null
-        fun body(): String = loweredBody ?: skill.instructions.lowercase().also { loweredBody = it }
 
+        // 正文不再参与判定：技能正文动辄几千字，蹭到一个泛词就上榜，是「一搜一大片」的主因。
+        // 名称与描述本来就是给人（和检索）看的一句话摘要，拿它当唯一依据才准。
         fun weightOf(term: String): Double {
-            if (name.contains(term)) return WEIGHT_NAME
-            if (description.contains(term)) return WEIGHT_DESCRIPTION
-            return if (body().contains(term)) WEIGHT_INSTRUCTIONS else 0.0
+            if (containsWord(name, term)) return WEIGHT_NAME
+            if (containsWord(description, term)) return WEIGHT_DESCRIPTION
+            return 0.0
         }
 
         var total = 0.0
@@ -170,13 +174,36 @@ class SkillRepository @Inject constructor(
         }
         if (matched == 0) return 0.0
 
-        // 全词命中说明问法很具体；只命中一部分仍要能返回，但按覆盖率降权，排在全中之后。
+        // 全词命中说明问法很具体；部分命中要过半才算相关——只要一个词蹭到就返回，
+        // 结果就是「抛一段英文进去，半仓技能都被列出来」。
         return if (matched == variants.size) {
             total * ALL_TOKENS_FACTOR
         } else {
             val coverage = matched.toDouble() / variants.size
+            if (coverage < MIN_PARTIAL_COVERAGE) return 0.0
             total * (PARTIAL_BASE_FACTOR + PARTIAL_COVERAGE_FACTOR * coverage)
         }
+    }
+
+    /**
+     * 词边界匹配：英文按字母/数字边界判，中文直接子串。
+     *
+     * 不能一律用 `contains`——`ui` 会命中 `build`、`guide`，`com` 会命中 `command`，
+     * 两个字母的词能蹭到半个技能库。也不能一律用正则 `\b`，它对中文不成立。
+     */
+    private fun containsWord(text: String, term: String): Boolean {
+        if (term.isEmpty()) return false
+        if (term.any { it.code > 127 }) return text.contains(term)
+        var idx = text.indexOf(term)
+        while (idx >= 0) {
+            val before = if (idx == 0) null else text[idx - 1]
+            val after = if (idx + term.length >= text.length) null else text[idx + term.length]
+            val okBefore = before == null || !before.isLetterOrDigit()
+            val okAfter = after == null || !after.isLetterOrDigit()
+            if (okBefore && okAfter) return true
+            idx = text.indexOf(term, idx + 1)
+        }
+        return false
     }
 
     /** 读取指定 skill 的完整指令正文；不存在 / 解析失败 / 已被禁用时返回 null。 */
@@ -185,10 +212,6 @@ class SkillRepository @Inject constructor(
         return projectDirectorySkillSource.loadInstructions(name)
             ?: globalDirectorySkillSource.loadInstructions(name)
     }
-
-    /** 技能是否在任一作用域中被禁用。 */
-    fun isSkillDisabled(name: String): Boolean =
-        name.lowercase() in skillConfigRepository.disabledNames()
 
     /** 在指定作用域启用/禁用某个技能。@return false 表示项目级配置因工作区未就绪被跳过。 */
     fun setSkillDisabled(name: String, disabled: Boolean, scope: SkillScope): Boolean =
@@ -285,7 +308,20 @@ class SkillRepository @Inject constructor(
          */
         private const val WEIGHT_NAME = 10.0
         private const val WEIGHT_DESCRIPTION = 6.0
-        private const val WEIGHT_INSTRUCTIONS = 2.0
+
+        /** 部分命中至少要过半才认：只蹭到一个词就返回会让一次检索列出几十条无关技能。 */
+        private const val MIN_PARTIAL_COVERAGE = 0.5
+
+        /**
+         * 代码结构词：只在多词查询里过滤。这些词几乎每段英文 prompt 里都有，
+         * 命中它们说明不了任何「这个技能跟任务相关」。单搜时不过滤，用户可能就是想知道 android 相关技能。
+         */
+        private val STRUCTURAL_TERMS = setOf(
+            "app", "src", "main", "java", "kotlin", "android", "compose", "hilt",
+            "room", "gradle", "module", "feature", "domain", "presentation",
+            "import", "package", "class", "object", "fun", "val", "var",
+            "string", "int", "void", "null", "return", "private", "public", "override"
+        )
 
         /** 问法表别名只算「大概率是同一件事」，拿不到原词那么高的分。 */
         private const val ALIAS_FACTOR = 0.6

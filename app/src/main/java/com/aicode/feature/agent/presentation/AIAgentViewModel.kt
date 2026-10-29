@@ -71,6 +71,7 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.engine.AgentEngine
 import com.aicode.feature.agent.domain.engine.EngineContext
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
+import com.aicode.feature.terminal.domain.RemoteTerminalSessionManager
 import com.aicode.feature.terminal.domain.TabFinishedEvent
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -106,6 +107,9 @@ import com.aicode.feature.agent.domain.command.SlashCommandRegistry.ResolvedComm
 import com.aicode.feature.agent.domain.mention.FileMentionRepository
 import com.aicode.feature.agent.domain.mention.FileMentionState
 import com.aicode.feature.agent.domain.skill.Skill
+import com.aicode.feature.agent.domain.skill.SkillTriggerHit
+import com.aicode.feature.agent.domain.skill.SkillTriggerMatcher
+import com.aicode.feature.agent.domain.skill.oneLineDescription
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.notification.AgentLiveNotificationManager
 import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager
@@ -166,6 +170,7 @@ class AIAgentViewModel @Inject constructor(
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val planApprovalManager: PlanApprovalManager,
     private val terminalSessionManager: TerminalSessionManager,
+    private val remoteTerminalSessionManager: RemoteTerminalSessionManager,
     private val terminalSessionProvider: TerminalSessionProvider,
     private val slashCommandRegistry: SlashCommandRegistry,
     private val fileMentionRepository: FileMentionRepository,
@@ -243,13 +248,6 @@ class AIAgentViewModel @Inject constructor(
 
     private val _agentStates = MutableStateFlow<Map<String, AgentUIState>>(emptyMap())
     val agentStates: StateFlow<Map<String, AgentUIState>> = _agentStates.asStateFlow()
-
-    /**
-     * 各会话「最后一轮是否正常完成」：只有正常收尾（收到完成标记）才在轮末回复下挂「复制 / 更多」
-     * 按钮；主动暂停 / 出错 / 未开始都不挂，避免按钮挂在半截输出上。
-     */
-    private val _completedSessions = MutableStateFlow<Set<String>>(emptySet())
-    val completedSessions: StateFlow<Set<String>> = _completedSessions.asStateFlow()
 
     /**
      * 子代理卡片状态（按子会话 id 索引），仅存内存。
@@ -2038,6 +2036,37 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 命中技能后往本轮上下文里放什么。
+     *
+     * 分两条路：
+     * - **短命令直出**：≤ [SkillTriggerMatcher.SHORT_COMMAND_TOKENS] 个词且只命中一个，直接给正文。
+     *   用户打「逆向 这个包」这种短句时，不该让他多等一次工具往返。
+     * - **候选清单**：其余情况只给一行。直接注入正文的代价是几千字——筛错一次上下文就被灌满；
+     *   给候选则最多几行，模型自己判断要不要 `loadSkill`。
+     */
+    private fun buildSkillInjection(hits: List<SkillTriggerHit>, tokenCount: Int): String? {
+        if (hits.isEmpty()) return null
+        val primary = hits.first()
+        val direct = hits.size == 1 &&
+            tokenCount <= SkillTriggerMatcher.SHORT_COMMAND_TOKENS &&
+            !primary.deduped
+        if (direct) {
+            return buildString {
+                appendLine("[触发技能 ${primary.skill.name} · 命中关键词「${primary.hitWord}」]")
+                appendLine(primary.skill.instructions)
+                appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
+            }.trimEnd()
+        }
+        return buildString {
+            appendLine("[候选技能] 本轮消息疑似涉及以下技能，不确定时先用 loadSkill 取完整指令：")
+            hits.take(SkillTriggerMatcher.MAX_CANDIDATES).forEach { hit ->
+                appendLine("- ${hit.skill.name}：${hit.skill.oneLineDescription()}" + if (hit.deduped) "（本会话已加载过）" else "")
+            }
+            appendLine("调用方式：loadSkill(skill_name=\"技能名\")。与当前任务无关就忽略本行。")
+        }.trimEnd()
+    }
+
     fun executeAgentRequestStream(
         request: String,
         modelRequest: String = request,
@@ -2078,35 +2107,24 @@ class AIAgentViewModel @Inject constructor(
             }
         }
 
-        // 技能关键词自动触发（见「技能关键词触发设计.md」）：普通消息中把某个技能的触发词作为
-        // 空格分隔的独立词说出时，把该技能正文作为本轮用户行的 modelReminder 注入。
-        // 不拼进正文：正文一旦改写，这行及其后所有历史的前缀缓存全部作废。
-        // 斜杠命令已在上面分流返回，优先级天然更高；自动触发轮次（/init、后台通知）不参与匹配。
-        val triggeredHits = if (isAutoTrigger || request.startsWith("/")) {
+        // 技能自动触发。只有「人说的话」才参与判定：
+        // - 子代理 prompt 是机器生成的任务描述，里面必然出现 test/review/build 这类词；
+        // - 后台通知与目标续跑同理（isAutoTrigger）；
+        // - 长文本是粘贴的日志或结构化指令，不是「主动说出一个触发词」。
+        // 注意下面 2211 行还会再算一次 isSubAgent（那次供工具集裁剪用）；这里提前查一次会话行，
+        // 是因为触发判定在那之前，而它必须知道「谁在说话」。
+        val requestTokenCount = SkillTriggerMatcher.tokenize(request).size
+        val isSubAgentSession = sessionUseCase.getSessionById(sessionId)?.parentId != null
+        val triggeredHits = if (
+            isAutoTrigger ||
+            isSubAgentSession ||
+            requestTokenCount > SkillTriggerMatcher.MAX_TRIGGER_TOKENS
+        ) {
             emptyList()
         } else {
             slashCommandRegistry.findTriggered(request, sessionId)
         }
-        val skillInjection = if (triggeredHits.isEmpty()) {
-            null
-        } else {
-            val primary = triggeredHits.first()
-            buildString {
-                if (primary.deduped) {
-                    appendLine("（技能 ${primary.skill.name} 已在本会话加载过，完整指令可用 loadSkill 取回）")
-                } else {
-                    appendLine("[触发技能 ${primary.skill.name} · 用户消息中命中关键词「${primary.hitWord}」]")
-                    appendLine(primary.skill.instructions)
-                }
-                val others = triggeredHits.drop(1)
-                if (others.isNotEmpty()) {
-                    appendLine("（同时命中技能：${others.joinToString("、") { it.skill.name }}，相关任务可用 loadSkill 工具加载）")
-                }
-                if (!primary.deduped) {
-                    appendLine("[触发技能注入结束 · 以上为技能指令，用户原话见上]")
-                }
-            }.trimEnd()
-        }
+        val skillInjection = buildSkillInjection(triggeredHits, requestTokenCount)
         // 发出去的就是 modelRequest（附件说明已经包含在里面）。旧代码在命中技能时把它和 request
         // 再拼一遍，既重复又只活在请求里——下一轮从库里重建历史时这行必然变字。
         val effectiveModelRequest = modelRequest
@@ -2516,7 +2534,6 @@ class AIAgentViewModel @Inject constructor(
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setCompacting(sessionId, false)
-                        _completedSessions.value = _completedSessions.value + sessionId
                         // 子代理会话完成时通知父会话（异步回调）
                         if (isSubAgent) {
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
@@ -2599,7 +2616,6 @@ class AIAgentViewModel @Inject constructor(
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage(context)))
-             _completedSessions.value = _completedSessions.value - sessionId
              // 子会话在 workflow 之外失败（如历史构建异常）：通知父会话并释放并发名额。
              // 不补这一手，父代理会一直等一条永不到来的完成通知，名额也泄漏到进程重启。
              if (isSubSession) {
@@ -2684,10 +2700,16 @@ class AIAgentViewModel @Inject constructor(
         askUserQuestionManager.resolve(id, answer)
     }
 
-    /** 停止当前工作区所有正在运行的 AI 会话并关闭所有终端标签（切换工作区前调用）。 */
+    /**
+     * 停止当前工作区所有正在运行的 AI 会话并关闭所有终端标签（切换工作区前调用）。
+     *
+     * 本地与远程是两套管理器：只关本地的话，远程模式下切工作区后旧标签仍停在旧目录，
+     * 继续敲命令会作用在错误的工作区（`ensureInitialTab` 还会复用旧标签，不重新 cd）。
+     */
     fun stopAllAndCloseTerminal() {
         stopAllAgents()
         terminalSessionManager.tabs.value.map { it.id }.forEach { terminalSessionManager.closeTab(it) }
+        remoteTerminalSessionManager.tabs.value.map { it.id }.forEach { remoteTerminalSessionManager.closeTab(it) }
     }
 
     /** 停止当前工作区所有正在运行的 AI 会话（切换工作区前调用）。 */
@@ -2912,12 +2934,23 @@ class AIAgentViewModel @Inject constructor(
         draftPrefs.edit().remove(sessionId).apply()
     }
 
-    /** 新建会话；工作区里已有空会话时直接切过去复用（当前会话为空则优先），避免堆积空会话。 */
+    /**
+     * 新建会话。
+     *
+     * 复用顺序：当前会话是空的 → 直接用它；否则找本工作区里已有的空根会话（最近更新的一个）切过去；
+     * 都没有才真新建。不查这一下的话，每点一次「新建」就多一条空会话，列表越堆越长。
+     */
     fun newSession() = viewModelScope.launch {
         if (_currentWorkspace.value.isBlank()) return@launch
         val curId = _currentSessionId.value
         if (curId != null && sessionUseCase.isSessionEmpty(curId)) {
             setAgentState(curId, AgentUIState.Idle)
+            return@launch
+        }
+        val reusable = sessionUseCase.getEmptySessionOfWorkspace(_currentWorkspace.value)
+        if (reusable != null && reusable.id != curId) {
+            setAgentState(reusable.id, AgentUIState.Idle)
+            _currentSessionId.value = reusable.id
             return@launch
         }
         // 新会话时异步重连未连接的 MCP server，让 manageMcp 新增的配置真正生效；

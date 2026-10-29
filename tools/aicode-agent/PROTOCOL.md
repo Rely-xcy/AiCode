@@ -67,6 +67,8 @@
 | `mkdir` | path | `ok` | 无 |
 | `remove` | path, recursive | `ok` | 无 |
 | `rename` | path, to | `ok` | 无 |
+| `chmod` | path, mode | `ok` | 无。只取 `mode & 0o777`，setuid/sticky 高位一律忽略 |
+| `copy` | path, to, overwrite | `ok` | 无。仅普通文件；目录复制返回 `EISDIR` |
 | `hash` | path | `ok` + `size`（`hash` 字段为 `sha256:<hex>`） | 无 |
 | `grep` | pattern, path, maxResults | `ok` | JSON 数组（见下） |
 

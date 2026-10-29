@@ -172,6 +172,7 @@ class AIAgentViewModelSystemNotificationQueueTest {
         terminalSessionManager = mockk<TerminalSessionManager>(relaxed = true).also { m ->
             every { m.tabFinishedEvents } returns MutableSharedFlow()
         },
+        remoteTerminalSessionManager = mockk(relaxed = true),
         terminalSessionProvider = mockk<TerminalSessionProvider>(relaxed = true).also { m ->
             every { m.tabFinishedEvents } returns tabFinishedEvents
         },

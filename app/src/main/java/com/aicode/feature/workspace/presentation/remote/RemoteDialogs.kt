@@ -446,7 +446,6 @@ fun AddRemoteMountDialog(
     var connExpanded by remember { mutableStateOf(false) }
     var wsExpanded by remember { mutableStateOf(false) }
     var showBrowser by remember { mutableStateOf(false) }
-    val selectedConnection = connections.find { it.id == selectedConnectionId }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val configuration = LocalConfiguration.current

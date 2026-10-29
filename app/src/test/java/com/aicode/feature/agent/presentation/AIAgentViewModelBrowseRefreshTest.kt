@@ -139,6 +139,7 @@ class AIAgentViewModelBrowseRefreshTest {
         messagePersistenceUseCase = mockk(relaxed = true),
         planApprovalManager = mockk(relaxed = true),
         terminalSessionManager = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
+        remoteTerminalSessionManager = mockk(relaxed = true),
         // 后台命令结束事件流：与 terminalSessionManager 同样桩成空流，本路径不依赖它。
         terminalSessionProvider = mockk(relaxed = true) { every { tabFinishedEvents } returns MutableSharedFlow() },
         slashCommandRegistry = mockk {
