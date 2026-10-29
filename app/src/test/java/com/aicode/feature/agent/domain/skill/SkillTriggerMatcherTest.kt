@@ -169,4 +169,19 @@ class SkillTriggerMatcherTest {
         val text = SkillParser.serialize("n", "d", emptyList(), emptyList(), "body")
         assertFalse(text.contains("triggers"))
     }
+
+    @Test
+    fun `两字母英文触发词被丢弃中文二字保留`() {
+        // UI/PE 这类两个字母的词能蹭到任何一段技术文本（UI 命中 build/quick，PE 命中 type）。
+        // 中文两字是有效术语（逆向、脱壳），不能一刀切。
+        val sanitized = SkillTriggerMatcher.sanitize(listOf("UI", "PE", "APK", "逆向", "脱壳"))
+        assertEquals(listOf("APK", "逆向", "脱壳"), sanitized)
+    }
+
+    @Test
+    fun `两字母英文触发词不会在消息里命中`() {
+        val ui = Skill(name = "ui-kit", description = "", triggers = listOf("UI"), instructions = "")
+        // 消息里有一大堆 UI，但触发词在 sanitize 阶段就被丢了
+        assertTrue(SkillTriggerMatcher.match("看一下这个 UI 和 build 流程", listOf(ui)).isEmpty())
+    }
 }
