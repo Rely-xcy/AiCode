@@ -48,6 +48,10 @@ object NoOpRemoteAgentTierStore : RemoteAgentTierStore {
  *
  * 只应缓存 L1/L2 这类「正向能力」；L3 是探测失败的结果，一次网络抖动就该重试，
  * 不能永久钉死（见 [RemoteAgentCapabilityDetector]）。
+ *
+ * **当前没有接线**：`RemoteAgentCapabilityDetector` 的 store 参数默认 [NoOpRemoteAgentTierStore]，
+ * main 里没有任何地方构造本类（只有单测用）。接上之前的实际行为是「只靠内存缓存、重启即失」——
+ * 这是有意的（期 1 没有 DI 注入点），不是忘接。将来接上时注意：别把 L3 也存进去。
  */
 class DataStoreRemoteAgentTierStore(
     private val dataStore: DataStore<Preferences>

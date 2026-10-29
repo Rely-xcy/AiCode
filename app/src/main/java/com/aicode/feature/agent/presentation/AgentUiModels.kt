@@ -307,7 +307,12 @@ data class QueuedRequest(
     val persistUserMessage: Boolean = true
 )
 
-/** 会话级持续目标（goal）的 UI 快照：文本、状态与已续跑轮数。 */
+/**
+ * 会话级持续目标（goal）的 UI 快照：文本、状态与已续跑轮数。
+ *
+ * [turnCount] 目前没有读者：`GoalBannerRow` 只渲染 status/text，续跑次数用的是 DB 里的
+ * `session.goalTurnCount`。字段留着是准备在 banner 上展示「已续 N 轮」，删它要同步改构造点。
+ */
 @Immutable
 data class SessionGoalUi(
     val text: String,
