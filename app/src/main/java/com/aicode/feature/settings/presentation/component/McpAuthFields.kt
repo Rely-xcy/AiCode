@@ -46,6 +46,8 @@ import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.core.ui.InlineBanner
+import com.aicode.core.ui.InlineBannerLevel
 import com.aicode.feature.settings.presentation.McpAuthUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
@@ -273,32 +275,11 @@ internal fun McpAuthFields(
 
                         // 错误提示横幅
                         state.error?.let { message ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
-                                        shape = RoundedCornerShape(Radius.md)
-                                    )
-                                    .padding(horizontal = Spacing.md, vertical = 10.dp),
-                                verticalAlignment = Alignment.Top,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = FeatherIcons.AlertCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .padding(top = 1.dp)
-                                )
-                                Text(
-                                    text = stringResource(R.string.mcp_auth_failed, message),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
+                            InlineBanner(
+                                text = stringResource(R.string.mcp_auth_failed, message),
+                                level = InlineBannerLevel.Error,
+                                icon = FeatherIcons.AlertCircle
+                            )
                         }
 
                         // 动作区：授权进行中 vs 常规状态分开排布，避免同一行堆叠导致按钮被遮挡

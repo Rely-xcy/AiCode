@@ -58,6 +58,8 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.InlineBanner
+import com.aicode.core.ui.InlineBannerLevel
 import com.aicode.feature.credentials.data.remote.GITHUB_APP_INSTALL_URL
 import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
@@ -623,24 +625,11 @@ private fun SuccessContent(
 /** 登录结果里的提醒卡片（只读令牌 / 安装状态未知）。 */
 @Composable
 private fun LoginWarningCard(text: String) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.lg),
-        color = MaterialTheme.semanticColors.warningContainer.copy(alpha = 0.4f),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.semanticColors.warning.copy(alpha = 0.3f)
-        )
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.lg),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-    }
+    InlineBanner(
+        text = text,
+        level = InlineBannerLevel.Warning,
+        icon = FeatherIcons.AlertCircle
+    )
 }
 
 /** 已授权仓库列表的展示上限：只让用户确认「认得我的仓库」，不在弹层里铺满一屏。 */
