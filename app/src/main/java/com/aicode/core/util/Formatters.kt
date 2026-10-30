@@ -73,12 +73,18 @@ private fun String.trimToSingleDecimal(): String = replace(Regex("(\\.\\d)\\d+")
 /**
  * 缓存命中率：缓存输入 / 总输入（inputTokens 已含缓存命中部分，各 provider 适配器统一该口径）。
  * 计数器不为正表示渠道没上报，返回 "-" 而不是误导性的 0.0%；上限夹到 100% 兜住服务端异常值。
+ *
+ * 汇总查询返回 Long，单次调用实体返回 Int；Long 是核心实现，Int 重载只负责无损提升，不能反过来
+ * 把汇总值强转 Int——长周期统计可能溢出。
  */
-fun formatCacheHitRatePercent(inputTokens: Int, cachedInputTokens: Int): String {
-    if (inputTokens <= 0 || cachedInputTokens <= 0) return "-"
+fun formatCacheHitRatePercent(inputTokens: Long, cachedInputTokens: Long): String {
+    if (inputTokens <= 0L || cachedInputTokens <= 0L) return "-"
     val rate = min(cachedInputTokens * 100.0 / inputTokens, 100.0)
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
+
+fun formatCacheHitRatePercent(inputTokens: Int, cachedInputTokens: Int): String =
+    formatCacheHitRatePercent(inputTokens.toLong(), cachedInputTokens.toLong())
 
 /** 文件名用时间戳：yyyyMMdd-HHmmss，无空格，固定 Locale.US 以免数字形态跟随区域变化。 */
 fun formatCompactTimestamp(epochMillis: Long = System.currentTimeMillis()): String =

@@ -196,6 +196,12 @@ class FormattersTest {
         assertEquals("100.0%", formatCacheHitRatePercent(1_000, 1_000))
     }
 
+    @Test
+    fun cacheHitRateAcceptsLongSummariesWithoutNarrowing() {
+        val input = Int.MAX_VALUE.toLong() * 4
+        assertEquals("50.0%", formatCacheHitRatePercent(input, input / 2))
+    }
+
     // endregion
 
     // region timestamps
