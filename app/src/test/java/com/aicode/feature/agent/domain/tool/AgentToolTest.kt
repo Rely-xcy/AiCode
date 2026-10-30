@@ -81,6 +81,7 @@ class AgentToolTest {
             agentDefinitionRepository = mockk(relaxed = true),
             aiProviderRepository = mockk(relaxed = true),
             subagentTierSettings = mockk(relaxed = true),
+            writeLeaseRegistry = mockk(relaxed = true),
             appContext = mockk(relaxed = true)
         )
 
