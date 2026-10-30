@@ -38,8 +38,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.LocalImageViewer
-import com.aicode.core.ui.THUMBNAIL_MAX_EDGE
-import com.aicode.core.ui.decodeSampledBitmap
+import com.aicode.core.ui.ThumbnailCache
 import com.aicode.core.util.ApkInstaller
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.workspace.domain.FileAccessProvider
@@ -189,10 +188,9 @@ private fun AttachmentThumb(attachment: AgentAttachment) {
 private fun AttachmentImageThumb(attachment: AgentAttachment) {
     // 读盘 + 解码放 IO 线程：以前在 remember 里同步 decodeFile，滚到带图消息时会卡主线程。
     // 采样与 OOM 兜底统一走 decodeSampledBitmap。
-    val bitmap by produceState<ImageBitmap?>(null, attachment.localPath) {
-        value = withContext(Dispatchers.IO) {
-            decodeSampledBitmap(attachment.localPath, THUMBNAIL_MAX_EDGE)
-        }
+    val path = attachment.localPath
+    val bitmap by produceState<ImageBitmap?>(ThumbnailCache.peek(path), path) {
+        value = ThumbnailCache.peek(path) ?: withContext(Dispatchers.IO) { ThumbnailCache.load(path) }
     }
     val loaded = bitmap
     if (loaded != null) {
