@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.AppStatusPill
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
@@ -317,19 +318,16 @@ internal fun BackupScreen(
 
     // 目标删除确认
     targetToDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { targetToDelete = null },
-            title = { Text(stringResource(R.string.common_delete)) },
-            text = { Text(stringResource(R.string.backup_net_delete_target_confirm, target.name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteTarget(target.id)
-                    targetToDelete = null
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
+        AppConfirmDialog(
+            title = stringResource(R.string.common_delete),
+            message = stringResource(R.string.backup_net_delete_target_confirm, target.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                viewModel.deleteTarget(target.id)
+                targetToDelete = null
             },
-            dismissButton = { TextButton(onClick = { targetToDelete = null }) { Text(stringResource(R.string.common_cancel)) } }
+            onDismiss = { targetToDelete = null }
         )
     }
 

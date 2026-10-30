@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppConfirmDialog
 import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SegmentedTabs
@@ -300,18 +301,17 @@ internal fun ContainerSection(
     }
 
     deletingProfile?.let { deleting ->
-        AlertDialog(
-            onDismissRequest = { deletingProfile = null },
-            title = { Text(stringResource(R.string.container_delete_config)) },
-            text = { Text(stringResource(R.string.container_delete_confirm, deleting.name, deleteHint(context, deleting))) },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleteImageCopy(deleting)
-                    onDeleteProfile(deleting)
-                    deletingProfile = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.container_delete_config),
+            message = stringResource(R.string.container_delete_confirm, deleting.name, deleteHint(context, deleting)),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                deleteImageCopy(deleting)
+                onDeleteProfile(deleting)
+                deletingProfile = null
             },
-            dismissButton = { TextButton(onClick = { deletingProfile = null }) { Text(stringResource(R.string.common_cancel)) } }
+            onDismiss = { deletingProfile = null }
         )
     }
 

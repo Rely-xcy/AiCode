@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
 import com.aicode.feature.settings.presentation.component.ReorderableCardRow
@@ -304,43 +305,33 @@ fun RemoteServerScreen(
     }
 
     pendingDeleteConnection?.let { conn ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteConnection = null },
-            title = { Text(stringResource(R.string.common_delete)) },
-            text = { Text(stringResource(R.string.remote_delete_connection_confirm, conn.name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteConnection(conn.id)
-                    pendingDeleteConnection = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.common_delete),
+            message = stringResource(R.string.remote_delete_connection_confirm, conn.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                viewModel.deleteConnection(conn.id)
+                pendingDeleteConnection = null
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteConnection = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDeleteConnection = null }
         )
     }
 
     pendingDeleteMount?.let { mount ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteMount = null },
-            title = { Text(stringResource(R.string.common_delete)) },
-            text = {
-                Text(
-                    stringResource(
-                        R.string.remote_delete_mount_confirm,
-                        mount.connection?.name ?: mount.localMountPath
-                    )
-                )
+        AppConfirmDialog(
+            title = stringResource(R.string.common_delete),
+            message = stringResource(
+                R.string.remote_delete_mount_confirm,
+                mount.connection?.name ?: mount.localMountPath
+            ),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                viewModel.deleteMount(mount.id)
+                pendingDeleteMount = null
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteMount(mount.id)
-                    pendingDeleteMount = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteMount = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDeleteMount = null }
         )
     }
 

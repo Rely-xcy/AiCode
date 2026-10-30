@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -53,7 +52,7 @@ import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionIconButton
@@ -194,9 +193,11 @@ internal fun ContainerImageDownloadSection(
 
     if (showBatchDeleteConfirm) {
         val targets = selection.selectedKeys.toSet()
-        BatchDeleteConfirmDialog(
+        AppConfirmDialog(
             title = stringResource(R.string.container_download_batch_delete_title),
             message = stringResource(R.string.container_download_batch_delete_confirm, targets.size),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
             onConfirm = {
                 showBatchDeleteConfirm = false
                 selection.exit()
@@ -234,19 +235,16 @@ internal fun ContainerImageDownloadSection(
     }
 
     deleteEntry?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { deleteEntry = null },
-            title = { Text(stringResource(R.string.container_download_delete_title)) },
-            text = { Text(stringResource(R.string.container_download_delete_confirm, entry.displayLabel(imageVersions[entry.id]))) },
-            confirmButton = {
-                TextButton(onClick = {
-                    onDelete(entry.id)
-                    deleteEntry = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.container_download_delete_title),
+            message = stringResource(R.string.container_download_delete_confirm, entry.displayLabel(imageVersions[entry.id])),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                onDelete(entry.id)
+                deleteEntry = null
             },
-            dismissButton = {
-                TextButton(onClick = { deleteEntry = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { deleteEntry = null }
         )
     }
 }

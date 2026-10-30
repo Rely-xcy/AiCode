@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.util.formatBytes
 import com.aicode.feature.backup.domain.remote.RemoteBackup
 import java.text.SimpleDateFormat
@@ -97,21 +98,16 @@ fun RemoteBackupDialog(
     )
 
     pendingDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.backup_net_remote_delete)) },
-            text = { Text(stringResource(R.string.backup_net_remote_delete_confirm, target.name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    onDelete(target)
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
+        AppConfirmDialog(
+            title = stringResource(R.string.backup_net_remote_delete),
+            message = stringResource(R.string.backup_net_remote_delete_confirm, target.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete = null
+                onDelete(target)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDelete = null }
         )
     }
 }

@@ -45,8 +45,8 @@ import androidx.compose.ui.zIndex
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.AppSwitch
-import com.aicode.core.ui.BatchDeleteConfirmDialog
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionIconButton
@@ -162,9 +162,11 @@ internal fun PromptsSection(
 
     if (showBatchDeleteConfirm) {
         val targets = selection.selectedKeys.mapNotNull { keyToTarget[it] }
-        BatchDeleteConfirmDialog(
+        AppConfirmDialog(
             title = stringResource(R.string.prompts_batch_delete_title),
             message = stringResource(R.string.prompts_batch_delete_confirm, targets.size),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
             onConfirm = {
                 showBatchDeleteConfirm = false
                 selection.exit()

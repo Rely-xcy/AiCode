@@ -43,7 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionButton
@@ -195,9 +195,11 @@ internal fun ProvidersSection(
 
     if (showBatchDeleteConfirm) {
         val targets = selection.selectedKeys.toSet()
-        BatchDeleteConfirmDialog(
+        AppConfirmDialog(
             title = stringResource(R.string.providers_batch_delete_title),
             message = stringResource(R.string.providers_batch_delete_confirm, targets.size),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
             onConfirm = {
                 showBatchDeleteConfirm = false
                 selection.exit()
