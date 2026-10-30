@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.util.formatTokenLimitTrimZero
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -596,10 +597,10 @@ private fun ModelMetadataTags(metadata: ModelMetadata?) {
             }
             val input = metadata.inputTokens?.takeIf { it > 0 } ?: metadata.contextTokens.takeIf { it > 0 }
             if (input != null) {
-                ModelTag(text = formatTokenLimit(input), icon = FeatherIcons.ArrowUp)
+                ModelTag(text = formatTokenLimitTrimZero(input), icon = FeatherIcons.ArrowUp)
             }
             metadata.outputTokens?.takeIf { it > 0 }?.let { output ->
-                ModelTag(text = formatTokenLimit(output), icon = FeatherIcons.ArrowDown)
+                ModelTag(text = formatTokenLimitTrimZero(output), icon = FeatherIcons.ArrowDown)
             }
         }
     }
@@ -648,15 +649,3 @@ private fun ModelTag(
         }
     }
 }
-
-private fun formatTokenLimit(tokens: Int): String =
-    when {
-        tokens >= 1_000_000 && tokens % 1_000_000 == 0 -> "${tokens / 1_000_000}M"
-        tokens >= 1_000_000 -> "${tokens / 1_000_000.0}".trimDecimal() + "M"
-        tokens >= 1_000 && tokens % 1_000 == 0 -> "${tokens / 1_000}K"
-        tokens >= 1_000 -> "${tokens / 1_000.0}".trimDecimal() + "K"
-        else -> tokens.toString()
-    }
-
-private fun String.trimDecimal(): String =
-    replace(Regex("(\\.\\d)\\d+"), "$1").removeSuffix(".0")

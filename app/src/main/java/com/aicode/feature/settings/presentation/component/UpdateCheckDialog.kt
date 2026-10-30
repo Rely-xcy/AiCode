@@ -21,6 +21,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.util.formatBytes
 import com.aicode.feature.settings.presentation.UpdateCheckUiState
 
 /**

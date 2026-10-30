@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.aicode.R
 import com.aicode.core.util.ImageDownscaler
+import com.aicode.core.util.formatMegabyteBytes
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.workspace.domain.FileAccessProvider
@@ -289,12 +290,8 @@ private const val MAX_IMAGE_UPLOAD_BYTES = 5L * 1024 * 1024
 private const val MAX_IMAGE_SOURCE_BYTES = 40L * 1024 * 1024
 internal const val MAX_PENDING_ATTACHMENTS = 8
 
-internal fun formatBytes(bytes: Long): String {
-    val kb = 1024.0
-    val mb = kb * 1024.0
-    return when {
-        bytes >= mb -> String.format(java.util.Locale.US, "%.1f MB", bytes / mb)
-        bytes >= kb -> String.format(java.util.Locale.US, "%.0f KB", bytes / kb)
-        else -> "$bytes B"
-    }
-}
+/**
+ * 附件体积展示（输入区、消息附件共用）：固定 Locale.US，小数点不随系统区域变成逗号。
+ * 体积口径见 [formatMegabyteBytes]。
+ */
+internal fun formatBytes(bytes: Long): String = formatMegabyteBytes(bytes, java.util.Locale.US)

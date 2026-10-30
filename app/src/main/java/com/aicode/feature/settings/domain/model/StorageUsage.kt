@@ -64,11 +64,3 @@ data class DeviceSpace(
     val totalBytes: Long,
     val availableBytes: Long
 )
-
-/** 字节数转可读文本。固定用 [java.util.Locale.US] 的小数点，避免跟随系统区域变成逗号。 */
-internal fun formatStorageSize(bytes: Long): String = when {
-    bytes >= 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
-    bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
-    bytes >= 1024L -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
-    else -> "$bytes B"
-}

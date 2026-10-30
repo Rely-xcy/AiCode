@@ -4,6 +4,7 @@ import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.formatCapacityBytes
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.container.ContainerInstaller
@@ -17,7 +18,6 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
-import com.aicode.feature.settings.domain.model.formatStorageSize
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -175,7 +175,7 @@ class StorageUsageScanner @Inject constructor(
                 label = project.name,
                 bytes = dirSize(project, cancelled),
                 note = attachments.takeIf { it > 0 }?.let {
-                    context.getString(R.string.storage_workspace_attachments, formatStorageSize(it))
+                    context.getString(R.string.storage_workspace_attachments, formatCapacityBytes(it))
                 }
             )
         }

@@ -58,6 +58,7 @@ import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionIconButton
 import com.aicode.core.ui.SwipeToDeleteRow
+import com.aicode.core.util.formatBytes
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerImageEol
 import com.aicode.feature.agent.domain.container.displayLabel
@@ -72,14 +73,6 @@ import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Trash2
 import java.io.File
 import kotlinx.coroutines.launch
-
-/** 字节数转可读体积；容器镜像下载与更新包下载共用（同包内 internal，避免各写一份）。 */
-internal fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / 1024.0 / 1024 / 1024)
-    bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
-    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
-    else -> "$bytes B"
-}
 
 /** 发行版 logo（与容器与镜像页一致的图标风格）；未识别返回 null（调用方回退通用图标）。 */
 @Composable

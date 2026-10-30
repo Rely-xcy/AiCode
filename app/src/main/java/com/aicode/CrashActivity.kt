@@ -53,14 +53,12 @@ import androidx.compose.ui.unit.sp
 import com.aicode.core.theme.AIEditorTheme
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.util.formatDateTimeSeconds
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.X
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 全屏崩溃错误页：全局未捕获异常处理器捕获崩溃后拉起本页面，
@@ -79,7 +77,7 @@ class CrashActivity : ComponentActivity() {
         val logDir = resolveLogDir()
         val appVersion = resolveAppVersion()
         val device = "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
-        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val time = formatDateTimeSeconds()
         val report = buildReport(threadName, stack, screen, mode, memory, logDir, appVersion, device, time)
 
         setContent {

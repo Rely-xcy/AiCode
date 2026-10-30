@@ -53,6 +53,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.util.formatTokenLimit
 import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import compose.icons.FeatherIcons
@@ -617,18 +618,6 @@ private fun ModelMetadata?.hasVisibleTags(): Boolean {
     val input = inputTokens?.takeIf { it > 0 } ?: contextTokens.takeIf { it > 0 }
     return input != null || (outputTokens != null && outputTokens > 0)
 }
-
-private fun formatTokenLimit(tokens: Int): String =
-    when {
-        tokens >= 1_000_000 && tokens % 1_000_000 == 0 -> "${tokens / 1_000_000}M"
-        tokens >= 1_000_000 -> "${tokens / 1_000_000.0}M".trimDecimal()
-        tokens >= 1_000 && tokens % 1_000 == 0 -> "${tokens / 1_000}K"
-        tokens >= 1_000 -> "${tokens / 1_000.0}K".trimDecimal()
-        else -> tokens.toString()
-    }
-
-private fun String.trimDecimal(): String =
-    replace(Regex("(\\.\\d)\\d+"), "$1").removeSuffix(".0")
 
 @Composable
 internal fun FetchModelRow(
