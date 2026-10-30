@@ -1837,12 +1837,17 @@ fun AIChatPanel(
     // StateFlow 快照读取 + Pair 分配（用户实测：滑动中卡、加载完静止不卡）。
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .collect { index ->
-                val ms = latestMessagesState.value
-                if (index <= 3 && ms.hasMore && !ms.isLoadingMore) {
-                    viewModel.loadMoreMessages()
-                }
+        // 触发信号里带上分页上限：消息按条数分页，一轮长过程折叠后整页补载可能一个可见项都不增加，
+        // index 不再变化；只监听 index 会卡在这里，要用户上下晃动才能再触发一页。
+        // 上限纳入信号后，每页补载完成都会重新判断，仍在顶部就连续补载。
+        // 代价是 lambda 每帧多读一次消息快照；用 distinctUntilChanged 把下游触发压到真正变化时。
+        snapshotFlow {
+            val ms = latestMessagesState.value
+            Triple(listState.firstVisibleItemIndex <= 3 && ms.hasMore && !ms.isLoadingMore, ms.sessionId, ms.limit)
+        }
+            .distinctUntilChanged()
+            .collect { (shouldLoad, _, _) ->
+                if (shouldLoad) viewModel.loadMoreMessages()
             }
     }
     // 折叠头死锁兜底：长对话列表被折叠头压成少数 item 后可能一开局就停在 index ≤ 3 且
@@ -1882,6 +1887,9 @@ fun AIChatPanel(
 
     val markdownImageTransformer = remember(viewModel.fileAccess) {
         MarkdownImageTransformer(viewModel.fileAccess)
+    // 触发信号里带上分页上限：消息按条数分页，一轮长过程折叠后整页补载可能一个可见项都不增加，
+    // index 不再变化；只监听 index 会卡在这里，要用户上下晃动才能再触发一页。
+    // 上限纳入信号后，每页补载完成都会重新判断，仍在顶部就连续补载。
     }
     val imageViewerState = rememberImageViewerState()
     val viewerDecodeSpec = rememberViewerDecodeSpec()
