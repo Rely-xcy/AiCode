@@ -71,13 +71,15 @@ sealed class AgentEvent {
      * @param id 界面侧预生成的消息行 id（无界面 id 时为随序号生成的稳定 id）
      * @param content 用户原文，不经任何包装
      * @param isInterjection 这是运行中插话或轮内守卫：落库行 UI 不渲染，仅作为记录与模型 payload。
-     * @param modelReminder 运行中插话的模型侧围栏（随行落库，组装请求时拼回）；非插话恒为 null。
+     * @param modelReminder 运行中插话的模型侧围栏（只在当前请求中拼回，不进入历史）；非插话恒为 null。
      */
     data class UserMessageAdded(
         val id: String,
         val content: String,
         val isInterjection: Boolean = false,
-        val modelReminder: String? = null
+        val modelReminder: String? = null,
+        /** 应从下一轮模型历史中排除的内部守卫消息。 */
+        val isContextExcluded: Boolean = false
     ) : AgentEvent()
 
     /**

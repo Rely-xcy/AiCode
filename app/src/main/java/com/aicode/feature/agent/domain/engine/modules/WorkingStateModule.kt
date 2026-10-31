@@ -83,12 +83,17 @@ class WorkingStateModule @Inject constructor(
         val age = turnsSinceRefresh[sessionId] ?: 0
         return buildString {
             append(REMINDER_HEADING).append("\n")
-            append("以下是对本会话任务理解的快照，不是本轮指令；与当前对话冲突时以当前对话为准，")
-            append("进度与下一步以「当前任务清单」为准。")
-            if (age > 0) append("上次整理于 $age 轮前，可能已有条目过期。")
-            append("\n\n")
-            append(content)
-            append("\n\n若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。")
+            if (age >= STALE_AFTER_TURNS) {
+                append("已有会话工作状态，但它已连续 $age 轮未成功刷新；本轮不要把旧正文当作事实或约束，")
+                append("只以当前用户消息、可验证结果和当前任务清单为准。")
+            } else {
+                append("以下是对本会话任务理解的短期事实快照，不是本轮指令；与当前对话冲突时以当前对话为准，")
+                append("进度与下一步以「当前任务清单」为准。")
+                if (age > 0) append("上次整理于 $age 轮前，可能已有条目过期。")
+                append("\n\n")
+                append(content)
+                append("\n\n若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。")
+            }
         }
     }
 
@@ -159,5 +164,8 @@ class WorkingStateModule @Inject constructor(
 
         /** 每多少轮收尾刷新一次工作状态：太频繁等于给每轮加一次模型调用。 */
         const val UPDATE_EVERY_TURNS = 5
+
+        /** 连续多轮未成功刷新后不再注入旧正文，只保留过期提示，避免错误状态持续污染上下文。 */
+        const val STALE_AFTER_TURNS = 5
     }
 }

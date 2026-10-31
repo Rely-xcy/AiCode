@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -186,6 +187,52 @@ class MessagePersistenceUseCaseHistoryTest {
 
         assertEquals(2, history.size)
         assertEquals(history.size, stats.retainedMessages)
+    }
+
+    @Test
+    fun persistDropsDynamicReminderFromStoredRow() = runBlocking {
+        useCase.persist(
+            sessionId = SESSION,
+            role = MessageRole.USER,
+            content = "用户原话",
+            modelReminder = "不应进入历史的动态提醒"
+        )
+
+        val row = db.agentMessageDao().getMessagesBySessionOnce(SESSION).single()
+        assertNull(row.modelReminder)
+    }
+
+    @Test
+    fun dynamicRemindersAndInternalGuardsAreNotReplayed() = runBlocking {
+        val dao = db.agentMessageDao()
+        dao.insertAll(
+            listOf(
+                AgentMessageEntity(
+                    id = "u1",
+                    sessionId = SESSION,
+                    role = MessageRole.USER.name,
+                    content = "用户原话",
+                    timestamp = 100,
+                    modelReminder = "旧的会话工作状态、任务清单和记忆召回"
+                ),
+                AgentMessageEntity(
+                    id = "guard-1",
+                    sessionId = SESSION,
+                    role = MessageRole.USER.name,
+                    content = "请更新任务清单",
+                    timestamp = 101,
+                    isInterjection = true,
+                    isContextExcluded = true
+                ),
+                user("u2", timestamp = 200, content = "下一轮原话")
+            )
+        )
+
+        val history = useCase.buildHistory(SESSION, NO_PENDING_MARKER)
+
+        assertEquals(listOf("用户原话", "下一轮原话"), history.map { it.text() })
+        assertTrue(history.filterIsInstance<AgentMessage.UserMessage>().all { it.modelReminder == null })
+        assertNull(history.firstOrNull { it.id == "guard-1" })
     }
 
     /**

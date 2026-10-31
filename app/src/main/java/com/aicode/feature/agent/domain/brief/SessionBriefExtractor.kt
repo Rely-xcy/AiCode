@@ -74,7 +74,8 @@ class SessionBriefExtractor @Inject constructor(
         const val PROMPT_FILE = "agent/session-brief.md"
 
         /** 状态上限：每轮都注入，太长会挤占窗口，也说明提炼没收敛。 */
-        const val MAX_BRIEF_CHARS = 4000
+        /** 状态每轮都会注入，控制在短快照范围；过期细节应删除而不是继续压缩成规则。 */
+        const val MAX_BRIEF_CHARS = 2400
 
         private const val TRANSCRIPT_MESSAGES = 30
         private const val MAX_MESSAGE_CHARS = 1200

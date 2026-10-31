@@ -158,6 +158,23 @@ class TurnReminderStabilityTest {
     }
 
     @Test
+    fun staleWorkingStateDowngradesToShortWarning() = runBlocking {
+        val state = workingStateModule()
+        val engine = AgentEngine(
+            setOf<EngineModule>(state),
+            CoroutineScope(Dispatchers.Unconfined)
+        )
+        val c = ctx(historyA)
+        awaitReminder(engine, c) { it.contains(briefText) }
+
+        repeat(5) { state.onTurnCompleted(c) }
+
+        val text = awaitReminder(engine, c) { it.contains("不要把旧正文当作事实或约束") }
+        assertTrue(text.contains("不要把旧正文当作事实或约束"))
+        assertFalse(text.contains(briefText))
+    }
+
+    @Test
     fun promptFragment_isGoneForAllThreeModules() {
         val state = workingStateModule()
         val task = taskModule()

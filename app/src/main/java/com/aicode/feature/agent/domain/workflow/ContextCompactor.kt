@@ -218,7 +218,9 @@ class ContextCompactor @Inject constructor(
         // 新语义：旧摘要块是冻结的独立块，新块只覆盖本次折掉的原文，不再合并旧摘要
         // （设计 §4.3 第 5 步）。buildSummaryInstruction 的 previous-summary 分支保留，
         // 阶段 3 引入合并时复用；extractPreviousSummary 同理保留但不再被此处调用。
-        val summarySource = removeCompactionPairs(head)
+        // 动态提醒与内部守卫只服务当前请求，不是任务事实；它们不能被摘要模型吸收，
+        // 否则下一次压缩会把已经隔离的污染重新固化进摘要链。
+        val summarySource = removeDynamicContext(removeCompactionPairs(head))
         if (summarySource.isEmpty()) {
             // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容。
             FileLogger.i(TAG, "无可压缩内容（head 为空），跳过压缩")
@@ -263,7 +265,7 @@ class ContextCompactor @Inject constructor(
         // 再给调用方一次「捞出长期价值」的机会（记忆抽取）：这段历史马上离开上下文
         if (onBeforeFold != null) {
             try {
-                onBeforeFold(head)
+                onBeforeFold(removeDynamicContext(head))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1409,6 +1411,21 @@ internal fun splitIntoSummaryChunks(
 }
 
 /**
+ * 动态提醒只在本轮请求投影中有效：摘要请求不读取历史提醒，也不把内部守卫当成用户事实。
+ */
+private fun removeDynamicContext(messages: List<AgentMessage>): List<AgentMessage> =
+    messages.asSequence()
+        .filterNot { it is AgentMessage.UserMessage && it.id.startsWith("guard-") }
+        .map { message ->
+            if (message is AgentMessage.UserMessage && message.modelReminder != null) {
+                message.copy(modelReminder = null)
+            } else {
+                message
+            }
+        }
+        .toList()
+
+/**
  * 「去掉压缩块后」的前 [coveredFiltered] 条消息，对应回原 head 的哪个下标。
  *
  * 块数达到上限时要把 splitIndex 收回到最后一块末尾，而块是在 [removeCompactionPairs]
@@ -1427,6 +1444,9 @@ internal fun indexAfterFilteredMessages(head: List<AgentMessage>, coveredFiltere
 
             current is AgentMessage.AssistantMessage &&
                 current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX) -> index++
+
+            current is AgentMessage.UserMessage &&
+                current.id.startsWith("guard-") -> index++
 
             else -> {
                 filtered++
