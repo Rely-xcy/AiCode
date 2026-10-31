@@ -272,6 +272,9 @@ class CompactionModule @Inject constructor(
                     // 触发判定用的那个数（含 system/工具开销）。带下去只为了记账日志能自洽：
                     // 单看折叠记账的「折叠前消息估算」会比硬线低几千 token，看着像不该折却折了。
                     decisionTokens = effectiveCurrentTokens,
+                    // 固定开销（system + 工具定义）：压缩内部用它判断「保留区是不是已经压不下去」，
+                    // 避免小窗口模型白跑一轮摘要后立刻又触发。
+                    overheadTokens = call.overheadTokens,
                     // 折叠前先捞长期价值：这段历史马上离开上下文，里面的决策/纠正/约定
                     // 应该进记忆库而不是只被摘要吞掉。抽取失败不影响压缩本身。
                     // 注意：这一步**不受**「长期记忆自动沉淀」开关控制（用户 2026-09-30 明确要求保持独立）——

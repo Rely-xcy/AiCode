@@ -151,6 +151,13 @@ class ContextCompactor @Inject constructor(
          */
         decisionTokens: Int = 0,
         /**
+         * 固定开销（系统提示词 + 工具定义）的估算。调用方已经算好了，不用把 systemPrompt/tools 本身传进来。
+         *
+         * 用它做两道前置防御：保留区已达触发线时跳过压缩（不白跑摘要）、保留区超预算时提前失败。
+         * 小窗口模型反复压缩就是这两条缺失导致的：压完仍超触发线，下一轮立刻又触发。
+         */
+        overheadTokens: Int = 0,
+        /**
          * 折叠前的回调：拿到即将被折叠掉的那段历史（head）。
          * 给调用方一个「趁还没丢，先把长期价值捞出来」的机会（如抽取长期记忆）。
          */
@@ -170,6 +177,19 @@ class ContextCompactor @Inject constructor(
         // 该 tool 消息会变成孤儿，API 直接 400。向前回溯到配对的 assistant。
         splitIndex = adjustSplitIndex(messages, splitIndex)
         if (splitIndex <= 0) return null
+
+        // 固定开销加上必须原样保留的最近上下文就已经压不到触发线以下时，压缩只会白花一轮摘要调用，
+        // 下一次请求又立刻重新触发；窗口小的模型最容易遇到。已经超出预算时仍要试（没有别的退路）。
+        if (overheadTokens > 0 && decisionTokens < contextLimit) {
+            val retainedTokens = overheadTokens + TokenEstimator.estimateMessages(messages.drop(splitIndex))
+            if (retainedTokens >= hardThreshold) {
+                FileLogger.i(
+                    TAG,
+                    "保留部分已达 $retainedTokens tokens（触发线 $hardThreshold），压缩无法降到触发线以下，跳过"
+                )
+                return null
+            }
+        }
 
         // 分块摘要：以前 head 装不进摘要窗口就把 splitIndex 前移（这轮少折一点），超大
         // 会话因此反复「少折一点」压不下去。现在改为按摘要窗口切块、逐块摘要、再把各块
@@ -203,6 +223,13 @@ class ContextCompactor @Inject constructor(
             // 重复压缩时 head 可能只剩旧的 marker+summary 对，删光后无可压缩内容。
             FileLogger.i(TAG, "无可压缩内容（head 为空），跳过压缩")
             return null
+        }
+
+        // 保留区本身就放不进预算时，摘要再短也无济于事：先于摘要调用失败，省掉整串白跑的请求。
+        if (overheadTokens > 0) {
+            check(overheadTokens + TokenEstimator.estimateMessages(tail) < contextLimit) {
+                "Retained history and tool definitions already exceed the main model input budget"
+            }
         }
 
         val needsChunking = summaryBudgetTokens > 0 &&

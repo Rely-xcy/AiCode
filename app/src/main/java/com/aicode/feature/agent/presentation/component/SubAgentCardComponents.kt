@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,8 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.InlineBanner
+import com.aicode.core.ui.InlineBannerLevel
 import com.aicode.feature.agent.presentation.SubAgentCardState
 import com.aicode.feature.agent.presentation.SubAgentCardStatus
 import compose.icons.FeatherIcons
@@ -385,32 +388,14 @@ private fun SubAgentDispatchItemCard(
 /** 警告/回退提示条。 */
 @Composable
 private fun SubAgentWarningBanner(warning: String) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.xs),
-        color = MaterialTheme.semanticColors.warningContainer.copy(alpha = 0.35f),
-        border = BorderStroke(0.5.dp, MaterialTheme.semanticColors.warning.copy(alpha = 0.35f))
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
-        ) {
-            Icon(
-                imageVector = FeatherIcons.AlertCircle,
-                contentDescription = null,
-                tint = MaterialTheme.semanticColors.warning,
-                modifier = Modifier.size(12.dp)
-            )
-            Text(
-                text = warning,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.semanticColors.onWarningContainer,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
+    InlineBanner(
+        text = warning,
+        level = InlineBannerLevel.Warning,
+        icon = FeatherIcons.AlertCircle,
+        contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.xs),
+        textStyle = MaterialTheme.typography.labelSmall,
+        maxLines = 2
+    )
 }
 
 /** 发出时的状态药丸：指示子代理任务已成功派发。 */

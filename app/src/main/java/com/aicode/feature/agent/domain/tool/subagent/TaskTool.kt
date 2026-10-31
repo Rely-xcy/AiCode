@@ -97,6 +97,37 @@ class TaskTool @Inject constructor(
 
     override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列出。子代理拥有独立上下文，按所选代理的工具集工作，不能嵌套创建子代理；全局最多同时运行 5 个（所有会话共享名额）。任务完成后会通知主会话，无需轮询；运行中也可能主动发消息。用 send 可追加指令或继续追问已完成的子代理。创建时可用 tier 按任务难度选择模型档位（light 只读探索与机械活 / standard 单文件修改与常规修复 / strong 跨模块重构与疑难排查）；省略 tier 时按用户在设置里配置的「均衡」档，一档都没配才继承父会话。"
 
+    /** tasks 数组中单个任务项的 JSON Schema */
+    private val taskItemSchema: Map<String, Any> = mapOf(
+        "type" to "object",
+        "properties" to mapOf(
+            "prompt" to mapOf(
+                "type" to "string",
+                "description" to "给子代理的完整指令（必填）。写明目标、已知信息、约束与预期产出"
+            ),
+            "description" to mapOf(
+                "type" to "string",
+                "description" to "子代理任务描述（可选，作为子会话标题，如「修复登录 bug」）"
+            ),
+            "agent" to mapOf(
+                "type" to "string",
+                "description" to "自定义子代理名（可选）：取系统提示词「可用子代理」清单中的名称"
+            ),
+            "tier" to mapOf(
+                "type" to "string",
+                "enum" to SubagentModelTier.entries.map { it.apiValue },
+                "description" to "模型档位（可选）：light / standard / strong"
+            ),
+            // fork 独有：并行派发时声明写范围，防止两个子代理改同一个文件。
+            "writeScope" to mapOf(
+                "type" to "array",
+                "items" to mapOf("type" to "string"),
+                "description" to "写范围（可选）：要改的文件或目录，支持 * 与 **"
+            )
+        ),
+        "required" to listOf("prompt")
+    )
+
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
             name = "action",
@@ -147,20 +178,7 @@ class TaskTool @Inject constructor(
             type = ParameterType.ARRAY,
             description = "批量创建任务列表（create 可选，与单个 prompt 二选一）：每个元素为一个包含 prompt（必填）、description（可选）、agent（可选）、tier（可选）、writeScope（可选）的对象。一次性批量派发多个子代理。",
             required = false,
-            itemsSchema = mapOf(
-                "type" to "object",
-                "properties" to mapOf(
-                    "prompt" to mapOf("type" to "string"),
-                    "description" to mapOf("type" to "string"),
-                    "agent" to mapOf("type" to "string"),
-                    "tier" to mapOf("type" to "string"),
-                    "writeScope" to mapOf(
-                        "type" to "array",
-                        "items" to mapOf("type" to "string")
-                    )
-                ),
-                "required" to listOf("prompt")
-            )
+            itemsSchema = taskItemSchema
         ),
         "message" to ToolParameter(
             name = "message",

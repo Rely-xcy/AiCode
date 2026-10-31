@@ -52,6 +52,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.TokenStatsPalette
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.util.formatCacheHitRatePercent
 import com.aicode.core.util.formatCostUsd
 import com.aicode.feature.agent.data.local.dao.CallSummary
 import com.aicode.feature.agent.data.local.dao.DayCallStats
@@ -82,7 +83,6 @@ import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.min
 
 private val INPUT_COLOR = TokenStatsPalette.Input
 private val OUTPUT_COLOR = TokenStatsPalette.Output
@@ -1004,19 +1004,13 @@ private fun formatCache(context: android.content.Context, cachedRead: Long, cach
 private fun formatCallTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
-/** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）；缓存读取为 0 表示渠道没上报，显示 - 而不是误导性的 0%。 */
-internal fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
-    if (call.inputTokens <= 0 || call.cachedInputTokens <= 0) return "-"
-    val rate = min(call.cachedInputTokens * 100.0 / call.inputTokens, 100.0)
-    return String.format(Locale.getDefault(), "%.1f%%", rate)
-}
+/** 单次调用缓存命中率：口径见 [formatCacheHitRatePercent]。 */
+internal fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String =
+    formatCacheHitRatePercent(call.inputTokens, call.cachedInputTokens)
 
-/** 概览缓存命中率：缓存输入 / 总输入（与单次调用同口径）；clamp 到 100% 兜住个别服务端上报的异常值，缓存为 0 时同样显示 -。 */
-internal fun formatCacheHitRate(s: CallSummary): String {
-    if (s.inputTokens <= 0 || s.cachedInputTokens <= 0) return "-"
-    val rate = min(s.cachedInputTokens * 100.0 / s.inputTokens, 100.0)
-    return String.format(Locale.getDefault(), "%.1f%%", rate)
-}
+/** 概览缓存命中率：与单次调用同口径，见 [formatCacheHitRatePercent]。 */
+internal fun formatCacheHitRate(s: CallSummary): String =
+    formatCacheHitRatePercent(s.inputTokens, s.cachedInputTokens)
 
 /** 明细表里的缓存 token 列：0 表示渠道没上报，显示 -（与表内其它缺失值口径一致）。 */
 internal fun formatOptionalTokens(value: Int): String = if (value > 0) value.toString() else "-"

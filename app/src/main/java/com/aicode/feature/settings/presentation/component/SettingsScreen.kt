@@ -69,6 +69,7 @@ import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionToggleAction
 import com.aicode.core.ui.pageEnter
@@ -1699,30 +1700,17 @@ fun SettingsScreen(
         LaunchedEffect(deleteStarted, deleting) {
             if (deleteStarted && !deleting) skillToDelete = null
         }
-        AlertDialog(
-            onDismissRequest = { if (!deleting) skillToDelete = null },
-            title = { Text(stringResource(R.string.skills_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.skills_delete_confirm_message, target.name)) },
-            confirmButton = {
-                TextButton(
-                    enabled = !deleting,
-                    onClick = {
-                        deleteStarted = true
-                        viewModel.deleteSkill(target.name, target.scope)
-                    }
-                ) {
-                    if (deleting) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
+        AppConfirmDialog(
+            title = stringResource(R.string.skills_delete_confirm_title),
+            message = stringResource(R.string.skills_delete_confirm_message, target.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            inProgress = deleting,
+            onConfirm = {
+                deleteStarted = true
+                viewModel.deleteSkill(target.name, target.scope)
             },
-            dismissButton = {
-                TextButton(enabled = !deleting, onClick = { skillToDelete = null }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            }
+            onDismiss = { skillToDelete = null }
         )
     }
 
@@ -1734,30 +1722,17 @@ fun SettingsScreen(
         LaunchedEffect(deleteStarted, deleting) {
             if (deleteStarted && !deleting) subAgentToDelete = null
         }
-        AlertDialog(
-            onDismissRequest = { if (!deleting) subAgentToDelete = null },
-            title = { Text(stringResource(R.string.subagents_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.subagents_delete_confirm_message, target.name)) },
-            confirmButton = {
-                TextButton(
-                    enabled = !deleting,
-                    onClick = {
-                        deleteStarted = true
-                        viewModel.deleteSubAgent(target.name, target.scope)
-                    }
-                ) {
-                    if (deleting) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
+        AppConfirmDialog(
+            title = stringResource(R.string.subagents_delete_confirm_title),
+            message = stringResource(R.string.subagents_delete_confirm_message, target.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            inProgress = deleting,
+            onConfirm = {
+                deleteStarted = true
+                viewModel.deleteSubAgent(target.name, target.scope)
             },
-            dismissButton = {
-                TextButton(enabled = !deleting, onClick = { subAgentToDelete = null }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            }
+            onDismiss = { subAgentToDelete = null }
         )
     }
 

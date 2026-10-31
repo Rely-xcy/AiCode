@@ -484,10 +484,10 @@ suspend fun <T> retryStaircase(
                 if (!isRateLimitError(e)) throw e
             }
             if (attempt >= maxRetries) throw e
-            awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
             FileLogger.w(TAG, "网络请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())
+            awaitNetworkIfOffline()
             attempt++
             if (wait > 0) delay(wait)
         }
@@ -532,10 +532,10 @@ suspend fun streamWithStaircaseRetry(
                 if (!(isRateLimitError(e) && !receivedContent)) throw e
             }
             if (attempt >= maxRetries) throw e
-            awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
             FileLogger.w(TAG, "流式请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())
+            awaitNetworkIfOffline()
             attempt++
             if (wait > 0) delay(wait)
         }

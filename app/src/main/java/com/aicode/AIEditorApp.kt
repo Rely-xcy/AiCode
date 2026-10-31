@@ -14,6 +14,8 @@ import com.aicode.core.net.AppProxy
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.TombstoneParser
+import com.aicode.core.util.formatCompactTimestamp
+import com.aicode.core.util.formatDateTimeSeconds
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ConnectionState
@@ -651,10 +653,7 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 组装单条异常退出的可读描述：原因、时间、状态、重要级、内存、描述与 trace 首部。 */
     private fun describeExit(info: ApplicationExitInfo): String = buildString {
         append("原因=").append(exitReasonName(info.reason))
-        append("，时间=").append(
-            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-                .format(java.util.Date(info.timestamp))
-        )
+        append("，时间=").append(formatDateTimeSeconds(info.timestamp))
         append("，status=").append(info.status)
         append("，importance=").append(info.importance)
         append("，pss=").append(info.pss / 1024 / 1024).append("MB")
@@ -675,8 +674,7 @@ class AIEditorApp : Application(), Configuration.Provider {
     private fun describeNativeTrace(stream: java.io.InputStream?, timestamp: Long): String {
         val bytes = runCatching { stream?.use { it.readBytes() } }.getOrNull()
         if (bytes == null || bytes.isEmpty()) return "trace: (无)"
-        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
-            .format(java.util.Date(timestamp))
+        val stamp = formatCompactTimestamp(timestamp)
         val dir = FileLogger.logDirectory()?.let { File(it, "crash-traces").apply { mkdirs() } }
         val rawPath = dir?.let { d ->
             File(d, "tombstone-$stamp.pb").also { f ->

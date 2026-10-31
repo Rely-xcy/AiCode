@@ -25,6 +25,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppConfirmDialog
+import com.aicode.core.util.formatBytes
 import com.aicode.feature.backup.domain.remote.RemoteBackup
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -96,35 +98,23 @@ fun RemoteBackupDialog(
     )
 
     pendingDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.backup_net_remote_delete)) },
-            text = { Text(stringResource(R.string.backup_net_remote_delete_confirm, target.name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    onDelete(target)
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
+        AppConfirmDialog(
+            title = stringResource(R.string.backup_net_remote_delete),
+            message = stringResource(R.string.backup_net_remote_delete_confirm, target.name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete = null
+                onDelete(target)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDelete = null }
         )
     }
 }
 
 private fun remoteBackupSubtitle(item: RemoteBackup): String {
-    val size = formatSize(item.size)
+    val size = formatBytes(item.size, Locale.US)
     if (item.lastModified <= 0L) return size
     val time = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(item.lastModified))
     return "$size · $time"
-}
-
-private fun formatSize(bytes: Long): String = when {
-    bytes >= 1L shl 30 -> String.format(Locale.US, "%.1f GB", bytes / (1L shl 30).toDouble())
-    bytes >= 1L shl 20 -> String.format(Locale.US, "%.1f MB", bytes / (1L shl 20).toDouble())
-    bytes >= 1L shl 10 -> String.format(Locale.US, "%.1f KB", bytes / (1L shl 10).toDouble())
-    else -> "$bytes B"
 }

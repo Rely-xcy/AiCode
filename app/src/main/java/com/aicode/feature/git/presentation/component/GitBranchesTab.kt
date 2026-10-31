@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppConfirmDialog
 import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
@@ -245,24 +246,24 @@ internal fun BranchesTab(
     }
 
     pendingDelete?.let { (name, isRemote) ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(if (isRemote) stringResource(R.string.git_delete_remote_branch) else stringResource(R.string.git_delete_branch)) },
-            text = {
-                Text(
-                    if (isRemote) stringResource(R.string.git_delete_remote_branch_confirm, name)
-                    else stringResource(R.string.git_delete_local_branch_confirm, name)
-                )
+        AppConfirmDialog(
+            title = if (isRemote) {
+                stringResource(R.string.git_delete_remote_branch)
+            } else {
+                stringResource(R.string.git_delete_branch)
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    if (isRemote) onDeleteRemoteBranch(name) else onDeleteBranch(name)
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+            message = if (isRemote) {
+                stringResource(R.string.git_delete_remote_branch_confirm, name)
+            } else {
+                stringResource(R.string.git_delete_local_branch_confirm, name)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete = null
+                if (isRemote) onDeleteRemoteBranch(name) else onDeleteBranch(name)
+            },
+            onDismiss = { pendingDelete = null }
         )
     }
 
@@ -357,19 +358,16 @@ internal fun BranchesTab(
     }
 
     pendingDeleteTag?.let { name ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteTag = null },
-            title = { Text(stringResource(R.string.git_delete_tag)) },
-            text = { Text(stringResource(R.string.git_delete_tag_confirm, name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDeleteTag = null
-                    onDeleteTag(name)
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.git_delete_tag),
+            message = stringResource(R.string.git_delete_tag_confirm, name),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDeleteTag = null
+                onDeleteTag(name)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteTag = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDeleteTag = null }
         )
     }
 

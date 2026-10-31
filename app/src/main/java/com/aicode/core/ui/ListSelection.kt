@@ -1,7 +1,6 @@
 package com.aicode.core.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -11,9 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -217,50 +214,4 @@ fun SelectionActionIconButton(
             modifier = Modifier.size(18.dp)
         )
     }
-}
-
-/**
- * 批量删除二次确认弹窗。[inProgress] 为 true 时确认按钮转圈并锁定两个按钮，
- * 避免删除中途被关掉导致「看不见到底成没成」。
- */
-@Composable
-fun BatchDeleteConfirmDialog(
-    title: String,
-    message: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-    inProgress: Boolean = false,
-    progressText: String? = null
-) {
-    AlertDialog(
-        onDismissRequest = { if (!inProgress) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column {
-                Text(message)
-                if (progressText != null) {
-                    Spacer(Modifier.height(Spacing.sm))
-                    Text(
-                        text = progressText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !inProgress) {
-                if (inProgress) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !inProgress) {
-                Text(stringResource(R.string.common_cancel))
-            }
-        }
-    )
 }

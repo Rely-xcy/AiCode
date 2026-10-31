@@ -68,6 +68,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.InlineBanner
+import com.aicode.core.ui.InlineBannerLevel
 import com.aicode.core.ui.ShapeClickBox
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.feature.agent.domain.container.ContainerInitState
@@ -81,6 +83,7 @@ import com.termux.terminal.TerminalColors
 import com.termux.terminal.TextStyle
 import com.termux.view.TerminalView
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Settings
@@ -662,22 +665,10 @@ private fun Modifier.widthChip(label: String): Modifier =
  */
 @Composable
 private fun ConnectionDroppedBanner() {
-    Surface(color = MaterialTheme.colorScheme.errorContainer) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm)
-        ) {
-            Text(
-                text = stringResource(R.string.terminal_connection_dropped),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer
-            )
-            Text(
-                text = stringResource(R.string.terminal_connection_dropped_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer
-            )
-        }
-    }
+    InlineBanner(
+        text = stringResource(R.string.terminal_connection_dropped),
+        detail = stringResource(R.string.terminal_connection_dropped_hint),
+        level = InlineBannerLevel.Error,
+        icon = FeatherIcons.AlertCircle
+    )
 }

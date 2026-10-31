@@ -49,12 +49,12 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.StorageUsagePalette
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.util.formatCapacityBytes
 import com.aicode.feature.settings.domain.model.CleanupKind
 import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
-import com.aicode.feature.settings.domain.model.formatStorageSize
 import com.aicode.feature.settings.presentation.StorageUiState
 import com.aicode.feature.settings.presentation.StorageViewModel
 
@@ -146,7 +146,7 @@ internal fun StorageSection(
             FootNote(stringResource(R.string.storage_breakdown_note))
 
             state.freedBytes?.let { freed ->
-                FootNote(stringResource(R.string.storage_freed, formatStorageSize(freed)))
+                FootNote(stringResource(R.string.storage_freed, formatCapacityBytes(freed)))
             }
         }
 
@@ -164,7 +164,7 @@ internal fun StorageSection(
                 if (state.cleaning) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 } else {
-                    Text(stringResource(R.string.storage_clean_selected, formatStorageSize(state.selectedBytes)))
+                    Text(stringResource(R.string.storage_clean_selected, formatCapacityBytes(state.selectedBytes)))
                 }
             }
         }
@@ -181,7 +181,7 @@ internal fun StorageSection(
                 ) {
                     Text(stringResource(
                         R.string.storage_clean_confirm_selected,
-                        formatStorageSize(kinds.sumOf { state.cleanableSizes[it] ?: 0L })
+                        formatCapacityBytes(kinds.sumOf { state.cleanableSizes[it] ?: 0L })
                     ))
                     kinds.forEach { kind ->
                         Column {
@@ -223,7 +223,7 @@ private fun OverviewCard(state: StorageUiState) {
             Spacer(Modifier.height(Spacing.xs))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = formatStorageSize(state.totalBytes),
+                    text = formatCapacityBytes(state.totalBytes),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -245,8 +245,8 @@ private fun OverviewCard(state: StorageUiState) {
             Text(
                 text = stringResource(
                     R.string.storage_device_free,
-                    formatStorageSize(state.deviceSpace.availableBytes),
-                    formatStorageSize(state.deviceSpace.totalBytes)
+                    formatCapacityBytes(state.deviceSpace.availableBytes),
+                    formatCapacityBytes(state.deviceSpace.totalBytes)
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.semanticColors.subtleText
@@ -329,7 +329,7 @@ private fun CategoryRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = entry?.let { formatStorageSize(it.bytes) } ?: "—",
+            text = entry?.let { formatCapacityBytes(it.bytes) } ?: "—",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.semanticColors.subtleText
         )
@@ -377,7 +377,7 @@ private fun DetailRow(
             )
             Spacer(Modifier.width(Spacing.sm))
             Text(
-                text = formatStorageSize(detail.bytes),
+                text = formatCapacityBytes(detail.bytes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.semanticColors.subtleText
             )

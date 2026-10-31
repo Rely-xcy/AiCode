@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.aicode.R
+import com.aicode.core.util.ImageDownscaler
+import com.aicode.core.util.formatMegabyteBytes
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.workspace.domain.FileAccessProvider
@@ -75,10 +77,11 @@ internal fun AgentAttachment.toPendingAttachment(): PendingUploadAttachment {
         val file = File(localPath)
         if (file.exists() && file.isFile && file.length() > 0) {
             try {
-                val bytes = file.readBytes()
-                val base64 = Base64.getEncoder().encodeToString(bytes)
+                val (mime, base64) = ImageDownscaler.downscaleToBase64(
+                    file.readBytes(), mimeType.ifBlank { "image/jpeg" }
+                )
                 AgentImage(
-                    mimeType = mimeType.ifBlank { "image/jpeg" },
+                    mimeType = mime,
                     base64Data = base64,
                     path = containerPath
                 )
@@ -133,8 +136,8 @@ internal fun selectedAttachments(
 internal fun hasAttachmentSlots(currentCount: Int): Boolean =
     currentCount < MAX_PENDING_ATTACHMENTS
 
-private fun imageLimitError(context: Context): String =
-    context.getString(R.string.chat_image_too_large, formatBytes(MAX_IMAGE_UPLOAD_BYTES))
+private fun imageLimitError(context: Context, limit: Long): String =
+    context.getString(R.string.chat_image_too_large, formatBytes(limit))
 
 internal fun emptyWorkspaceMessage(context: Context): String =
     context.getString(R.string.chat_select_workspace_first)
@@ -181,10 +184,10 @@ internal suspend fun copyUriToWorkspace(
         fileMimeType(context, uri, fileName)
     }
 
-    // 图片要整份读进来做 base64，先按 provider 报的大小拦一道；SIZE 拿不到时下面还有兜底判断。
+    // 原图要整份读进内存再缩小，这里只拦会顶爆堆的超大文件；发给模型的副本在缩小后再按上限校验。
     if (includeImageData) {
         val declared = context.contentSize(uri)
-        if (declared != null && declared > MAX_IMAGE_UPLOAD_BYTES) error(imageLimitError(context))
+        if (declared != null && declared > MAX_IMAGE_SOURCE_BYTES) error(imageLimitError(context, MAX_IMAGE_SOURCE_BYTES))
     }
 
     // 大文件读写可能持续很久。用 runInterruptible 把「上传协程被取消」转成对阻塞调用的线程中断，
@@ -194,12 +197,14 @@ internal suspend fun copyUriToWorkspace(
     if (includeImageData) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: error(unreadableFileMessage(context))
-        if (bytes.size > MAX_IMAGE_UPLOAD_BYTES) error(imageLimitError(context))
+        if (bytes.size > MAX_IMAGE_SOURCE_BYTES) error(imageLimitError(context, MAX_IMAGE_SOURCE_BYTES))
+        val scaled = ImageDownscaler.downscale(bytes, mimeType)
+        if (scaled.bytes.size > MAX_IMAGE_UPLOAD_BYTES) error(imageLimitError(context, MAX_IMAGE_UPLOAD_BYTES))
         runInterruptible { fileAccess.writeBytes(containerPath, bytes, overwrite = true) }
         sizeBytes = bytes.size.toLong()
         image = AgentImage(
-            mimeType = mimeType,
-            base64Data = Base64.getEncoder().encodeToString(bytes),
+            mimeType = scaled.mimeType,
+            base64Data = Base64.getEncoder().encodeToString(scaled.bytes),
             path = containerPath
         )
     } else {
@@ -282,14 +287,11 @@ private val SUPPORTED_IMAGE_MIME_TYPES = setOf(
 )
 
 private const val MAX_IMAGE_UPLOAD_BYTES = 5L * 1024 * 1024
+private const val MAX_IMAGE_SOURCE_BYTES = 40L * 1024 * 1024
 internal const val MAX_PENDING_ATTACHMENTS = 8
 
-internal fun formatBytes(bytes: Long): String {
-    val kb = 1024.0
-    val mb = kb * 1024.0
-    return when {
-        bytes >= mb -> String.format(java.util.Locale.US, "%.1f MB", bytes / mb)
-        bytes >= kb -> String.format(java.util.Locale.US, "%.0f KB", bytes / kb)
-        else -> "$bytes B"
-    }
-}
+/**
+ * 附件体积展示（输入区、消息附件共用）：固定 Locale.US，小数点不随系统区域变成逗号。
+ * 体积口径见 [formatMegabyteBytes]。
+ */
+internal fun formatBytes(bytes: Long): String = formatMegabyteBytes(bytes, java.util.Locale.US)

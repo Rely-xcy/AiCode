@@ -17,6 +17,8 @@ import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
 import com.aicode.feature.backup.domain.remote.RemoteBackup
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.formatCoarseBytes
+import com.aicode.core.util.formatCompactTimestamp
 import dagger.hilt.android.lifecycle.HiltViewModel
 import com.aicode.R
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -33,9 +35,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
 
 sealed class BackupState {
@@ -211,7 +210,7 @@ class BackupViewModel @Inject constructor(
                             exportStats.skippedWorkspaces.joinToString { "${it.name}(${it.reason})" }
                     )
                 }
-                val name = "aicode-backup-${fileTimestamp()}.tar.gz"
+                val name = "aicode-backup-${formatCompactTimestamp()}.tar.gz"
                 val result = withContext(Dispatchers.IO) {
                     runCatching { targetRepository.storageFor(target).upload(name, file).getOrThrow() }
                 }
@@ -445,8 +444,8 @@ class BackupViewModel @Inject constructor(
     private fun describeBackupError(e: Throwable): String = when (e) {
         is InsufficientSpaceException -> context.getString(
             R.string.backup_space_insufficient,
-            formatBytes(e.requiredBytes),
-            formatBytes(e.availableBytes)
+            formatCoarseBytes(e.requiredBytes),
+            formatCoarseBytes(e.availableBytes)
         )
         is PartialRestoreException -> {
             val detail = e.cause?.let { it.message ?: it::class.simpleName }
@@ -480,12 +479,6 @@ class BackupViewModel @Inject constructor(
         }
     }
 
-    private fun formatBytes(bytes: Long): String = when {
-        bytes >= 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
-        bytes >= 1024L * 1024 -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
-        else -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
-    }
-
     fun reset() {
         if (_state.value is BackupState.WorkspaceSelection) {
             cancelImportSelection()
@@ -493,9 +486,6 @@ class BackupViewModel @Inject constructor(
             _state.value = BackupState.Idle
         }
     }
-
-    private fun fileTimestamp(): String =
-        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
 
     companion object {
         private const val TAG = "Backup"

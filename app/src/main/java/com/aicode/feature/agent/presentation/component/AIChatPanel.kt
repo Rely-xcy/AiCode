@@ -211,6 +211,11 @@ internal data class ChatRenderItem(
     val groupMember: Boolean = false,
 )
 
+/** 消息条数超过此值后，渲染项列表改在后台线程重建。 */
+private const val ASYNC_CHAT_ITEMS_THRESHOLD = 120
+
+private class AsyncChatItems(val sessionId: String?, val items: List<ChatRenderItem>)
+
 /** 工具调用分组头 item 的 contentType。 */
 private const val TOOL_GROUP_CONTENT_TYPE = "tool-group"
 
@@ -1092,7 +1097,11 @@ fun AIChatPanel(
                 ?.let { message -> stableTurnKeys[message.id] ?: turnKeyOf(message.id) }
         }
     }
-    val chatItems = remember(messages, toolGroupOverrideSnapshot, turnOverrideSnapshot, activeTurnKey, currentSessionId, stableTurnKeys) {
+    // 长会话里重建整张列表要遍历全部消息（拆轮、分组、拆块），在主线程上做会卡住每次落库与补载历史。
+    // 超过阈值后改在后台算，算完前继续显示上一版（LazyColumn 与它的条数一直自洽）；
+    // 切换会话后的首版仍同步算，避免短暂显示上一个会话的内容。
+    val chatItemsKey = remember(messages, toolGroupOverrideSnapshot, turnOverrideSnapshot, activeTurnKey, currentSessionId, stableTurnKeys) { Any() }
+    val buildItems = {
         flattenChatProcesses(buildChatItems(
             messages = messages,
             groupOverrides = toolGroupOverrideSnapshot,
@@ -1102,9 +1111,22 @@ fun AIChatPanel(
             turnKeys = stableTurnKeys,
         ))
     }
+    val useAsyncItems = messages.size > ASYNC_CHAT_ITEMS_THRESHOLD
+    var asyncItems by remember { mutableStateOf<AsyncChatItems?>(null) }
+    LaunchedEffect(chatItemsKey, useAsyncItems) {
+        if (!useAsyncItems) return@LaunchedEffect
+        val sessionId = currentSessionId
+        val built = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { buildItems() }
+        asyncItems = AsyncChatItems(sessionId, built)
+    }
+    val readyAsyncItems = asyncItems?.takeIf { useAsyncItems && it.sessionId == currentSessionId }
+    val chatItems = readyAsyncItems?.items ?: remember(chatItemsKey) { buildItems() }
+
     // 预热队列：最近窗口里会走 Markdown 渲染的定稿正文。长文渲染的是分块切片（见 messageRenderItems），
     // 所以取 item.slice 而不是整条正文，否则预热写进去的缓存键与渲染时查的键对不上。
     // 从最近处往历史上预热：用户回看是从底部往上翻，先把即将滑入视口的那几条喂熟才划算。
+    // 异步构建时 chatItems 先返回上一版，队列会跟着重建一次、新列表到后再重建一次：
+    // key 里带的就是当前 chatItems，不会对着旧列表写错缓存键。
     val markdownWarmQueue = remember(currentSessionId, chatItems) {
         chatItems
             .filter { it.turnHeader == null && it.toolGroup == null && it.contentType != REASONING_CONTENT_TYPE }
@@ -1832,17 +1854,25 @@ fun AIChatPanel(
     // fling 中 index 每跨一个 item 就变一次，会让整个 AIChatPanel 大函数随之重组、连带全部可见
     // item 重组，是快速滚动掉帧（进而 fling 补偿跳变、抽搐）的主要放大器。改为在协程内用
     // snapshotFlow 观察 index，组合体完全不读它。
+    // 触发信号里带上分页上限：消息按条数分页，一轮长过程折叠后整页补载可能一个可见项都不增加，
+    // index 不再变化；只监听 index 会卡在这里，要用户上下晃动才能再触发一页。
+    // 上限纳入信号后，每页补载完成都会重新判断，仍在顶部就连续补载。
     val latestMessagesState = rememberUpdatedState(messagesState)
     // 滑动到顶触发：lambda 每帧执行，不能把消息状态也塞进来——那会让滑动每一帧多一次
     // StateFlow 快照读取 + Pair 分配（用户实测：滑动中卡、加载完静止不卡）。
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .collect { index ->
-                val ms = latestMessagesState.value
-                if (index <= 3 && ms.hasMore && !ms.isLoadingMore) {
-                    viewModel.loadMoreMessages()
-                }
+        // 触发信号里带上分页上限：消息按条数分页，一轮长过程折叠后整页补载可能一个可见项都不增加，
+        // index 不再变化；只监听 index 会卡在这里，要用户上下晃动才能再触发一页。
+        // 上限纳入信号后，每页补载完成都会重新判断，仍在顶部就连续补载。
+        // 代价是 lambda 每帧多读一次消息快照；用 distinctUntilChanged 把下游触发压到真正变化时。
+        snapshotFlow {
+            val ms = latestMessagesState.value
+            Triple(listState.firstVisibleItemIndex <= 3 && ms.hasMore && !ms.isLoadingMore, ms.sessionId, ms.limit)
+        }
+            .distinctUntilChanged()
+            .collect { (shouldLoad, _, _) ->
+                if (shouldLoad) viewModel.loadMoreMessages()
             }
     }
     // 折叠头死锁兜底：长对话列表被折叠头压成少数 item 后可能一开局就停在 index ≤ 3 且

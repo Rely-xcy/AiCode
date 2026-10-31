@@ -52,6 +52,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppConfirmDialog
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -410,19 +411,16 @@ fun ChatDrawerContent(
     }
 
     pendingDelete?.let { session ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.chat_delete_session)) },
-            text = { Text(stringResource(R.string.chat_delete_session_confirm, session.title)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    onDelete(session)
-                    pendingDelete = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.chat_delete_session),
+            message = stringResource(R.string.chat_delete_session_confirm, session.title),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                onDelete(session)
+                pendingDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDelete = null }
         )
     }
 
@@ -456,34 +454,25 @@ fun ChatDrawerContent(
     }
 
     if (showBatchDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showBatchDeleteConfirm = false },
-            title = { Text(stringResource(R.string.chat_batch_delete_title)) },
-            text = {
-                Text(stringResource(R.string.chat_batch_delete_confirm, selectedSessionIds.size))
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showBatchDeleteConfirm = false
-                    val toDelete = selectedSessionIds.toSet()
-                    selectedSessionIds.clear()
-                    isSelectionMode = false
-                    if (onDeleteSessions != null) {
-                        onDeleteSessions(toDelete)
-                    } else {
-                        toDelete.forEach { sid: String ->
-                            sessions.firstOrNull { it.id == sid }?.let { onDelete(it) }
-                        }
+        AppConfirmDialog(
+            title = stringResource(R.string.chat_batch_delete_title),
+            message = stringResource(R.string.chat_batch_delete_confirm, selectedSessionIds.size),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                val toDelete = selectedSessionIds.toSet()
+                selectedSessionIds.clear()
+                isSelectionMode = false
+                if (onDeleteSessions != null) {
+                    onDeleteSessions(toDelete)
+                } else {
+                    toDelete.forEach { sid: String ->
+                        sessions.firstOrNull { it.id == sid }?.let { onDelete(it) }
                     }
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showBatchDeleteConfirm = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            }
+            onDismiss = { showBatchDeleteConfirm = false }
         )
     }
 
@@ -1086,30 +1075,23 @@ private fun FileBrowserTab(
     }
 
     pendingDelete?.let { node ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.common_delete)) },
-            text = {
-                Text(
-                    stringResource(
-                        if (node.entry.isDirectory) {
-                            R.string.file_browser_delete_folder_confirm
-                        } else {
-                            R.string.file_browser_delete_file_confirm
-                        },
-                        node.entry.name
-                    )
-                )
+        AppConfirmDialog(
+            title = stringResource(R.string.common_delete),
+            message = stringResource(
+                if (node.entry.isDirectory) {
+                    R.string.file_browser_delete_folder_confirm
+                } else {
+                    R.string.file_browser_delete_file_confirm
+                },
+                node.entry.name
+            ),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                onDeleteEntry(node.path)
+                pendingDelete = null
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    onDeleteEntry(node.path)
-                    pendingDelete = null
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDelete = null }
         )
     }
 }

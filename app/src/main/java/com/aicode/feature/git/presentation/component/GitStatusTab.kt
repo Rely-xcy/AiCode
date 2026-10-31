@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.core.ui.AppConfirmDialog
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
@@ -493,36 +494,30 @@ internal fun StatusTab(
     }
 
     pendingDropStash?.let { index ->
-        AlertDialog(
-            onDismissRequest = { pendingDropStash = null },
-            title = { Text(stringResource(R.string.git_stash_drop)) },
-            text = { Text(stringResource(R.string.git_stash_drop_confirm, index)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDropStash = null
-                    onStashDrop(index)
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.git_stash_drop),
+            message = stringResource(R.string.git_stash_drop_confirm, index),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDropStash = null
+                onStashDrop(index)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDropStash = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDropStash = null }
         )
     }
 
     if (showClearStashConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearStashConfirm = false },
-            title = { Text(stringResource(R.string.git_stash_clear)) },
-            text = { Text(stringResource(R.string.git_stash_clear_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showClearStashConfirm = false
-                    onStashClear()
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
+        AppConfirmDialog(
+            title = stringResource(R.string.git_stash_clear),
+            message = stringResource(R.string.git_stash_clear_confirm),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                showClearStashConfirm = false
+                onStashClear()
             },
-            dismissButton = {
-                TextButton(onClick = { showClearStashConfirm = false }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { showClearStashConfirm = false }
         )
     }
 
@@ -563,25 +558,18 @@ internal fun StatusTab(
     }
 
     pendingDelete?.let { path ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = {
-                Text(
-                    stringResource(
-                        if (path.endsWith("/")) R.string.git_action_delete_dir else R.string.git_action_delete_file
-                    )
-                )
+        AppConfirmDialog(
+            title = stringResource(
+                if (path.endsWith("/")) R.string.git_action_delete_dir else R.string.git_action_delete_file
+            ),
+            message = stringResource(R.string.git_delete_untracked_confirm, path),
+            confirmLabel = stringResource(R.string.common_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete = null
+                onDeleteUntracked(path)
             },
-            text = { Text(stringResource(R.string.git_delete_untracked_confirm, path)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    onDeleteUntracked(path)
-                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
+            onDismiss = { pendingDelete = null }
         )
     }
 
