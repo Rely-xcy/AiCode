@@ -45,6 +45,15 @@ class WorkingStateModule @Inject constructor(
     /** 距上次收尾更新的轮数（只在达到阈值时刷新一次，避免每轮多一次模型调用）。 */
     private val turnsSinceUpdate = ConcurrentHashMap<String, Int>()
 
+    /**
+     * 距上次**成功**更新已经过了几轮。
+     *
+     * [turnsSinceUpdate] 是「距离下次尝试还差几轮」的倒计时，更新失败也会重置；
+     * 这个计数只在提炼真正写库成功时清零。注入时要靠它告诉模型「这份状态可能已经过期」，
+     * 否则一段五天前的进展会被当成当前事实。
+     */
+    private val turnsSinceRefresh = ConcurrentHashMap<String, Int>()
+
     // 声明在 init 之前：Kotlin 按声明顺序初始化
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -71,12 +80,15 @@ class WorkingStateModule @Inject constructor(
         watch(sessionId)
         val content = snapshotBySession[sessionId] ?: return null
         if (content.isBlank()) return null
+        val age = turnsSinceRefresh[sessionId] ?: 0
         return buildString {
             append(REMINDER_HEADING).append("\n")
-            append("会话工作状态（每轮重新注入，压缩上下文不会丢；这是本会话已确定的任务理解）：\n")
-            append("硬约束优先于本会话其它一切安排，任何一条都不得违反。\n\n")
+            append("以下是对本会话任务理解的快照，不是本轮指令；与当前对话冲突时以当前对话为准，")
+            append("进度与下一步以「当前任务清单」为准。")
+            if (age > 0) append("上次整理于 $age 轮前，可能已有条目过期。")
+            append("\n\n")
             append(content)
-            append("\n\n若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守过时结论。")
+            append("\n\n若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。")
         }
     }
 
@@ -84,6 +96,7 @@ class WorkingStateModule @Inject constructor(
         // 阶段 0：只在有实质工作的轮次里定期刷新；一次性对话不值得多花一次模型调用。
         if (ctx.isSubAgent) return
         val sessionId = ctx.sessionId ?: return
+        turnsSinceRefresh.merge(sessionId, 1) { old, _ -> old + 1 }
         val oneShot = ctx.oneShot ?: return
         val count = (turnsSinceUpdate[sessionId] ?: 0) + 1
         if (count < UPDATE_EVERY_TURNS) {
@@ -97,6 +110,9 @@ class WorkingStateModule @Inject constructor(
                 history = ctx.history,
                 complete = { prompt -> oneShot(SessionBriefExtractor.PROMPT_FILE, prompt) }
             )
+        }.onSuccess { updated ->
+            // 只有真正写库成功才清零：失败时继续累加，注入侧会如实提示「可能已过期」。
+            if (updated) turnsSinceRefresh[sessionId] = 0
         }.onFailure { e ->
             if (e is kotlinx.coroutines.CancellationException) throw e
             FileLogger.w(TAG, "收尾更新会话工作状态失败，不影响主流程", e)
@@ -108,6 +124,7 @@ class WorkingStateModule @Inject constructor(
         watchers.remove(sessionId)?.cancel()
         snapshotBySession.remove(sessionId)
         turnsSinceUpdate.remove(sessionId)
+        turnsSinceRefresh.remove(sessionId)
     }
 
     private fun watch(sessionId: String) {

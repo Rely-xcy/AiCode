@@ -53,13 +53,16 @@ One or two sentences.
 - the immediate next action, if determined
 
 Merge the existing working state into the new one: keep what is still true, replace what changed, drop what is obsolete. Do not append a changelog.
+
+A statement is obsolete when a newer message contradicts it, or when the action it forbade has since been explicitly approved and completed. Obsolete statements must be removed, even if the user never said "retract that". A stale constraint is worse than a missing one: it will be read as a current hard rule and block correct work.
 </format>
 
 <rules>
 - Write in the same language the user writes in.
 - Be specific: name the files, functions, commands or modules involved when they matter.
-- Hard constraints are the most important section: preserve each one word-for-word, and never remove a constraint unless the user explicitly retracted it.
-- Stay under 4000 characters. Compress wording, never drop a decision or a constraint.
+- Hard constraints are the most important section: preserve each one word-for-word. But drop constraints that are already obsolete under the merge rule above — do not preserve a rule the session has moved past.
+- "当前进展" and "下一步" must be rewritten from the newest messages. Never copy them forward: finished work is not progress, and a stale next step actively misleads.
+- Stay under 4000 characters. Compress wording, never drop a decision or a constraint that is still in force.
 - If the transcript adds nothing durable to the existing state, output the existing state unchanged.
 - Output nothing else — this document is injected verbatim into the system prompt.
 </rules>
