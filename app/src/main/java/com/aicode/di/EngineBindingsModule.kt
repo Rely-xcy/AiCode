@@ -2,6 +2,7 @@ package com.aicode.di
 
 import com.aicode.feature.agent.domain.engine.EngineModule
 import com.aicode.feature.agent.domain.engine.modules.CompactionModule
+import com.aicode.feature.agent.domain.engine.modules.CredentialsModule
 import com.aicode.feature.agent.domain.engine.modules.MemoryModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentModule
 import com.aicode.feature.agent.domain.engine.modules.SubAgentTeamModule
@@ -52,4 +53,8 @@ abstract class EngineBindingsModule {
     @Binds
     @IntoSet
     abstract fun bindVirtualScreenModule(module: VirtualScreenModule): EngineModule
+
+    @Binds
+    @IntoSet
+    abstract fun bindCredentialsModule(module: CredentialsModule): EngineModule
 }
