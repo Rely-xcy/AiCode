@@ -53,6 +53,7 @@ class CredentialsModuleTest {
     @Test
     fun askingWhereTokenIsConfiguredInjects() {
         assertNotNull(module().turnReminder(ctx("供应商的 token 在哪配置")))
+        assertNotNull(module().turnReminder(ctx("token 怎么配置才能用")))
     }
 
     @Test

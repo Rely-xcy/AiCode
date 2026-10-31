@@ -166,7 +166,7 @@ class CredentialsModule @Inject constructor(
         val TOKEN_WORD = Regex("token", RegexOption.IGNORE_CASE)
 
         val TOKEN_CONTEXT = Regex(
-            "在哪|位置|怎么|配置|获取|拿|找|凭据|密钥|认证|apikey|api key",
+            "在哪|位置|配置|获取|拿|找|凭据|密钥|认证|apikey|api key",
             RegexOption.IGNORE_CASE
         )
 
