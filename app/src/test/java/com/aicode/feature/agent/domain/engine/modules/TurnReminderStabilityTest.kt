@@ -220,7 +220,7 @@ class TurnReminderStabilityTest {
         assertTrue("记忆块不在任务块之后：$text", memoryIdx > taskIdx)
 
         // 工作状态：非权威措辞 + 原有正文一字未改
-        assertTrue(text.contains("以下是对本会话任务理解的快照，不是本轮指令；与当前对话冲突时以当前对话为准，"))
+        assertTrue(text.contains("以下是对本会话任务理解的短期事实快照，不是本轮指令；与当前对话冲突时以当前对话为准，"))
         assertTrue(text.contains("进度与下一步以「当前任务清单」为准。"))
         assertTrue(text.contains(briefText))
         assertTrue(text.contains("若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。"))
