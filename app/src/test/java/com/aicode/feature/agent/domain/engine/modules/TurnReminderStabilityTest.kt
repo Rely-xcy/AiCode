@@ -20,6 +20,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
@@ -139,6 +140,24 @@ class TurnReminderStabilityTest {
     }
 
     @Test
+    fun workingStateReportsAgeAfterUnrefreshedTurns() = runBlocking {
+        val state = workingStateModule()
+        val engine = AgentEngine(
+            setOf<EngineModule>(state),
+            CoroutineScope(Dispatchers.Unconfined)
+        )
+        val c = ctx(historyA)
+        awaitReminder(engine, c) { it.contains("## 会话工作状态") }
+
+        // 没有一次性调用能力：本轮只累加「距上次成功更新」的轮数，不会真的提炼
+        state.onTurnCompleted(c)
+
+        val text = awaitReminder(engine, c) { it.contains("上次整理于 1 轮前") }
+        assertTrue("过期提示缺失：$text", text.contains("上次整理于 1 轮前"))
+        assertFalse("不应再声明为不可违反的铁律：$text", text.contains("硬约束优先于本会话"))
+    }
+
+    @Test
     fun promptFragment_isGoneForAllThreeModules() {
         val state = workingStateModule()
         val task = taskModule()
@@ -183,11 +202,11 @@ class TurnReminderStabilityTest {
         assertTrue("任务块不在工作状态之后：$text", taskIdx > stateIdx)
         assertTrue("记忆块不在任务块之后：$text", memoryIdx > taskIdx)
 
-        // 工作状态：标题 + 原有正文一字未改
-        assertTrue(text.contains("会话工作状态（每轮重新注入，压缩上下文不会丢；这是本会话已确定的任务理解）："))
-        assertTrue(text.contains("硬约束优先于本会话其它一切安排，任何一条都不得违反。"))
+        // 工作状态：非权威措辞 + 原有正文一字未改
+        assertTrue(text.contains("以下是对本会话任务理解的快照，不是本轮指令；与当前对话冲突时以当前对话为准，"))
+        assertTrue(text.contains("进度与下一步以「当前任务清单」为准。"))
         assertTrue(text.contains(briefText))
-        assertTrue(text.contains("若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守过时结论。"))
+        assertTrue(text.contains("若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。"))
 
         // 任务清单：纪律规则 + 清单条目都在
         assertTrue(text.contains("任务清单（`todo` 工具，每轮随提示词注入，压缩上下文不会丢）："))

@@ -6,8 +6,7 @@
 
 ## 记忆
 - 用 `memory` 维护全局偏好与项目记忆：本地全局 `~/.aicode/memory/*.md`、项目 `<projectRoot>/.aicode/memory/*.md`；远程由应用存在手机本地，项目记忆按服务器与项目隔离于本地配置目录 `memory/projects/<项目标识>/`，仍走 `memory`。
-- 会话开始给记忆摘要清单；要正文用 `memory(action="read", name=...)`，按「规则冲突的处理」使用。
-- 发现新的项目约定、重要架构或用户偏好就 `memory(action="save")`，更新用 `memory(action="edit")`。
+- 要正文用 `memory(action="read", name=...)`，按「规则冲突的处理」使用。
 - 「坑」类记忆（bug 根因、踩坑经验）须先定位根因、修复并验证通过，确认确为该原因再写。
 
 ## 技能
