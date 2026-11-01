@@ -50,10 +50,12 @@ class RootTool @Inject constructor(
 
     override val description =
         "通过设备 root（su，uid 0）在宿主 Android 系统上执行**只读/调试类**命令（`dumpsys`/`getprop`/`ls`/`cat`/`ps`/`logcat -d`/`input`/`screencap`/`wm` 查询/`settings get`/`pm list`/`am stack list` 等），" +
+            "以及 `grep`/`head`/`tail`/`wc`/`sort`/`uniq`/`cut`/`tr`/`sed -n`/只读 `find` 这类过滤命令；" +
+            "另允许在 `/data/local/tmp` 与 `Download` 内做受控暂存写（`mkdir`/`cp`/`mv`/`rm`/`chmod`），用于搬日志、导证据。" +
             "用于辅助调试宿主系统与虚拟屏自动化测试。需设备已 root，且每次调用都会弹窗确认（不可「始终允许」）。" +
             "**白名单外的命令一律拒绝执行**（不提供解锁参数）：`service` 只放 `list`、`wm`/`cmd window` 只放查询、" +
             "`monkey` 全拒、`am` 只放已评估的子命令（`start`/`force-stop`/`broadcast` 这类会改运行状态的照常放行，但弹窗会标注）。" +
-            "需要改系统、刷机、清数据这类操作请让用户在终端自己跑。"
+            "需要改系统分区、刷机、清数据这类操作请让用户在终端自己跑。"
 
     override val permissionPolicy = ToolPermissionPolicy.ASK
     override val capabilities = setOf(ToolCapability.EXECUTE_COMMANDS)
@@ -123,7 +125,8 @@ class RootTool @Inject constructor(
         if (!RootCommandGuard.isAllowlisted(command)) {
             return ToolResult.Error(
                 "该命令不在可自动执行的白名单内（白名单为只读/调试类：dumpsys/getprop/ls/cat/ps/logcat -d/input/screencap/" +
-                    "wm 查询/settings get/pm list/service list/am 的已评估子命令等）。" +
+                    "wm 查询/settings get/pm list/service list/am 的已评估子命令，以及 grep/head/tail 等只读过滤；" +
+                    "暂存写仅限 /data/local/tmp 与 Download 下的 mkdir/cp/mv/rm/chmod）。" +
                     "为设备安全，AI 不会以 root 执行白名单外的命令。如需执行，请让用户在容器终端里自己跑。",
                 code = "ROOT_COMMAND_NOT_ALLOWLISTED"
             )

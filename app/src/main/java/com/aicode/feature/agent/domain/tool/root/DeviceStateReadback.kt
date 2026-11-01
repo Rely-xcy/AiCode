@@ -16,8 +16,9 @@ package com.aicode.feature.agent.domain.tool.root
  * [RootTool] 与 [com.aicode.feature.agent.domain.tool.shizuku.ShizukuTool] 共用本对象：两者都是
  * 「把一条命令丢给设备执行」，状态语义一致。本对象只做命令解析与判决，执行由调用方注入（便于单测）。
  *
- * 只读判定直接复用 [RootCommandGuard.isAllowlisted]：整条已在白名单内的命令本身不会改状态，不生成探针；
- * 因此白名单是唯一的「哪些算只读」的真相来源，本对象不再复述一遍（避免两边慢慢走偏）。
+ * 只读判定直接复用 [RootCommandGuard.isAllowlisted]：整条已在白名单内的只读命令不生成探针。
+ * 注意：`mkdir`/`cp`/`mv`/`rm`/`chmod` 属于受控暂存写，虽然也在白名单内，但会改文件系统，
+ * 必须先于白名单判定单独处理，否则会被误当成只读跳过。
  */
 internal object DeviceStateReadback {
 
@@ -71,6 +72,9 @@ internal object DeviceStateReadback {
 
     /** 这些开关的取值要吃掉下一个 token（用于跳过参数找位置参数）。 */
     private val FLAGS_WITH_VALUE = setOf("--user", "--display", "-d")
+
+    /** 受控暂存写：白名单内但会改文件系统，不能按只读跳过。 */
+    private val STAGING_WRITE_HEADS = setOf("mkdir", "cp", "mv", "rm", "chmod")
 
     /**
      * 把回读结果拼成交给模型的一段文本；命令里没有可回读的状态变更时返回 null（此时调用方什么也不加）。
@@ -131,6 +135,15 @@ internal object DeviceStateReadback {
         }
         // `am` 不能靠白名单跳过：启动/停止应用这类真的改状态，而它们本身就在白名单里（见 [RootCommandGuard.advisory]）。
         if (head == "am") return amChecks(tokens)
+        // 暂存写（mkdir/cp/mv/rm/chmod）也在白名单内，但确实改了文件系统，不能当成只读跳过。
+        if (head in STAGING_WRITE_HEADS) {
+            return listOf(
+                Unverifiable(
+                    "暂存目录文件操作已执行",
+                    "本工具不回读文件系统状态；请用 `ls -ld <目标>` 或 `cat <目标>` 自行确认结果"
+                )
+            )
+        }
         // 其余整条已在白名单内 = 只读调试命令，不改状态，不生成回读。
         if (RootCommandGuard.isAllowlisted(segment)) return emptyList()
         return when (head) {
