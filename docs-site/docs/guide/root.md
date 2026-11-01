@@ -29,11 +29,15 @@
 
 ### 内置安全闸门（代码级，不靠劝说）
 
-**AI 只能执行白名单内的只读/调试类命令**，而且**没有解锁参数**——能不能改系统不由 AI 决定：
+**AI 只能执行白名单内的只读/调试类命令，以及暂存目录内的受控写**，而且**没有解锁参数**——能不能改系统不由 AI 决定：
 
-`dumpsys`、`getprop`、`ls`、`cat`、`ps`、`pidof`、`top`、`df`、`du`、`stat`、`id`、`date`、`uptime`、`uname`、`whoami`、`logcat`、`service`、`input`、`screencap`、`wm`、`settings get`、`pm`（列表/信息类）、`am`、`monkey`、`ip`、`mount`、`free` 等。
+`dumpsys`、`getprop`、`ls`、`cat`、`ps`、`pidof`、`top`、`df`、`du`、`stat`、`id`、`date`、`uptime`、`uname`、`whoami`、`logcat`、`service`、`input`、`screencap`、`wm`、`settings get`、`pm`（列表/信息类）、`am`、`ip`、`mount`、`free` 等。
 
-白名单外的命令（包括 `cp`、`chmod`、`reboot` 这类本身不毁坏设备的）会被直接拒绝，工具会回复原因并建议「让用户自己在终端执行」。另外，即使命令在白名单内，也会再过一道硬拦截：
+为了能真正查日志和报错，另放行只读过滤：`grep`、`head`、`tail`、`wc`、`sort`、`uniq`、`cut`、`tr`、`sed -n`（只认行号/范围 + `p`）、只读 `find`（拒绝 `-delete`/`-exec` 等写谓词）。例如 `logcat -d | grep -i exception`。
+
+另允许在 `/data/local/tmp` 与 `Download` 内做受控暂存写：`mkdir`、`cp`、`mv`、`rm`、`chmod`。`cp` 的源可以是普通可读文件，目标必须在暂存目录；`mv`/`rm`/`chmod` 的路径也必须在暂存目录。路径含 `..` 或通配符一律拒绝，输出重定向也只能指向暂存目录或 `/dev/null`。
+
+白名单外的命令（包括改系统设置、装/卸/清应用、`service call`、`reboot` 等）会被直接拒绝，工具会回复原因并建议「让用户自己在终端执行」。另外，即使命令在白名单内，也会再过一道硬拦截：
 
 | 拦截面 | 例子 |
 | --- | --- |
@@ -41,10 +45,12 @@
 | 刷机、分区、格式化 | `fastboot …`、`mkfs.ext4 …`、`parted …` |
 | 直接写块设备 | `dd … of=/dev/block/…` |
 | 向系统分区写入 | `echo x > /system/…`、`cp x /system/…` |
+| 重定向到非暂存目录 | `ls > /data/system/out.txt` |
+| 暂存目录外的写 | `rm /sdcard/other/x`、`cp a /sdcard/other/b` |
 | 进刷机 / 恢复模式、清数据 | `reboot bootloader/edl/recovery`、`MASTER_CLEAR` |
 | 命令拼接 / 管道进 shell | `rm -rf $(echo /system)`、`… \| sh`、`eval …` |
 
-简单说：**AI 用 root 只能看和测（只读 + 输入注入 + 截屏），不能改**。真正需要改系统、刷机、清数据时，请你自己在终端里执行。
+简单说：**AI 用 root 可以看、测，以及在 `/data/local/tmp` 和 `Download` 内整理/搬运文件；不能改系统分区、装/卸应用、改系统设置、刷机或清数据**。真正需要这些操作时，请你自己在终端里执行。
 
 ## 使用示例
 
@@ -53,5 +59,7 @@
 - 「用 root 看一下现在有几块显示屏」（`dumpsys display`）
 - 「模拟按一下返回键」（`input keyevent KEYCODE_BACK`）
 - 「截一张当前屏幕」（`screencap -p /sdcard/shot.png`）
+- 「把崩溃日志里带 Exception 的行找出来」（`logcat -d | grep -i exception`）
+- 「把 ANR 日志复制到 Download 再发我」（`cp /data/anr/traces.txt /sdcard/Download/`）
 
 虚拟屏功能（在你看不见的屏幕上自动测试 app）也依赖这条 root 通道，见[软件权限](/guide/app-permissions)里的〈虚拟屏 root 通道〉。

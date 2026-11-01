@@ -164,6 +164,12 @@ class DeviceStateReadbackTest {
     }
 
     @Test
+    fun `暂存写不会被当成只读跳过`() {
+        val report = report("mkdir -p /sdcard/Download/aicode", emptyMap())
+        assertTrue(report!!.contains("未确认｜暂存目录文件操作已执行"))
+    }
+
+    @Test
     fun `input 与 svc 标未确认而不是成功`() {
         val input = report("input -d 2 tap 100 200", emptyMap())
         assertTrue(input!!.contains("未确认｜"))

@@ -8,10 +8,11 @@ package com.aicode.feature.agent.domain.tool.root
  * 不依赖提示词劝说，也不受 AUTO 模式影响。
  *
  * 设计原则（按优先级）：
- * 1. **白名单**：AI 只能执行首 token 在 [ALLOWED_COMMANDS] 内的命令（只读调试 + 无害的界面操作）；
+ * 1. **白名单**：AI 只能执行首 token 在 [ALLOWED_COMMANDS] 内的命令（只读调试、只读过滤、受控暂存写）；
  * 2. **黑名单**：即使白名单内，仍逐条检查不可逆动作（删系统/刷机/写块设备/进刷机模式/清数据）；
- * 3. **拼接拦截**：命令替换、eval、管道进 shell 一律拒——它们能让上面的静态判定失效；
- * 4. **无解锁口**：不存在 allowUnsafe 之类的参数；能改系统的操作不由 AI 决定，一律回给用户。
+ * 3. **拼接拦截**：命令替换、eval、管道进 shell 一律拒——它们能让上面的静态判定失效；普通管道按段审核；
+ * 4. **受控暂存写**：`mkdir`/`cp`/`mv`/`rm`/`chmod` 只允许 `/data/local/tmp` 与 `Download`，其余路径仍拒；
+ * 5. **无解锁口**：不存在 allowUnsafe 之类的参数；能改系统的操作不由 AI 决定，一律回给用户。
  *
  * 纯字符串逻辑、无 IO，便于单测与逐条 review。
  */
@@ -43,14 +44,14 @@ object RootCommandGuard {
     private val REBOOT_TARGETS = listOf("bootloader", "fastboot", "edl", "recovery", "recovery-mode")
 
     /**
-     * 默认放行的命令**首 token**（只读调试与无害的界面操作）。
+     * 默认放行的命令**首 token**（只读调试、只读过滤与受控暂存写）。
      *
      * 不在名单里的命令默认拒绝且**无解锁口**（不存在 allowUnsafe 之类参数）——这是「可控范围」的
-     * 主要手段：AI 默认只能做只读/调试类的事；能改系统的操作必须由用户自己在终端执行。
+     * 主要手段：AI 默认只能做只读/调试类的事与暂存目录内的整理；能改系统的操作必须由用户自己在终端执行。
      *
-     * 维护注意：新增条目必须是「只读或无害」的命令首 token；有写能力的（cp/mv/chmod/kill 等）
-     * 一律不进名单——需求属正当也应回给用户。首 token 进名单**不**等于整条放行：`settings`/`cmd`/`pm`
-     * 只放只读子命令，`service`/`wm`/`am`/`monkey`/`logcat`/`mount` 另有子命令判定，见 [decideSegment]。
+     * 维护注意：新增条目必须是「只读、只读过滤或受控暂存写」的命令首 token；有写能力但不在暂存目录的
+     * （改系统设置、装应用、service call 等）一律不进名单。首 token 进名单**不**等于整条放行：`settings`/`cmd`/`pm`
+     * 只放只读子命令，`service`/`wm`/`am`/`logcat`/`mount` 另有子命令判定，见 [decideSegment]。
      */
     private val ALLOWED_COMMANDS = setOf(
         // 只读系统信息
@@ -61,7 +62,11 @@ object RootCommandGuard {
         // 应用信息与控制（不改系统分区）
         "pm", "am", "monkey",
         // 其它只读工具
-        "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum"
+        "netstat", "ifconfig", "ip", "mount", "free", "md5sum", "sha256sum",
+        // 只读过滤：查日志/查报错必须有管道过滤，否则大输出只能被截断
+        "grep", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "sed", "find",
+        // 受控暂存写：只在 STAGING_ROOTS 内放行，见 decideSegment
+        "mkdir", "cp", "mv", "rm", "chmod"
     )
 
     /** 只允许读的 `settings` 子命令；写子命令一律不在默认白名单。 */
@@ -159,6 +164,28 @@ object RootCommandGuard {
         "clear-debug-app" to "会改目标应用的调试状态"
     )
 
+    /** 允许 AI 写入/整理的暂存目录；其余目录仍拒绝。 */
+    private val STAGING_ROOTS = listOf(
+        "/data/local/tmp",
+        "/sdcard/download",
+        "/storage/emulated/0/download",
+        "/storage/self/primary/download"
+    )
+
+    /** find 里会写文件或执行命令的谓词，一律拒绝。 */
+    private val FIND_WRITE_PREDICATES = setOf(
+        "-delete", "-exec", "-execdir", "-ok", "-okdir",
+        "-fprint", "-fprintf", "-fls", "-fprint0"
+    )
+
+    /** sed 只放行「行号/范围 + p」的静默打印脚本，堵住 w/e/r/s 等写分支。 */
+    private val SED_SAFE_SCRIPT = Regex("^[0-9,$;!~* ]*p$")
+
+    private val CHMOD_MODE = Regex("^[0-7]{3,4}$")
+
+    /** 重定向目标：只允许暂存目录与 /dev/null。 */
+    private val REDIRECT_TARGET = Regex("(?:^|\\s)\\d?>>?\\s*([^\\s;&|]+)")
+
     data class Rejection(val reason: String)
 
     /** 单段判定结果：放行，或拒绝（[reason] 为空表示由调用方给通用文案）。 */
@@ -239,6 +266,15 @@ object RootCommandGuard {
             "logcat" -> decideLogcat(tokens)
             "mount" -> decideMount(tokens)
             "am" -> decideAm(tokens)
+            "grep" -> decideFilter(tokens)
+            "head", "tail", "wc", "sort", "uniq", "cut", "tr" -> decideFilter(tokens)
+            "sed" -> decideSed(tokens)
+            "find" -> decideFind(tokens)
+            "mkdir" -> decideMkdir(tokens)
+            "cp" -> decideCopy(tokens)
+            "mv" -> decideMove(tokens)
+            "rm" -> decideRemove(tokens)
+            "chmod" -> decideChmod(tokens)
             "monkey" -> Decision(
                 false,
                 "拒绝执行：`monkey` 会向任意应用灌入随机事件（等价于脚本化点击/输入，且不区分目标），已拦截。" +
@@ -322,6 +358,179 @@ object RootCommandGuard {
             "-u" -> rest[1].isNotEmpty()
             else -> false
         }
+    }
+
+    /**
+     * 只读过滤命令：允许从 stdin 读（管道场景），带绝对路径的参数只允许落在暂存目录。
+     *
+     * 这条是「查日志/查报错」的关键：没有它，`logcat -d` 的大输出只能整套回传，
+     * 再被 BoundedOutput 截成头尾，真正的异常常常正好被截掉。
+     */
+    private fun decideFilter(tokens: List<String>): Decision {
+        val head = tokens.first()
+        val args = tokens.drop(1)
+        if (head == "tail" && args.any { it == "-f" || it == "-F" || it.startsWith("--follow") }) {
+            return Decision(
+                false,
+                "拒绝执行：`tail -f` 会常驻不返回并占住 root 通道；请用 `tail -n <行数>` 取完即退。"
+            )
+        }
+        if (args.any { it.contains("..") }) {
+            return Decision(false, "拒绝执行：路径不允许包含 `..`，请使用暂存目录内的明确路径。")
+        }
+        val absolute = args.filter { it.startsWith("/") }
+        val bad = absolute.firstOrNull { !isStagingPath(it) }
+        if (bad != null) {
+            return Decision(
+                false,
+                "拒绝执行：`$head` 只允许读取暂存目录内的文件（/data/local/tmp 或 Download）；`$bad` 不在其中。"
+            )
+        }
+        // sort -o 是写文件，目标必须是暂存目录（绝对路径已在上面的 absolute 检查里被约束）。
+        if (head == "sort") {
+            val outIndex = args.indexOfFirst { it == "-o" || it.startsWith("-o") }
+            if (outIndex >= 0) {
+                val target = if (args[outIndex] == "-o") args.getOrNull(outIndex + 1) else args[outIndex].removePrefix("-o")
+                if (target.isNullOrBlank() || !isStagingPath(target)) {
+                    return Decision(false, "拒绝执行：`sort -o` 只能写到暂存目录。")
+                }
+            }
+            val longOutput = args.firstOrNull { it.startsWith("--output=") }
+            if (longOutput != null && !isStagingPath(longOutput.substringAfter('='))) {
+                return Decision(false, "拒绝执行：`sort --output=` 只能写到暂存目录。")
+            }
+        }
+        return Decision(true)
+    }
+
+    /** `sed` 只放行 `-n` + 行号/范围 + `p`，堵住 `-i`、`s///w`、`e`、`r` 等写分支。 */
+    private fun decideSed(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val quiet = args.firstOrNull() == "-n" || args.firstOrNull() == "--quiet"
+        if (!quiet) {
+            return Decision(false, "拒绝执行：`sed` 只放行 `-n` 静默打印，不支持 `-i` 或写文件。")
+        }
+        val script = args.getOrNull(1)?.trim('\'', '"') ?: return Decision(false, "拒绝执行：`sed -n` 缺少脚本。")
+        if (!SED_SAFE_SCRIPT.matches(script)) {
+            return Decision(false, "拒绝执行：`sed` 只放行行号/范围加 `p` 的打印脚本，避免 `s///w`、`e`、`r` 等写分支。")
+        }
+        val files = args.drop(2).filterNot { it.startsWith("-") }
+        if (files.any { it.contains("..") }) {
+            return Decision(false, "拒绝执行：`sed` 的文件路径不允许包含 `..`。")
+        }
+        val bad = files.filter { it.startsWith("/") }.firstOrNull { !isStagingPath(it) }
+        if (bad != null) {
+            return Decision(false, "拒绝执行：`sed` 只允许读取暂存目录内的文件；`$bad` 不在其中。")
+        }
+        return Decision(true)
+    }
+
+    /** `find` 只读：路径必须在暂存目录，且不允许 `-delete`/`-exec` 等写谓词。 */
+    private fun decideFind(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val writePredicate = args.firstOrNull { it in FIND_WRITE_PREDICATES }
+        if (writePredicate != null) {
+            return Decision(false, "拒绝执行：`find $writePredicate` 会写文件或执行命令，已拦截。")
+        }
+        val paths = args.takeWhile { !it.startsWith("-") }
+        if (paths.isEmpty()) {
+            return Decision(false, "拒绝执行：`find` 必须指定暂存目录（/data/local/tmp 或 Download），不接受根目录/相对路径。")
+        }
+        val bad = paths.firstOrNull { it.contains("..") || !isStagingPath(it) }
+        if (bad != null) {
+            return Decision(false, "拒绝执行：`find` 只允许在暂存目录内检索；`$bad` 不在其中。")
+        }
+        return Decision(true)
+    }
+
+    /** `mkdir` 只允许 `-p`，目标必须在暂存目录。 */
+    private fun decideMkdir(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        if (args.any { it.startsWith("-") && it != "-p" }) {
+            return Decision(false, "拒绝执行：`mkdir` 只放行 `-p`，不接受改权限等其它参数。")
+        }
+        return decideStagingPaths(
+            args.filterNot { it.startsWith("-") },
+            "`mkdir` 只允许在暂存目录内创建目录"
+        )
+    }
+
+    /** `cp`：源可读任意非受保护路径，目标必须在暂存目录。 */
+    private fun decideCopy(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val allowedFlags = setOf("-r", "-R", "-a", "-p", "-f", "-v", "--recursive", "--archive", "--preserve")
+        val badFlag = args.firstOrNull { it.startsWith("-") && it !in allowedFlags }
+        if (badFlag != null) return Decision(false, "拒绝执行：`cp $badFlag` 不在受控参数内。")
+        val paths = args.filterNot { it.startsWith("-") }
+        if (paths.size < 2) return Decision(false, "拒绝执行：`cp` 需要源路径和目标路径。")
+        val dest = paths.last()
+        if (!isStagingPath(dest)) {
+            return Decision(false, "拒绝执行：`cp` 的目标只能是暂存目录（/data/local/tmp 或 Download）；`$dest` 不在其中。")
+        }
+        val badSource = paths.dropLast(1).firstOrNull { !isReadableSource(it) }
+        if (badSource != null) {
+            return Decision(false, "拒绝执行：`cp` 不能从根目录或受保护系统路径复制；`$badSource` 不允许。")
+        }
+        return Decision(true)
+    }
+
+    /** `mv`：源和目标都必须在暂存目录，避免把系统/应用文件移走。 */
+    private fun decideMove(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val allowedFlags = setOf("-f", "-v", "--force")
+        val badFlag = args.firstOrNull { it.startsWith("-") && it !in allowedFlags }
+        if (badFlag != null) return Decision(false, "拒绝执行：`mv $badFlag` 不在受控参数内。")
+        val paths = args.filterNot { it.startsWith("-") }
+        if (paths.size < 2) return Decision(false, "拒绝执行：`mv` 需要源路径和目标路径。")
+        return decideStagingPaths(paths, "`mv` 的源和目标都必须在暂存目录内")
+    }
+
+    /** `rm`：只删除暂存目录内的内容。 */
+    private fun decideRemove(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val allowedFlags = setOf("-r", "-R", "-f", "-rf", "-fr", "--recursive", "--force")
+        val badFlag = args.firstOrNull { it.startsWith("-") && it !in allowedFlags }
+        if (badFlag != null) return Decision(false, "拒绝执行：`rm $badFlag` 不在受控参数内。")
+        return decideStagingPaths(
+            args.filterNot { it.startsWith("-") },
+            "`rm` 只允许删除暂存目录内的内容"
+        )
+    }
+
+    /** `chmod`：只改暂存目录内文件的权限，模式只接受三位/四位八进制。 */
+    private fun decideChmod(tokens: List<String>): Decision {
+        val args = tokens.drop(1)
+        val mode = args.firstOrNull()
+        if (mode == null || !CHMOD_MODE.matches(mode)) {
+            return Decision(false, "拒绝执行：`chmod` 只接受三位/四位八进制权限，例如 `chmod 600 <暂存目录文件>`。")
+        }
+        return decideStagingPaths(args.drop(1), "`chmod` 只允许修改暂存目录内的文件")
+    }
+
+    private fun decideStagingPaths(paths: List<String>, message: String): Decision {
+        if (paths.isEmpty()) return Decision(false, "拒绝执行：$message；未提供路径。")
+        val bad = paths.firstOrNull { !isStagingPath(it) }
+        if (bad != null) {
+            return Decision(false, "拒绝执行：$message；`$bad` 不在暂存目录内。")
+        }
+        return Decision(true)
+    }
+
+    /** 暂存目录：只允许这两类目录，防止把系统或应用私有数据当成可写区。 */
+    private fun isStagingPath(raw: String): Boolean {
+        val path = raw.trim().trim('"', '\'').lowercase()
+        if (path.isEmpty() || path.contains("..")) return false
+        if (path.any { it == '*' || it == '?' }) return false
+        val normalized = path.trimEnd('/')
+        return STAGING_ROOTS.any { normalized == it || normalized.startsWith("$it/") }
+    }
+
+    /** `cp` 的源：必须是绝对路径、非根、非受保护系统路径。 */
+    private fun isReadableSource(raw: String): Boolean {
+        val path = raw.trim().trim('"', '\'').lowercase()
+        if (!path.startsWith("/") || path == "/" || path.contains("..")) return false
+        if (path.any { it == '*' || it == '?' }) return false
+        return PROTECTED_PATHS.none { path == it || path.startsWith("$it/") }
     }
 
     /**
@@ -496,6 +705,18 @@ object RootCommandGuard {
                 "拒绝执行：命令包含命令替换 / eval / 管道进 shell，无法静态判定其实际作用，已拦截。" +
                     "请改写成不依赖拼接的单条命令。"
             )
+        }
+
+        // 6) 重定向目标：只允许暂存目录或 /dev/null，避免借 `ls > /data/...` 绕过写路径限制。
+        for (match in REDIRECT_TARGET.findAll(normalized)) {
+            val target = match.groupValues[1].trim('"', '\'')
+            if (target.startsWith("&") || target == "/dev/null") continue
+            if (!isStagingPath(target)) {
+                return Rejection(
+                    "拒绝执行：输出重定向只允许写入暂存目录（/data/local/tmp 或 Download）或 /dev/null；" +
+                        "`$target` 不在其中。"
+                )
+            }
         }
 
         return null

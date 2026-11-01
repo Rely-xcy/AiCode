@@ -30,11 +30,15 @@ class RootCommandGuardTest {
     }
 
     @Test
-    fun `应用管理与普通数据目录写入放行`() {
+    fun `应用管理与普通数据目录写不触发危险拦截，但不在自动白名单`() {
         assertNull(RootCommandGuard.check("pm list packages"))
         assertNull(RootCommandGuard.check("am start -n com.android.settings/.Settings"))
         assertNull(RootCommandGuard.check("rm -rf /sdcard/testdir"))
         assertNull(RootCommandGuard.check("cp /sdcard/a.txt /sdcard/b.txt"))
+
+        // 不在暂存目录的写仍需用户自己执行
+        assertFalse(RootCommandGuard.isAllowlisted("rm -rf /sdcard/testdir"))
+        assertFalse(RootCommandGuard.isAllowlisted("cp /sdcard/a.txt /sdcard/b.txt"))
     }
 
     // ---- 必须拦截 ----
@@ -297,6 +301,49 @@ class RootCommandGuardTest {
         assertFalse(RootCommandGuard.isAllowlisted("getprop x ; monkey -p com.tencent.mm 10"))
         assertNotNull(RootCommandGuard.rejectionReason("ls /sdcard ; service call activity 1"))
         assertTrue(RootCommandGuard.isAllowlisted("ls /sdcard ; wm size"))
+    }
+
+    @Test
+    fun `只读过滤命令放行，但文件路径限暂存目录`() {
+        assertTrue(RootCommandGuard.isAllowlisted("logcat -d | grep -i exception"))
+        assertTrue(RootCommandGuard.isAllowlisted("dumpsys activity | grep -A 5 Crash"))
+        assertTrue(RootCommandGuard.isAllowlisted("head -n 100 /sdcard/Download/a.log"))
+        assertTrue(RootCommandGuard.isAllowlisted("tail -n 50 /sdcard/Download/a.log"))
+        assertTrue(RootCommandGuard.isAllowlisted("sort /sdcard/Download/a.txt"))
+        assertTrue(RootCommandGuard.isAllowlisted("sed -n '1,200p' /sdcard/Download/a.log"))
+        assertTrue(RootCommandGuard.isAllowlisted("find /sdcard/Download -name '*.log'"))
+
+        assertFalse(RootCommandGuard.isAllowlisted("tail -f /sdcard/Download/a.log"))
+        assertFalse(RootCommandGuard.isAllowlisted("find /sdcard/Download -delete"))
+        assertFalse(RootCommandGuard.isAllowlisted("find / -name x"))
+        assertFalse(RootCommandGuard.isAllowlisted("sed -i 's/a/b/' /sdcard/Download/a"))
+        assertFalse(RootCommandGuard.isAllowlisted("grep x /data/system/users/0.xml"))
+        assertFalse(RootCommandGuard.isAllowlisted("head -n 10 /data/anr/traces.txt"))
+    }
+
+    @Test
+    fun `受控暂存写只允许暂存目录`() {
+        assertTrue(RootCommandGuard.isAllowlisted("mkdir -p /sdcard/Download/aicode/tmp"))
+        assertTrue(RootCommandGuard.isAllowlisted("cp /data/anr/traces.txt /sdcard/Download/"))
+        assertTrue(RootCommandGuard.isAllowlisted("cp -r /sdcard/Download/a /sdcard/Download/b"))
+        assertTrue(RootCommandGuard.isAllowlisted("mv /sdcard/Download/a /sdcard/Download/b"))
+        assertTrue(RootCommandGuard.isAllowlisted("rm -rf /sdcard/Download/aicode/tmp"))
+        assertTrue(RootCommandGuard.isAllowlisted("chmod 600 /sdcard/Download/a.txt"))
+
+        assertFalse(RootCommandGuard.isAllowlisted("mkdir /sdcard/other"))
+        assertFalse(RootCommandGuard.isAllowlisted("cp /sdcard/a /sdcard/b"))
+        assertFalse(RootCommandGuard.isAllowlisted("mv /sdcard/Download/a /sdcard/other/b"))
+        assertFalse(RootCommandGuard.isAllowlisted("rm -rf /sdcard/Download/../system"))
+        assertFalse(RootCommandGuard.isAllowlisted("chmod 777 /system/bin/sh"))
+        assertFalse(RootCommandGuard.isAllowlisted("cp /data/system/users/0.xml /sdcard/Download/x"))
+    }
+
+    @Test
+    fun `重定向只能写暂存目录或 dev null`() {
+        assertNull(RootCommandGuard.check("logcat -d > /sdcard/Download/log.txt"))
+        assertNull(RootCommandGuard.check("logcat -d 2>/dev/null"))
+        assertNotNull(RootCommandGuard.check("logcat -d > /sdcard/log.txt"))
+        assertNotNull(RootCommandGuard.check("ls > /data/system/out.txt"))
     }
 
     @Test
