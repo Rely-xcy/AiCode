@@ -22,3 +22,22 @@ internal fun shouldCalibrateToAnchor(
     pointerDown: Boolean,
     canScrollForward: Boolean
 ): Boolean = followBottom && !userScrollGesture && !pointerDown && canScrollForward
+
+/**
+ * 是否真的停在底部：最后一项的底部必须落在安全区上下界内。
+ *
+ * 只卡上界（`bottom <= safeBottom + tolerance`）会把「最后一项还在屏幕上」误判成在底部：
+ * 用户在最后一条长消息内部往上滑时，该项仍可见且底部只会变小，条件一直成立；
+ * 松手后 followBottom 被恢复，下一次内容增长就会瞬移回底部，表现为无动画的突然跳回。
+ */
+internal fun isScrolledToBottom(
+    lastVisibleIndex: Int,
+    totalItemsCount: Int,
+    lastVisibleBottomPx: Int,
+    safeBottomPx: Int,
+    tolerancePx: Int
+): Boolean {
+    if (totalItemsCount <= 0 || lastVisibleIndex < totalItemsCount - 1) return false
+    val gap = safeBottomPx - lastVisibleBottomPx
+    return gap >= -tolerancePx && gap <= tolerancePx
+}
