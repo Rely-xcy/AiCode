@@ -1617,12 +1617,18 @@ fun AIChatPanel(
             val lastVisible = layout.visibleItemsInfo.lastOrNull()
                 ?: return@derivedStateOf false
             if (!listState.canScrollForward) return@derivedStateOf true
-            val lastIndex = layout.totalItemsCount - 1
             // 到底 = 最后内容底部停在安全区（悬浮层上沿）附近，而非视口底：
-            // 判定更严格，避免用户拖走一小段后仍被判「在底部」而恢复跟随、立即被拉回。
+            // 必须同时卡上下界。只写 `<= safeBottom + tolerance` 时，最后一条消息只要还在屏幕上，
+            // 往上滑多少都满足条件，isAtBottom 会一直为 true；松手后 followBottom 被误恢复，
+            // 下一次内容增长就会 requestScrollToItem 瞬移回底部（无动画的突然跳回）。
             val safeBottom = layout.viewportEndOffset - inputBarReservePx
-            lastVisible.index >= lastIndex &&
-                (lastVisible.offset + lastVisible.size) <= safeBottom + AUTO_SCROLL_TOLERANCE_PX
+            isScrolledToBottom(
+                lastVisibleIndex = lastVisible.index,
+                totalItemsCount = layout.totalItemsCount,
+                lastVisibleBottomPx = lastVisible.offset + lastVisible.size,
+                safeBottomPx = safeBottom,
+                tolerancePx = AUTO_SCROLL_TOLERANCE_PX
+            )
         }
     }
 

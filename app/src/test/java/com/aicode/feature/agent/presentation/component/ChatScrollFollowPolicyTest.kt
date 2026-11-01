@@ -39,6 +39,31 @@ class ChatScrollFollowPolicyTest {
     }
 
     @Test
+    fun `只有底部停在安全区附近才算在底部`() {
+        // 最后一项底部正好在安全区：在底部
+        assertTrue(
+            isScrolledToBottom(
+                lastVisibleIndex = 9,
+                totalItemsCount = 10,
+                lastVisibleBottomPx = 1_000,
+                safeBottomPx = 1_000,
+                tolerancePx = 2
+            )
+        )
+        // 在容差内：仍算在底部
+        assertTrue(
+            isScrolledToBottom(9, 10, 998, 1_000, 2)
+        )
+        // 最后一项还在屏幕上，但已经往上滑了 50px：不能算在底部
+        assertFalse(
+            "最后一项仍在视口内不等于在底部，否则松手后会恢复跟随并瞬移回底",
+            isScrolledToBottom(9, 10, 950, 1_000, 2)
+        )
+        // 最后可见项不是最后一项：明确不在底部
+        assertFalse(isScrolledToBottom(8, 10, 1_000, 1_000, 2))
+    }
+
+    @Test
     fun `不跟随、手势中、已到底这三种情况都不校准`() {
         assertFalse(
             shouldCalibrateToAnchor(
