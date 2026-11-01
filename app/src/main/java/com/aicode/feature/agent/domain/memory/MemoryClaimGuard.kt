@@ -25,7 +25,7 @@ object MemoryClaimGuard {
     const val TOOL_NAME = "memory"
 
     /**
-     * 补调用提醒：作为一条 user 消息注入本轮对话，不落库、不上 UI（与「截断后续写」的注入方式一致）。
+     * 补调用提醒：作为一条 user 消息注入本轮对话，落库但标记为上下文排除，不进入后续历史，也不上 UI。
      */
     val REMINDER: String = """
         [系统提醒] 你上一段回复里声称已经记住了什么，但这一轮你并没有调用 memory 工具——那等于什么都没记，用户去记忆页会找不到。

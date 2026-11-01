@@ -135,7 +135,8 @@ class MessagePersistenceUseCase @Inject constructor(
                 cachedInputTokens = cachedInputTokens,
                 isCompacted = isCompacted,
                 isContextExcluded = isContextExcluded,
-                modelReminder = modelReminder,
+                // 动态提醒只属于当前请求投影，不写进历史；旧库字段仍保留以兼容 schema。
+                modelReminder = null,
                 isInterjection = isInterjection
             )
         )
@@ -143,17 +144,6 @@ class MessagePersistenceUseCase @Inject constructor(
 
     suspend fun updateContent(messageId: String, newContent: String) {
         agentMessageDao.updateMessageContent(messageId, sanitizeContent(newContent))
-    }
-
-    /**
-     * 把本轮的模式提醒写到该用户行上。提醒只在模式变化时注入一次，故一条消息最多写一次；
-     * content 保持用户原话，界面与回放都不认它，只在组装请求时拼回模型侧文本。
-     * 按快照上限截断：提醒文本来自可被用户自定义覆盖的 prompts 文件，不能任由它撑大单行。
-     */
-    suspend fun attachModelReminder(messageId: String, reminder: String): String {
-        val stored = capBytes(reminder, MAX_SNAPSHOT_BYTES)
-        agentMessageDao.updateModelReminder(messageId, stored)
-        return stored
     }
 
     /**
@@ -322,7 +312,7 @@ class MessagePersistenceUseCase @Inject constructor(
 
     private suspend fun buildHistoryUncached(sessionId: String, pendingToolMarker: String): List<AgentMessage> {
         val allEntities = agentMessageDao.getMessagesBySessionOnce(sessionId)
-            .filter { !it.isCompacted && !it.isContextExcluded }
+            .filter { !it.isCompacted && !isInternalReminder(it) }
 
         // 摘要块：isContextSummary 行（含其配对 marker）按 timestamp 升序就是块链的顺序。
         // 已被淘汰的摘要行（isCompacted=1）在上面已被滤掉，不会参与回放。
@@ -444,7 +434,8 @@ class MessagePersistenceUseCase @Inject constructor(
                             id = e.id,
                             content = finalContent,
                             images = images,
-                            modelReminder = e.modelReminder
+                            // modelReminder 是请求级动态投影，历史回放不再携带旧提醒。
+                            modelReminder = null
                         )
                     )
                 }
@@ -486,6 +477,13 @@ class MessagePersistenceUseCase @Inject constructor(
         }
         return result
     }
+
+    /**
+     * 内部提醒不属于用户历史：新数据用 isContextExcluded 标记；旧版本的守卫行没有该列标记，
+     * 但固定使用 guard- 前缀，按这个稳定身份在回放时兼容排除。真实用户插话不使用该前缀。
+     */
+    private fun isInternalReminder(entity: AgentMessageEntity): Boolean =
+        entity.isContextExcluded || (entity.isInterjection && entity.id.startsWith("guard-"))
 
     /** 参与回放的一个摘要块：摘要行 + 紧贴它前面的 marker 行（缺失时为 null，拼装时合成）。 */
     private data class SummaryPair(val summary: AgentMessageEntity, val marker: AgentMessageEntity?)

@@ -481,8 +481,7 @@ class StatefulAgentWorkflow @Inject constructor(
                         effects.add(AgentSideEffect.CallLlm)
                     } else if (action.todoGuardReminder != null) {
                         // 收尾守卫拦下：这一轮活干完了，清单却整轮没动。
-                        // 提醒必须落库（一条 isInterjection 的 USER 行，UI 不渲染）：只进本轮上下文的话，
-                        // 下一轮重建历史少了这一条，从这里往后的前缀全部作废。
+                        // 只在当前轮内回灌；落库行标记为上下文排除，下一轮不再把内部守卫当成用户历史。
                         val reminder = guardMessage(action.todoGuardReminder)
                         newState = newState.copy(
                             messages = newState.messages + reminder,
@@ -492,7 +491,7 @@ class StatefulAgentWorkflow @Inject constructor(
                         effects.add(AgentSideEffect.CallLlm)
                     } else if (shouldRemindMemory(newState, action.response.content)) {
                         // 兜底：回复声称记住了、本轮却没有任何 memory 工具调用（提示词管「倾向」，这里管「保证」）。
-                        // 补一条提醒让它当场补调用；同样落库为 UI 不渲染的 USER 行，保证下轮历史同字节。
+                        // 补一条提醒让它当场补调用；落库为 UI 不渲染且上下文排除的 USER 行，只服务当前工具循环。
                         FileLogger.w(TAG, "回复声称已写入记忆但本轮无 memory 工具调用，注入提醒重发")
                         val reminder = guardMessage(MemoryClaimGuard.REMINDER)
                         newState = newState.copy(
@@ -722,24 +721,9 @@ class StatefulAgentWorkflow @Inject constructor(
         )
             .joinToString("\n\n")
             .ifBlank { null }
-        // 提醒必须**落库**：它是本轮请求里「模型可见字节」的一部分。不落库时，下一轮重建历史只剩正文，
-        // 于是上一轮整段 assistant / 工具输出在本轮全部变成未命中——**每轮断一次前缀**，
-        // 这比「历史里多几份副本」贵得多（实测缓存命中率掉到 67%，取证见记录 b93f9b13）。
-        // 写入失败就不注入：宁可少一块信息，也不要把「发出去的」与「存下来的」弄成两份不同字节。
-        // 用实际写入的字符串当请求里的提醒（会按快照上限截断），两处才是同一串字节。
-        val reminderForRequest = turnReminder?.let { reminder ->
-            val rowId = currentContext.userMessageId
-            if (rowId == null) {
-                reminder
-            } else {
-                runCatching {
-                    messagePersistenceUseCase.attachModelReminder(rowId, reminder)
-                }.getOrElse {
-                    FileLogger.w(TAG, "写入本轮提醒失败，本轮不注入提醒")
-                    null
-                }
-            }
-        }
+        // 动态提醒只属于本轮请求投影，不写回用户消息历史；下一轮重新生成最新投影。
+        // 这样工作状态、任务清单和记忆召回不会随普通用户消息逐轮累积。
+        val reminderForRequest = turnReminder
         // 「说记住了但没调用工具」的兜底开关：子代理不写用户画像，主动记忆规则在 MemoryModule 就没给它注入，
         // 兜底也无从谈起。判据必须与那道门禁同源（都是 isSubAgent），不能再用「有没有自定义定义」近似。
         val memoryGuardEnabled = !currentContext.isSubAgent &&
@@ -810,7 +794,8 @@ class StatefulAgentWorkflow @Inject constructor(
                         AgentEvent.UserMessageAdded(
                             effect.id,
                             effect.content,
-                            isInterjection = true
+                            isInterjection = true,
+                            isContextExcluded = true
                         )
                     )
                     is AgentSideEffect.CallLlm -> {

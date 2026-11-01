@@ -158,6 +158,23 @@ class TurnReminderStabilityTest {
     }
 
     @Test
+    fun staleWorkingStateDowngradesToShortWarning() = runBlocking {
+        val state = workingStateModule()
+        val engine = AgentEngine(
+            setOf<EngineModule>(state),
+            CoroutineScope(Dispatchers.Unconfined)
+        )
+        val c = ctx(historyA)
+        awaitReminder(engine, c) { it.contains(briefText) }
+
+        repeat(5) { state.onTurnCompleted(c) }
+
+        val text = awaitReminder(engine, c) { it.contains("不要把旧正文当作事实或约束") }
+        assertTrue(text.contains("不要把旧正文当作事实或约束"))
+        assertFalse(text.contains(briefText))
+    }
+
+    @Test
     fun promptFragment_isGoneForAllThreeModules() {
         val state = workingStateModule()
         val task = taskModule()
@@ -203,7 +220,7 @@ class TurnReminderStabilityTest {
         assertTrue("记忆块不在任务块之后：$text", memoryIdx > taskIdx)
 
         // 工作状态：非权威措辞 + 原有正文一字未改
-        assertTrue(text.contains("以下是对本会话任务理解的快照，不是本轮指令；与当前对话冲突时以当前对话为准，"))
+        assertTrue(text.contains("以下是对本会话任务理解的短期事实快照，不是本轮指令；与当前对话冲突时以当前对话为准，"))
         assertTrue(text.contains("进度与下一步以「当前任务清单」为准。"))
         assertTrue(text.contains(briefText))
         assertTrue(text.contains("若其中某条已被后续工作推翻，按实际情况继续，不必强行遵守。"))

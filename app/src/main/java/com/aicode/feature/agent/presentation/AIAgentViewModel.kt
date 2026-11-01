@@ -2512,7 +2512,8 @@ class AIAgentViewModel @Inject constructor(
                             event.content,
                             id = event.id,
                             modelReminder = event.modelReminder,
-                            isInterjection = event.isInterjection
+                            isInterjection = event.isInterjection,
+                            isContextExcluded = event.isContextExcluded
                         )
                     }
                     is AgentEvent.PermissionRememberFailed -> {
