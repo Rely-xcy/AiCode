@@ -239,6 +239,17 @@ class SessionUseCase @Inject constructor(
         }
     }
 
+    /**
+     * 运行中覆盖目标文本，不重置消耗基线也不重置轮次计数。
+     *
+     * 用于 `/goal` 中途改写目标时：用户不想让 token 预算从头算，只换目标描述。
+     */
+    suspend fun updateGoalText(sessionId: String, goal: String?) {
+        val trimmed = goal?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) return
+        chatSessionDao.updateGoalText(sessionId, trimmed)
+    }
+
     suspend fun updateGoalStatus(sessionId: String, status: GoalStatus?) {
         chatSessionDao.updateGoalStatus(sessionId, status?.name)
     }

@@ -3170,17 +3170,38 @@ class AIAgentViewModel @Inject constructor(
         val goalText = text.trim().take(MAX_GOAL_CHARS)
         if (goalText.isEmpty()) return
         goalEmptyTurnCounts.remove(sid)
-        sessionUseCase.setGoal(sid, goalText, session.totalInputTokens, session.totalOutputTokens)
-        // goal 与 PLAN 互斥：自主循环期间 PLAN 退出门禁需人工审查，故设定 goal 时若处于 PLAN 则强制退出。
-        if (runCatching { AgentMode.valueOf(session.mode) }.getOrNull() == AgentMode.PLAN) {
-            sessionUseCase.updateMode(sid, AgentMode.BUILD.name)
+
+        val existingGoal = session.goal?.takeIf { it.isNotBlank() }
+        val existingStatus = session.goalStatus?.let { runCatching { GoalStatus.valueOf(it) }.getOrNull() }
+
+        if (existingGoal != null && existingStatus in setOf(GoalStatus.ACTIVE, GoalStatus.PAUSED)) {
+            // 运行中更新：保留消耗基线与已跑轮次，只改目标文本；PAUSED 状态下改目标自动恢复
+            sessionUseCase.updateGoalText(sid, goalText)
+            if (existingStatus == GoalStatus.PAUSED) {
+                sessionUseCase.updateGoalStatus(sid, GoalStatus.ACTIVE)
+            }
+            if (runCatching { AgentMode.valueOf(session.mode) }.getOrNull() == AgentMode.PLAN) {
+                sessionUseCase.updateMode(sid, AgentMode.BUILD.name)
+            }
+            persistGoalNotice(
+                sid,
+                "目标已更新：$goalText\n（消耗基线与已跑轮次保留）AI 将继续自主推进。" +
+                    "可随时 `/goal pause` / `/goal clear`。"
+            )
+            enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goalText, session.goalTurnCount + 1))
+        } else {
+            // 首次设定或从 BLOCKED/EXHAUSTED 重新设定：重置消耗基线与轮次计数
+            sessionUseCase.setGoal(sid, goalText, session.totalInputTokens, session.totalOutputTokens)
+            if (runCatching { AgentMode.valueOf(session.mode) }.getOrNull() == AgentMode.PLAN) {
+                sessionUseCase.updateMode(sid, AgentMode.BUILD.name)
+            }
+            persistGoalNotice(
+                sid,
+                "已设定目标：$goalText\nAI 将自主循环推进（工具自动放行、PLAN 停用），直到达成、受阻或预算耗尽。" +
+                    "可随时 `/goal pause` / `/goal resume` / `/goal clear`。"
+            )
+            enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goalText, 1))
         }
-        persistGoalNotice(
-            sid,
-            "已设定目标：$goalText\nAI 将自主循环推进（工具自动放行、PLAN 停用），直到达成、受阻或预算耗尽。" +
-                "可随时 `/goal pause` / `/goal resume` / `/goal clear`。"
-        )
-        enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goalText, 1))
     }
 
     private suspend fun clearGoal(sid: String) {

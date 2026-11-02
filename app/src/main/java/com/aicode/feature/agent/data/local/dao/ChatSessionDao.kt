@@ -102,6 +102,11 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET goal = :goal, goalStatus = :status, goalTurnCount = 0, goalStartInputTokens = :startInput, goalStartOutputTokens = :startOutput WHERE id = :id")
     suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Int, startOutput: Int)
 
+    /** 运行中覆盖目标文本，只改 goal 列，保留消耗基线与轮次计数。 */
+    @Query("UPDATE chat_sessions SET goal = :goal WHERE id = :id")
+    suspend fun updateGoalText(id: String, goal: String)
+
+
     @Query("UPDATE chat_sessions SET goalStatus = :status WHERE id = :id")
     suspend fun updateGoalStatus(id: String, status: String?)
 
