@@ -68,6 +68,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// Tab 枚举：「状态」=系统概卡，「记忆」=记忆列表
+private enum class MemoryTab { STATUS, LIST }
+
 // 记忆列表的项 key：两张设置卡与分组标题用固定 key，条目用「分组前缀 + name」。
 // LazyColumn 要求同一列表里 key 唯一，重复会直接崩；条目不在后面拼下标，
 // 否则删掉一条后其余行的滑动位移状态会错位到别的条目上。
@@ -118,29 +121,54 @@ internal fun MemorySection(
     var actionMemory by remember { mutableStateOf<Memory?>(null) }
     // 自定义治理周期输入弹窗
     var showCustomIntervalDialog by remember { mutableStateOf(false) }
+    // 顶部 Tab：状态概览 / 记忆列表（默认进记忆列表，高频路径不变）
+    var selectedTab by remember { mutableStateOf(MemoryTab.LIST) }
 
     // 列表走 LazyColumn 只组合可视区的行：记忆条目数不可控（实测到过上百条），
     // 一次组合全部行会把进页面卡住，而每行还各带一个左滑容器，组合成本比普通行更高。
     // 滚动位置由 rememberLazyListState 保存；宿主按分区名套了 SaveableStateHolder，
     // 从编辑页返回时能回到原位置。
     val listState = rememberLazyListState()
-    LazyColumn(
-        state = listState,
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = Spacing.lg),
-        // 底部留白走 contentPadding：与原来 verticalScroll 里的 padding 一样随内容滚动
-        contentPadding = PaddingValues(bottom = Spacing.xl)
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 列表放最前：这是本页最高频的内容，两张设置/状态卡沉底。
-        // 空态跟技能页 / MCP 页一样直接排在页内，不套卡片：一张没有分组标题的卡片贴在顶栏下
-        // 既没有归属，也跟下面带标题的卡片不是一套节奏。
-        if (memories.isEmpty()) {
-            // 首次读盘未完成时不要渲染空态：那会先闪一下「没有记忆」再变成列表。
-            item(key = MEMORY_STATUS_KEY) {
-                if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
-            }
-        } else {
+        SegmentedTabs(
+            selected = if (selectedTab == MemoryTab.STATUS) 0 else 1,
+            labels = listOf(
+                stringResource(R.string.memory_tab_status),
+                stringResource(R.string.memory_tab_list)
+            ),
+            onSelect = { selectedTab = if (it == 0) MemoryTab.STATUS else MemoryTab.LIST },
+            modifier = Modifier.padding(top = Spacing.md)
+        )
+
+        when (selectedTab) {
+            MemoryTab.STATUS -> MemoryStatusSection(
+                memories = memories,
+                loading = loading,
+                shortTerm = shortTerm,
+                activeMemoryEnabled = activeMemoryEnabled,
+                onToggleActiveMemory = onToggleActiveMemory,
+                curationIntervalHours = curationIntervalHours,
+                onSelectCurationInterval = onSelectCurationInterval,
+                onOpenCustomInterval = { showCustomIntervalDialog = true }
+            )
+            MemoryTab.LIST -> LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = Spacing.xl)
+            ) {
+                // 空态跟技能页 / MCP 页一样直接排在页内：一张没有分组标题的卡片贴在顶栏下
+                // 既没有归属，也跟下面带标题的卡片不是一套节奏。
+                if (memories.isEmpty()) {
+                    item(key = MEMORY_STATUS_KEY) {
+                        if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
+                    }
+                } else {
             val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
             val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
             if (globalMemories.isNotEmpty()) {
@@ -197,147 +225,6 @@ internal fun MemorySection(
             }
         }
 
-        // 标题与卡片之间原本由 Column 的 spacedBy(sm) 提供间距，换 LazyColumn 后按项补回 8dp。
-        item(key = MEMORY_HEADER_LONG_TERM_KEY) {
-            Box(modifier = Modifier.padding(top = Spacing.sm)) {
-                SettingsGroupHeader(text = stringResource(R.string.memory_long_term_header))
-            }
-        }
-        item(key = MEMORY_LONG_TERM_CARD_KEY) {
-            SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
-                // 长期 / 短期是两套东西：这页管的是写盘、跨会话注入提示词的长期记忆
-                Text(
-                    text = stringResource(R.string.memory_long_term_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    // 说明句统一用 onSurfaceVariant（与各项副标题、页脚说明同色）；
-                    // subtleText 在本仓只用于取值与箭头这类弱提示
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = null,
-                    title = stringResource(R.string.memory_active_memory),
-                    subtitle = stringResource(R.string.memory_active_memory_desc),
-                    subtitleMaxLines = 2,
-                    trailing = {
-                        AppSwitch(
-                            checked = activeMemoryEnabled,
-                            onCheckedChange = onToggleActiveMemory
-                        )
-                    }
-                )
-                SettingsDivider()
-                // 治理周期：三档预设 + 自定义，直接铺成胶囊分段控件，不再弹层
-                // （弹层要“点行→选→关弹层”三步，而这里只有三四个互斥选项）。
-                // 与主动记忆开关无关：周期 = 0 就是关闭治理，所以始终可点、不置灰。
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.semanticColors.cardSurface)
-                        .padding(horizontal = Spacing.lg, vertical = 12.dp)
-                ) {
-                    Text(
-                        text = stringResource(R.string.memory_curation_interval),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = stringResource(R.string.memory_curation_interval_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(Spacing.sm))
-                    SegmentedTabs(
-                        selected = curationIntervalIndex(curationIntervalHours),
-                        labels = listOf(
-                            stringResource(R.string.memory_curation_interval_off_short),
-                            stringResource(R.string.memory_curation_interval_1d),
-                            stringResource(R.string.memory_curation_interval_7d),
-                            stringResource(R.string.memory_curation_interval_custom)
-                        ),
-                        onSelect = { index ->
-                            when (index) {
-                                0 -> onSelectCurationInterval(0)
-                                1 -> onSelectCurationInterval(24)
-                                2 -> onSelectCurationInterval(168)
-                                else -> showCustomIntervalDialog = true
-                            }
-                        }
-                    )
-                    // 自定义档位下把当前值写出来，否则「自定义」这枚胶囊看不出实际是多少
-                    val isCustom = curationIntervalIndex(curationIntervalHours) == CURATION_CUSTOM_INDEX
-                    if (isCustom) {
-                        Text(
-                            text = stringResource(R.string.memory_curation_interval_hours, curationIntervalHours),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(top = Spacing.xs)
-                        )
-                    }
-                }
-            }
-        }
-
-        // 本次会话（短期）：只读，不给编辑入口——上下文不是用户能直接改的东西。
-        // 拿不到会话数据就整块不渲染：摆一张空卡片比没有更让人困惑。
-        if (shortTerm != null) {
-            item(key = MEMORY_HEADER_SESSION_KEY) {
-                Box(modifier = Modifier.padding(top = Spacing.sm)) {
-                    SettingsGroupHeader(text = stringResource(R.string.memory_session_card_title))
-                }
-            }
-            item(key = MEMORY_SESSION_CARD_KEY) {
-                SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
-                    SettingsRow(
-                        icon = null,
-                        title = shortTerm.title,
-                        subtitle = stringResource(R.string.memory_session_card_desc)
-                    )
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = null,
-                        title = stringResource(R.string.memory_session_context_label),
-                        trailing = {
-                            SessionValueText(
-                                stringResource(R.string.memory_session_context_value, shortTerm.retainedMessages)
-                            )
-                        }
-                    )
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = null,
-                        title = stringResource(R.string.memory_session_fold_label),
-                        trailing = {
-                            SessionValueText(
-                                if (shortTerm.foldCount == 0) {
-                                    stringResource(R.string.memory_session_no_fold)
-                                } else {
-                                    stringResource(R.string.memory_session_fold_value, shortTerm.foldCount)
-                                }
-                            )
-                        }
-                    )
-                    // 没跑过请求的会话没有输入 token 可报，这一行直接不显示，不摆一个 0
-                    if (shortTerm.lastInputTokens > 0) {
-                        SettingsDivider()
-                        SettingsRow(
-                            icon = null,
-                            title = stringResource(R.string.memory_session_input_label),
-                            trailing = {
-                                SessionValueText(
-                                    // 这个数是 provider 回传的真实值（上次请求的输入 token），顺手标明来源，
-                                    // 与聊天页指示器的「估算/真实」用同一对文案。
-                                    stringResource(
-                                        R.string.memory_session_input_value,
-                                        shortTerm.lastInputTokens,
-                                        stringResource(R.string.common_token_source_reported)
-                                    )
-                                )
-                            }
-                        )
-                    }
-                }
             }
         }
     }
@@ -366,6 +253,140 @@ internal fun MemorySection(
             },
             onDismiss = { showCustomIntervalDialog = false }
         )
+    }
+}
+
+/**
+ * 记忆状态概览：引擎健康、全局/项目记忆数、主动记忆开关与治理周期、短期会话摘要。
+ * 作为 "状态" Tab 的内容，与 "记忆" Tab 的列表互不干扰。
+ */
+@Composable
+internal fun MemoryStatusSection(
+    memories: List<Memory>,
+    loading: Boolean,
+    shortTerm: SessionShortTermState?,
+    activeMemoryEnabled: Boolean,
+    onToggleActiveMemory: (Boolean) -> Unit,
+    curationIntervalHours: Int,
+    onSelectCurationInterval: (Int) -> Unit,
+    onOpenCustomInterval: () -> Unit
+) {
+    val globalMemories = remember(memories) { memories.filter { it.scope == MemoryScope.GLOBAL } }
+    val projectMemories = remember(memories) { memories.filter { it.scope == MemoryScope.PROJECT } }
+    val pinnedCount = remember(memories) { memories.count { it.pinned } }
+
+    // 治理周期展示标签
+    val curationLabel = when (curationIntervalHours) {
+        0 -> stringResource(R.string.memory_status_curation_off)
+        24 -> stringResource(R.string.memory_curation_interval_1d)
+        168 -> stringResource(R.string.memory_curation_interval_7d)
+        else -> stringResource(R.string.memory_curation_interval_hours, curationIntervalHours)
+    }
+
+    // 顶部卡片：系统状态标题
+    SettingsGroupHeader(text = stringResource(R.string.memory_status_card_title))
+    SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
+        Text(
+            text = stringResource(R.string.memory_status_card_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
+        )
+        SettingsDivider()
+
+        // 引擎运行状态
+        SettingsRow(
+            icon = null,
+            title = stringResource(R.string.memory_status_engine),
+            subtitle = stringResource(R.string.memory_status_engine_running),
+            trailing = {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+                )
+            }
+        )
+        SettingsDivider()
+
+        // 全局记忆数
+        SettingsRow(
+            icon = null,
+            title = stringResource(R.string.memory_group_global),
+            subtitle = stringResource(R.string.memory_status_pinned_count, globalMemories.size, globalMemories.count { it.pinned })
+        )
+        SettingsDivider()
+
+        // 项目记忆数
+        SettingsRow(
+            icon = null,
+            title = stringResource(R.string.memory_group_project),
+            subtitle = stringResource(R.string.memory_group_project_count, projectMemories.size)
+        )
+        SettingsDivider()
+
+        // 主动记忆开关
+        SettingsRow(
+            icon = null,
+            title = stringResource(R.string.memory_active_memory),
+            subtitle = stringResource(R.string.memory_active_memory_desc),
+            subtitleMaxLines = 2,
+            trailing = {
+                AppSwitch(
+                    checked = activeMemoryEnabled,
+                    onCheckedChange = onToggleActiveMemory
+                )
+            }
+        )
+        SettingsDivider()
+
+        // 治理周期：三档预设 + 自定义
+        Text(
+            text = stringResource(R.string.memory_curation_interval),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = stringResource(R.string.memory_curation_interval_desc),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        SegmentedTabs(
+            selected = curationIntervalIndex(curationIntervalHours),
+            labels = listOf(
+                stringResource(R.string.memory_curation_interval_off_short),
+                stringResource(R.string.memory_curation_interval_1d),
+                stringResource(R.string.memory_curation_interval_7d),
+                stringResource(R.string.memory_curation_interval_custom)
+            ),
+            onSelect = { index ->
+                when (index) {
+                    0 -> onSelectCurationInterval(0)
+                    1 -> onSelectCurationInterval(24)
+                    2 -> onSelectCurationInterval(168)
+                    else -> onOpenCustomInterval()
+                }
+            }
+        )
+
+        // 短期会话（只读）
+        if (shortTerm != null) {
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.memory_session_card_title),
+                trailing = {
+                    SessionValueText(
+                        stringResource(
+                            R.string.memory_status_session_label,
+                            shortTerm.retainedMessages,
+                            shortTerm.foldCount
+                        )
+                    )
+                }
+            )
+        }
     }
 }
 

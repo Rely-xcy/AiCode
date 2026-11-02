@@ -1452,6 +1452,20 @@
     <string name="memory_curation_interval_1d">1 天</string>
     <string name="memory_curation_interval_7d">7 天</string>
     <string name="memory_curation_interval_hours">每 %1$d 小时</string>
+    <!-- memory status tab -->
+    <string name="memory_tab_status">状态</string>
+    <string name="memory_tab_list">记忆</string>
+    <string name="memory_status_card_title">系统状态</string>
+    <string name="memory_status_card_desc">引擎、各层存储与治理的运行概况。</string>
+    <string name="memory_status_ok">系统正常</string>
+    <string name="memory_status_engine">记忆引擎</string>
+    <string name="memory_status_engine_running">引擎运行正常</string>
+    <string name="memory_status_pinned_count">%1$d 条 · %2$d 条置顶</string>
+    <string name="memory_status_active_on">已开启</string>
+    <string name="memory_status_active_off">已关闭</string>
+    <string name="memory_status_curation_label">治理周期 %1$s</string>
+    <string name="memory_status_curation_off">治理已关闭</string>
+    <string name="memory_status_session_label">本次上下文 %1$d 条 · 已折叠 %2$d 次</string>
 
     <!-- Custom Prompts -->
     <string name="prompts_title">提示词</string>

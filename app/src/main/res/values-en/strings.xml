@@ -1452,6 +1452,20 @@
     <string name="memory_curation_interval_1d">1 day</string>
     <string name="memory_curation_interval_7d">7 days</string>
     <string name="memory_curation_interval_hours">Every %1$d hours</string>
+    <!-- memory status tab -->
+    <string name="memory_tab_status">Status</string>
+    <string name="memory_tab_list">Memories</string>
+    <string name="memory_status_card_title">System status</string>
+    <string name="memory_status_card_desc">Engine, storage layers and curation overview.</string>
+    <string name="memory_status_ok">All systems normal</string>
+    <string name="memory_status_engine">Memory engine</string>
+    <string name="memory_status_engine_running">Engine running</string>
+    <string name="memory_status_pinned_count">%1$d entries · %2$d pinned</string>
+    <string name="memory_status_active_on">Enabled</string>
+    <string name="memory_status_active_off">Disabled</string>
+    <string name="memory_status_curation_label">Curation every %1$s</string>
+    <string name="memory_status_curation_off">Curation disabled</string>
+    <string name="memory_status_session_label">%1$d messages this session · %2$d compactions</string>
 
     <!-- Custom Prompts -->
     <string name="prompts_title">Prompts</string>
