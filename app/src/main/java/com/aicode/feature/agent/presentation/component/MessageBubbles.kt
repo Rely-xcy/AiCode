@@ -580,13 +580,16 @@ internal fun TurnCollapseHeader(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     processCount: Int = 0,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    /** 摘要态：已完成轮的收起状态，视觉上弱化（背景更淡、文字更小）。 */
+    isSummary: Boolean = false,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = ChatStyle.toolRowMinHeight)
             .clip(RoundedCornerShape(ChatStyle.panelCorner))
+            .background(if (isSummary) MaterialTheme.semanticColors.mutedSurface.copy(alpha = 0.5f) else Color.Transparent)
             .clickable(
                 enabled = enabled,
                 onClickLabel = stringResource(
@@ -604,8 +607,8 @@ internal fun TurnCollapseHeader(
                 // 拿不到耗时（被窗口截断的半轮、消息缺时间戳）时只说「已完成」，不留空档
                 else -> stringResource(R.string.chat_turn_completed_plain)
             },
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
+            color = if (isSummary) MaterialTheme.semanticColors.subtleText else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = if (isSummary) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -616,7 +619,7 @@ internal fun TurnCollapseHeader(
             style = ChevronRotationStyle.RIGHT_DOWN,
             contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
             tint = Brand.IconGray,
-            size = 18.dp
+            size = if (isSummary) 16.dp else 18.dp
         )
     }
 }
