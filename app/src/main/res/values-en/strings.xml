@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AiCode</string>
+    <string name="app_name">AiCove</string>
     <string name="plan_mode_refinement_requested">The user chose to refine the plan. Remain in PLAN and wait for specific feedback before making changes or requesting to exit again.</string>
     <string name="plan_mode_approved_build">The plan was approved. BUILD mode is active; implement within the approved scope.</string>
     <string name="plan_mode_approved_auto">The plan was approved and AUTO mode restored. Implement within the approved scope and follow AUTO permission rules.</string>
