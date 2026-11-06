@@ -1,6 +1,6 @@
 # Shizuku 工具
 
-Shizuku 让普通应用可以执行系统命令。AiCode 接入后，AI 获得一个名为 `Shizuku` 的工具，可通过它在手机系统上运行 `pm`、`am`、`cmd` 等命令，弥补本地容器（PRoot）拿不到系统权限的短板。
+Shizuku 让普通应用可以执行系统命令。AiCove 接入后，AI 获得一个名为 `Shizuku` 的工具，可通过它在手机系统上运行 `pm`、`am`、`cmd` 等命令，弥补本地容器（PRoot）拿不到系统权限的短板。
 
 ## 前置：安装并启动 Shizuku
 
@@ -9,7 +9,7 @@ Shizuku 让普通应用可以执行系统命令。AiCode 接入后，AI 获得�
    - Android 11 及以上：开启「无线调试」后可直接在手机上启动；
    - Android 10 及以下：需连接电脑用 adb 启动。
 
-## 在 AiCode 中授权
+## 在 AiCove 中授权
 
 打开「设置 → 软件权限 → Shizuku」，页面显示当前状态：
 
@@ -19,7 +19,7 @@ Shizuku 让普通应用可以执行系统命令。AiCode 接入后，AI 获得�
 
 「未安装 / 服务没启动」在状态上是一回事（都只看 binder 通不通）：管理器包名不在 Shizuku 的官方契约内（Sui 是 Magisk 模块、没有独立管理器包，Stellar 等兼容层用各自的包名），按包名判「装没装」必然误判。
 
-从 Shizuku 应用返回 AiCode 时，状态会自动刷新。
+从 Shizuku 应用返回 AiCove 时，状态会自动刷新。
 
 ## 使用与安全
 
