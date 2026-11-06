@@ -29,6 +29,17 @@ Each row shows the name, upstream format, model count and enabled status.
 - **Swipe a row left** to reveal a red delete button.
 - **Long-press and drag the name or upstream format area** to reorder; the order survives restart.
 
+### Batch operations
+
+The **Select** button at the top right (the check-square icon) lets you handle several vendors at once:
+
+1. Tap **Select** to enter multi-select mode: a checkbox appears on the left of each row and tapping anywhere on the row toggles it.
+2. An action bar appears on top with "N selected", **Enable / Disable / Delete**, and an **×** on the right to leave multi-select mode (the system back gesture does the same).
+3. **Select All** picks every vendor in the list; tap again to deselect all.
+4. **Delete** asks for confirmation first, then removes all selected vendors and leaves multi-select mode.
+
+While in multi-select mode, drag-to-reorder is disabled and tapping a row only toggles selection — leave the mode to edit a vendor.
+
 ## Multi-Key Mode
 
 ::: tip Version note
@@ -88,10 +99,17 @@ Switch to the "Models" tab of the edit page.
 - **Output window**: the max length of a single reply.
 - **Pricing**: input / output / cache-read / cache-write tiers, in USD per million tokens, used for cost statistics.
 - **Capability toggles**: image input, image output, tool calls, reasoning.
+- **Reasoning levels**: tick the levels this model really accepts and whether thinking can be turned off. Leave empty to use the built-in capability table; filled values win (useful when a relay renamed the model).
 
 Your values take priority; unfilled ones fall back to auto-detected results. If auto-detection can't match the model name, it retries after stripping common suffixes like `-thinking`, `-preview`, `-high` — so most renamed relay models are still recognized.
 
-**Thinking effort**: the lightning icon button above the input box is always available. If the current model's supported levels can be detected, only those are listed; otherwise (model has no level info, or the relay renamed it) all levels are shown — `Off` / `Lowest` / `Low` / `Medium` / `High` / `Highest` / `Max` — and you decide. Some relay models force reasoning on but use non-standard names, and this still lets you adjust manually. The choice is remembered and carried over when a new session uses this model.
+**Thinking effort**: the lightning icon above the input box controls reasoning depth, and the label right of it always shows the level in effect (e.g. **High**; it reads **Off** when thinking is turned off, or the lowest level actually sent when the model can't be turned off). Tapping it opens a sheet with a **Thinking** switch at the top (only shown for models that can actually turn thinking off) and, below it, only the levels the model really supports — the provider default is tagged **Default**.
+
+- Pick a level above what the model supports and it clamps to the nearest lower level; the sheet states the outcome, e.g. **Effective: High**.
+- For models that always think, the sheet says so and marks the level that will actually be sent.
+- When the levels can't be detected (relay renamed the model, or a custom model), every level is listed with a "may not take effect" hint.
+
+The choice is remembered and carried over when a new session uses this model. For the per-family support matrix and how to verify a setting really took effect, see [Reasoning modes](/advanced/reasoning-modes).
 
 **Test**: every model row has a "Test" button that sends one real request to verify connectivity, with the result shown below the row.
 

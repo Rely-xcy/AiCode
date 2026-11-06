@@ -99,6 +99,12 @@ AI 可通过 `browser` 工具控制浏览器执行以下操作：
 
 `getBackbone` 返回无障碍树：每个节点形如 `{role,name,ref,url,value,children}`，`role` 是按标签/`role` 属性推导的可访问角色（`link`/`button`/`textbox`/`heading`/`navigation`…），`name` 是可访问名称（`aria-label`/`aria-labelledby`/`alt`/`placeholder`/关联 `label`/内容文本），`ref` 只分配给可交互元素。已过滤 `script`/`style` 与不可见元素，超出 `maxDepth` 的节点以 `truncated:true` 标记。
 
+## 操作超时怎么办
+
+AI 打开网页会等待页面加载完成，超过 30 秒仍未完成时会提示操作超时。这不表示浏览器未初始化：先打开浏览器面板检查页面是否已经显示，再检查网络、代理或登录状态，确认后再让 AI 继续操作。若只需要网页正文或静态 HTML，可以让 AI 使用网页抓取，不必等待浏览器渲染。
+
+你主动停止 AI 时，进行中的浏览器工具调用也会取消，不会把停止操作误报成浏览器未就绪。
+
 ## 与 websearch / webfetch 的区别
 
 - **websearch**：搜索引擎查询，获取搜索结果摘要。

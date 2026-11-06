@@ -3,7 +3,7 @@
 在 AiCode 的 Linux 容器（PRoot）中配置 JDK、Android SDK 与 Flutter SDK 后，即可直接从源码编译 Flutter 应用的 Android APK。本文以 Debian 12 (bookworm) aarch64 为例，已在 PRoot 容器内实测通过 debug APK 的构建。
 
 ::: tip 支持范围
-ARM64 容器仅支持构建 **debug APK**（JIT 模式，原生支持 ARM64）。**release / profile 包无法在本地构建**：Google 仅为 Android AOT 发布 linux-x64 平台的 gen_snapshot，ARM64 宿主机上无法执行 AOT 编译。如需 release 包，请使用 GitHub Actions 等远程构建方式。
+本文构建 **debug APK**（JIT 模式，原生支持 ARM64）。**release 包**需要额外用 qemu 转译补齐 AOT 编译器，见《在容器中构建 Flutter release APK》。
 :::
 
 ::: tip 镜像与网络说明
@@ -255,6 +255,8 @@ build/app/outputs/flutter-apk/app-debug.apk
 ~/android/sdk/build-tools/35.0.0/aapt2 dump badging build/app/outputs/flutter-apk/app-debug.apk | head -3
 ```
 
+如需 release 包，在同一套环境上按《在容器中构建 Flutter release APK》补装 qemu 后再构建。
+
 ## 常见问题
 
 | 现象 | 原因 | 解决 |
@@ -271,7 +273,7 @@ build/app/outputs/flutter-apk/app-debug.apk
 
 ## 限制与提示
 
-- **release/profile 无法在 ARM64 构建**：Android AOT 的 gen_snapshot 仅有 linux-x64 版。如需 release 包，请使用 GitHub Actions（在 x64 上执行 `flutter build apk --release`）或其它远程构建方式。
+- **release 包需额外配置**：Android AOT 的 gen_snapshot 仅有 linux-x64 版，需按《在容器中构建 Flutter release APK》用 qemu 转译运行；或者改用 GitHub Actions（在 x64 上执行 `flutter build apk --release`）等远程构建方式。
 - 模板 `flutter create` 的 `compileSdk=35`、`buildToolsVersion=33.0.1`，修改模板前请先确认对应 SDK 组件已安装。
 - PRoot 下大量小文件的解压（如 dart-sdk、依赖缓存）速度偏慢属正常现象，请勿误判为卡死。
 - 若依赖解析持续失败，可先单独 `curl -sI` 验证对应仓库 URL 的可达性，再检查仓库顺序。
