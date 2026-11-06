@@ -97,7 +97,7 @@ There is nothing to set up beforehand: install the app, configure a model under 
 | Download | [GitHub Releases](https://github.com/Rely-xcy/AiCove/releases/latest): pick `armsolo` for real devices, `x86solo` for emulators, `universal` for both |
 | Quick start | Settings → AI Vendors to add a model → Container & Images to pick local or SSH → new session and chat |
 | Changelog | [Releases](https://github.com/Rely-xcy/AiCove/releases) (all versions & notes) |
-| User guide | [Online docs](https://aicode.murk.top): quick start, user manual and advanced guides (same content as the in-app docs) |
+| User guide | [Online docs](https://rely-xcy.github.io/AiCove/): quick start, user manual and advanced guides (same content as the in-app docs) |
 
 ## Star
 

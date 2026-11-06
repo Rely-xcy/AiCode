@@ -21,10 +21,10 @@ hero:
       link: /en/guide/quick-start
     - theme: alt
       text: Download APK
-      link: https://aicode.murk.top/download
+      link: https://github.com/Rely-xcy/AiCove/releases/latest
     - theme: alt
       text: GitHub
-      link: https://github.com/jieapi/aicode
+      link: https://github.com/Rely-xcy/AiCove
 
 features:
   - title: AI Agent

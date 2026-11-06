@@ -51,7 +51,7 @@ Back up important code, settings, and data regularly, and verify that backups ca
 
 ## 7. Open-Source License and Reserved Rights
 
-The App is open source under GPL-3.0, with source code in the [GitHub repository](https://github.com/jieapi/aicode). This agreement does not restrict your rights under that license to run, study, copy, modify, or redistribute the software. Exercising those rights remains subject to the license's conditions. Third-party components retain their respective licenses.
+The App is open source under GPL-3.0, with source code in the [GitHub repository](https://github.com/Rely-xcy/AiCove). This agreement does not restrict your rights under that license to run, study, copy, modify, or redistribute the software. Exercising those rights remains subject to the license's conditions. Third-party components retain their respective licenses.
 
 If this agreement conflicts with GPL-3.0 regarding rights granted by that license, GPL-3.0 prevails. The startup consent process does not impose additional restrictions on those open-source rights.
 
@@ -71,5 +71,5 @@ For questions about this agreement or the App, use the contact details below. Gi
 
 - Developer: jieapi (individual developer)
 - Email: xiaojieapi@qq.com
-- GitHub Issues: <https://github.com/jieapi/aicode/issues>
-- Project homepage: <https://github.com/jieapi/aicode>
+- GitHub Issues: <https://github.com/Rely-xcy/AiCove/issues>
+- Project homepage: <https://github.com/Rely-xcy/AiCove>

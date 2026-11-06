@@ -81,7 +81,7 @@ The App is intended for users capable of software development and is not directe
 
 ## 8. Open Source and Auditable
 
-The App's source code is publicly available on [GitHub](https://github.com/jieapi/aicode) under GPL-3.0, so you can review the code to verify its data handling.
+The App's source code is publicly available on [GitHub](https://github.com/Rely-xcy/AiCove) under GPL-3.0, so you can review the code to verify its data handling.
 
 ## 9. Changes to This Policy
 
@@ -93,5 +93,5 @@ If you have questions about this Privacy Policy, contact us through the followin
 
 - Developer: jieapi (individual developer)
 - Contact email: xiaojieapi@qq.com
-- GitHub Issues: <https://github.com/jieapi/aicode/issues>
-- Project home: <https://github.com/jieapi/aicode>
+- GitHub Issues: <https://github.com/Rely-xcy/AiCove/issues>
+- Project home: <https://github.com/Rely-xcy/AiCove>
