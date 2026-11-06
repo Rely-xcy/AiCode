@@ -30,16 +30,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -156,9 +153,6 @@ private val ChatPanelSlotSaver = Saver<ChatPanelSlot, String>(
 
 /** 悬浮层（横幅/面板/输入框）与最后一条消息的间距。 */
 private val FLOATING_LAYER_GAP_DP = 8.dp
-
-/** 整轮过程区的最大高度（px）：超过后内滚，不撑开整页。对应 B 方案；叠加 C 时已完成步骤折叠进摘要行。 */
-private val TURN_PROCESS_MAX_HEIGHT_DP = 210.dp
 
 /** 内容底部驱动校准的容差（px）：最后内容底部超出安全区超过该值才向下校准，避免亚像素抖动。 */
 private const val AUTO_SCROLL_TOLERANCE_PX = 2
@@ -2665,52 +2659,8 @@ private fun RenderChatItem(item: ChatRenderItem, env: ChatItemEnv) {
                 enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
                 exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
             ) {
-                // B+C 叠加：过程区固定高度内滚（B），已完成步骤折叠成摘要（C）。
-                // running=false 时默认收起过程区，用户手动点开才展开——避免历史轮占屏。
-                val processExpanded = if (header.running) true else header.expanded
-                val scrollState = rememberLazyListState()
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    // 已完成步骤的摘要行：点开展开态过程列表；收起态只留一行
-                    if (!header.running && !processExpanded) {
-                        TurnCollapseHeader(
-                            running = false,
-                            durationMs = header.endMessageId?.let { env.taskDurations[it] },
-                            expanded = true,
-                            processCount = header.processCount,
-                            enabled = true,
-                            isSummary = true,
-                            onToggle = {
-                                env.viewModel.setTurnExpanded(header.key, true)
-                                env.onToolItemToggled()
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        // 运行中 / 已手动展开：过程列表套限高内滚容器
-                        LazyColumn(
-                            state = scrollState,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = TURN_PROCESS_MAX_HEIGHT_DP)
-                                .padding(horizontal = Spacing.xs),
-                            contentPadding = PaddingValues(vertical = Spacing.xs),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            items(item.turnProcess.size) { idx ->
-                                RenderChatItem(item.turnProcess[idx], env)
-                            }
-                        }
-                        if (header.processCount > 0) {
-                            Text(
-                                text = stringResource(R.string.chat_turn_process_hint, header.processCount),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.semanticColors.subtleText,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 2.dp, start = Spacing.xs)
-                            )
-                        }
-                    }
+                    item.turnProcess.forEach { child -> RenderChatItem(child, env) }
                 }
             }
         }

@@ -2208,5 +2208,4 @@
     <string name="tool_mcp_stdio_added">已添加 %1$s 本地 MCP server：%2$s，配置将在下一次会话生效。若命令依赖 Node/Python 等运行时，请通过命令工具在用户确认后安装。</string>
     <string name="tool_mcp_invalid_name">server_name 只能含 ASCII 字母、数字、下划线与连字符（当前：%1$s）。server 名称会拼成 mcp__&lt;server_name&gt;__&lt;tool&gt; 送给模型，必须符合工具命名规范。</string>
     <string name="tool_memory_saved">已保存记忆「%1$s」到 %2$s 作用域，下一轮起会出现在你的记忆清单里。</string>
-    <string name="chat_turn_process_hint">共 %1$d 个步骤</string>
 </resources>

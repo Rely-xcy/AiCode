@@ -2209,5 +2209,4 @@
     <string name="tool_mcp_stdio_added">Added local MCP server %2$s in %1$s. The configuration takes effect in the next session. If the command needs a runtime such as Node or Python, install it with the command tool after the user confirms.</string>
     <string name="tool_mcp_invalid_name">server_name may contain only ASCII letters, digits, underscores, and hyphens (current: %1$s). Server names are joined into mcp__&lt;server_name&gt;__&lt;tool&gt; for the model, so they must follow tool naming rules.</string>
     <string name="tool_memory_saved">Saved memory “%1$s” in the %2$s scope. It appears in your memory index from the next turn.</string>
-    <string name="chat_turn_process_hint">%1$d steps total</string>
 </resources>
