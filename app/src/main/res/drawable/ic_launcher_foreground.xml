@@ -6,10 +6,19 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#2E2823"
-        android:pathData="M54,26.5 A27.5,27.5 0 1 0 77.8,67.7 A5.05,5.05 0 0 0 70.8,60.4 A17.4,17.4 0 1 1 54,36.6 A5.05,5.05 0 0 0 54,26.5 Z" />
-    <path
-        android:fillColor="#2E2823"
-        android:pathData="M44.85,54 A9.15,9.15 0 1 0 63.15,54 A9.15,9.15 0 1 0 44.85,54 Z" />
+    <!-- 图形按 512 标准图标的 60% 占比反算：adaptive icon 系统会把 108dp 画布放大 1.5 倍
+         再裁到 72dp 安全区，若按 108 画布上的原尺寸放，桌面会显得比网页预览粗一圈。
+         group 缩到 0.842，使裁剪后图形占 60%，与标准图标一致。 -->
+    <group
+        android:scaleX="0.842"
+        android:scaleY="0.842"
+        android:pivotX="54"
+        android:pivotY="54">
+        <path
+            android:fillColor="#2E2823"
+            android:pathData="M54,26.5 A27.5,27.5 0 1 0 77.8,67.7 A5.05,5.05 0 0 0 70.8,60.4 A17.4,17.4 0 1 1 54,36.6 A5.05,5.05 0 0 0 54,26.5 Z" />
+        <path
+            android:fillColor="#2E2823"
+            android:pathData="M44.85,54 A9.15,9.15 0 1 0 63.15,54 A9.15,9.15 0 1 0 44.85,54 Z" />
+    </group>
 </vector>
