@@ -51,7 +51,7 @@ AI 模型、搜索、网站、MCP 服务、软件仓库、Git 托管、远程服
 
 ## 七、开源许可与权利保留
 
-本应用依据 GPL-3.0 开源，源代码见 [GitHub 仓库](https://github.com/jieapi/aicode)。你依据该许可证享有的运行、研究、复制、修改和再分发等权利不受本协议限制；行使这些权利时应遵守许可证的相应条件。第三方组件适用各自许可证。
+本应用依据 GPL-3.0 开源，源代码见 [GitHub 仓库](https://github.com/Rely-xcy/AiCove)。你依据该许可证享有的运行、研究、复制、修改和再分发等权利不受本协议限制；行使这些权利时应遵守许可证的相应条件。第三方组件适用各自许可证。
 
 如本协议与 GPL-3.0 对其所授予权利的规定发生冲突，以 GPL-3.0 为准。启动确认流程不构成对上述开源权利的额外限制。
 
@@ -71,5 +71,5 @@ AI 模型、搜索、网站、MCP 服务、软件仓库、Git 托管、远程服
 
 - 开发者：jieapi（个人开发者）
 - 联系邮箱：xiaojieapi@qq.com
-- GitHub Issues：<https://github.com/jieapi/aicode/issues>
-- 项目主页：<https://github.com/jieapi/aicode>
+- GitHub Issues：<https://github.com/Rely-xcy/AiCove/issues>
+- 项目主页：<https://github.com/Rely-xcy/AiCove>

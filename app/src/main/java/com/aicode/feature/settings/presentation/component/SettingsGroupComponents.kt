@@ -25,7 +25,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -38,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -254,6 +259,18 @@ internal fun ModelSearchField(
     focusRequester: FocusRequester? = null
 ) {
     val isLight = settingsLightMode()
+    // 用 TextFieldValue 而非 String 重载：String 重载在文本被外部改写（清除按钮、搜索防抖回写）时
+    // 只重置 selection，而 IME 的组合区（composition）仍指向旧文本。之后长按选词，Compose 会拿
+    // 越界 offset 去构造 TextSelection.Request，Android 直接抛 IllegalArgumentException。
+    var fieldValue by remember {
+        mutableStateOf(TextFieldValue(query, selection = TextRange(query.length)))
+    }
+    // 外部文本变化时同步；selection 收在末尾、组合区清空，避免指向已不存在的字符。
+    LaunchedEffect(query) {
+        if (fieldValue.text != query) {
+            fieldValue = TextFieldValue(query, selection = TextRange(query.length))
+        }
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(50),
@@ -284,8 +301,21 @@ internal fun ModelSearchField(
                     )
                 }
                 BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
+                    value = fieldValue,
+                    onValueChange = { newValue ->
+                        // 输入法在联想/组合阶段会短暂报出超出文本长度的 selection 或组合区。
+                        // 原样传给 Compose，下一次选词/取词就会带着越界下标去问 TextClassifier。
+                        val len = newValue.text.length
+                        val selection = TextRange(
+                            newValue.selection.start.coerceIn(0, len),
+                            newValue.selection.end.coerceIn(0, len)
+                        )
+                        val composition = newValue.composition?.let {
+                            TextRange(it.start.coerceIn(0, len), it.end.coerceIn(0, len))
+                        }
+                        fieldValue = newValue.copy(selection = selection, composition = composition)
+                        onQueryChange(newValue.text)
+                    },
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         color = MaterialTheme.colorScheme.onSurface
                     ),

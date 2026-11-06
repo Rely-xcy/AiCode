@@ -7,6 +7,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   srcDir: './docs',
+  // GitHub Pages 项目页路径：https://rely-xcy.github.io/AiCove/
+  base: '/AiCove/',
   locales: {
     root: {
       label: '简体中文',
@@ -15,20 +17,20 @@ export default defineConfig({
     en: {
       label: 'English',
       lang: 'en',
-      title: 'AiCode',
-      titleTemplate: ':title | AiCode - AI Coding Tool & Terminal on Android',
-      description: 'AiCode is an open-source AI coding and mobile workstation tool for Android. It ships with a built-in Linux container and terminal, letting the AI Agent read and write files, run shell commands and builds on its own — with deep integration of the MCP protocol, Git version control and remote SSH development.',
+      title: 'AiCove',
+      titleTemplate: ':title | AiCove - AI Coding Tool & Terminal on Android',
+      description: 'AiCove is an open-source AI coding and mobile workstation tool for Android. It ships with a built-in Linux container and terminal, letting the AI Agent read and write files, run shell commands and builds on its own — with deep integration of the MCP protocol, Git version control and remote SSH development.',
       head: [
-        ['meta', { name: 'keywords', content: 'AiCode, Android AI coding, mobile development, Linux terminal, PRoot, Termux, AI Agent, MCP, code editor, Git client, mobile workstation, remote SSH' }],
-        ['meta', { property: 'og:title', content: 'AiCode - AI Coding Tool & Linux Terminal on Android' }],
+        ['meta', { name: 'keywords', content: 'AiCove, Android AI coding, mobile development, Linux terminal, PRoot, Termux, AI Agent, MCP, code editor, Git client, mobile workstation, remote SSH' }],
+        ['meta', { property: 'og:title', content: 'AiCove - AI Coding Tool & Linux Terminal on Android' }],
         ['meta', { property: 'og:description', content: 'An open-source AI coding tool for Android with a built-in Linux container and terminal. AI Agent edits code, runs commands and builds; supports MCP tools, Git and remote SSH.' }],
-        ['meta', { name: 'twitter:title', content: 'AiCode - AI Coding Tool & Linux Terminal on Android' }],
+        ['meta', { name: 'twitter:title', content: 'AiCove - AI Coding Tool & Linux Terminal on Android' }],
         ['meta', { name: 'twitter:description', content: 'An open-source AI coding tool for Android with a built-in Linux container and terminal. AI Agent edits code, runs commands and builds; supports MCP tools, Git and remote SSH.' }]
       ],
       themeConfig: {
         nav: [
           { text: 'Guide', link: '/en/guide/quick-start', activeMatch: '/en/guide/' },
-          { text: 'Download', link: 'https://github.com/jieapi/aicode/releases/latest' },
+          { text: 'Download', link: 'https://github.com/Rely-xcy/AiCove/releases/latest' },
           { text: 'User Agreement', link: '/en/terms' },
           { text: 'Privacy', link: '/en/privacy' }
         ],
@@ -59,45 +61,45 @@ export default defineConfig({
         sidebarMenuLabel: 'Menu',
         returnToTopLabel: 'Back to top',
         editLink: {
-          pattern: 'https://github.com/jieapi/aicode/edit/main/docs-site/docs/:path',
+          pattern: 'https://github.com/Rely-xcy/AiCove/edit/main/docs-site/docs/:path',
           text: 'Edit this page on GitHub'
         },
         footer: {
           message: 'Open source under GPL-3.0',
-          copyright: 'Copyright © 2026-present AiCode'
+          copyright: 'Copyright © 2026-present AiCove'
         }
       }
     }
   },
-  title: 'AiCode',
-  titleTemplate: ':title | AiCode - 手机端 AI 编程工具与终端',
-  description: 'AiCode 是一款开源的 Android 端 AI 编程与移动工作站工具。内置 Linux 容器与终端环境，AI Agent 可自主读写文件、执行 Shell 命令与运行构建，深度集成 MCP 协议、Git 版本控制与远程 SSH 开发。',
-  cleanUrls: true,
+  title: 'AiCove',
+  titleTemplate: ':title | AiCove - 手机端 AI 编程工具与终端',
+  description: 'AiCove 是一款开源的 Android 端 AI 编程与移动工作站工具。内置 Linux 容器与终端环境，AI Agent 可自主读写文件、执行 Shell 命令与运行构建，深度集成 MCP 协议、Git 版本控制与远程 SSH 开发。',
+  cleanUrls: false,
   lastUpdated: true,
   sitemap: {
-    hostname: 'https://aicode.murk.top'
+    hostname: 'https://rely-xcy.github.io/AiCove'
   },
   head: [
     ['link', { rel: 'icon', href: '/logo.png', type: 'image/png' }],
     ['meta', { name: 'theme-color', content: '#3c8772' }],
-    ['meta', { name: 'keywords', content: 'AiCode, Android AI 编程, 手机编程, 移动端开发, Linux 终端, PRoot, Termux, AI Agent, MCP 协议, 手机代码编辑器, Git 客户端, 移动工作站, 手机跑终端, 远程 SSH 开发' }],
-    ['meta', { name: 'author', content: 'AiCode Team' }],
+    ['meta', { name: 'keywords', content: 'AiCove, Android AI 编程, 手机编程, 移动端开发, Linux 终端, PRoot, Termux, AI Agent, MCP 协议, 手机代码编辑器, Git 客户端, 移动工作站, 手机跑终端, 远程 SSH 开发' }],
+    ['meta', { name: 'author', content: 'AiCove' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:site_name', content: 'AiCode' }],
-    ['meta', { property: 'og:title', content: 'AiCode - 手机端 AI 编程工具与内置 Linux 终端' }],
+    ['meta', { property: 'og:site_name', content: 'AiCove' }],
+    ['meta', { property: 'og:title', content: 'AiCove - 手机端 AI 编程工具与内置 Linux 终端' }],
     ['meta', { property: 'og:description', content: 'Android 端全功能 AI 编程工具：内置 Linux 容器与终端、AI Agent 自动修改代码与执行命令、MCP 工具扩展、Git 版本管理与远程 SSH 连接。' }],
-    ['meta', { property: 'og:image', content: 'https://aicode.murk.top/logo.png' }],
-    ['meta', { property: 'og:url', content: 'https://aicode.murk.top/' }],
+    ['meta', { property: 'og:image', content: 'https://rely-xcy.github.io/AiCove/logo.png' }],
+    ['meta', { property: 'og:url', content: 'https://rely-xcy.github.io/AiCove/' }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-    ['meta', { name: 'twitter:title', content: 'AiCode - 手机端 AI 编程工具与内置 Linux 终端' }],
+    ['meta', { name: 'twitter:title', content: 'AiCove - 手机端 AI 编程工具与内置 Linux 终端' }],
     ['meta', { name: 'twitter:description', content: 'Android 端全功能 AI 编程工具：内置 Linux 容器与终端、AI Agent 自动修改代码与执行命令、MCP 工具扩展、Git 版本管理与远程 SSH 连接。' }],
-    ['meta', { name: 'twitter:image', content: 'https://aicode.murk.top/logo.png' }]
+    ['meta', { name: 'twitter:image', content: 'https://rely-xcy.github.io/AiCove/logo.png' }]
   ],
   themeConfig: {
     nav: [
       { text: '使用手册', link: '/guide/quick-start', activeMatch: '/guide/' },
       { text: '进阶教程', link: '/advanced/build-android-app', activeMatch: '/advanced/' },
-      { text: '下载', link: 'https://github.com/jieapi/aicode/releases/latest' },
+      { text: '下载', link: 'https://github.com/Rely-xcy/AiCove/releases/latest' },
       { text: '用户协议', link: '/terms' },
       { text: '隐私政策', link: '/privacy' }
     ],
@@ -204,7 +206,7 @@ export default defineConfig({
       ]
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/jieapi/aicode' }
+      { icon: 'github', link: 'https://github.com/Rely-xcy/AiCove' }
     ],
     search: {
       provider: 'local'
@@ -218,12 +220,12 @@ export default defineConfig({
     sidebarMenuLabel: '菜单',
     returnToTopLabel: '回到顶部',
     editLink: {
-      pattern: 'https://github.com/jieapi/aicode/edit/main/docs-site/docs/:path',
+      pattern: 'https://github.com/Rely-xcy/AiCove/edit/main/docs-site/docs/:path',
       text: '在 GitHub 上编辑此页'
     },
     footer: {
       message: '基于 GPL-3.0 协议开源',
-      copyright: 'Copyright © 2026-至今 AiCode'
+      copyright: 'Copyright © 2026-至今 AiCove'
     }
   },
   vite: {
