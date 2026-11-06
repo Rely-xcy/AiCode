@@ -1,24 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- AiCove 启动图标前景：静湾与原点（The Quiet Cove）。
-     深陶炭 #2E2823，纯色无渐变；图形落在自适应图标中心安全区内。 -->
+<!-- 前景：海湾弧 + 圆核（512 标准图标里图形占 60%，线条厚度约 12%）。
+     adaptive icon 系统会把 108dp 画布放大再裁到 72dp 安全区，MIUI 实测放大倍率
+     约 1.6-1.75，故 group 收到 0.68，使桌面显示占约 52%。
+     弧与圆核都改用 stroke/fill 分开描述：线条粗细由 strokeWidth 直接控制，
+     比 fill 双弧更容易按真机反馈微调。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 图形按 512 标准图标的 60% 占比反算：adaptive icon 系统会把 108dp 画布放大
-         再裁到 72dp 安全区。实测 MIUI 上 0.842 仍占 60-70%，留白偏少，故收到 0.68，
-         目标显示占 52% 左右，与设计预览一致。 -->
     <group
         android:scaleX="0.68"
         android:scaleY="0.68"
         android:pivotX="54"
         android:pivotY="54">
+        <!-- 海湾弧：半径 24.25，线宽 6.5（外径 55，厚约 11.8%） -->
         <path
-            android:fillColor="#2E2823"
-            android:pathData="M54,26.5 A27.5,27.5 0 1 0 77.8,67.7 A5.05,5.05 0 0 0 70.8,60.4 A17.4,17.4 0 1 1 54,36.6 A5.05,5.05 0 0 0 54,26.5 Z" />
+            android:pathData="M 54,29.75 A 24.25,24.25 0 1 0 75.0,66.1"
+            android:strokeColor="#2E2823"
+            android:strokeWidth="6.5"
+            android:strokeLineCap="round" />
+        <!-- 圆核 -->
         <path
-            android:fillColor="#2E2823"
-            android:pathData="M44.85,54 A9.15,9.15 0 1 0 63.15,54 A9.15,9.15 0 1 0 44.85,54 Z" />
+            android:pathData="M 54,45.5 A 8.5,8.5 0 1 1 54,62.5 A 8.5,8.5 0 1 1 54,45.5"
+            android:fillColor="#2E2823" />
     </group>
 </vector>
