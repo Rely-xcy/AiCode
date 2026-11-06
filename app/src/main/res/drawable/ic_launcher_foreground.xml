@@ -6,12 +6,12 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 图形按 512 标准图标的 60% 占比反算：adaptive icon 系统会把 108dp 画布放大 1.5 倍
-         再裁到 72dp 安全区，若按 108 画布上的原尺寸放，桌面会显得比网页预览粗一圈。
-         group 缩到 0.842，使裁剪后图形占 60%，与标准图标一致。 -->
+    <!-- 图形按 512 标准图标的 60% 占比反算：adaptive icon 系统会把 108dp 画布放大
+         再裁到 72dp 安全区。实测 MIUI 上 0.842 仍占 60-70%，留白偏少，故收到 0.68，
+         目标显示占 52% 左右，与设计预览一致。 -->
     <group
-        android:scaleX="0.842"
-        android:scaleY="0.842"
+        android:scaleX="0.68"
+        android:scaleY="0.68"
         android:pivotX="54"
         android:pivotY="54">
         <path
