@@ -4,7 +4,7 @@ import android.content.Context
 import com.aicode.core.security.CredentialStore
 import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.data.local.dao.BackupTargetDao
+import com.aicode.feature.backup.data.local.dao.BackupTargetDao
 import com.aicode.feature.backup.data.local.entity.BackupTargetEntity
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
@@ -89,9 +89,9 @@ class AndroidCredentialStore @Inject constructor(
 
             val label = "provider ${p.name}"
             // 写回：一行一次，把五个字段一起更新。
-            val writeBack: () -> Boolean = {
+            val writeBack: () -> Boolean = writeBack@{
                 val latest = aiProviderDao.getAllProvidersOnce().firstOrNull { it.id == p.id }
-                    ?: return@let false
+                    ?: return@writeBack false
                 val rewritten = latest.copy(
                     apiKey = plainApiKey?.let { KeystoreCipher.encryptString(it) } ?: latest.apiKey,
                     apiKeys = plainApiKeys?.let { KeystoreCipher.encryptString(it) } ?: latest.apiKeys,
@@ -124,9 +124,9 @@ class AndroidCredentialStore @Inject constructor(
             if (plainAuth == null && plainPass == null) return@forEach
 
             val label = "connection ${c.name}"
-            val writeBack: () -> Boolean = {
+            val writeBack: () -> Boolean = writeBack@{
                 val latest = remoteConnectionDao.getAllConnectionsOnce().firstOrNull { it.id == c.id }
-                    ?: return@let false
+                    ?: return@writeBack false
                 val rewritten = latest.copy(
                     authData = plainAuth?.let { KeystoreCipher.encryptString(it) } ?: latest.authData,
                     passphrase = plainPass?.let { KeystoreCipher.encryptString(it) } ?: latest.passphrase
@@ -154,9 +154,9 @@ class AndroidCredentialStore @Inject constructor(
             if (plainPassword == null && plainSecret == null && plainToken == null) return@forEach
 
             val label = "backup target ${t.name}"
-            val writeBack: () -> Boolean = {
+            val writeBack: () -> Boolean = writeBack@{
                 val latest = backupTargetDao.getAllOnce().firstOrNull { it.id == t.id }
-                    ?: return@let false
+                    ?: return@writeBack false
                 val rewritten = latest.copy(
                     password = plainPassword?.let { KeystoreCipher.encryptString(it) } ?: latest.password,
                     secretKey = plainSecret?.let { KeystoreCipher.encryptString(it) } ?: latest.secretKey,
