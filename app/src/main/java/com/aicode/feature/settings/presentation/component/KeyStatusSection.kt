@@ -136,5 +136,5 @@ internal fun KeyStatusSection(
 }
 
 /** 换密钥是磁盘与数据库操作，不能在主线程做。 */
-private suspend fun <T> withContextIo(block: () -> T): T =
+private suspend fun <T> withContextIo(block: suspend () -> T): T =
     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { block() }

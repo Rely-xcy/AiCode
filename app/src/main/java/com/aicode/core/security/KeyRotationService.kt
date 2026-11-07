@@ -1,6 +1,8 @@
 package com.aicode.core.security
 
 import com.aicode.core.util.FileLogger
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,12 +20,15 @@ import javax.inject.Singleton
  *
  * 密文本身在哪、怎么落盘，由 [CredentialStore] 提供——core 层不认识 Room 与各个
  * repository，反向依赖会让分层检查直接拦下。
+ *
+ * 全部入口都是 suspend：读写凭据要经过 Room 的 suspend DAO，用 [Mutex] 而不是
+ * synchronized 串行化——后者在协程里会阻塞线程，且持锁跨挂起点会死锁。
  */
 @Singleton
 class KeyRotationService @Inject constructor(
     private val store: CredentialStore
 ) {
-    private val lock = Any()
+    private val mutex = Mutex()
 
     /** 一次轮换的结果统计。 */
     data class Result(
@@ -38,7 +43,7 @@ class KeyRotationService @Inject constructor(
      *
      * 用户手动点「更换密钥」走 [rotate]，不受这个门槛限制。
      */
-    fun rotateIfNeeded(): Result = synchronized(lock) {
+    suspend fun rotateIfNeeded(): Result {
         val entry = KeyringStore.activeEntry()
             ?: return Result(rotated = false, migratedItems = 0, skippedItems = 0)
         val remaining = entry.expiresAt - System.currentTimeMillis()
@@ -46,21 +51,23 @@ class KeyRotationService @Inject constructor(
         if (remaining > 0 && daysLeft > ROTATE_AHEAD_DAYS) {
             return Result(rotated = false, migratedItems = 0, skippedItems = 0)
         }
-        rotate()
+        return rotate()
     }
 
     /** 强制轮换（用户手动触发）。 */
-    fun rotate(): Result = synchronized(lock) {
+    suspend fun rotate(): Result = mutex.withLock {
         if (KeyringStore.activeEntry() == null) {
             return Result(rotated = false, migratedItems = 0, skippedItems = 0, failure = "没有可用的密钥")
         }
 
-        // 第一步：全部解密到内存。任一项解不开就跳过并计数，不中断整轮——
-        // 解不开的那条本来就是坏数据，不该让它挡住其它数据的轮换。
+        // 第一步：全部解密到内存。解不开的项跳过并计数，不中断整轮——
+        // 那条本来就是坏数据（密钥早于本次轮换就已丢失），不该挡住其它数据的轮换。
         val pending = mutableListOf<PendingWrite>()
-        var skipped = 0
+        val skippedRef = intArrayOf(0)
         val collectFailure = runCatching {
-            store.collectEncryptedFields { label, plaintext, writeBack ->
+            store.collectEncryptedFields(
+                skipped = { count -> skippedRef[0] = count }
+            ) { label, _, writeBack ->
                 pending += PendingWrite(label, writeBack)
             }
         }.getOrElse { e ->
@@ -68,7 +75,7 @@ class KeyRotationService @Inject constructor(
             return Result(
                 rotated = false,
                 migratedItems = 0,
-                skippedItems = skipped,
+                skippedItems = skippedRef[0],
                 failure = "收集密文失败：${e.message ?: e::class.simpleName}"
             )
         }
@@ -77,12 +84,12 @@ class KeyRotationService @Inject constructor(
             return Result(
                 rotated = false,
                 migratedItems = 0,
-                skippedItems = skipped,
+                skippedItems = skippedRef[0],
                 failure = collectFailure
             )
         }
         if (pending.isEmpty()) {
-            return Result(rotated = false, migratedItems = 0, skippedItems = skipped)
+            return Result(rotated = false, migratedItems = 0, skippedItems = skippedRef[0])
         }
 
         // 第二步：换新密钥。旧密钥此时仍留在密钥环里（状态变 retired），
@@ -102,7 +109,7 @@ class KeyRotationService @Inject constructor(
                 return Result(
                     rotated = true,
                     migratedItems = migrated,
-                    skippedItems = skipped,
+                    skippedItems = skippedRef[0],
                     failure = "${item.label} 写回失败"
                 )
             }
@@ -110,13 +117,13 @@ class KeyRotationService @Inject constructor(
         }
 
         FileLogger.i(TAG, "轮换完成：$migrated 项已换到新密钥 ${newEntry.id}")
-        Result(rotated = true, migratedItems = migrated, skippedItems = skipped)
+        Result(rotated = true, migratedItems = migrated, skippedItems = skippedRef[0])
     }
 
     /** 一条待写回的密文：明文已在手，只差用新密钥加密落盘。 */
     private class PendingWrite(
         val label: String,
-        val writeBack: () -> Boolean
+        val writeBack: suspend () -> Boolean
     )
 
     companion object {
@@ -138,10 +145,14 @@ interface CredentialStore {
     /**
      * 遍历全部密文字段。
      *
-     * @param onField 每条成功解密的字段：标签、明文、写回回调
+     * 实现方负责把解不开的项计入 [skipped]，不要抛异常中断整轮。
+     *
+     * @param onField 每条成功解密的字段：标签、明文、写回回调（回调内部自己加密落盘并校验）
+     * @param skipped 解不开而被跳过的项数
      * @return 非 null 表示整体失败（整轮放弃），null 表示继续
      */
-    fun collectEncryptedFields(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+    suspend fun collectEncryptedFields(
+        skipped: (Int) -> Unit = {},
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ): String?
 }

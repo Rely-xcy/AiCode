@@ -5,14 +5,9 @@ import com.aicode.core.security.CredentialStore
 import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.backup.data.local.dao.BackupTargetDao
-import com.aicode.feature.backup.data.local.entity.BackupTargetEntity
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
-import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
-import com.aicode.feature.workspace.data.local.entity.RemoteConnectionEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,6 +21,8 @@ import javax.inject.Singleton
  * 按**行**收集、按**行**写回：供应商一行有五个敏感字段，逐字段各写一次库会让
  * 同一行被反复 REPLACE 整表，途中任何并发写入都会被抹掉。改成一行只写一次、
  * 五个字段一起带上，写回前先重新读一次该行拿最新值，避免覆盖用户在此期间的改动。
+ *
+ * 全部方法都是 suspend：DAO 是 suspend 的，写回回调也必须能挂起。
  */
 @Singleton
 class AndroidCredentialStore @Inject constructor(
@@ -35,61 +32,56 @@ class AndroidCredentialStore @Inject constructor(
     private val backupTargetDao: BackupTargetDao
 ) : CredentialStore {
 
-    override fun collectEncryptedFields(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
-    ): String? = runBlocking(Dispatchers.IO) {
-        var failure: String? = null
-        runCatching { collectProviders(onField) }.onFailure {
-            FileLogger.w(TAG, "轮换收集供应商字段失败", it)
-            failure = "供应商字段收集失败"
+    override suspend fun collectEncryptedFields(
+        skipped: (Int) -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
+    ): String? {
+        var skippedCount = 0
+        val countSkipped: () -> Unit = {
+            skippedCount++
+            skipped(skippedCount)
         }
-        if (failure == null) {
-            runCatching { collectConnections(onField) }.onFailure {
-                FileLogger.w(TAG, "轮换收集连接字段失败", it)
-                failure = "连接字段收集失败"
+        val steps: List<suspend () -> Unit> = listOf(
+            { collectProviders(countSkipped, onField) },
+            { collectConnections(countSkipped, onField) },
+            { collectBackupTargets(countSkipped, onField) },
+            { collectSharedPreferences(countSkipped, onField) },
+            { collectSshKeyFiles(countSkipped, onField) }
+        )
+        for (step in steps) {
+            val failure = runCatching { step() }.exceptionOrNull()
+            if (failure != null) {
+                FileLogger.w(TAG, "轮换收集失败", failure)
+                return "收集密文失败：${failure.message ?: failure::class.simpleName}"
             }
         }
-        if (failure == null) {
-            runCatching { collectBackupTargets(onField) }.onFailure {
-                FileLogger.w(TAG, "轮换收集备份目标字段失败", it)
-                failure = "备份目标字段收集失败"
-            }
-        }
-        if (failure == null) {
-            runCatching { collectSharedPreferences(onField) }.onFailure {
-                FileLogger.w(TAG, "轮换收集口令字段失败", it)
-                failure = "口令字段收集失败"
-            }
-        }
-        if (failure == null) {
-            runCatching { collectSshKeyFiles(onField) }.onFailure {
-                FileLogger.w(TAG, "轮换收集 SSH 私钥文件失败", it)
-                failure = "SSH 私钥文件收集失败"
-            }
-        }
-        failure
+        return null
     }
 
     // ---------- Room：供应商 ----------
 
     private suspend fun collectProviders(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+        countSkipped: () -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ) {
         aiProviderDao.getAllProvidersOnce().forEach { p ->
             // 一行里哪些字段是密文，先解出来；解不开的字段保持原样不动。
-            val plainApiKey = p.apiKey.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainApiKeys = p.apiKeys.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainProxy = p.proxyPassword.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainHeaders = p.customHeaders.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainScript = p.scriptParams.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
+            val plainApiKey = p.apiKey.decryptIfCipher()
+            val plainApiKeys = p.apiKeys.decryptIfCipher()
+            val plainProxy = p.proxyPassword.decryptIfCipher()
+            val plainHeaders = p.customHeaders.decryptIfCipher()
+            val plainScript = p.scriptParams.decryptIfCipher()
 
             val anyPlain = listOf(plainApiKey, plainApiKeys, plainProxy, plainHeaders, plainScript)
                 .any { it != null }
-            if (!anyPlain) return@forEach
+            if (!anyPlain) {
+                // 是密文却解不开，说明这条已因密钥丢失变成孤儿，计入跳过。
+                if (isCipher(p.apiKey) || isCipher(p.apiKeys)) countSkipped()
+                return@forEach
+            }
 
             val label = "provider ${p.name}"
-            // 写回：一行一次，把五个字段一起更新。
-            val writeBack: () -> Boolean = writeBack@{
+            val writeBack: suspend () -> Boolean = writeBack@{
                 val latest = aiProviderDao.getAllProvidersOnce().firstOrNull { it.id == p.id }
                     ?: return@writeBack false
                 val rewritten = latest.copy(
@@ -107,24 +99,30 @@ class AndroidCredentialStore @Inject constructor(
                     KeystoreCipher.tryDecryptString(rewritten.apiKey).getOrNull() == it
                 } ?: true
             }
-            onField(label, plainApiKey ?: plainApiKeys ?: plainProxy ?: plainHeaders ?: plainScript.orEmpty(), writeBack)
+            val plaintext = plainApiKey ?: plainApiKeys ?: plainProxy ?: plainHeaders ?: plainScript
+            if (plaintext == null) return@forEach
+            onField(label, plaintext, writeBack)
         }
     }
 
     // ---------- Room：远程连接 ----------
 
     private suspend fun collectConnections(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+        countSkipped: () -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ) {
         remoteConnectionDao.getAllConnectionsOnce().forEach { c ->
             // 密钥模式的 authData 是明文私钥路径，不是密文，别动它。
             val authIsPassword = c.authType.equals("password", ignoreCase = true)
-            val plainAuth = if (authIsPassword && isCipher(c.authData)) decryptOrNull(c.authData) else null
-            val plainPass = c.passphrase?.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            if (plainAuth == null && plainPass == null) return@forEach
+            val plainAuth = if (authIsPassword) c.authData.decryptIfCipher() else null
+            val plainPass = c.passphrase?.decryptIfCipher()
+            if (plainAuth == null && plainPass == null) {
+                if (authIsPassword && isCipher(c.authData)) countSkipped()
+                return@forEach
+            }
 
             val label = "connection ${c.name}"
-            val writeBack: () -> Boolean = writeBack@{
+            val writeBack: suspend () -> Boolean = writeBack@{
                 val latest = remoteConnectionDao.getAllConnectionsOnce().firstOrNull { it.id == c.id }
                     ?: return@writeBack false
                 val rewritten = latest.copy(
@@ -138,23 +136,29 @@ class AndroidCredentialStore @Inject constructor(
                     KeystoreCipher.tryDecryptString(rewritten.authData).getOrNull() == it
                 } ?: true
             }
-            onField(label, plainAuth ?: plainPass.orEmpty(), writeBack)
+            val plaintext = plainAuth ?: plainPass
+            if (plaintext == null) return@forEach
+            onField(label, plaintext, writeBack)
         }
     }
 
     // ---------- Room：备份目标 ----------
 
     private suspend fun collectBackupTargets(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+        countSkipped: () -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ) {
         backupTargetDao.getAllOnce().forEach { t ->
-            val plainPassword = t.password.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainSecret = t.secretKey.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            val plainToken = t.sessionToken.takeIf { isCipher(it) }?.let { decryptOrNull(it) }
-            if (plainPassword == null && plainSecret == null && plainToken == null) return@forEach
+            val plainPassword = t.password.decryptIfCipher()
+            val plainSecret = t.secretKey.decryptIfCipher()
+            val plainToken = t.sessionToken.decryptIfCipher()
+            if (plainPassword == null && plainSecret == null && plainToken == null) {
+                if (isCipher(t.password) || isCipher(t.secretKey)) countSkipped()
+                return@forEach
+            }
 
             val label = "backup target ${t.name}"
-            val writeBack: () -> Boolean = writeBack@{
+            val writeBack: suspend () -> Boolean = writeBack@{
                 val latest = backupTargetDao.getAllOnce().firstOrNull { it.id == t.id }
                     ?: return@writeBack false
                 val rewritten = latest.copy(
@@ -167,49 +171,55 @@ class AndroidCredentialStore @Inject constructor(
                     KeystoreCipher.tryDecryptString(rewritten.password).getOrNull() == it
                 } ?: true
             }
-            onField(label, plainPassword ?: plainSecret ?: plainToken.orEmpty(), writeBack)
+            val plaintext = plainPassword ?: plainSecret ?: plainToken
+            if (plaintext == null) return@forEach
+            onField(label, plaintext, writeBack)
         }
     }
 
     // ---------- SharedPreferences ----------
 
     private fun collectSharedPreferences(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+        countSkipped: () -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ) {
         // 全局代理密码
-        context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE).let { prefs ->
-            val cipher = prefs.getString(PROXY_PASSWORD_KEY, null)
-            if (cipher != null && isCipher(cipher)) {
-                decryptOrNull(cipher)?.let { plain ->
-                    onField("proxy password", plain) {
-                        val current = context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE)
-                            .getString(PROXY_PASSWORD_KEY, null)
-                        // 期间用户可能已经改过口令，别用旧值覆盖。
-                        if (current != cipher) return@onField false
-                        context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE).edit()
-                            .putString(PROXY_PASSWORD_KEY, KeystoreCipher.encryptString(plain)).apply()
-                        KeystoreCipher.tryDecryptString(
-                            context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE)
-                                .getString(PROXY_PASSWORD_KEY, null)
-                        ).getOrNull() == plain
-                    }
+        val proxyPrefs = context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE)
+        val proxyCipher = proxyPrefs.getString(PROXY_PASSWORD_KEY, null)
+        if (proxyCipher != null && isCipher(proxyCipher)) {
+            val plain = decryptOrNull(proxyCipher)
+            if (plain == null) {
+                countSkipped()
+            } else {
+                onField("proxy password", plain) {
+                    val current = context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE)
+                        .getString(PROXY_PASSWORD_KEY, null)
+                    // 期间用户可能已经改过口令，别用旧值覆盖。
+                    if (current != proxyCipher) return@onField false
+                    context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(PROXY_PASSWORD_KEY, KeystoreCipher.encryptString(plain)).apply()
+                    val stored = context.getSharedPreferences(PROXY_PREFS, Context.MODE_PRIVATE)
+                        .getString(PROXY_PASSWORD_KEY, null)
+                    KeystoreCipher.tryDecryptString(stored ?: "").getOrNull() == plain
                 }
             }
         }
 
         // SSH 登录密钥的口令：key_<id>_passphrase
-        context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE).let { prefs ->
-            prefs.all.keys.filter { it.endsWith(SSH_PASSPHRASE_SUFFIX) }.forEach { key ->
-                val cipher = prefs.getString(key, null) ?: return@forEach
-                if (!isCipher(cipher)) return@forEach
-                decryptOrNull(cipher)?.let { plain ->
-                    onField("ssh login passphrase $key", plain) {
-                        val store = context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE)
-                        if (store.getString(key, null) != cipher) return@onField false
-                        store.edit().putString(key, KeystoreCipher.encryptString(plain)).apply()
-                        KeystoreCipher.tryDecryptString(store.getString(key, null)).getOrNull() == plain
-                    }
-                }
+        val sshPrefs = context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE)
+        sshPrefs.all.keys.filter { it.endsWith(SSH_PASSPHRASE_SUFFIX) }.forEach { key ->
+            val cipher = sshPrefs.getString(key, null) ?: return@forEach
+            if (!isCipher(cipher)) return@forEach
+            val plain = decryptOrNull(cipher)
+            if (plain == null) {
+                countSkipped()
+                return@forEach
+            }
+            onField("ssh login passphrase $key", plain) {
+                val store = context.getSharedPreferences(SSH_LOGIN_PREFS, Context.MODE_PRIVATE)
+                if (store.getString(key, null) != cipher) return@onField false
+                store.edit().putString(key, KeystoreCipher.encryptString(plain)).apply()
+                KeystoreCipher.tryDecryptString(store.getString(key, null) ?: "").getOrNull() == plain
             }
         }
     }
@@ -217,16 +227,17 @@ class AndroidCredentialStore @Inject constructor(
     // ---------- 文件：SSH 私钥本体 ----------
 
     private fun collectSshKeyFiles(
-        onField: (label: String, plaintext: String, writeBack: () -> Boolean) -> Unit
+        countSkipped: () -> Unit,
+        onField: (label: String, plaintext: String, writeBack: suspend () -> Boolean) -> Unit
     ) {
-        val dir = File(context.filesDir, SSH_KEYS_DIR)
-        val files = dir.listFiles() ?: return
+        val files = File(context.filesDir, SSH_KEYS_DIR).listFiles() ?: return
         files.filter { it.isFile }.forEach { file ->
             val bytes = runCatching { file.readBytes() }.getOrNull() ?: return@forEach
             if (!KeystoreCipher.isEncryptedBytes(bytes)) return@forEach
             val plain = runCatching { KeystoreCipher.decryptBytes(bytes) }.getOrNull()
             if (plain == null || plain.isEmpty()) {
                 FileLogger.w(TAG, "跳过解不开的私钥文件：${file.name}")
+                countSkipped()
                 return@forEach
             }
             val text = String(plain, Charsets.UTF_8)
@@ -243,7 +254,10 @@ class AndroidCredentialStore @Inject constructor(
 
     private fun isCipher(value: String): Boolean = KeystoreCipher.isEncryptedString(value)
 
-    /** 解不开就返回 null——那条是坏数据，跳过即可，不该让整轮失败。 */
+    /** 非密文或解不开都返回 null——调用方据此判断这一项是否要跳过。 */
+    private fun String.decryptIfCipher(): String? =
+        if (isCipher(this)) decryptOrNull(this) else null
+
     private fun decryptOrNull(value: String): String? =
         KeystoreCipher.tryDecryptString(value).getOrNull()
 
