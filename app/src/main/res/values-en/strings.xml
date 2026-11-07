@@ -250,7 +250,7 @@
     <string name="theme_mode_section">Appearance mode</string>
     <string name="theme_preset_section">Color theme</string>
     <string name="theme_preset_default">Default Blue</string>
-    <string name="theme_preset_coffee">Coffee</string>
+    <string name="theme_preset_coffee">Warm Paper</string>
     <string name="theme_preset_graphite">Graphite</string>
     <string name="theme_preset_forest">Forest</string>
     <string name="theme_dynamic_color">Dynamic color</string>
@@ -1387,7 +1387,7 @@
     <string name="mcp_details">Details</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">No memories yet</string>
+    <string name="memory_empty">The bay is quiet</string>
     <string name="memory_loading">Loading memories…</string>
     <string name="memory_empty_hint">Saved automatically as you chat (with Active memory on), or tap + in the top right to add one</string>
     <string name="memory_search_hint">Search memory names or content…</string>
@@ -1410,6 +1410,15 @@
     <string name="memory_group_global">Global memories</string>
     <string name="memory_group_global_count">Global memories (%1$d)</string>
     <string name="memory_group_project">Project memories</string>
+    <string name="memory_group_global_title">Global preferences</string>
+    <string name="memory_group_project_title">Project conventions</string>
+    <string name="memory_group_global_hint">Applies to every project</string>
+    <string name="memory_group_project_hint">Applies to this project only</string>
+    <string name="memory_sensing_title">Active sensing</string>
+    <string name="memory_sensing_desc">Stable preferences and decisions are distilled as a conversation ends</string>
+    <string name="memory_sensing_session_hint">Session scratch: %1$d turns linked</string>
+    <string name="memory_sensing_non_persistent">Not persistent</string>
+    <string name="memory_detail_updated_at">Updated %1$s · %2$s</string>
     <string name="memory_group_project_count">Project memories (%1$d)</string>
     <string name="memory_add">Add memory</string>
     <string name="memory_long_term_header">Memories (cross-session)</string>

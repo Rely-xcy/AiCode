@@ -61,33 +61,38 @@ data class AppThemePreset(
             dark = AppThemeColors(DarkColorScheme, DarkSemanticColors)
         )
 
-        /** 咖啡：暖赤陶 + 米白纸感，取自 Anthropic 品牌色。 */
+        /**
+         * 暖纸：暖米纸底 + 陶土红强调，AiCove 的默认视觉基调。
+         *
+         * 整套色板来自记忆页设计稿的暖中性色板（暖米纸 / 陶土红 / 深陶炭），
+         * 不含任何冷色蓝紫与科技感高光。
+         */
         val COFFEE = fromSeeds(
             id = "coffee",
             nameRes = R.string.theme_preset_coffee,
             lightSeed = AppThemeSeed(
-                primary = Color(0xFFC15F3C),
-                secondary = Color(0xFF6A9BCC),
-                tertiary = Color(0xFF788C5D),
+                primary = Color(0xFFB85B38),
+                secondary = Color(0xFF8C857A),
+                tertiary = Color(0xFF3D7A5A),
                 background = Color(0xFFF5F3EC),
-                surface = Color(0xFFFCFBF7),
-                surfaceVariant = Color(0xFFEDEAE0),
-                onSurface = Color(0xFF141413),
-                onSurfaceVariant = Color(0xFF6B6761),
-                outline = Color(0xFFB0AEA5),
-                outlineVariant = Color(0xFFE4E0D4)
+                surface = Color(0xFFFFFFFF),
+                surfaceVariant = Color(0xFFEDEAE1),
+                onSurface = Color(0xFF201E1C),
+                onSurfaceVariant = Color(0xFF6B665F),
+                outline = Color(0xFF9E988F),
+                outlineVariant = Color(0xFFE4DFD4)
             ),
             darkSeed = AppThemeSeed(
-                primary = Color(0xFFE08A6B),
-                secondary = Color(0xFF8FB4DB),
-                tertiary = Color(0xFF9AAF7C),
-                background = Color(0xFF1A1917),
-                surface = Color(0xFF232220),
-                surfaceVariant = Color(0xFF2E2C29),
-                onSurface = Color(0xFFFAF9F5),
-                onSurfaceVariant = Color(0xFFB0AEA5),
-                outline = Color(0xFF6B6862),
-                outlineVariant = Color(0xFF373734)
+                primary = Color(0xFFC97250),
+                secondary = Color(0xFFA8A298),
+                tertiary = Color(0xFF529E77),
+                background = Color(0xFF181716),
+                surface = Color(0xFF22201E),
+                surfaceVariant = Color(0xFF2C2926),
+                onSurface = Color(0xFFEBE7DF),
+                onSurfaceVariant = Color(0xFFA8A298),
+                outline = Color(0xFF736E65),
+                outlineVariant = Color(0xFF38342F)
             )
         )
 

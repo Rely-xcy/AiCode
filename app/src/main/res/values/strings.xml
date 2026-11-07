@@ -250,7 +250,7 @@
     <string name="theme_mode_section">明暗模式</string>
     <string name="theme_preset_section">配色方案</string>
     <string name="theme_preset_default">默认蓝</string>
-    <string name="theme_preset_coffee">咖啡</string>
+    <string name="theme_preset_coffee">暖纸</string>
     <string name="theme_preset_graphite">石墨</string>
     <string name="theme_preset_forest">森林</string>
     <string name="theme_dynamic_color">动态取色</string>
@@ -1387,7 +1387,7 @@
     <string name="mcp_details">详情</string>
 
     <!-- Memory Settings -->
-    <string name="memory_empty">还没有记忆</string>
+    <string name="memory_empty">海湾静候中</string>
     <string name="memory_loading">正在读取记忆…</string>
     <string name="memory_empty_hint">AI 会在对话中自动沉淀（需打开主动记忆）；也可以点右上角「+」手动新增</string>
     <string name="memory_search_hint">搜索记忆名称或内容…</string>
@@ -1411,6 +1411,15 @@
     <string name="memory_group_global_count">全局记忆（%1$d）</string>
     <string name="memory_group_project">项目记忆</string>
     <string name="memory_group_project_count">项目记忆（%1$d）</string>
+    <string name="memory_group_global_title">全局偏好</string>
+    <string name="memory_group_project_title">项目约定</string>
+    <string name="memory_group_global_hint">跨所有项目生效</string>
+    <string name="memory_group_project_hint">仅当前工程生效</string>
+    <string name="memory_sensing_title">主动感知沉淀</string>
+    <string name="memory_sensing_desc">对话收尾时自动提炼稳定偏好与决策</string>
+    <string name="memory_sensing_session_hint">本次会话暂存：已关联 %1$d 轮上下文</string>
+    <string name="memory_sensing_non_persistent">非持久</string>
+    <string name="memory_detail_updated_at">更新于 %1$s · %2$s</string>
     <string name="memory_add">新增记忆</string>
     <string name="memory_long_term_header">记忆（跨会话）</string>
     <string name="memory_long_term_desc">跨会话生效：每条记忆的名称与描述都会注入后续对话的系统提示词。</string>
