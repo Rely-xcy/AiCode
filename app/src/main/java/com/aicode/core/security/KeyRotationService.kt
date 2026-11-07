@@ -143,7 +143,7 @@ class KeyRotationService @Inject constructor(
  */
 interface CredentialStore {
     /**
-     * 遍历全部密文字段。
+     * 遍历本域全部密文字段。
      *
      * 实现方负责把解不开的项计入 [skipped]，不要抛异常中断整轮。
      *
