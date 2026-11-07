@@ -73,6 +73,21 @@ jobs:
       - name: Check migration versions
         run: python3 scripts/check_migrations.py
 
+      # 架构门禁（普通模式）：分层方向、禁用组件、单文件行数、中英文案对齐。
+      # 存量违规登记在 .architecture-baseline.json，这里只拦「新增」与「比基线更高」。
+      - name: Architecture gate
+        run: python3 scripts/check_architecture.py
+
+      # 架构门禁（棘轮模式）：在普通模式之上，还要求基线已经跟着收缩——
+      # 修好了违规却忘了删基线，等于悄悄留出新的额度，所以这里也要失败。
+      - name: Architecture gate (ratchet)
+        run: python3 scripts/check_architecture.py --mode ratchet
+
+      # 门禁自测：故意违规的样例必须 FAIL、合规样例必须 PASS。
+      # 改了规则或脚本却把拦截能力改没了，会在这里暴露。
+      - name: Self-test architecture gate
+        run: python3 scripts/test_check_architecture.py
+
       # 镜像目录同步脚本的离线自测：锁住 Alpine/Ubuntu/Debian 三套解析器对上游格式的假设，
       # 上游改版式时在 PR 阶段就暴露，而不是等每日定时任务悄悄失败。
       - name: Self-test container image sync script

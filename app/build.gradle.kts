@@ -465,5 +465,17 @@ tasks.register<Exec>("checkMigrations") {
     workingDir(rootProject.projectDir)
 }
 
+// 架构门禁：规则在 architecture-policy.json，存量豁免在 .architecture-baseline.json。
+// 分层方向、禁用组件、单文件行数、中英文案对齐四项一起查；本地手动跑 `./gradlew checkArchitecture`。
+// 默认 check 模式只拦新增与增长，ratchet 模式（要求基线跟着收缩）留给发版流程用。
+tasks.register<Exec>("checkArchitecture") {
+    commandLine("python3", "scripts/check_architecture.py")
+    workingDir(rootProject.projectDir)
+}
+
 // assets 合并前必须先生成文档，否则首次构建（或 clean 后）APK 里会没有 docs/。
-tasks.named("preBuild") { dependsOn(syncAiDocs) }
+// 架构门禁也挂在 preBuild 上：违规在编译前就拦下，不用等 Kotlin 编译完才发现。
+tasks.named("preBuild") {
+    dependsOn(syncAiDocs)
+    dependsOn("checkArchitecture")
+}

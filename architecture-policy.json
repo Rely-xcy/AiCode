@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "comment": [
+    "架构门禁的唯一规则来源。scripts/check_architecture.py 只执行这里声明的规则，判定逻辑不写死在脚本里。",
+    "存量违规登记在 .architecture-baseline.json：只减不增，修好一条就要在基线里删掉一条。",
+    "新增规则或收紧阈值只改本文件；重新生成基线用 python3 scripts/check_architecture.py --write-baseline。"
+  ],
+
+  "layering": {
+    "sourceRoots": ["app/src/main/java"],
+    "packagePrefix": "com.aicode",
+    "extensions": [".kt", ".java"],
+    "comment": "模块 = 包路径 com.aicode.<模块>；feature 下的子包按 com.aicode.feature.<名字> 归并，与旧 check_layering.py 口径一致。",
+    "forbidden": [
+      {
+        "from": ["core"],
+        "to": ["feature/*"],
+        "reason": "core 是各 feature 共用的基础设施，反向依赖会让 core 编译依赖具体业务；feature 一拆分/删除，core 跟着编不过"
+      }
+    ],
+    "featureCycles": {
+      "enabled": true,
+      "reason": "两个 feature 互相 import 说明至少一边放错层：依赖图一旦成环，拆分、测试与增量编译都会失效，必须先定谁在上层"
+    }
+  },
+
+  "bannedComponents": [
+    {
+      "id": "raw-textfield",
+      "symbol": "androidx.compose.material3.TextField",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": [],
+      "reason": "输入框统一走 core/ui/AppTextField.kt（内含 appTextFieldColors/dialogTextFieldColors 与下划线处理）；直接调原生 TextField 要每个页面自己调配色，换主题必漏改"
+    },
+    {
+      "id": "raw-outlined-textfield",
+      "symbol": "androidx.compose.material3.OutlinedTextField",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/ui/AppTextField.kt"],
+      "reason": "禁止各模块私自重复包装 OutlinedTextField：配色、下划线、弹窗专用色都已在 AppTextField 收敛，多包一层就会长出第二套视觉"
+    },
+    {
+      "id": "raw-switch",
+      "symbol": "androidx.compose.material3.Switch",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/ui/AppSwitch.kt"],
+      "reason": "开关一律用 core/ui/AppSwitch.kt：原生 Switch 的轨道/滑块颜色不跟随语义色板，暗色与换肤下会突兀"
+    },
+    {
+      "id": "raw-modal-bottom-sheet",
+      "symbol": "androidx.compose.material3.ModalBottomSheet",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/ui/AdaptiveModalBottomSheet.kt"],
+      "reason": "模态一律用 core/ui/AdaptiveModalBottomSheet.kt：里面带了平板自适应宽度与拖拽 fling 修正，直接调原生会丢掉这两项，平板上会拉满全屏"
+    },
+    {
+      "id": "raw-swipe-to-dismiss",
+      "symbol": "androidx.compose.material3.SwipeToDismiss",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/ui/SwipeToDeleteRow.kt"],
+      "reason": "左滑删除一律用 core/ui/SwipeToDeleteRow.kt：删除背景、阈值与无障碍提示已统一，原生组件各页面各调一套"
+    },
+    {
+      "id": "raw-swipe-to-dismiss-box",
+      "symbol": "androidx.compose.material3.SwipeToDismissBox",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/ui/SwipeToDeleteRow.kt"],
+      "reason": "左滑删除一律用 core/ui/SwipeToDeleteRow.kt：删除背景、阈值与无障碍提示已统一，原生组件各页面各调一套"
+    },
+    {
+      "id": "hardcoded-color",
+      "type": "regex",
+      "pattern": "(?<![\\w.])Color\\s*\\(\\s*(?:0x[0-9A-Fa-f]{6,8}|\\d)",
+      "scope": ["app/src/main/java/**/*.kt"],
+      "allow": ["app/src/main/java/com/aicode/core/theme/**"],
+      "reason": "色值只能来自 core/theme（AIEditorTheme 的语义色、AppThemePreset 预设、MaterialTheme 令牌）；页面里写死 0xFF... 在暗色与换肤下不跟随，改一次颜色要全仓搜"
+    }
+  ],
+
+  "fileSize": {
+    "limit": 1500,
+    "scope": ["app/src/main/java/**/*.kt"],
+    "allow": [],
+    "reason": "单文件超过 1500 行后定位与 review 成本陡增，通常也意味着混了多个职责；新文件不得越线，存量的只许下降不许再涨"
+  },
+
+  "i18n": {
+    "baseLocale": "zh",
+    "localeDirs": {
+      "zh": ["app/src/main/res/values/**/*.xml"],
+      "en": ["app/src/main/res/values-en/**/*.xml"]
+    },
+    "reason": "用户可见文案必须中英成对：只有一侧的键在另一语言下会直接显示键名或漏文案，且用户看不到、只有截图才发现"
+  }
+}

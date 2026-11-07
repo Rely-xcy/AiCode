@@ -105,6 +105,12 @@ jobs:
       - name: Check migration versions
         run: python3 scripts/check_migrations.py
 
+      # 发版前串跑其余静态门禁：架构门禁（棘轮模式）、门禁自测、镜像脚本自测，
+      # 以及本机有运维脚本时的技能 frontmatter 校验。任一环节失败即中止，
+      # 避免「CI 绿了但发版分支上还有存量违规在涨」的窗口。
+      - name: Release preflight gates
+        run: python3 scripts/release_preflight.py
+
       # 发版质量门禁：跑单元测试，失败即中止，避免发出回归包。
       # 只跑 universal debug 变体：单测逻辑与 flavor 无关，跑全 flavor 6 变体是重复编译。
       - name: Run unit tests
