@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="key_status_section_title">密钥与加密</string>
+    <string name="key_status_device_key">设备密钥</string>
+    <string name="key_status_device_key_ok">可用（Android Keystore）</string>
+    <string name="key_status_device_key_missing">不可用，已改用自备密钥</string>
+    <string name="key_status_local_key">自备密钥</string>
+    <string name="key_status_local_key_days">有效期剩余 %1$d 天</string>
+    <string name="key_status_local_key_missing">尚未生成</string>
+    <string name="key_status_local_key_unknown">状态未知</string>
+    <string name="key_status_rotate">更换密钥</string>
+    <string name="key_status_rotate_desc">生成新密钥并重新加密全部凭据；旧密钥保留 7 天可回退</string>
+    <string name="key_status_rotate_action">更换</string>
+    <string name="key_status_rotating">更换中…</string>
+    <string name="key_status_rotate_done">已更换，%1$d 项凭据已用新密钥加密</string>
+    <string name="key_status_rotate_partial">部分完成，%1$d 项已换到新密钥，其余保持原样</string>
+    <string name="key_status_rotate_failed">更换失败：%1$s</string>
+    <string name="key_status_rotate_skipped">没有需要更换的凭据</string>
+</resources>

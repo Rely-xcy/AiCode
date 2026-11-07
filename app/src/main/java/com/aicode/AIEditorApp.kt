@@ -189,6 +189,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var secretEncryptionMigrator: com.aicode.feature.settings.data.SecretEncryptionMigrator
 
+    /** 密钥轮换调度：自备密钥 90 天到期前自动把密文换到新密钥。 */
+    @Inject
+    lateinit var keyRotationScheduler: com.aicode.core.security.KeyRotationScheduler
+
     /** git 凭据仓库：启动即把旧版明文凭据文件迁移为编码格式。 */
     @Inject
     lateinit var fileCredentialRepository: com.aicode.feature.credentials.data.repository.FileCredentialRepository
@@ -304,6 +308,12 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即把旧版明文的 git 凭据文件迁移为编码格式。
         appScope.launch {
             fileCredentialRepository.migrateToEncoded()
+        }
+        // 启动即检查自备密钥是否临近到期，到期则把全部凭据换到新密钥。
+        // 排在明文迁移之后：那一步会把旧明文加密成密文，先加密再轮换才不会漏掉这些条目。
+        appScope.launch {
+            keyRotationScheduler.runIfNeeded()
+            keyRotationScheduler.purgeExpired()
         }
         // 启动即异步刷新本仓库模型元数据（12h 缓存；失败静默，resolve 兜底内置 assets 数据）。
         appScope.launch {

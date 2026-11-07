@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="key_status_section_title">Keys and encryption</string>
+    <string name="key_status_device_key">Device key</string>
+    <string name="key_status_device_key_ok">Available (Android Keystore)</string>
+    <string name="key_status_device_key_missing">Unavailable, using the local key</string>
+    <string name="key_status_local_key">Local key</string>
+    <string name="key_status_local_key_days">%1$d days left before expiry</string>
+    <string name="key_status_local_key_missing">Not generated yet</string>
+    <string name="key_status_local_key_unknown">Status unknown</string>
+    <string name="key_status_rotate">Rotate key</string>
+    <string name="key_status_rotate_desc">Generates a new key and re-encrypts every credential; the old key is kept for 7 days so you can roll back</string>
+    <string name="key_status_rotate_action">Rotate</string>
+    <string name="key_status_rotating">Rotating…</string>
+    <string name="key_status_rotate_done">Rotated; %1$d credentials now use the new key</string>
+    <string name="key_status_rotate_partial">Partially done; %1$d credentials use the new key, the rest are unchanged</string>
+    <string name="key_status_rotate_failed">Rotation failed: %1$s</string>
+    <string name="key_status_rotate_skipped">No credentials needed rotating</string>
+</resources>
