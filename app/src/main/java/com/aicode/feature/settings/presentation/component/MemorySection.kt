@@ -1,7 +1,13 @@
 package com.aicode.feature.settings.presentation.component
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,98 +17,99 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import com.aicode.feature.settings.presentation.SessionShortTermState
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.ChevronRotationStyle
+import com.aicode.core.ui.ExpandableChevronIcon
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.memory.Memory
-import com.aicode.feature.agent.domain.memory.MemoryExtractor
 import com.aicode.feature.agent.domain.memory.MemoryKind
 import com.aicode.feature.agent.domain.memory.MemoryScope
-import com.aicode.feature.agent.domain.memory.MemorySource
 import com.aicode.feature.settings.data.repository.MemorySettingsRepository
+import com.aicode.feature.settings.presentation.SessionShortTermState
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.Edit2
+import compose.icons.feathericons.Activity
 import compose.icons.feathericons.FileText
-import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.User
+import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Tab 枚举：「状态」=系统概卡，「记忆」=记忆列表
-private enum class MemoryTab { STATUS, LIST }
-
-// 记忆列表的项 key：两张设置卡与分组标题用固定 key，条目用「分组前缀 + name」。
-// LazyColumn 要求同一列表里 key 唯一，重复会直接崩；条目不在后面拼下标，
-// 否则删掉一条后其余行的滑动位移状态会错位到别的条目上。
-private const val MEMORY_GLOBAL_PREFIX = "memory_global_"
-private const val MEMORY_PROJECT_PREFIX = "memory_project_"
-private const val MEMORY_STATUS_KEY = "memory_status"
+// 列表里的固定项与条目 key。LazyColumn 要求同一列表 key 唯一，撞 key 会直接崩；
+// 条目 key 只拼作用域前缀 + 名称，不在后面补下标，否则删掉一条后其余行的滑动位移状态会错位到别的条目上。
 private const val MEMORY_HEADER_GLOBAL_KEY = "memory_header_global"
 private const val MEMORY_HEADER_PROJECT_KEY = "memory_header_project"
-private const val MEMORY_HEADER_LONG_TERM_KEY = "memory_header_long_term"
-private const val MEMORY_LONG_TERM_CARD_KEY = "memory_long_term_card"
-private const val MEMORY_HEADER_SESSION_KEY = "memory_header_session"
-private const val MEMORY_SESSION_CARD_KEY = "memory_session_card"
+private const val MEMORY_SENSING_KEY = "memory_sensing"
+private const val MEMORY_EMPTY_KEY = "memory_empty"
+private const val MEMORY_GLOBAL_PREFIX = "memory_global_"
+private const val MEMORY_PROJECT_PREFIX = "memory_project_"
+private const val MEMORY_SENSING_CONTENT_TYPE = "memory-sensing"
+private const val MEMORY_HEADER_CONTENT_TYPE = "memory-header"
+private const val MEMORY_CARD_CONTENT_TYPE = "memory-card"
+private const val MEMORY_EMPTY_CONTENT_TYPE = "memory-empty"
+
+// 微标签的纵向内边距：与 AppStatusPill 的 2dp 对齐，标签高度才不会比同一行的正文高出一截。
+private val MicroTagVerticalPadding = 2.dp
+
+private fun memoryItemKey(memory: Memory): String =
+    (if (memory.scope == MemoryScope.GLOBAL) MEMORY_GLOBAL_PREFIX else MEMORY_PROJECT_PREFIX) + memory.name
 
 /**
- * 记忆页（长期记忆）：主体是当前生效的长期记忆列表（点击看详情、长按弹编辑/删除、左滑删除），
- * 其后是主动记忆开关 + 治理周期（周期归零即关闭），最后是只读的「本次会话（短期）」卡片。
+ * 记忆页：单页流式，自上而下是页内搜索、主动感知微卡、全局偏好组、项目约定组。
  *
- * 列表排在最前、两张设置/状态卡沉底，是按使用频率排的：列表才是用户来这一页要看的东西，
- * 设置与只读状态放前面会把列表挤到首屏折线以下。
+ * 取消了两级 Tab：状态与清单原本各占一屏，看开关要切一次、看条目再切回来；现在感知开关、治理周期
+ * 与会话暂存收进一张微卡，清单紧跟其后，一屏能同时看到两者，也不必再记「刚才在哪个 Tab」。
  *
- * 搜索不在这页：顶栏只放一个放大镜入口，点进二级搜索页（[MemorySearchSection]）去搜。
- * 记忆一多只能靠滚动找人，而搜索框留在内容区会随列表一起滚走、塞进顶栏又会和「+」挤同一行。
+ * 搜索框留在页内、固定在列表上方而不是顶栏放大镜：顶栏那枚入口会把页面推进二级搜索页，
+ * 返回后滚动位置与展开态都丢；页内常驻后筛选只作用在当前列表上，敲字不读盘。
  *
- * 短期与长期必须分开展示：短期上下文随会话结束就没了，长期记忆是写盘、跨会话注入提示词的另一套东西，
- * 混成一张清单会让人以为上下文也会被存下来。
+ * 详情改成就地展开：底部弹层要盖住列表、关掉才能看下一条，而记忆正文通常只有几行，
+ * 就地展开能边看正文边改。同一时刻只展开一条，避免多条长文本把列表撑成好几屏。
  *
- * 按作用域分两栏（全局 / 项目），每条再带一个作用域徽章——项目记忆只在该工作区生效，
- * 和全局记忆混成一份清单会让人分不清哪条换项目就没了。
+ * 列表仍走 LazyColumn 逐项虚拟化：条目数不可控（实测过上百条），一次性组合全部行会让进页卡顿。
  *
- * @param shortTerm 本次会话（短期）卡片的数据；null 表示拿不到（如还没开过会话），此时整块不渲染。
- * @param memories 全部记忆；本页始终画完整列表，筛选只发生在搜索页，
- *   否则从搜索页返回后列表会被上一次的关键词继续筛着。
+ * @param memories 已按当前关键词过滤后的记忆（来自 MemoryViewModel.visibleMemories）；
+ *   本页只负责渲染，不再做第二套匹配，避免两处过滤规则走偏。
+ * @param searchQuery 搜索词放在 ViewModel 里，旋转屏幕或从编辑页返回时不丢。
+ * @param shortTerm 本次会话的短期上下文规模；null 表示取不到，此时不画「本次会话暂存」那一行。
  */
 @Composable
 internal fun MemorySection(
@@ -113,134 +120,139 @@ internal fun MemorySection(
     onToggleActiveMemory: (Boolean) -> Unit,
     curationIntervalHours: Int,
     onSelectCurationInterval: (Int) -> Unit,
-    onOpenDetail: (Memory) -> Unit,
     onEdit: (Memory) -> Unit,
-    onDelete: (Memory) -> Unit
+    onDelete: (Memory) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit
 ) {
-    // 长按哪条就为哪条弹操作菜单；null 表示菜单未打开
-    var actionMemory by remember { mutableStateOf<Memory?>(null) }
-    // 自定义治理周期输入弹窗
+    // 展开态按条目 key 记：搜索过滤后重新排布时，展开的仍是同一条记忆，而不是同一下标。
+    // 用 rememberSaveable 而不是 remember：进编辑器改完返回时，刚展开的那条应该还开着，
+    // 否则回来面对的是一列全部收起的卡片，得重新找。
+    var expandedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // 删除走二次确认：左滑与内联按钮都落到这里，确认后才真正回调上层。
+    var deleteTarget by remember { mutableStateOf<Memory?>(null) }
     var showCustomIntervalDialog by remember { mutableStateOf(false) }
-    // 顶部 Tab：状态概览 / 记忆列表（默认进记忆列表，高频路径不变）
-    var selectedTab by remember { mutableStateOf(MemoryTab.LIST) }
 
-    // 列表走 LazyColumn 只组合可视区的行：记忆条目数不可控（实测到过上百条），
-    // 一次组合全部行会把进页面卡住，而每行还各带一个左滑容器，组合成本比普通行更高。
-    // 滚动位置由 rememberLazyListState 保存；宿主按分区名套了 SaveableStateHolder，
-    // 从编辑页返回时能回到原位置。
     val listState = rememberLazyListState()
+    // 搜索词一变就把列表拉回顶部：筛选后的结果数量变少，留着旧偏移会直接落到列表末尾，
+    // 看起来像「搜不到」。只在关键词变化时归零，不动用户的正常滚动。
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotEmpty()) listState.scrollToItem(0)
+    }
+    // 只在数据变化时分组，避免每次重组都产生两份新 List。
+    val globalMemories = remember(memories) { memories.filter { it.scope == MemoryScope.GLOBAL } }
+    val projectMemories = remember(memories) { memories.filter { it.scope == MemoryScope.PROJECT } }
+    val searching = searchQuery.isNotBlank()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        SegmentedTabs(
-            selected = if (selectedTab == MemoryTab.STATUS) 0 else 1,
-            labels = listOf(
-                stringResource(R.string.memory_tab_status),
-                stringResource(R.string.memory_tab_list)
-            ),
-            onSelect = { selectedTab = if (it == 0) MemoryTab.STATUS else MemoryTab.LIST },
-            modifier = Modifier.padding(top = Spacing.md)
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 搜索框在列表外：清单上百条时它必须一直可见，跟着列表滚走就等于没有。
+        MemorySearchBar(
+            query = searchQuery,
+            onQueryChange = onSearchQueryChange,
+            modifier = Modifier.padding(
+                start = Spacing.lg,
+                end = Spacing.lg,
+                top = Spacing.md,
+                bottom = Spacing.sm
+            )
         )
 
-        when (selectedTab) {
-            MemoryTab.STATUS -> MemoryStatusSection(
-                memories = memories,
-                loading = loading,
-                shortTerm = shortTerm,
-                activeMemoryEnabled = activeMemoryEnabled,
-                onToggleActiveMemory = onToggleActiveMemory,
-                curationIntervalHours = curationIntervalHours,
-                onSelectCurationInterval = onSelectCurationInterval,
-                onOpenCustomInterval = { showCustomIntervalDialog = true }
-            )
-            MemoryTab.LIST -> LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = Spacing.xl)
-            ) {
-                // 空态跟技能页 / MCP 页一样直接排在页内：一张没有分组标题的卡片贴在顶栏下
-                // 既没有归属，也跟下面带标题的卡片不是一套节奏。
-                if (memories.isEmpty()) {
-                    item(key = MEMORY_STATUS_KEY) {
-                        if (loading) MemoryLoadingPlaceholder() else MemoryEmptyState()
-                    }
-                } else {
-            val globalMemories = memories.filter { it.scope == MemoryScope.GLOBAL }
-            val projectMemories = memories.filter { it.scope == MemoryScope.PROJECT }
-            if (globalMemories.isNotEmpty()) {
-                item(key = MEMORY_HEADER_GLOBAL_KEY) {
-                    SettingsGroupHeader(
-                        text = stringResource(R.string.memory_group_global_count, globalMemories.size)
-                    )
-                }
-                groupedLazyItems(
-                    items = globalMemories,
-                    keyPrefix = MEMORY_GLOBAL_PREFIX,
-                    idOf = { it.name },
-                    contentType = "memory-row"
-                ) { memory ->
-                    MemoryRow(
-                        memory = memory,
-                        onOpenDetail = { onOpenDetail(memory) },
-                        onLongClick = { actionMemory = memory },
-                        onDelete = { onDelete(memory) }
-                    )
-                }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = Spacing.lg,
+                end = Spacing.lg,
+                top = Spacing.sm,
+                bottom = Spacing.xl
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            item(key = MEMORY_SENSING_KEY, contentType = MEMORY_SENSING_CONTENT_TYPE) {
+                MemorySensingCard(
+                    activeMemoryEnabled = activeMemoryEnabled,
+                    onToggleActiveMemory = onToggleActiveMemory,
+                    shortTerm = shortTerm,
+                    curationIntervalHours = curationIntervalHours,
+                    onSelectCurationInterval = onSelectCurationInterval,
+                    onOpenCustomInterval = { showCustomIntervalDialog = true }
+                )
             }
-            if (projectMemories.isNotEmpty()) {
-                item(key = MEMORY_HEADER_PROJECT_KEY) {
-                    // 全局组也在时这一项不是首项，补 8dp；否则顶部会多出一段空白
-                    Box(
-                        modifier = if (globalMemories.isNotEmpty()) {
-                            Modifier.padding(top = Spacing.sm)
-                        } else {
-                            Modifier
-                        }
-                    ) {
-                        SettingsGroupHeader(
-                            text = stringResource(
-                                R.string.memory_group_project_count,
-                                projectMemories.size
-                            )
+
+            if (memories.isEmpty()) {
+                item(key = MEMORY_EMPTY_KEY, contentType = MEMORY_EMPTY_CONTENT_TYPE) {
+                    when {
+                        // 首次读盘未完成时列表必为空，那时不能拿「没搜到」冒充。
+                        loading -> MemoryLoadingPlaceholder()
+                        searching -> SearchEmptyHint(stringResource(R.string.memory_search_empty))
+                        else -> MemoryEmptyState()
+                    }
+                }
+            } else {
+                if (globalMemories.isNotEmpty()) {
+                    item(key = MEMORY_HEADER_GLOBAL_KEY, contentType = MEMORY_HEADER_CONTENT_TYPE) {
+                        MemoryGroupHeader(
+                            title = stringResource(R.string.memory_group_global_title),
+                            count = globalMemories.size,
+                            hint = stringResource(R.string.memory_group_global_hint)
+                        )
+                    }
+                    items(
+                        items = globalMemories,
+                        key = { memory -> memoryItemKey(memory) },
+                        contentType = { MEMORY_CARD_CONTENT_TYPE }
+                    ) { memory ->
+                        MemoryCard(
+                            memory = memory,
+                            expanded = expandedKey == memoryItemKey(memory),
+                            onToggle = {
+                                val key = memoryItemKey(memory)
+                                expandedKey = if (expandedKey == key) null else key
+                            },
+                            onEdit = { onEdit(memory) },
+                            onDeleteRequest = { deleteTarget = memory }
                         )
                     }
                 }
-                groupedLazyItems(
-                    items = projectMemories,
-                    keyPrefix = MEMORY_PROJECT_PREFIX,
-                    idOf = { it.name },
-                    contentType = "memory-row"
-                ) { memory ->
-                    MemoryRow(
-                        memory = memory,
-                        onOpenDetail = { onOpenDetail(memory) },
-                        onLongClick = { actionMemory = memory },
-                        onDelete = { onDelete(memory) }
-                    )
+                if (projectMemories.isNotEmpty()) {
+                    item(key = MEMORY_HEADER_PROJECT_KEY, contentType = MEMORY_HEADER_CONTENT_TYPE) {
+                        MemoryGroupHeader(
+                            title = stringResource(R.string.memory_group_project_title),
+                            count = projectMemories.size,
+                            hint = stringResource(R.string.memory_group_project_hint)
+                        )
+                    }
+                    items(
+                        items = projectMemories,
+                        key = { memory -> memoryItemKey(memory) },
+                        contentType = { MEMORY_CARD_CONTENT_TYPE }
+                    ) { memory ->
+                        MemoryCard(
+                            memory = memory,
+                            expanded = expandedKey == memoryItemKey(memory),
+                            onToggle = {
+                                val key = memoryItemKey(memory)
+                                expandedKey = if (expandedKey == key) null else key
+                            },
+                            onEdit = { onEdit(memory) },
+                            onDeleteRequest = { deleteTarget = memory }
+                        )
+                    }
                 }
-            }
-        }
-
             }
         }
     }
 
-    actionMemory?.let { memory ->
-        MemoryActionsSheet(
+    deleteTarget?.let { memory ->
+        MemoryDeleteConfirmDialog(
             memory = memory,
-            onEdit = {
-                actionMemory = null
-                onEdit(memory)
-            },
-            onDelete = {
-                actionMemory = null
+            onConfirm = {
+                // 被删的那条如果正展开着，收起态没有承载物，顺手清掉，避免下一次同名条目一进来就是展开的。
+                if (expandedKey == memoryItemKey(memory)) expandedKey = null
                 onDelete(memory)
+                deleteTarget = null
             },
-            onDismiss = { actionMemory = null }
+            onDismiss = { deleteTarget = null }
         )
     }
 
@@ -256,102 +268,146 @@ internal fun MemorySection(
     }
 }
 
+/** 页内搜索框：全 App 统一的胶囊搜索框，只额外挂一个清除按钮。 */
+@Composable
+private fun MemorySearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val trailing: (@Composable () -> Unit)? = if (query.isEmpty()) {
+        null
+    } else {
+        {
+            IconButton(
+                onClick = { onQueryChange("") },
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.X,
+                    contentDescription = stringResource(R.string.common_clear),
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.semanticColors.subtleText
+                )
+            }
+        }
+    }
+    ModelSearchField(
+        query = query,
+        onQueryChange = onQueryChange,
+        placeholder = stringResource(R.string.memory_search_hint),
+        modifier = modifier,
+        trailing = trailing
+    )
+}
+
 /**
- * 记忆状态概览：引擎健康、全局/项目记忆数、主动记忆开关与治理周期、短期会话摘要。
- * 作为 "状态" Tab 的内容，与 "记忆" Tab 的列表互不干扰。
+ * 主动感知微卡：标题行（图标 + 说明 + 开关）、会话暂存行、治理周期三块合成一张卡。
+ *
+ * 治理周期原本在「状态」Tab 里独占一段，取消 Tab 后没地方放；单独再起一屏或一张卡都会把
+ * 清单挤下去，所以收进这张卡：三者都是「引擎当前怎么跑」的状态，天然是一组。
  */
 @Composable
-internal fun MemoryStatusSection(
-    memories: List<Memory>,
-    loading: Boolean,
-    shortTerm: SessionShortTermState?,
+private fun MemorySensingCard(
     activeMemoryEnabled: Boolean,
     onToggleActiveMemory: (Boolean) -> Unit,
+    shortTerm: SessionShortTermState?,
     curationIntervalHours: Int,
     onSelectCurationInterval: (Int) -> Unit,
     onOpenCustomInterval: () -> Unit
 ) {
-    val globalMemories = remember(memories) { memories.filter { it.scope == MemoryScope.GLOBAL } }
-    val projectMemories = remember(memories) { memories.filter { it.scope == MemoryScope.PROJECT } }
-    val pinnedCount = remember(memories) { memories.count { it.pinned } }
-
-    // 治理周期展示标签
+    val shape = RoundedCornerShape(Radius.xl)
+    val iconShape = RoundedCornerShape(Radius.sm)
     val curationLabel = when (curationIntervalHours) {
-        0 -> stringResource(R.string.memory_status_curation_off)
+        0 -> stringResource(R.string.memory_curation_interval_off_short)
         24 -> stringResource(R.string.memory_curation_interval_1d)
         168 -> stringResource(R.string.memory_curation_interval_7d)
         else -> stringResource(R.string.memory_curation_interval_hours, curationIntervalHours)
     }
 
-    // 顶部卡片：系统状态标题
-    SettingsGroupHeader(text = stringResource(R.string.memory_status_card_title))
-    SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
-        Text(
-            text = stringResource(R.string.memory_status_card_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 12.dp)
-        )
-        SettingsDivider()
-
-        // 引擎运行状态
-        SettingsRow(
-            icon = null,
-            title = stringResource(R.string.memory_status_engine),
-            subtitle = stringResource(R.string.memory_status_engine_running),
-            trailing = {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            // 卡底用 cardSurface + 描边，跟本页其它分组卡同一套语言；
+            // 不用页面底色：卡内的 SegmentedTabs 轨道是 mutedSurface，卡底一旦同色，
+            // 整枚分段控件就只剩一个白滑块，看不出「这是一组可选项」。
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, shape)
+            .padding(horizontal = Spacing.md, vertical = Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(Spacing.xxl)
+                    // 图标块反过来用 mutedSurface：卡底是白的，这里再填白就看不出是个图标格。
+                    .background(MaterialTheme.semanticColors.mutedSurface, iconShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Activity,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
                 )
             }
-        )
-        SettingsDivider()
-
-        // 全局记忆数
-        SettingsRow(
-            icon = null,
-            title = stringResource(R.string.memory_group_global),
-            subtitle = stringResource(R.string.memory_status_pinned_count, globalMemories.size, globalMemories.count { it.pinned })
-        )
-        SettingsDivider()
-
-        // 项目记忆数
-        SettingsRow(
-            icon = null,
-            title = stringResource(R.string.memory_group_project),
-            subtitle = stringResource(R.string.memory_group_project_count, projectMemories.size)
-        )
-        SettingsDivider()
-
-        // 主动记忆开关
-        SettingsRow(
-            icon = null,
-            title = stringResource(R.string.memory_active_memory),
-            subtitle = stringResource(R.string.memory_active_memory_desc),
-            subtitleMaxLines = 2,
-            trailing = {
-                AppSwitch(
-                    checked = activeMemoryEnabled,
-                    onCheckedChange = onToggleActiveMemory
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.memory_sensing_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = stringResource(R.string.memory_sensing_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.semanticColors.subtleText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-        )
-        SettingsDivider()
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            AppSwitch(
+                checked = activeMemoryEnabled,
+                onCheckedChange = onToggleActiveMemory
+            )
+        }
 
-        // 治理周期：三档预设 + 自定义
-        Text(
-            text = stringResource(R.string.memory_curation_interval),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = stringResource(R.string.memory_curation_interval_desc),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(Spacing.sm))
+        if (shortTerm != null) {
+            HorizontalDivider(color = MaterialTheme.semanticColors.subtleBorder)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(
+                        R.string.memory_sensing_session_hint,
+                        shortTerm.retainedMessages
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.semanticColors.subtleText,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                MemoryQuietTag(text = stringResource(R.string.memory_sensing_non_persistent))
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.semanticColors.subtleBorder)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.memory_curation_interval),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.semanticColors.subtleText,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = curationLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
         SegmentedTabs(
             selected = curationIntervalIndex(curationIntervalHours),
             labels = listOf(
@@ -369,133 +425,294 @@ internal fun MemoryStatusSection(
                 }
             }
         )
+    }
+}
 
-        // 短期会话（只读）
-        if (shortTerm != null) {
-            SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.memory_session_card_title),
-                trailing = {
-                    SessionValueText(
-                        stringResource(
-                            R.string.memory_status_session_label,
-                            shortTerm.retainedMessages,
-                            shortTerm.foldCount
-                        )
-                    )
+/** 分组头：标题 + 计数徽章 + 右侧作用域说明，说明用灰字，不与标题抢注意力。 */
+@Composable
+private fun MemoryGroupHeader(title: String, count: Int, hint: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.xs, end = Spacing.xs, top = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        Spacer(modifier = Modifier.width(Spacing.xs))
+        MemoryCountBadge(count = count)
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+            text = hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.semanticColors.subtleText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** 计数徽章：跟着分组标题走，让「这一组有几条」不必靠数行数。 */
+@Composable
+private fun MemoryCountBadge(count: Int) {
+    MemoryMicroTag(
+        text = count.toString(),
+        textColor = MaterialTheme.semanticColors.subtleText,
+        backgroundColor = MaterialTheme.semanticColors.mutedSurface
+    )
+}
+
+/** 「非持久」小标签：会话暂存只是标签，不承载点击，所以不做成胶囊按钮。 */
+@Composable
+private fun MemoryQuietTag(text: String) {
+    MemoryMicroTag(
+        text = text,
+        textColor = MaterialTheme.semanticColors.subtleText,
+        backgroundColor = MaterialTheme.semanticColors.cardSurface,
+        borderColor = MaterialTheme.semanticColors.subtleBorder
+    )
+}
+
+/** 「置顶」小标签：品牌色系，与条目标题同色，一眼能看出这条被钉住了。 */
+@Composable
+private fun MemoryPinnedTag() {
+    MemoryMicroTag(
+        text = stringResource(R.string.memory_pinned),
+        textColor = MaterialTheme.colorScheme.primary,
+        backgroundColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    )
+}
+
+/** 微标签统一形状：4dp 小圆角，与卡片 16dp / 内块 8dp 分档，不跟卡片抢圆角。 */
+@Composable
+private fun MemoryMicroTag(
+    text: String,
+    textColor: Color,
+    backgroundColor: Color,
+    borderColor: Color? = null
+) {
+    val shape = RoundedCornerShape(Radius.xs)
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = textColor,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(shape)
+            .background(backgroundColor)
+            .then(
+                if (borderColor == null) {
+                    Modifier
+                } else {
+                    Modifier.border(1.dp, borderColor, shape)
                 }
             )
-        }
-    }
+            .padding(horizontal = Spacing.xs, vertical = MicroTagVerticalPadding)
+    )
 }
 
 /**
- * 记忆搜索二级页：顶栏那一行搜索框由 SettingsScreen 渲染（[SearchTopBarField]），这里只画结果。
+ * 单条记忆卡：左侧类型图标 + 名称/摘要，右侧置顶标签与折叠箭头；点击就地展开正文与编辑/删除。
  *
- * 结果列表复用列表页的同一套懒加载分组与 [MemoryRow]：图标、作用域徽章、置顶与来源标注全长在行里，
- * 另写一套搜索结果行，过一阵就会和列表长得不一样。分组也不拆：命中横跨全局与项目时，
- * 一个作用域小标题比每行再重复两遍徽章更好扫。
- *
- * 过滤不在这里做：进来的 [results] 已经是 MemoryViewModel.visibleMemories 的结果，
- * 只对已读进内存的列表做字符串匹配，敲字不会触发任何读盘。
- *
- * 点击行为只到详情：详情弹层里本来就有编辑与删除入口，搜索页再挂一套长按菜单只多一层；
- * 左滑删除保留——行组件自带这个手势，滑开了不回应反而像是坏了。
- *
- * @param results 已按当前关键词算好的命中列表（来自 MemoryViewModel.visibleMemories）
- * @param query 当前关键词：只用来判断「是否刚进页面」，空词时把滚动位置归零
- * @param loading 首次读盘未完成：此时 [results] 必然为空，不能拿「没搜到」冒充。
+ * 展开态不弹层，是因为详情弹层要盖住整个列表：看完一条想对照下一条得先关掉再找位置，
+ * 而记忆正文通常只有几行，就地展开的阅读成本更低。
  */
 @Composable
-internal fun MemorySearchSection(
-    results: List<Memory>,
-    query: String,
-    loading: Boolean,
-    onEdit: (Memory) -> Unit,
-    onDelete: (Memory) -> Unit
+private fun MemoryCard(
+    memory: Memory,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onEdit: () -> Unit,
+    onDeleteRequest: () -> Unit
 ) {
-    // 详情与删除确认都留在这个页面上：从结果点进去、关掉弹层，还能回到同一份结果，
-    // 而不是被带回列表再搜一次。
-    var detailMemory by remember { mutableStateOf<Memory?>(null) }
-    var deleteTarget by remember { mutableStateOf<Memory?>(null) }
-
-    // 结果同样是可能上百条的列表：与技能搜索页共用 GroupedLazyList 的分组骨架，不另写一套布局。
-    val listState = rememberLazyListState()
-    // 空关键词=刚从入口进来（入口每次都会先清空）：把上一次留下的滚动位置归零，
-    // 否则会停在全量列表的中间，看着像结果被截断了；有关键词时不动，从详情返回能回到原位置。
-    LaunchedEffect(query.isBlank()) {
-        if (query.isBlank()) listState.scrollToItem(0)
+    val cardShape = RoundedCornerShape(Radius.xl)
+    val innerShape = RoundedCornerShape(Radius.sm)
+    val iconShape = RoundedCornerShape(Radius.sm)
+    val borderColor = when {
+        expanded -> MaterialTheme.colorScheme.primary
+        // 置顶只加一层品牌色描边：整卡铺色会把「可点区域」和「选中态」混在一起。
+        memory.pinned -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+        else -> MaterialTheme.semanticColors.subtleBorder
     }
 
-    // 只在结果变化时分组，避免每次重组都产生两份新 List。
-    val globalMemories = remember(results) { results.filter { it.scope == MemoryScope.GLOBAL } }
-    val projectMemories = remember(results) { results.filter { it.scope == MemoryScope.PROJECT } }
+    SwipeToDeleteRow(
+        onDelete = onDeleteRequest,
+        onClick = onToggle,
+        contentShape = cardShape
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, borderColor, cardShape)
+                .padding(horizontal = Spacing.md, vertical = Spacing.md)
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, iconShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        // 画像与笔记是两种东西：自动沉淀出的用户画像要一眼认出来。
+                        imageVector = if (memory.kind == MemoryKind.PROFILE) {
+                            FeatherIcons.User
+                        } else {
+                            FeatherIcons.FileText
+                        },
+                        contentDescription = null,
+                        tint = if (memory.pinned) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
-    GroupedLazyList(
-        state = listState,
-        sections = listOf(
-            GroupedLazySection(
-                title = stringResource(R.string.memory_group_global_count, globalMemories.size),
-                keyPrefix = MEMORY_GLOBAL_PREFIX,
-                items = globalMemories
-            ),
-            GroupedLazySection(
-                title = stringResource(R.string.memory_group_project_count, projectMemories.size),
-                keyPrefix = MEMORY_PROJECT_PREFIX,
-                items = projectMemories
-            )
-        ),
-        idOf = { it.name },
-        rowContentType = "memory-row",
-        // 首次读盘未完成时结果必为空，但那时不能当「没搜到」：先给正在读取。
-        emptyContent = {
-            if (loading) {
-                MemoryLoadingPlaceholder()
-            } else {
-                SearchEmptyHint(stringResource(R.string.memory_search_empty))
+                Spacer(modifier = Modifier.width(Spacing.sm))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = memory.name,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (memory.pinned) {
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            MemoryPinnedTag()
+                        }
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        ExpandableChevronIcon(
+                            expanded = expanded,
+                            style = ChevronRotationStyle.RIGHT_DOWN,
+                            size = 16.dp,
+                            tint = if (expanded) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.semanticColors.subtleText
+                            }
+                        )
+                    }
+                    Text(
+                        text = memory.description.ifBlank {
+                            stringResource(R.string.mcp_no_description)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        // 展开时摘要转成正文前的引子：提一档对比度，并放开单行截断。
+                        color = if (expanded) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.semanticColors.subtleText
+                        },
+                        maxLines = if (expanded) 3 else 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-        },
-        row = { memory ->
-            MemoryRow(
-                memory = memory,
-                onOpenDetail = { detailMemory = memory },
-                onLongClick = {},
-                onDelete = { deleteTarget = memory }
-            )
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(
+                    animationSpec = tween(durationMillis = 200),
+                    expandFrom = Alignment.Top
+                ) + fadeIn(animationSpec = tween(durationMillis = 150)),
+                exit = shrinkVertically(
+                    animationSpec = tween(durationMillis = 180),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(animationSpec = tween(durationMillis = 120))
+            ) {
+                Column(
+                    modifier = Modifier.padding(top = Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    HorizontalDivider(color = MaterialTheme.semanticColors.subtleBorder)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(innerShape)
+                            .background(MaterialTheme.semanticColors.pageBackground)
+                            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, innerShape)
+                            .padding(horizontal = Spacing.md, vertical = Spacing.md)
+                    ) {
+                        Text(
+                            text = memory.content.ifBlank {
+                                stringResource(R.string.memory_detail_empty)
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = memoryUpdatedAtText(memory),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // 行尾两个文字按钮收紧左右内边距：默认 12dp 会在 320dp 窄屏上
+                        // 把「更新于 …」压成省略号，而这两颗按钮的文字只有两个字。
+                        TextButton(
+                            onClick = onEdit,
+                            contentPadding = PaddingValues(horizontal = Spacing.sm)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.common_edit),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        TextButton(
+                            onClick = onDeleteRequest,
+                            contentPadding = PaddingValues(horizontal = Spacing.sm)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.common_delete),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
         }
-    )
-
-    detailMemory?.let { memory ->
-        MemoryDetailSheet(
-            memory = memory,
-            onDismiss = { detailMemory = null },
-            onEdit = {
-                detailMemory = null
-                onEdit(memory)
-            },
-            onDelete = {
-                detailMemory = null
-                deleteTarget = memory
-            }
-        )
-    }
-
-    deleteTarget?.let { memory ->
-        MemoryDeleteConfirmDialog(
-            memory = memory,
-            onConfirm = {
-                onDelete(memory)
-                deleteTarget = null
-            },
-            onDismiss = { deleteTarget = null }
-        )
     }
 }
 
-/** 删除记忆的二次确认框：列表页与搜索页共用，条目名统一取 memory.name。 */
+/** 「更新于 X · 全局/项目」：正文看过之后最想知道的就是它有多新、在哪个作用域生效。 */
 @Composable
-internal fun MemoryDeleteConfirmDialog(
+private fun memoryUpdatedAtText(memory: Memory): String {
+    val updatedAt = maxOf(memory.lastHitAt, memory.createdAt)
+    val scopeText = stringResource(
+        if (memory.scope == MemoryScope.PROJECT) {
+            R.string.memory_scope_project
+        } else {
+            R.string.memory_scope_global
+        }
+    )
+    return if (updatedAt > 0) {
+        stringResource(R.string.memory_detail_updated_at, relativeTimeText(updatedAt), scopeText)
+    } else {
+        scopeText
+    }
+}
+
+/** 删除记忆的二次确认框：左滑与内联按钮共用，条目名统一取 memory.name。 */
+@Composable
+private fun MemoryDeleteConfirmDialog(
     memory: Memory,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
@@ -510,20 +727,6 @@ internal fun MemoryDeleteConfirmDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         }
-    )
-}
-
-/** 短期卡片右侧取值：右对齐单行，配色与设置页其它取值行一致。 */
-@Composable
-private fun SessionValueText(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.semanticColors.subtleText,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        textAlign = TextAlign.End,
-        modifier = Modifier.padding(start = Spacing.sm)
     )
 }
 
@@ -555,7 +758,7 @@ private fun MemoryEmptyState() {
         Box(
             modifier = Modifier
                 .size(64.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.xl)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -575,329 +778,6 @@ private fun MemoryEmptyState() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
-        )
-    }
-}
-
-/** 单条记忆行：图标 + 名称/描述，点击看详情，长按弹编辑/删除，左滑删除。 */
-@Composable
-private fun MemoryRow(
-    memory: Memory,
-    onOpenDetail: () -> Unit,
-    onLongClick: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val rowBackground = MaterialTheme.semanticColors.cardSurface
-
-    SwipeToDeleteRow(
-        onDelete = onDelete,
-        onClick = onOpenDetail,
-        onLongClick = onLongClick,
-        // 圆角跟着滑动位移：记忆行在分组卡片里，卡片是 14dp 圆角，
-        // 滑开时露出的是行自己的切边，不在这里裁圆角就是一条直角。
-        contentShape = RoundedCornerShape(Radius.lg)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(rowBackground)
-                .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    // 40dp 圆角块 + 8dp 圆角与 MCP / 技能 / 子代理 / 容器列表行一致，
-                    // 刻意不用令牌：这几处必须像素对齐，改一个就会跟其它列表行错开
-                    .size(40.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    // 画像与笔记是两种东西：自动沉淀出的用户画像要一眼认出来，
-                    // 与名称旁的来源徽章一起表达“这条不是我在对话里让它记的”
-                    imageVector = if (memory.kind == MemoryKind.PROFILE) {
-                        FeatherIcons.User
-                    } else {
-                        FeatherIcons.FileText
-                    },
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(Spacing.md))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = memory.name,
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    MemoryScopePill(scope = memory.scope)
-                    // 置顶标识：与作用域/来源同一套 McpPill，不另造视觉
-                    if (memory.pinned) {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        McpPill(
-                            text = stringResource(R.string.memory_pinned),
-                            textColor = MaterialTheme.colorScheme.tertiary,
-                            backgroundColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-                        )
-                    }
-                    // 来源只给自动沉淀类挂：NOTE 全是「对话中记录」，每行都挂就是噪音。
-                    // 不要求 source 非空：旧条目（source 字段是后来才加的）会按 kind 回退成「自动沉淀」，
-                    // 否则升级上来的用户会看到这些条目一个来源都没有。
-                    if (memory.kind == MemoryKind.PROFILE) {
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        MemorySourcePill(memory = memory)
-                    }
-                }
-                Text(
-                    text = memory.description.ifBlank { stringResource(R.string.mcp_no_description) },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(modifier = Modifier.width(Spacing.sm))
-
-            Icon(
-                imageVector = FeatherIcons.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.semanticColors.subtleText,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-    }
-}
-
-/**
- * 作用域徽章：全局 / 项目。
- *
- * 配色与 MCP 页的 pill 保持一致（项目级用主色，全局用中性色），复用同一个 [McpPill]。
- */
-/**
- * 来源文案：自动沉淀 / 压缩前抽取 / 对话中记录。
- *
- * 老条目没写 source（那之前的版本只存 kind），按 kind 回退：PROFILE 一定是沉淀出来的，
- * 其余当作对话中记的。
- */
-@Composable
-private fun memorySourceText(memory: Memory): String = when (memory.source) {
-    MemoryExtractor.SOURCE_AUTO_DISTILL -> stringResource(R.string.memory_source_auto)
-    MemoryExtractor.SOURCE_PRE_FOLD -> stringResource(R.string.memory_source_pre_fold)
-    MemorySource.SOURCE_MODEL_TOOL -> stringResource(R.string.memory_source_manual)
-    else -> stringResource(
-        if (memory.kind == MemoryKind.PROFILE) R.string.memory_source_auto
-        else R.string.memory_source_manual
-    )
-}
-
-/** 来源徐章：配色与作用域徐章同一套规则（主色=自动沉淀、次色=压缩前抽取），靠文案区分。 */
-@Composable
-private fun MemorySourcePill(memory: Memory) {
-    val accent = if (memory.source == MemoryExtractor.SOURCE_PRE_FOLD) {
-        MaterialTheme.colorScheme.tertiary
-    } else {
-        MaterialTheme.colorScheme.primary
-    }
-    McpPill(
-        text = memorySourceText(memory),
-        textColor = accent,
-        backgroundColor = accent.copy(alpha = 0.12f)
-    )
-}
-
-@Composable
-private fun MemoryScopePill(scope: MemoryScope) {
-    val isProject = scope == MemoryScope.PROJECT
-    McpPill(
-        text = stringResource(
-            if (isProject) R.string.memory_group_project else R.string.memory_group_global
-        ),
-        textColor = if (isProject) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        backgroundColor = if (isProject) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-        }
-    )
-}
-
-/**
- * 记忆详情：名称当标题，下面一行徽章（作用域 / 置顶 / 来源），再是描述、元信息与完整正文，
- * 底部给编辑 / 删除两个入口。
- *
- * 注入到系统提示词的只有「名称 + 描述」，正文平时看不到，详情页才展开。
- * 编辑/删除除了长按菜单还在这里出现：刚看完正文往往正是要改或要删的时候，
- * 退回列表再长按多一步，也容易对错条目。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun MemoryDetailSheet(
-    memory: Memory,
-    onDismiss: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = settingsPageBackground()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                // 弹层内容槽在部分分支给的是无界高度，verticalScroll 需要上界才知道能滚多少；
-                // 不封顶时可见区＝内容高度、滚动范围恒为 0，长正文就“滑不动”。
-                .heightIn(max = 560.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            Text(
-                text = memory.name,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = Spacing.lg, end = Spacing.lg, top = Spacing.sm)
-            )
-            // 徽章行：与列表行同一套 pill，不另造视觉
-            Row(
-                modifier = Modifier.padding(horizontal = Spacing.lg),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MemoryScopePill(scope = memory.scope)
-                if (memory.pinned) {
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    McpPill(
-                        text = stringResource(R.string.memory_pinned),
-                        textColor = MaterialTheme.colorScheme.tertiary,
-                        backgroundColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-                    )
-                }
-                // 来源与列表行同一条规则：只给自动沉淀类挂，NOTE 全是对话中记的
-                if (memory.kind == MemoryKind.PROFILE) {
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    MemorySourcePill(memory = memory)
-                }
-            }
-            SettingsGroup(modifier = Modifier.padding(top = Spacing.sm)) {
-                SettingsRow(
-                    icon = null,
-                    title = memory.description.ifBlank { stringResource(R.string.mcp_no_description) }
-                )
-            }
-            // 元信息：没有值的行整行不摆，沿用短期卡那条约定（不拿 0 或空占位凑数）
-            val hasMeta = memory.hitCount > 0 || memory.lastHitAt > 0 || memory.createdAt > 0
-            if (hasMeta) {
-                SettingsGroupHeader(text = stringResource(R.string.memory_detail_meta))
-                SettingsGroup {
-                    if (memory.hitCount > 0) {
-                        SettingsRow(
-                            icon = null,
-                            title = stringResource(R.string.memory_detail_hits, memory.hitCount)
-                        )
-                    }
-                    if (memory.lastHitAt > 0) {
-                        if (memory.hitCount > 0) SettingsDivider()
-                        SettingsRow(
-                            icon = null,
-                            title = stringResource(
-                                R.string.memory_detail_last_hit,
-                                relativeTimeText(memory.lastHitAt)
-                            )
-                        )
-                    }
-                    if (memory.createdAt > 0) {
-                        if (memory.hitCount > 0 || memory.lastHitAt > 0) SettingsDivider()
-                        SettingsRow(
-                            icon = null,
-                            title = stringResource(
-                                R.string.memory_detail_created,
-                                formatEpochDate(memory.createdAt)
-                            )
-                        )
-                    }
-                }
-            }
-            SettingsGroupHeader(text = stringResource(R.string.memory_detail_content))
-            SettingsGroup {
-                Text(
-                    text = memory.content.ifBlank { stringResource(R.string.memory_detail_empty) },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(Spacing.lg)
-                )
-            }
-            SettingsGroup {
-                MemoryDetailActionRow(
-                    icon = FeatherIcons.Edit2,
-                    title = stringResource(R.string.common_edit),
-                    onClick = onEdit
-                )
-                SettingsDivider()
-                MemoryDetailActionRow(
-                    icon = FeatherIcons.Trash2,
-                    title = stringResource(R.string.common_delete),
-                    titleColor = MaterialTheme.colorScheme.error,
-                    onClick = onDelete
-                )
-            }
-        }
-    }
-}
-
-/**
- * 详情弹层的动作行：尺寸与 [SettingsRow] 一致，只多一个标题色参数。
- *
- * 不复用 SettingsRow：它的标题色写死 onSurface，而共享组件不在本页改动范围内；
- * 删除行必须用 error 色才能与编辑行区分开。
- */
-@Composable
-private fun MemoryDetailActionRow(
-    icon: ImageVector,
-    title: String,
-    onClick: () -> Unit,
-    titleColor: Color = MaterialTheme.colorScheme.onSurface
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.lg, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = titleColor,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(modifier = Modifier.width(Spacing.md))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = titleColor,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = FeatherIcons.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.semanticColors.subtleText,
-            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -924,49 +804,7 @@ private fun relativeTimeText(epochMillis: Long): String {
 private fun formatEpochDate(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date(epochMillis))
 
-/**
- * 长按记忆弹出的操作菜单：编辑 / 删除。
- *
- * 删除沿用列表左滑的同一条回调（是否二次确认由上层决定），编辑进编辑器弹层。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MemoryActionsSheet(
-    memory: Memory,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = settingsPageBackground()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            SettingsGroupHeader(text = memory.name)
-            SettingsGroup {
-                SettingsRow(
-                    icon = FeatherIcons.Edit2,
-                    title = stringResource(R.string.common_edit),
-                    onClick = onEdit
-                )
-                SettingsDivider()
-                SettingsRow(
-                    icon = FeatherIcons.Trash2,
-                    title = stringResource(R.string.common_delete),
-                    onClick = onDelete
-                )
-            }
-        }
-    }
-}
-
-/** 治理周期预设档位（小时）：关闭 / 1 天 / 7 天；其余值一律算「自定义」。 */
+/** 治理周期的三档预设：关闭 / 1 天 / 7 天；其余值一律算「自定义」。 */
 private val CURATION_PRESET_HOURS = listOf(0, 24, 168)
 
 /** 「自定义」胶囊的下标（排在三个预设之后）。 */
@@ -1020,4 +858,3 @@ private fun CustomCurationIntervalDialog(
         }
     )
 }
-

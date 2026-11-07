@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Memory page strings.
+  Kept in a dedicated file so the memory page can evolve its copy without touching the shared strings.xml.
+-->
+<resources>
+    <!-- Top bar title: the total is part of the title so the count is visible before entering the list. -->
+    <string name="memory_title_with_count">Memory (%1$d)</string>
+</resources>

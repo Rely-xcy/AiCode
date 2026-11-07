@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  记忆页专用文案。
+  单独成文件而不是并回 strings.xml：这一页的文案由记忆页单独维护，避免和其它分区的大文件互相冲突。
+-->
+<resources>
+    <!-- 顶栏标题：条数写在标题里，进页前就能看出这一页有多少条记忆。 -->
+    <string name="memory_title_with_count">记忆 (%1$d)</string>
+</resources>
