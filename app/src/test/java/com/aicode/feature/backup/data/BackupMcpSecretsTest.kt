@@ -247,7 +247,7 @@ class BackupMcpSecretsTest {
         loginSecrets = loginSecrets
     )
 
-    private fun decrypt(manager: BackupManagerImpl, bytes: ByteArray): ByteArray =
+    private suspend fun decrypt(manager: BackupManagerImpl, bytes: ByteArray): ByteArray =
         manager.prepareImport(ByteArrayInputStream(bytes), PASSWORD).let { file ->
             try {
                 file.readBytes()
