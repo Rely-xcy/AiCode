@@ -259,6 +259,9 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 密钥环必须在任何敏感数据读写之前就绪：业务密文用它加密，Keystore 只负责包裹密钥本体，
+        // root 清掉 Keystore 后还能靠混淆副本把密钥捞回来。
+        com.aicode.core.security.KeystoreCipher.init(this)
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }
