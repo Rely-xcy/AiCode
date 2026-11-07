@@ -130,18 +130,19 @@ internal object KeyringStore {
         val bytes = ByteArray(KEY_BYTES).also { SecureRandom().nextBytes(it) }
         storeKey(id, bytes)
 
-        val updated = existing.map {
-            if (it.isActive) it.copy(state = KeyringEntry.STATE_RETIRED) else it
-        } + KeyringEntry(
+        val created = KeyringEntry(
             id = id,
             createdAt = now,
             expiresAt = now + LIFETIME_MS,
             state = KeyringEntry.STATE_ACTIVE
         )
+        val updated = existing.map {
+            if (it.isActive) it.copy(state = KeyringEntry.STATE_RETIRED) else it
+        } + created
         saveEntries(updated)
         prefs().edit().putString(KEY_ACTIVE, id).apply()
         FileLogger.i(TAG, "已生成新密钥 $id（有效期 90 天）")
-        id to SecretKeySpec(bytes, "AES")
+        created to SecretKeySpec(bytes, "AES")
     }
 
     fun loadKey(id: String): SecretKey? = synchronized(lock) {
