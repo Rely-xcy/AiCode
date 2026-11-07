@@ -122,6 +122,31 @@ internal object KeyringStore {
     }
 
     /**
+     * 确保密钥环里有一把可用密钥，没有就生成。
+     *
+     * 自备密钥原本是「首次加密凭据时才生成」，结果全新安装、还没存过凭据的用户
+     * 在设置页看到的是「尚未生成」。安装后就该有钥匙，启动时显式补一把。
+     */
+    fun ensureActiveKey(): KeyringEntry {
+        val existing = activeEntry()
+        if (existing != null && loadKey(existing.id) != null) return existing
+        return rotate().first
+    }
+
+    /**
+     * 设备密钥（Android Keystore 里包裹自备密钥的那把）是否真的能用。
+     *
+     * 不能只看别名存不存在：Keystore 被清后别名也没了，但更常见的是别名在、包浆数据解不开。
+     * 直接拿当前密钥的 .ks 副本试解一次，能解开才算可用；全程只读，不会在主线程生成密钥。
+     */
+    fun deviceKeyAvailable(): Boolean {
+        val entry = activeEntry() ?: return false
+        val ks = keystoreFile(entry.id)
+        if (!ks.isFile) return false
+        return runCatching { unwrapWithKeystore(ks.readBytes()) }.isSuccess
+    }
+
+    /**
      * 生成一把新密钥并设为 active，旧密钥标 retired。
      *
      * 旧密钥在 retire 之前必须仍可解密：调用方要先用旧密钥把所有密文读出来，

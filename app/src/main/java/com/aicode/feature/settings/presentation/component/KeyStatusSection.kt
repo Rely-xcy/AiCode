@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,8 +49,22 @@ internal fun KeyStatusSection(
     // 换完钥匙后剩余天数变了，要重新读一次。
     var refreshKey by remember { mutableStateOf(0) }
 
-    val entry = remember(refreshKey) { KeyringStore.activeEntry() }
-    val remainingDays = remember(refreshKey) { KeyringStore.remainingDays() }
+    // 读状态要碰 Keystore 与磁盘，放后台线程；进页时顺手补齐密钥，
+    // 免得启动自检还没跑完的那几秒里显示成「尚未生成」。
+    // 用可空表示「还没读到」：初值直接写 false 会先闪一下错的结论。
+    var hasKey by remember { mutableStateOf<Boolean?>(null) }
+    var remainingDays by remember { mutableStateOf<Long?>(null) }
+    var deviceKeyOk by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(refreshKey) {
+        withContextIo {
+            KeyringStore.ensureActiveKey()
+            hasKey = KeyringStore.activeEntry() != null
+            remainingDays = KeyringStore.remainingDays()
+            // 设备密钥（Keystore 里包裹自备密钥的那把）与自备密钥是两件事：
+            // Keystore 被清后自备密钥还能用混淆副本解开，不能拿 key 是否存在当设备密钥状态。
+            deviceKeyOk = KeyringStore.deviceKeyAvailable()
+        }
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         SettingsGroupHeader(text = stringResource(R.string.key_status_section_title))
@@ -59,7 +74,11 @@ internal fun KeyStatusSection(
                 icon = null,
                 title = stringResource(R.string.key_status_device_key),
                 subtitle = stringResource(
-                    if (entry != null) R.string.key_status_device_key_ok else R.string.key_status_device_key_missing
+                    when (deviceKeyOk) {
+                        null -> R.string.key_status_local_key_unknown
+                        true -> R.string.key_status_device_key_ok
+                        false -> R.string.key_status_device_key_missing
+                    }
                 )
             )
             SettingsDivider()
@@ -68,9 +87,10 @@ internal fun KeyStatusSection(
                 icon = null,
                 title = stringResource(R.string.key_status_local_key),
                 subtitle = when {
-                    entry == null -> stringResource(R.string.key_status_local_key_missing)
+                    hasKey == null -> stringResource(R.string.key_status_local_key_unknown)
+                    hasKey == false -> stringResource(R.string.key_status_local_key_missing)
                     remainingDays == null -> stringResource(R.string.key_status_local_key_unknown)
-                    else -> stringResource(R.string.key_status_local_key_days, remainingDays)
+                    else -> stringResource(R.string.key_status_local_key_days, remainingDays ?: 0L)
                 }
             )
             SettingsDivider()

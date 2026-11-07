@@ -132,6 +132,40 @@ class KeyringStoreTest {
         assertTrue(String(plain) == String(KeystoreCipher.decryptBytes(encrypted), Charsets.UTF_8))
     }
 
+    @Test
+    fun `全新安装没存过凭据 也应有可用密钥`() {
+        // 回归：自备密钥原本是「首次加密凭据时才生成」，全新安装且没配过服务商的用户
+        // 在设置页看到「尚未生成」，像是密钥体系没工作。
+        assertNull("前置：此时密钥环应为空", KeyringStore.activeEntry())
+
+        val entry = KeyringStore.ensureActiveKey()
+
+        assertNotNull(KeyringStore.activeEntry())
+        assertEquals(entry.id, KeyringStore.activeId())
+        assertTrue("新密钥应立即可用", KeyringStore.loadKey(entry.id) != null)
+    }
+
+    @Test
+    fun `ensureActiveKey 幂等 已有密钥时不生成新密钥`() {
+        val first = KeyringStore.ensureActiveKey()
+        val second = KeyringStore.ensureActiveKey()
+        assertEquals(first.id, second.id)
+        assertEquals(1, KeyringStore.entries().size)
+    }
+
+    @Test
+    fun `设备密钥不可用时 自备密钥仍能解密密文`() {
+        // 设备密钥（Keystore 包裹）丢了，靠混淆副本仍要能解开——这是「自备密钥」存在的意义。
+        val encrypted = KeystoreCipher.encryptString("survive-keystore-loss")
+        val id = KeyringStore.activeId()!!
+        java.io.File(
+            java.io.File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "keyring"),
+            "$id.ks"
+        ).delete()
+
+        assertEquals("survive-keystore-loss", KeystoreCipher.decryptString(encrypted))
+    }
+
     private fun deleteKeyMaterial(id: String) {
         val dir = java.io.File(
             ApplicationProvider.getApplicationContext<android.content.Context>().filesDir,

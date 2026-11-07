@@ -23,6 +23,10 @@ class KeyRotationScheduler @Inject constructor(
      */
     suspend fun runIfNeeded() {
         try {
+            // 先补一把钥匙：自备密钥原本是首次加密凭据时才生成，全新安装且没存过凭据的用户
+            // 在设置页会看到「尚未生成」，设备密钥也会因别名不存在而显示不可用。
+            val entry = KeyringStore.ensureActiveKey()
+            FileLogger.i(TAG, "密钥环就绪：${entry.id}")
             if (!rotationService.rotateIfNeeded().rotated) return
             FileLogger.i(TAG, "已按到期策略完成密钥轮换")
         } catch (e: Throwable) {
