@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -24,15 +23,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.aicode.core.theme.semanticColors
 
 /**
  * 全局统一的精致紧凑型开关组件：
- * - 紧凑尺寸（42.dp × 24.dp），告别 Material 3 默认 Switch 的笨重厚重感；
- * - 纯白微阴影圆形滑块 + 丝滑平移动画；
- * - 浅色模式为品牌蓝 / 柔和浅灰轨道；深色模式为亮蓝 / 暗灰蓝轨道。
+ * - 50.dp × 30.dp 胶囊轨道 + 26.dp 圆形滑块，触控面积达标又不显笨重；
+ * - 开启态取主题 primary（暖纸下即陶土红），关闭态取语义 mutedSurface，跟随主题切换；
+ * - 颜色 tween(200) 渐变、位移 spring 回弹，与设置页其它微交互同节奏。
  */
 @Composable
 fun AppSwitch(
@@ -42,13 +41,10 @@ fun AppSwitch(
     enabled: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
-    val isLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
-
-    // 轨道颜色
-    val targetTrackColor = when {
-        checked -> MaterialTheme.colorScheme.primary
-        isLight -> Color(0xFFE2E8F0)
-        else -> Color(0xFF334155)
+    val targetTrackColor = if (checked) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.semanticColors.mutedSurface
     }
     val animatedTrackColor by animateColorAsState(
         targetValue = targetTrackColor,
@@ -56,12 +52,9 @@ fun AppSwitch(
         label = "switchTrackColor"
     )
 
-    // 滑块颜色
-    val thumbColor = if (isLight) Color.White else Color(0xFFF8FAFC)
-
-    // 滑块位移（轨道宽 42dp，内边距 2dp，滑块 20dp，位移范围 2dp -> 20dp）
+    // 轨道 50dp、滑块 26dp、内边距 2dp，位移范围 2dp -> 22dp。
     val thumbOffset by animateDpAsState(
-        targetValue = if (checked) 20.dp else 2.dp,
+        targetValue = if (checked) 22.dp else 2.dp,
         animationSpec = spring(
             dampingRatio = 0.8f,
             stiffness = Spring.StiffnessMediumLow
@@ -86,7 +79,7 @@ fun AppSwitch(
         modifier = modifier
             .alpha(if (enabled) 1f else 0.4f)
             .then(toggleModifier)
-            .size(width = 42.dp, height = 24.dp)
+            .size(width = 50.dp, height = 30.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(animatedTrackColor),
         contentAlignment = Alignment.CenterStart
@@ -94,9 +87,9 @@ fun AppSwitch(
         Box(
             modifier = Modifier
                 .offset(x = thumbOffset)
-                .size(20.dp)
+                .size(26.dp)
                 .shadow(elevation = 2.dp, shape = CircleShape)
-                .background(thumbColor, CircleShape)
+                .background(Color.White, CircleShape)
         )
     }
 }

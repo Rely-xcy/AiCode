@@ -38,7 +38,8 @@ data class AppThemeSeed(
 /**
  * 可选的应用配色主题。
  *
- * [DEFAULT] 直接沿用手调的品牌蓝配色，其余主题由种子推导——保证升级后默认观感不变。
+ * [DEFAULT] 直接沿用手调的品牌蓝配色，其余主题由种子推导。
+ * 未选过主题的用户回退到 [COFFEE]（暖纸），但显式选过 [DEFAULT] 的用户仍保留品牌蓝。
  */
 data class AppThemePreset(
     val id: String,
@@ -53,7 +54,7 @@ data class AppThemePreset(
     }
 
     companion object {
-        /** 品牌蓝：历史默认配色，颜色值逐个手调，不走推导。 */
+        /** 品牌蓝：历史默认配色，颜色值逐个手调，不走推导。仅用户显式选择时生效。 */
         val DEFAULT = AppThemePreset(
             id = "default",
             nameRes = R.string.theme_preset_default,
@@ -156,10 +157,17 @@ data class AppThemePreset(
             )
         )
 
-        val ALL_PRESETS = listOf(DEFAULT, COFFEE, GRAPHITE, FOREST)
+        /** 选择器顺序：暖纸排第一，让默认观感在选择器里也第一个出现。 */
+        val ALL_PRESETS = listOf(COFFEE, DEFAULT, GRAPHITE, FOREST)
 
+        /**
+         * 按 id 查主题；null 与未知 id 都回退暖纸。
+         *
+         * 老用户持久化的是 "coffee" 等具体 id，回退只影响从未选过主题的新装用户，
+         * 因此显式选过 "default" 的仍能拿到品牌蓝。
+         */
         fun findById(id: String?): AppThemePreset =
-            ALL_PRESETS.firstOrNull { it.id == id } ?: DEFAULT
+            ALL_PRESETS.firstOrNull { it.id == id } ?: COFFEE
 
         private fun fromSeeds(
             id: String,

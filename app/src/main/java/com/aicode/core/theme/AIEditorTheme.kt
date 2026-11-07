@@ -36,6 +36,8 @@ object Radius {
     val mdLarge = 12.dp
     val lg = 14.dp
     val xl = 16.dp
+    /** 分组大卡：暖纸设计稿的卡片圆角。 */
+    val xxl = 22.dp
     val pill = 999.dp
 }
 
@@ -279,7 +281,7 @@ private val AppTypography = Typography().run {
 @Composable
 fun AIEditorTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    preset: AppThemePreset = AppThemePreset.DEFAULT,
+    preset: AppThemePreset = AppThemePreset.COFFEE,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
