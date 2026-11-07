@@ -282,6 +282,8 @@ internal fun GeneralSettingsSection(
                 }
             )
         }
+
+        KeyStatusSection()
     }
 
     if (showStartupSessionSheet) {

@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * 默认配色的回退语义。
  *
- * 「未选过主题」与「显式选了默认蓝」在持久化层都是一个可空 id，二者只靠 [AppThemePreset.findById]
+ * 「未选过主题」与「显式选了经典蓝」在持久化层都是一个可空 id，二者只靠 [AppThemePreset.findById]
  * 的入参区分：null 回退暖纸，\"default\" 仍拿到品牌蓝。这条边界一旦写反，老用户升级后会被悄悄换色。
  */
 class AppThemePresetTest {
@@ -25,7 +25,7 @@ class AppThemePresetTest {
     }
 
     @Test
-    fun `显式选择默认蓝仍然生效`() {
+    fun `显式选择经典蓝仍然生效`() {
         assertSame(AppThemePreset.DEFAULT, AppThemePreset.findById("default"))
     }
 

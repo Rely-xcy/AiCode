@@ -249,7 +249,7 @@
     <string name="theme_light">Light</string>
     <string name="theme_mode_section">Appearance mode</string>
     <string name="theme_preset_section">Color theme</string>
-    <string name="theme_preset_default">Default Blue</string>
+    <string name="theme_preset_default">Classic Blue</string>
     <string name="theme_preset_coffee">Warm Paper</string>
     <string name="theme_preset_graphite">Graphite</string>
     <string name="theme_preset_forest">Forest</string>

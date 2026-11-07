@@ -22,32 +22,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.aicode.core.theme.semanticColors
 
 /**
- * 开关的几何与动效参数集中在一处：设计稿给的是固定数值，散在 Composable 里既改不全、也没法在
- * 单测里锁住「滑块不会溢出轨道」这类不变量。
+ * 开关的几何与动效参数集中在一处：散在 Composable 里既改不全、也没法在单测里锁住
+ * 「滑块不会溢出轨道」这类不变量。
  */
 internal object AppSwitchSpec {
-    val trackWidth = 50.dp
-    val trackHeight = 30.dp
+    val trackWidth = 42.dp
+    val trackHeight = 24.dp
     val trackCorner = 12.dp
-    val thumbSize = 26.dp
+    val thumbSize = 20.dp
     val thumbInset = 2.dp
     val thumbOffsetOff = thumbInset
-    val thumbOffsetOn = 22.dp
+    val thumbOffsetOn = 20.dp
     const val trackColorDurationMillis = 200
     const val thumbDampingRatio = 0.8f
 }
 
 /**
  * 全局统一的精致紧凑型开关组件：
- * - 50.dp × 30.dp 胶囊轨道 + 26.dp 圆形滑块，触控面积达标又不显笨重；
- * - 开启态取主题 primary（暖纸下即陶土红），关闭态取语义 mutedSurface，跟随主题切换；
- * - 颜色 tween(200) 渐变、位移 spring 回弹，与设置页其它微交互同节奏。
+ * - 紧凑尺寸（42.dp × 24.dp），告别 Material 3 默认 Switch 的笨重厚重感；
+ * - 纯白微阴影圆形滑块 + 丝滑平移动画；
+ * - 浅色模式为品牌蓝 / 柔和浅灰轨道；深色模式为亮蓝 / 暗灰蓝轨道（均取主题语义色，不写死色值）。
  */
 @Composable
 fun AppSwitch(
@@ -57,10 +57,13 @@ fun AppSwitch(
     enabled: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
-    val targetTrackColor = if (checked) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.semanticColors.mutedSurface
+    val isLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
+
+    // 轨道颜色
+    val targetTrackColor = when {
+        checked -> MaterialTheme.colorScheme.primary
+        isLight -> MaterialTheme.semanticColors.mutedSurface
+        else -> MaterialTheme.semanticColors.capsuleSurface
     }
     val animatedTrackColor by animateColorAsState(
         targetValue = targetTrackColor,
@@ -68,6 +71,10 @@ fun AppSwitch(
         label = "switchTrackColor"
     )
 
+    // 滑块颜色
+    val thumbColor = MaterialTheme.colorScheme.surface
+
+    // 滑块位移（轨道宽 42dp，内边距 2dp，滑块 20dp，位移范围 2dp -> 20dp）
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) AppSwitchSpec.thumbOffsetOn else AppSwitchSpec.thumbOffsetOff,
         animationSpec = spring(
@@ -104,7 +111,7 @@ fun AppSwitch(
                 .offset(x = thumbOffset)
                 .size(AppSwitchSpec.thumbSize)
                 .shadow(elevation = 2.dp, shape = CircleShape)
-                .background(Color.White, CircleShape)
+                .background(thumbColor, CircleShape)
         )
     }
 }

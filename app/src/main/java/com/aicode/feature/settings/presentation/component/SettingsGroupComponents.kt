@@ -2,7 +2,6 @@ package com.aicode.feature.settings.presentation.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,19 +32,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextRange
@@ -57,7 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import compose.icons.FeatherIcons
@@ -138,9 +129,8 @@ internal fun SettingsGroup(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.xxl),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 0.dp
     ) {
         Column(content = content)
@@ -148,40 +138,11 @@ internal fun SettingsGroup(
 }
 
 /**
- * 懒加载分组卡的描边：只描整组外缘，行与行之间的接缝不描。
- * 每行各自描一圈会在接缝处与缩进分隔线叠成双线。
+ * [SettingsGroup] 的 LazyColumn 版：逐项绘制卡片背景，首项圆上角、末项圆下角，项间自动补分隔线。
+ *
+ * 技能 / 子代理这类列表条目数不可控（项目里可能有上百个），必须走 LazyColumn 逐项虚拟化，
+ * 只组合可见行；卡片外观靠这里的首尾圆角拼出来，视觉与 [SettingsGroup] 一致。
  */
-private fun Modifier.groupCardOutline(
-    index: Int,
-    lastIndex: Int,
-    color: Color
-): Modifier = drawBehind {
-    val stroke = 0.5.dp.toPx()
-    // 首帧或宽度未定时尺寸可能小于描边，此时构造出的圆角矩形上下边会倒置。
-    if (size.width <= stroke || size.height <= stroke) return@drawBehind
-    val half = stroke / 2f
-    val radius = (Radius.xxl.toPx() - half).coerceAtLeast(0f)
-    val topRadius = if (index == 0) radius else 0f
-    val bottomRadius = if (index == lastIndex) radius else 0f
-    val outline = Path().apply {
-        addRoundRect(
-            RoundRect(
-                rect = Rect(half, half, size.width - half, size.height - half),
-                topLeft = CornerRadius(topRadius),
-                topRight = CornerRadius(topRadius),
-                bottomRight = CornerRadius(bottomRadius),
-                bottomLeft = CornerRadius(bottomRadius)
-            )
-        )
-    }
-    // 中间行不画上下边，否则会与分隔线叠成 1dp 双线。
-    val clipTop = if (index == 0) 0f else stroke
-    val clipBottom = if (index == lastIndex) size.height else size.height - stroke
-    clipRect(left = 0f, top = clipTop, right = size.width, bottom = clipBottom) {
-        drawPath(outline, color, style = Stroke(width = stroke))
-    }
-}
-
 @Composable
 internal fun LazyGroupItem(
     index: Int,
@@ -190,17 +151,16 @@ internal fun LazyGroupItem(
     content: @Composable () -> Unit
 ) {
     val shape = RoundedCornerShape(
-        topStart = if (index == 0) Radius.xxl else 0.dp,
-        topEnd = if (index == 0) Radius.xxl else 0.dp,
-        bottomStart = if (index == lastIndex) Radius.xxl else 0.dp,
-        bottomEnd = if (index == lastIndex) Radius.xxl else 0.dp
+        topStart = if (index == 0) 14.dp else 0.dp,
+        topEnd = if (index == 0) 14.dp else 0.dp,
+        bottomStart = if (index == lastIndex) 14.dp else 0.dp,
+        bottomEnd = if (index == lastIndex) 14.dp else 0.dp
     )
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
             .background(MaterialTheme.semanticColors.cardSurface)
-            .groupCardOutline(index, lastIndex, MaterialTheme.colorScheme.outlineVariant)
     ) {
         content()
         if (index != lastIndex) SettingsDivider()
@@ -274,20 +234,17 @@ internal fun SettingsRow(
     }
 }
 
-/**
- * 分组内行间分隔线：起点跳过图标列（行内边距 16 + 图标 16 + 间距 12 = 44dp），
- * 取设计稿的 46dp 让它比标题首字再缩进一点；末行不显示。
- */
+/** 分组内行间分隔线：左右两端均缩进对齐行内容，末行不显示。 */
 @Composable
 internal fun SettingsDivider() {
     HorizontalDivider(
-        modifier = Modifier.padding(start = 46.dp, end = Spacing.lg),
+        modifier = Modifier.padding(horizontal = Spacing.lg),
         thickness = 0.5.dp,
         color = MaterialTheme.semanticColors.subtleBorder
     )
 }
 
-/** iOS 风格搜索框：浅灰圆角底、无描边，与设置页分组卡同一套层级。
+/** iOS 风格搜索框：浅灰胶囊背景、无边框，与设置页分组风格一致。
  *  [trailing] 为可选尾部控件（如清除按钮）。
  *  [focusRequester] 非空时挂到内部输入框上：搜索二级页要在进入时把焦点交给它，
  *  入口上的 Surface 不能聚焦，必须落到真正的 BasicTextField 节点。 */
@@ -314,8 +271,8 @@ internal fun ModelSearchField(
     }
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.xl),
-        color = MaterialTheme.semanticColors.mutedSurface
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.semanticColors.capsuleSurface
     ) {
         Row(
             // 行高固定：尾部控件（清除按钮的 IconButton 自带 48dp 最小触摸目标）比正文行高更高，

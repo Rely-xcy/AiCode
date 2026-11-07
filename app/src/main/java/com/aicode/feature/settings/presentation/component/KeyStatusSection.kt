@@ -19,11 +19,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.aicode.R
-import com.aicode.core.security.KeyRotationService
-import com.aicode.core.security.KeyringStore
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.security.KeyRotationService
+import com.aicode.core.security.KeyringStore
+import com.aicode.feature.settings.presentation.KeyStatusViewModel
 import kotlinx.coroutines.launch
 
 /**
@@ -37,9 +39,9 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun KeyStatusSection(
-    rotationService: KeyRotationService,
     modifier: Modifier = Modifier
 ) {
+    val viewModel: KeyStatusViewModel = hiltViewModel()
     val scope = rememberCoroutineScope()
     var rotating by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<KeyRotationService.Result?>(null) }
@@ -98,7 +100,7 @@ internal fun KeyStatusSection(
                         rotating = true
                         scope.launch {
                             // 换密钥要读写全部凭据，放后台线程，别卡住界面。
-                            result = withContextIo { rotationService.rotate() }
+                            result = withContextIo { viewModel.rotate() }
                             rotating = false
                             refreshKey++
                         }

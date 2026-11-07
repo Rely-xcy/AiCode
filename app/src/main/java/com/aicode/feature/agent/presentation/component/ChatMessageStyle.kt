@@ -92,7 +92,7 @@ internal object ChatStyle {
     val rowIconSize = 16.dp
 }
 
-/** 用户消息底色：浅色主题下即主题容器色（默认蓝即参考图那种淡蓝），深色下自动变深。 */
+/** 用户消息底色：浅色主题下即主题容器色（经典蓝即参考图那种淡蓝），深色下自动变深。 */
 @Composable
 internal fun chatUserBubbleColor(): Color = MaterialTheme.colorScheme.primaryContainer
 

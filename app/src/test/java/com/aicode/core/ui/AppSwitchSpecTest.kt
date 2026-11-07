@@ -7,7 +7,7 @@ import org.junit.Test
 /**
  * 开关的几何不变量。
  *
- * 设计稿只给了一组数值，真正容易被改坏的是它们之间的关系：滑块必须始终落在轨道内、
+ * 数值本身不是重点，真正容易被改坏的是它们之间的关系：滑块必须始终落在轨道内、
  * 两端留白一致、开启态右缘不越界。这里把关系锁住，调数值时不会改出「滑块探出轨道」的观感 bug。
  *
  * 比较用 [androidx.compose.ui.unit.Dp.value]，不依赖 value class 的装箱相等。
@@ -16,9 +16,9 @@ class AppSwitchSpecTest {
 
     @Test
     fun `轨道与滑块尺寸符合设计稿`() {
-        assertEquals(50f, AppSwitchSpec.trackWidth.value, 0f)
-        assertEquals(30f, AppSwitchSpec.trackHeight.value, 0f)
-        assertEquals(26f, AppSwitchSpec.thumbSize.value, 0f)
+        assertEquals(42f, AppSwitchSpec.trackWidth.value, 0f)
+        assertEquals(24f, AppSwitchSpec.trackHeight.value, 0f)
+        assertEquals(20f, AppSwitchSpec.thumbSize.value, 0f)
         assertEquals(12f, AppSwitchSpec.trackCorner.value, 0f)
     }
 

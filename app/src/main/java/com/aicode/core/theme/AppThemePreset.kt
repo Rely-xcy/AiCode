@@ -38,7 +38,7 @@ data class AppThemeSeed(
 /**
  * 可选的应用配色主题。
  *
- * [DEFAULT] 直接沿用手调的品牌蓝配色，其余主题由种子推导。
+ * [DEFAULT] 直接沿用手调的品牌蓝配色（选择器里叫「经典蓝」），其余主题由种子推导。
  * 未选过主题的用户回退到 [COFFEE]（暖纸），但显式选过 [DEFAULT] 的用户仍保留品牌蓝。
  */
 data class AppThemePreset(
@@ -54,7 +54,7 @@ data class AppThemePreset(
     }
 
     companion object {
-        /** 品牌蓝：历史默认配色，颜色值逐个手调，不走推导。仅用户显式选择时生效。 */
+        /** 品牌蓝（界面名「经典蓝」）：历史默认配色，颜色值逐个手调，不走推导。仅用户显式选择时生效。 */
         val DEFAULT = AppThemePreset(
             id = "default",
             nameRes = R.string.theme_preset_default,
