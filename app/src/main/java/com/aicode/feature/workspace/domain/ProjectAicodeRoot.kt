@@ -56,7 +56,7 @@ class ProjectAicodeRoot @Inject constructor(
         executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH
 
     private companion object {
-        const val AICODE_DIR = ".aicode"
+        const val AICODE_DIR = com.aicode.core.branding.BrandPaths.CONFIG_DIR_NAME
         const val PROJECTS_DIR = "projects"
     }
 }

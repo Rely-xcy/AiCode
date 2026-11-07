@@ -44,7 +44,7 @@ class WorkspacePathMapper @Inject constructor(
         /** AI 看到的工作区根路径。用 `~` 形式让提示词/工具描述更自然，内部用 [resolvedContainerRoot] 展开后匹配。 */
         const val CONTAINER_ROOT = "~/workspace"
         /** AI 配置目录在容器内的路径，绑定到宿主 [ContainerInstaller.aicodeDir]（独立于 rootfs）。 */
-        const val AICODE_ROOT = "/root/.aicode"
+        const val AICODE_ROOT = com.aicode.core.branding.BrandPaths.CONFIG_ROOT
         /**
          * 单次解析允许跟随的链接跳数上限。成环的链接（a→b→a）不会自己去死循环，
          * 到上限就报 [FileSystemLoopException]，与内核 ELOOP 的判定口径一致。

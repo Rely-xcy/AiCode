@@ -136,10 +136,10 @@ class FileChangeHub @Inject constructor(
         const val CONTAINER_ROOT = "~/workspace"
 
         /** AI 配置目录在容器内的根路径。与 `WorkspacePathMapper.AICODE_ROOT` 必须同值（同上）。 */
-        const val AICODE_ROOT = "/root/.aicode"
+        const val AICODE_ROOT = com.aicode.core.branding.BrandPaths.CONFIG_ROOT
 
         /** AI 配置目录在宿主/服务器上的目录名：容器内 `/root/.aicode` 与远端 `$HOME/.aicode` 都是它。 */
-        private const val AICODE_DIR_NAME = ".aicode"
+        private const val AICODE_DIR_NAME = com.aicode.core.branding.BrandPaths.CONFIG_DIR_NAME
 
         /**
          * 项目级配置在宿主私有配置目录下的落点目录名：远端模式下
