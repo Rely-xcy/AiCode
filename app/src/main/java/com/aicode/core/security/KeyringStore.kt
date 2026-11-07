@@ -19,7 +19,9 @@ internal data class KeyringEntry(
     val id: String,
     val createdAt: Long,
     val expiresAt: Long,
-    val state: String
+    val state: String,
+    /** 退休时刻；null 表示还没退休。保留期从这算，不从 createdAt 算。 */
+    val retiredAt: Long? = null
 ) {
     val isActive: Boolean get() = state == STATE_ACTIVE
 
@@ -86,18 +88,21 @@ internal object KeyringStore {
         val raw = prefs().getString(KEY_ENTRIES, null) ?: return emptyList()
         return raw.split('\n').mapNotNull { line ->
             val parts = line.split('|')
-            if (parts.size != 4) return@mapNotNull null
+            if (parts.size < 4) return@mapNotNull null
             KeyringEntry(
                 id = parts[0],
                 createdAt = parts[1].toLongOrNull() ?: return@mapNotNull null,
                 expiresAt = parts[2].toLongOrNull() ?: return@mapNotNull null,
-                state = parts[3]
+                state = parts[3],
+                retiredAt = parts.getOrNull(4)?.toLongOrNull()
             )
         }
     }
 
     private fun saveEntries(list: List<KeyringEntry>) {
-        val raw = list.joinToString("\n") { "${it.id}|${it.createdAt}|${it.expiresAt}|${it.state}" }
+        val raw = list.joinToString("\n") { entry ->
+            "${entry.id}|${entry.createdAt}|${entry.expiresAt}|${entry.state}|${entry.retiredAt ?: 0}"
+        }
         prefs().edit().putString(KEY_ENTRIES, raw).apply()
     }
 
@@ -119,8 +124,8 @@ internal object KeyringStore {
     /**
      * 生成一把新密钥并设为 active，旧密钥标 retired。
      *
-     * 不在这里做数据重加密：调用方需要先拿到旧密钥把所有密文读出来，再用新密钥写回，
-     * 全部成功后才允许 [retire]。这里只负责密钥材料本身。
+     * 旧密钥在 retire 之前必须仍可解密：调用方要先用旧密钥把所有密文读出来，
+     * 再用新密钥写回，全部成功才切换。这里只负责密钥材料本身。
      */
     fun rotate(): Pair<KeyringEntry, SecretKey> = synchronized(lock) {
         val now = System.currentTimeMillis()
@@ -136,8 +141,10 @@ internal object KeyringStore {
             expiresAt = now + LIFETIME_MS,
             state = KeyringEntry.STATE_ACTIVE
         )
+        // 旧密钥不在这就退休：它刚满 90 天，按退休时间算保留期的话马上就会被 purge 掉，
+        // 保留期就成了空窗。退休时间单独记在 retiredAt。
         val updated = existing.map {
-            if (it.isActive) it.copy(state = KeyringEntry.STATE_RETIRED) else it
+            if (it.isActive) it.copy(state = KeyringEntry.STATE_RETIRED, retiredAt = now) else it
         } + created
         saveEntries(updated)
         prefs().edit().putString(KEY_ACTIVE, id).apply()
@@ -151,13 +158,23 @@ internal object KeyringStore {
     }
 
     fun markRetired(id: String) = synchronized(lock) {
-        saveEntries(entries().map { if (it.id == id) it.copy(state = KeyringEntry.STATE_RETIRED) else it })
+        val now = System.currentTimeMillis()
+        saveEntries(entries().map {
+            if (it.id == id) it.copy(state = KeyringEntry.STATE_RETIRED, retiredAt = now) else it
+        })
     }
 
-    /** 删除已退休且超过保留期的密钥材料。返回删掉的 id。 */
+    /**
+     * 删除已退休且超过保留期的密钥材料。返回删掉的 id。
+     *
+     * 保留期从**退休时刻**算，不是从创建时刻：密钥满 90 天才被换掉，按创建时刻算的话
+     * 换掉就立即过期，7 天回退窗口实际为零。
+     */
     fun purgeRetired(): List<String> = synchronized(lock) {
         val now = System.currentTimeMillis()
-        val expired = entries().filter { !it.isActive && now - it.createdAt > RETENTION_MS }
+        val expired = entries().filter { entry ->
+            !entry.isActive && (entry.retiredAt?.let { now - it > RETENTION_MS } ?: false)
+        }
         if (expired.isEmpty()) return emptyList()
         expired.forEach { entry ->
             obfFile(entry.id).delete()

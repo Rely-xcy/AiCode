@@ -11,16 +11,18 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 /**
  * 密钥环与新密文格式的回归测试。
  *
  * 重点保住两条不变量：密文里带的 keyId 决定用哪把钥匙，以及密钥缺失时绝不静默给出错误明文。
  * 前者是「Keystore 没了也能解」的前提，后者是「不覆盖用户旧数据」的前提。
+ *
+ * 不写 @Config(sdk=...)：指定 SDK 版本会让 Robolectric 为它单独加载一份 Android runtime，
+ * 内存占用显著高于默认配置，在本仓 2400+ 测试同跑的 CI 上会挤爆堆、让不相干的测试报
+ * OutOfMemoryError。用默认配置即可覆盖这里的逻辑。
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
 class KeyringStoreTest {
 
     @Before
@@ -94,6 +96,21 @@ class KeyringStoreTest {
         assertEquals("retained", KeystoreCipher.decryptString(oldCipher))
         assertTrue(KeyringStore.purgeRetired().isEmpty())
         assertTrue(KeyringStore.loadKey(oldId) != null)
+    }
+
+    @Test
+    fun `保留期从退休时刻算而不是创建时刻`() {
+        // 密钥满 90 天才被换掉；若保留期按创建时刻算，换掉就立即过期，7 天回退窗口实际为零。
+        val oldCipher = KeystoreCipher.encryptString("rollback-window")
+        val oldId = KeyringStore.activeId()!!
+        KeyringStore.rotate()
+
+        val retired = KeyringStore.entries().first { it.id == oldId }
+        assertEquals(KeyringEntry.STATE_RETIRED, retired.state)
+        assertTrue("退休时刻必须被记录", retired.retiredAt != null)
+        // 刚退休的密钥不能被清掉
+        assertTrue(KeyringStore.purgeRetired().isEmpty())
+        assertEquals("rollback-window", KeystoreCipher.decryptString(oldCipher))
     }
 
     @Test
