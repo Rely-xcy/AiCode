@@ -265,7 +265,7 @@ class StorageUsageScanner @Inject constructor(
         private const val IMAGES_DIR = "rootfs_images"
         private const val PROJECTS_DIR = "projects"
         private const val CHECKPOINTS_DIR = "checkpoints"
-        private const val AICODE_DIR = "aicode"
+        private const val AICODE_DIR = com.aicode.core.branding.BrandPaths.HOST_DIR_NAME
         private const val PREFS_DIR = "shared_prefs"
         private const val ATTACHMENTS_RELATIVE = ".aicode/attachments"
 

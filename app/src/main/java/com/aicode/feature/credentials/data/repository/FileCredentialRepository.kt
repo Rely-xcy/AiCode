@@ -30,7 +30,7 @@ class FileCredentialRepository @Inject constructor(
 
     private companion object {
         const val TAG = "FileCredentialRepo"
-        const val AICODE_DIR = "aicode"
+        const val AICODE_DIR = com.aicode.core.branding.BrandPaths.HOST_DIR_NAME
         const val CREDENTIALS_NAME = "git-credentials"
     }
 
