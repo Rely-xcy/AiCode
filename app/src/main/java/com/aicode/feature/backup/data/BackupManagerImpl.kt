@@ -16,6 +16,7 @@ import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
+import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
@@ -40,6 +41,7 @@ import com.aicode.feature.backup.domain.ExportStats
 import com.aicode.feature.backup.domain.GitCredentialDto
 import com.aicode.feature.backup.domain.ImportPreview
 import com.aicode.feature.backup.domain.LoginSecretsPasswordRequiredException
+import com.aicode.feature.backup.domain.McpServerSecretsDto
 import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.ProviderSecretsDto
@@ -439,6 +441,8 @@ class BackupManagerImpl @Inject constructor(
         // 元数据与凭据段必须用同一份读取结果：分两次读可能把同一批供应商写成两套不一致的记录。
         val providers = if (options.providers) aiProviderDao.getAllProvidersOnce() else emptyList()
         val connections = if (options.remoteConnections) remoteConnectionDao.getAllConnectionsOnce() else emptyList()
+        // MCP 同理：metadata 里放去敏后的配置，headers/env 进凭据段，两处必须是同一次读的结果。
+        val mcpServers = if (options.mcpServers) mcpConfigRepository.getGlobalServers() else emptyList()
         val stream = object : FilterOutputStream(output) {
             override fun write(bytes: ByteArray, offset: Int, length: Int) {
                 out.write(bytes, offset, length)
@@ -452,9 +456,9 @@ class BackupManagerImpl @Inject constructor(
             GzipCompressorOutputStream(fos).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
-                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan, providers, connections))
+                    writeMetadataEntry(tar, buildMetadata(options, workspacePlan, providers, connections, mcpServers))
                     if (options.loginSecrets) {
-                        writeLoginSecretEntries(tar, options, secrets, providers, connections)
+                        writeLoginSecretEntries(tar, options, secrets, providers, connections, mcpServers)
                     }
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar, workspacePlan, writtenFiles)
@@ -513,7 +517,8 @@ class BackupManagerImpl @Inject constructor(
         options: BackupOptions,
         workspacePlan: WorkspaceBackupPlan,
         providers: List<AIProviderEntity>,
-        connections: List<RemoteConnectionEntity>
+        connections: List<RemoteConnectionEntity>,
+        mcpServers: List<McpServerConfig>
     ): BackupMetadata = BackupMetadata(
         schemaVersion = currentSchemaVersion(),
         appVersion = appVersionName(),
@@ -521,7 +526,8 @@ class BackupManagerImpl @Inject constructor(
         providers = providers.map { it.toDto() },
         remoteConnections = connections.map { it.toDto() },
         remoteMounts = if (options.remoteConnections) remoteConnectionDao.getAllMountsOnce().map { it.toDto() } else emptyList(),
-        mcpServers = if (options.mcpServers) mcpConfigRepository.getGlobalServers() else emptyList(),
+        // headers/env 是明文令牌，只在凭据段里出现（见 writeLoginSecretEntries）；这里写空占位。
+        mcpServers = mcpServers.map { it.withoutCredentials() },
         globalPermissionRules = if (options.permissionRules) permissionRulesRepository.getGlobalRulesOnce() else emptyList(),
         themeMode = if (options.appSettings) themeSettingsRepository.snapshot() else null,
         themePresetId = if (options.appSettings) themeSettingsRepository.presetSnapshot() else null,
@@ -918,7 +924,8 @@ class BackupManagerImpl @Inject constructor(
         options: BackupOptions,
         secrets: ExportSecretTally,
         providers: List<AIProviderEntity>,
-        connections: List<RemoteConnectionEntity>
+        connections: List<RemoteConnectionEntity>,
+        mcpServers: List<McpServerConfig>
     ) {
         writeJsonlFileEntry(tar, FILE_SECRET_GIT_CREDENTIALS) { writer ->
             // 走仓储读解码后的值：git-credentials 是 base64 再整体反转的混淆格式，解析规则只该有一处。
@@ -949,6 +956,16 @@ class BackupManagerImpl @Inject constructor(
             writeJsonlFileEntry(tar, FILE_SECRET_CONNECTIONS) { writer ->
                 connections.forEach { entity ->
                     writer.writeLine(json.encodeToString(ConnectionSecretsDto.serializer(), entity.toSecretDto(secrets)))
+                }
+            }
+        }
+        // MCP 的 headers/env：mcp.json 里本就是明文，没有可解不开的项，所以不过 tally。
+        // 只写有内容的记录：空 map 写进去等于「用户要清空」，导入时会把本机同名配置的凭据抹掉。
+        val mcpWithCredentials = mcpServers.filter { it.toSecretsDto().hasAnyCredential() }
+        if (options.mcpServers && mcpWithCredentials.isNotEmpty()) {
+            writeJsonlFileEntry(tar, FILE_SECRET_MCP_SERVERS) { writer ->
+                mcpWithCredentials.forEach { server ->
+                    writer.writeLine(json.encodeToString(McpServerSecretsDto.serializer(), server.toSecretsDto()))
                 }
             }
         }
@@ -1001,6 +1018,7 @@ class BackupManagerImpl @Inject constructor(
             entry.name == FILE_SECRET_MCP_OAUTH -> restoreMcpOAuthToken(tar, onRestored)
             entry.name == FILE_SECRET_PROVIDERS -> restoreProviderSecrets(tar, segmented, onRestored)
             entry.name == FILE_SECRET_CONNECTIONS -> restoreConnectionSecrets(tar, segmented, onRestored)
+            entry.name == FILE_SECRET_MCP_SERVERS -> restoreMcpServerSecrets(tar, segmented, onRestored)
             entry.name.startsWith(SECRET_SSH_KEYS_PREFIX) -> restoreSshKeyFile(tar, entry, onRestored)
             else -> {
                 FileLogger.w(TAG, "跳过无法识别的凭据条目：${entry.name}")
@@ -1046,6 +1064,24 @@ class BackupManagerImpl @Inject constructor(
             }
         }.onFailure { e ->
             FileLogger.w(TAG, "解析连接凭据条目失败，已读出的部分照常写回：${e.message}")
+            onRestored(RestoreStats(skippedLoginSecrets = 1))
+        }
+    }
+
+    /** 解析 MCP 服务器的 headers/env 段，容错规则同 [restoreProviderSecrets]。 */
+    private suspend fun restoreMcpServerSecrets(
+        tar: TarArchiveInputStream,
+        segmented: SegmentedCredentialSecrets,
+        onRestored: (RestoreStats) -> Unit
+    ) {
+        val parsed = linkedMapOf<String, McpServerSecretsDto>()
+        segmented.mcpServers = parsed
+        runCatching {
+            restoreJsonl(tar, McpServerSecretsDto.serializer()) { dtos ->
+                dtos.forEach { parsed[it.name] = it }
+            }
+        }.onFailure { e ->
+            FileLogger.w(TAG, "解析 MCP 凭据条目失败，已读出的部分照常写回：${e.message}")
             onRestored(RestoreStats(skippedLoginSecrets = 1))
         }
     }
@@ -1364,6 +1400,8 @@ class BackupManagerImpl @Inject constructor(
         // 新格式：metadata 里供应商密钥 / 连接密码是空占位，真实值在凭据段。
         // 凭据段是否实际出现也算进判据，兼容没有标记字段的同版本包。
         val secretsSegmented = meta.secretsInSeparateSegment || segmented.providers != null || segmented.connections != null
+        // MCP 单独判：凭据段里有这一段，或导出侧打了新格式标记，metadata 里的 headers/env 才是空占位。
+        val mcpSegmented = meta.secretsInSeparateSegment || segmented.mcpServers != null
         FileLogger.i(
             TAG,
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
@@ -1420,9 +1458,33 @@ class BackupManagerImpl @Inject constructor(
                 stats += RestoreStats(remoteMounts = meta.remoteMounts.size)
             }
             if (meta.mcpServers.isNotEmpty()) {
-                mcpConfigRepository.setGlobalServers(meta.mcpServers)
+                // 新格式下 metadata 的 headers/env 是空占位：凭据段里有同名记录就以它为准，
+                // 没有就沿用本机同名服务器的值——不能把「没带凭据」当成「用户清空」回写。
+                val existing = if (mcpSegmented) {
+                    mcpConfigRepository.getGlobalServers().associateBy { it.name }
+                } else {
+                    emptyMap()
+                }
+                val merged = meta.mcpServers.map { server ->
+                    server.withImportedCredentials(
+                        secrets = segmented.mcpServers?.get(server.name),
+                        existing = existing[server.name]
+                    )
+                }
+                mcpConfigRepository.setGlobalServers(merged)
                 mcpManager.reload()
-                stats += RestoreStats(mcpServers = meta.mcpServers.size)
+                // 凭据段里有、metadata 里没有的服务器：没有宿主记录可写，按未还原的凭据计数。
+                val orphanSecrets = segmented.mcpServers?.keys
+                    ?.count { name -> meta.mcpServers.none { it.name == name } } ?: 0
+                stats += RestoreStats(
+                    mcpServers = merged.size,
+                    loginSecrets = merged.count { server ->
+                        segmented.mcpServers?.get(server.name)?.hasAnyCredential() == true
+                    },
+                    skippedLoginSecrets = orphanSecrets
+                )
+            } else if (segmented.mcpServers?.isNotEmpty() == true) {
+                stats += RestoreStats(skippedLoginSecrets = segmented.mcpServers.orEmpty().size)
             }
             if (meta.globalPermissionRules.isNotEmpty()) {
                 permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
@@ -1754,6 +1816,8 @@ class BackupManagerImpl @Inject constructor(
         /** 供应商密钥与连接凭据：metadata 只留配置字段，密钥在这里。 */
         const val FILE_SECRET_PROVIDERS = "${SECRET_PREFIX}provider-secrets.jsonl"
         const val FILE_SECRET_CONNECTIONS = "${SECRET_PREFIX}connection-secrets.jsonl"
+        /** MCP 服务器的 headers/env：metadata 里只留配置字段。 */
+        const val FILE_SECRET_MCP_SERVERS = "${SECRET_PREFIX}mcp-servers.jsonl"
         const val SECRET_SSH_KEYS_PREFIX = "${SECRET_PREFIX}ssh-keys/"
 
         /** SSH 私钥目录：与 RemoteServerViewModel 写入、SecretEncryptionMigrator 迁移用的是同一处。 */
@@ -1840,4 +1904,5 @@ private class AssetTarget(val path: String, val kind: AssetKind)
 private class SegmentedCredentialSecrets {
     var providers: MutableMap<String, ProviderSecretsDto>? = null
     var connections: MutableMap<String, ConnectionSecretsDto>? = null
+    var mcpServers: MutableMap<String, McpServerSecretsDto>? = null
 }

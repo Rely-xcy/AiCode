@@ -95,3 +95,21 @@ data class ConnectionSecretsDto(
 data class SshLoginKeysDto(
     val entries: Map<String, String> = emptyMap()
 )
+
+/**
+ * 一个 MCP 服务器的凭据字段：HTTP 形态的 `headers` 与 stdio 形态的 `env`。
+ *
+ * 两者都按整块搬运，不按 key 挑「看起来像 token 的项」：同一个 map 里可能同时有 `User-Agent`
+ * 这类公开配置和 `Authorization` 这类令牌，靠名字猜会在漏掉一种写法时又变回明文泄露。
+ * 归属凭据段后，metadata 里这两个字段恒为空占位（见 [com.aicode.feature.backup.domain.BackupMetadata.secretsInSeparateSegment]）。
+ */
+@Serializable
+data class McpServerSecretsDto(
+    /** 服务器名即身份：MCP 配置是「名字 → 配置」的 map，同名即同一条。 */
+    val name: String,
+    val headers: Map<String, String> = emptyMap(),
+    val env: Map<String, String> = emptyMap()
+) {
+    /** 这条记录是否真的带了一项凭据：全空占位行不算，导入摘要按有内容的记录计数。 */
+    fun hasAnyCredential(): Boolean = headers.isNotEmpty() || env.isNotEmpty()
+}

@@ -1,6 +1,8 @@
 package com.aicode.feature.backup.data
 
+import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.backup.domain.ConnectionSecretsDto
+import com.aicode.feature.backup.domain.McpServerSecretsDto
 import com.aicode.feature.backup.domain.ProviderDto
 import com.aicode.feature.backup.domain.ProviderSecretsDto
 import com.aicode.feature.backup.domain.RemoteConnectionDto
@@ -179,4 +181,31 @@ internal fun RemoteConnectionDto.toImportedEntity(
         sortOrder = sortOrder ?: 0
     )
     return MappedConnection(entity, undecryptable, secrets?.hasAnyCredential() == true)
+}
+
+/**
+ * 导出：metadata 只留 MCP 的配置字段，headers/env 整块搬进凭据段。
+ *
+ * 这两个 map 在 mcp.json 里本就是明文（不走 Keystore），所以不需要解密计数；
+ * 凭据段本身只出现在加密包里，门控由 [com.aicode.feature.backup.domain.BackupOptions.loginSecrets] 负责。
+ */
+internal fun McpServerConfig.toSecretsDto() = McpServerSecretsDto(name = name, headers = headers, env = env)
+
+/** metadata 里的占位：headers/env 清空，其余配置字段（url/command/args/auth 等）原样保留。 */
+internal fun McpServerConfig.withoutCredentials() = copy(headers = emptyMap(), env = emptyMap())
+
+/**
+ * 导入：把凭据段的 headers/env 合回配置。
+ *
+ * - 凭据段里有这条记录：以它为准（空 map 表示用户就是要清空）；
+ * - 没有这条记录、但 metadata 里带了非空值：那是拆分之前的老备份，值本身就是真的，原样用；
+ * - 两边都空：新格式的空占位，沿用本机同名的值——不能把「没带凭据」当成「用户清空」回写。
+ */
+internal fun McpServerConfig.withImportedCredentials(
+    secrets: McpServerSecretsDto?,
+    existing: McpServerConfig?
+): McpServerConfig = when {
+    secrets != null -> copy(headers = secrets.headers, env = secrets.env)
+    headers.isNotEmpty() || env.isNotEmpty() -> this
+    else -> copy(headers = existing?.headers ?: headers, env = existing?.env ?: env)
 }

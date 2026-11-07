@@ -568,6 +568,9 @@ private fun LocalBackupTab(
                     )
                 }
             )
+            if (exportOptions.mcpServers) {
+                BackupOptionHint(text = stringResource(R.string.backup_data_mcp_hint))
+            }
             SettingsDivider()
             SettingsRow(
                 title = stringResource(R.string.backup_data_permissions),

@@ -69,6 +69,10 @@ data class BackupMetadata(
     val providers: List<ProviderDto> = emptyList(),
     val remoteConnections: List<RemoteConnectionDto> = emptyList(),
     val remoteMounts: List<RemoteMountDto> = emptyList(),
+    /**
+     * 全局 MCP 服务器配置。新格式里 `headers` / `env` 恒为空占位：两处都可能直接写着令牌，
+     * 真实值在 `secrets/mcp-servers.jsonl`（只在勾选「包含登录凭据」且带口令时出现）。
+     */
     val mcpServers: List<McpServerConfig> = emptyList(),
     val globalPermissionRules: List<PermissionRule> = emptyList(),
     val themeMode: String? = null,

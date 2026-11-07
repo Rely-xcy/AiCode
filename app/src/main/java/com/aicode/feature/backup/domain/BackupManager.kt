@@ -91,7 +91,8 @@ data class BackupOptions(
     /** 会话工作状态（`session_briefs` 表）。默认关。 */
     val sessionBriefs: Boolean = false,
     /**
-     * 登录凭据：git 令牌、SSH 私钥文件与登录口令、网络备份目标密钥、MCP 授权令牌，
+     * 登录凭据：git 令牌、SSH 私钥文件与登录口令、网络备份目标密钥、MCP 授权令牌与
+     * MCP 服务器的 headers/env（两处都可能直接写着 token）、
      * 以及从配置里拆出来的供应商密钥（API Key / 多 Key 列表 / 代理密码 / 自定义请求头 /
      * 脚本参数）与连接密码（PASSWORD 模式的 authData、私钥口令）。默认关。
      *
@@ -218,7 +219,8 @@ data class RestoreStats(
     val sessionBriefs: Int = 0,
     /**
      * 本次导入实际还原的登录凭据项数：git 凭据、SSH 登录密钥、SSH 私钥文件、网络备份目标、
-     * MCP 授权令牌、供应商密钥（每个供应商算一项）、连接凭据（每条连接算一项）。
+     * MCP 授权令牌、MCP 服务器的 headers/env（每台算一项）、供应商密钥（每个供应商算一项）、
+     * 连接凭据（每条连接算一项）。
      * 备份没带 `secrets/` 段时为 0，摘要也就不该提凭据。旧包把密钥放在 metadata.json 里，
      * 按旧路径读出时不在此计数（与引入本字段之前的行为一致）。
      */
