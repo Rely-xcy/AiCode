@@ -157,6 +157,8 @@ private fun Modifier.groupCardOutline(
     color: Color
 ): Modifier = drawBehind {
     val stroke = 0.5.dp.toPx()
+    // 首帧或宽度未定时尺寸可能小于描边，此时构造出的圆角矩形上下边会倒置。
+    if (size.width <= stroke || size.height <= stroke) return@drawBehind
     val half = stroke / 2f
     val radius = (Radius.xxl.toPx() - half).coerceAtLeast(0f)
     val topRadius = if (index == 0) radius else 0f
@@ -272,7 +274,10 @@ internal fun SettingsRow(
     }
 }
 
-/** 分组内行间分隔线：起点缩进到图标列之后（行内边距 + 图标 + 图标与标题间距），末行不显示。 */
+/**
+ * 分组内行间分隔线：起点跳过图标列（行内边距 16 + 图标 16 + 间距 12 = 44dp），
+ * 取设计稿的 46dp 让它比标题首字再缩进一点；末行不显示。
+ */
 @Composable
 internal fun SettingsDivider() {
     HorizontalDivider(
@@ -282,7 +287,7 @@ internal fun SettingsDivider() {
     )
 }
 
-/** iOS 风格搜索框：浅灰胶囊背景、无边框，与设置页分组风格一致。
+/** iOS 风格搜索框：浅灰圆角底、无描边，与设置页分组卡同一套层级。
  *  [trailing] 为可选尾部控件（如清除按钮）。
  *  [focusRequester] 非空时挂到内部输入框上：搜索二级页要在进入时把焦点交给它，
  *  入口上的 Surface 不能聚焦，必须落到真正的 BasicTextField 节点。 */
@@ -295,7 +300,6 @@ internal fun ModelSearchField(
     trailing: (@Composable () -> Unit)? = null,
     focusRequester: FocusRequester? = null
 ) {
-    val isLight = settingsLightMode()
     // 用 TextFieldValue 而非 String 重载：String 重载在文本被外部改写（清除按钮、搜索防抖回写）时
     // 只重置 selection，而 IME 的组合区（composition）仍指向旧文本。之后长按选词，Compose 会拿
     // 越界 offset 去构造 TextSelection.Request，Android 直接抛 IllegalArgumentException。
